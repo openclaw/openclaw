@@ -2,13 +2,10 @@ import {
   classifyAgentHarnessTerminalOutcome,
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  type HeartbeatToolResponse,
-  type MessagingToolSend,
-  type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessToolResultTelemetry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
-import type { CodexConfirmedMediaDelivery } from "./dynamic-tools.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
@@ -26,22 +23,22 @@ import { CodexUsageProjection } from "./event-projector-usage.js";
 import type { CodexTurn } from "./protocol.js";
 import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
 
-export type CodexAppServerToolTelemetry = {
-  didSendViaMessagingTool: boolean;
-  didDeliverSourceReplyViaMessageTool?: boolean;
-  sourceReplyDelivered?: true;
-  messagingToolSentTexts: string[];
-  messagingToolSentMediaUrls: string[];
-  messagingToolSentTargets: MessagingToolSend[];
-  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
-  confirmedMediaDeliveries?: readonly CodexConfirmedMediaDelivery[];
-  heartbeatToolResponse?: HeartbeatToolResponse;
-  toolMediaUrls?: string[];
-  toolAutoDeliveryMediaUrls?: string[];
-  coreTtsToolResults?: object[];
-  toolAudioAsVoice?: boolean;
-  successfulCronAdds?: number;
-} & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
+export type CodexAppServerToolTelemetry = Partial<
+  Omit<AgentHarnessToolResultTelemetry, "confirmedMediaDeliveries">
+> &
+  Pick<
+    AgentHarnessToolResultTelemetry,
+    | "didSendViaMessagingTool"
+    | "messagingToolSentTexts"
+    | "messagingToolSentMediaUrls"
+    | "messagingToolSentTargets"
+  > & {
+    didDeliverSourceReplyViaMessageTool?: boolean;
+    sourceReplyDelivered?: true;
+    confirmedMediaDeliveries?: Readonly<
+      AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
+    >;
+  } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
 
 /** Owns per-turn projection state and builds results from the same state. */
 export abstract class CodexTurnProjection {
@@ -50,6 +47,7 @@ export abstract class CodexTurnProjection {
   protected readonly assistantProjection: CodexAssistantProjection;
   protected readonly reasoningProjection: CodexReasoningProjection;
   readonly settlement: CodexProjectionSettlement;
+  protected readonly observedItemIds = new Set<string>();
   protected readonly activeItemIds = new Set<string>();
   protected readonly completedItemIds = new Set<string>();
   protected readonly activeCompactionItemIds = new Set<string>();
@@ -173,6 +171,7 @@ export abstract class CodexTurnProjection {
     } = this.terminalFailure;
     const upstreamUserText = this.options.upstreamUserText;
     const turnTainted = this.settlement.turnTainted;
+    const observedItemCount = new Set([...this.observedItemIds, ...this.completedItemIds]).size;
     const activeItemCount = this.activeItemIds.size;
     const completedItemCount = this.completedItemIds.size;
     const guardianReviewCount = this.eventProjection.guardianReviewCount;
@@ -247,18 +246,9 @@ export abstract class CodexTurnProjection {
     const currentAttemptAssistant = providerRefusal
       ? lastAssistant
       : this.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
-    // Each snapshot entry is tagged with a stable mirror identity of the
-    // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
-    // from this identity rather than from snapshot position or content
-    // hash, so:
-    //   - Re-mirror of the same turn (retry) → same identity → no-op.
-    //   - Re-emit of a prior turn's entry into a later turn's snapshot
-    //     (the cross-turn drift mode named in #77012) → original identity
-    //     is preserved → on-disk key still matches → also a no-op.
-    //   - Two distinct turns where the user repeats verbatim content →
-    //     distinct turnIds → distinct identities → both kept.
-    // Codex owns the canonical thread. These mirror records keep enough local
-    // context for OpenClaw history, search, and future harness switching.
+    // Stable turn/item identities deduplicate retries and cross-turn replays
+    // without collapsing identical text from distinct turns. Codex owns history;
+    // this mirror supports OpenClaw history, search, and harness switching.
     const messagesSnapshot = buildCodexMessagesSnapshot({
       runParams,
       turnId,
@@ -342,7 +332,7 @@ export abstract class CodexTurnProjection {
         replaySafe: !hadPotentialSideEffects,
       },
       itemLifecycle: {
-        startedCount: activeItemCount + completedItemCount,
+        startedCount: observedItemCount,
         completedCount: completedItemCount,
         activeCount: activeItemCount,
       },

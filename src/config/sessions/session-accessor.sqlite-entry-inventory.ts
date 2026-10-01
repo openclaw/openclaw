@@ -11,6 +11,7 @@ import {
   sessionEntryInventoryJson,
 } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -27,7 +28,7 @@ export function readSessionEntryStore(
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
   const db = getSessionKysely(database.db);
-  let query = db.selectFrom("session_nodes").selectAll();
+  let query = db.selectFrom("session_nodes").selectAll().select(sessionEntrySnapshotColumns);
   if (options.includeArchived === false) {
     query = query.where("archived_at", "is", null);
   }
@@ -58,7 +59,7 @@ const countQueriesByDatabase = new WeakMap<
 >();
 
 export function readSessionEntryCount(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   options: { includeArchived?: boolean } = {},
 ): number {
   const includeArchived = options.includeArchived !== false;

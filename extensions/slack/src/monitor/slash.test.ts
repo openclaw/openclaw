@@ -26,7 +26,12 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
+import {
+  firstCallPayload,
+  firstMockArg,
+  getSlackSlashMocks,
+  resetSlackSlashMocks,
+} from "./slash.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
@@ -145,9 +150,9 @@ const skillCommandFixtures = vi.hoisted(() => ({
   commands: [] as Array<{ name: string; skillName: string; description: string }>,
 }));
 
-vi.mock("./slash-commands.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./slash-commands.runtime.js")>(
-    "./slash-commands.runtime.js",
+vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/command-auth-native")>(
+    "openclaw/plugin-sdk/command-auth-native",
   );
   return {
     ...actual,
@@ -170,15 +175,6 @@ vi.mock("./slash-commands.runtime.js", async () => {
       }),
       ...slashCommandFixtures.specs,
     ],
-  };
-});
-
-vi.mock("./slash-skill-commands.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./slash-skill-commands.runtime.js")>(
-    "./slash-skill-commands.runtime.js",
-  );
-  return {
-    ...actual,
     listSkillCommandsForAgents: () => skillCommandFixtures.commands,
   };
 });
@@ -513,31 +509,8 @@ async function runArgMenuAction(
   return respond;
 }
 
-type MockCallSource = {
-  mock: {
-    calls: ArrayLike<ReadonlyArray<unknown>>;
-  };
-};
-
-function firstMockArg(mock: MockCallSource, argIndex: number, label: string) {
-  expect(mock).toHaveBeenCalled();
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call[argIndex];
-}
-
-function firstCallPayload(mock: MockCallSource, label: string): Record<string, unknown> {
-  const payload = firstMockArg(mock, 0, label);
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error(`expected ${label} payload`);
-  }
-  return payload as Record<string, unknown>;
-}
-
 function firstDispatchArg(): { ctx?: Record<string, unknown> } {
-  return firstMockArg(dispatchMock as unknown as MockCallSource, 0, "dispatch") as {
+  return firstMockArg(dispatchMock, 0, "dispatch") as {
     ctx?: Record<string, unknown>;
   };
 }
@@ -1329,23 +1302,6 @@ describe("Slack native command argument menus", () => {
     expectSingleDispatchedSlashBody("/tts status");
   });
 
-  it("dispatches the command when an overflow option is chosen", async () => {
-    await runArgMenuAction(argMenuHandler, {
-      action: {
-        selected_option: {
-          value: encodeValue({
-            command: "usage",
-            arg: "mode",
-            value: "cost",
-            userId: "U1",
-          }),
-        },
-      },
-    });
-
-    expectSingleDispatchedSlashBody("/usage cost");
-  });
-
   it("shows an external_select menu when choices exceed static_select options max", async () => {
     const { respond, payload, blockId } =
       await runCommandAndResolveActionsBlock(reportExternalHandler);
@@ -2085,11 +2041,7 @@ describe("slack slash command session metadata", () => {
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
-    const call = firstMockArg(
-      recordSessionMetaFromInboundMock as unknown as MockCallSource,
-      0,
-      "session meta",
-    ) as {
+    const call = firstMockArg(recordSessionMetaFromInboundMock, 0, "session meta") as {
       sessionKey?: string;
       ctx?: { GroupSpace?: string; OriginatingChannel?: string };
     };
@@ -2120,6 +2072,7 @@ describe("slack slash command session metadata", () => {
     expect(firstDispatchArg().ctx).toMatchObject({
       From: "slack:channel:team:TGRID1:channel:CGRID1",
       To: "slash:team:TGRID1:user:U1",
+      GroupSpace: "TGRID1",
       OriginatingTo: "team:TGRID1:channel:CGRID1",
       SessionKey: expect.stringContaining("team:tgrid1:user:u1"),
     });

@@ -13,14 +13,11 @@ import {
   type SpawnResult,
 } from "./exec-result.js";
 import { killProcessTree } from "./kill-tree.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
-import {
-  brokerExecaOptions,
-  spawnBrokerCommand,
-  type CommandSubprocess,
-} from "./spawn-broker/execa-client.js";
-import type { CommandSpawnOptions } from "./spawn-broker/execa-types.js";
+import { brokerExecaOptions, spawnBrokerCommand } from "./spawn-broker/execa-client.js";
+import type { CommandSpawnOptions, CommandSubprocess } from "./spawn-broker/execa-types.js";
 import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
@@ -184,6 +181,7 @@ function retainCommandProcess(
   let pid: number | undefined;
   let startedAt: number | null = null;
   let stopped = false;
+  let groupExtinct = false;
   const nativeChild = child.nodeChildProcess;
   let observedExit = nativeChild.exitCode != null || nativeChild.signalCode != null;
   const onExit = () => {
@@ -198,12 +196,19 @@ function retainCommandProcess(
     stopped = true;
     // A live direct child holds PID custody even when its optional timestamp probe failed.
     if (nativeChild.exitCode !== null || nativeChild.signalCode !== null) {
+      // Descendants can exit after pipe closure retained this command. An absent
+      // group has settled even if another process now owns the retired root PID.
+      if (!isChildProcessTreeAlive({ pid })) {
+        groupExtinct = true;
+        return;
+      }
       const currentStart = getFileLockProcessStartTime(pid);
       if (currentStart !== null && currentStart !== startedAt) {
         throw new CommandProcessCleanupError();
       }
     }
     killProcessTree(pid, { detached: true, force: true });
+    scheduleAdoptedChildZombieReapAfterExit(nativeChild, true);
   };
   const initialize = () => {
     pid = child.pid;
@@ -238,6 +243,9 @@ function retainCommandProcess(
     async settle() {
       await initialized;
       await completed;
+      if (groupExtinct) {
+        return;
+      }
       if (pid === undefined) {
         if (nativeChild instanceof BrokerChild && !nativeChild.notStarted) {
           throw new CommandProcessCleanupError();
@@ -288,6 +296,7 @@ export function shouldSpawnWithShell(params: {
 
 type SpawnCommandOptions = CommandSpawnOptions & {
   baseEnv?: NodeJS.ProcessEnv;
+  executionTimeoutMs?: number;
   /** The command runner routes scope cancellation through its termination owner. */
   inheritScopeCancellation?: boolean;
 };
@@ -311,6 +320,7 @@ export function spawnCommandWithInvocation<
     env,
     windowsVerbatimArguments,
     cancelSignal,
+    executionTimeoutMs,
     inheritScopeCancellation = true,
     ...execaOptions
   } = sourceOptions;
@@ -337,6 +347,10 @@ export function spawnCommandWithInvocation<
   // CLI and other platforms have no broker scope. Independent applications and
   // native descriptors retain their explicitly selected in-process transport.
   const remoteOptions = broker ? brokerExecaOptions(commandOptions) : undefined;
+  if (remoteOptions && executionTimeoutMs !== undefined) {
+    // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
+    remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
+  }
   const child: CommandSubprocess<CommandSpawnOptions> =
     broker && remoteOptions
       ? spawnBrokerCommand(
@@ -369,27 +383,17 @@ export function resolveCommandEnv(params: {
 }): NodeJS.ProcessEnv {
   const baseEnv = params.baseEnv ?? process.env;
   const platform = params.platform ?? process.platform;
-  const argv = params.argv;
-  const shouldSuppressNpmFund = (() => {
-    const cmd = path.basename(argv[0] ?? "");
-    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
-      return true;
-    }
-    if (cmd === "node" || cmd === "node.exe") {
-      const script = argv[1] ?? "";
-      return script.includes("npm-cli.js");
-    }
-    return false;
-  })();
+  const cmd = path.basename(params.argv[0] ?? "");
+  const shouldSuppressNpmFund =
+    cmd === "npm" ||
+    cmd === "npm.cmd" ||
+    cmd === "npm.exe" ||
+    ((cmd === "node" || cmd === "node.exe") && (params.argv[1] ?? "").includes("npm-cli.js"));
 
   const resolvedEnv = mergeProcessEnv([baseEnv, params.env], platform);
   if (shouldSuppressNpmFund) {
-    if (resolvedEnv.NPM_CONFIG_FUND == null) {
-      resolvedEnv.NPM_CONFIG_FUND = "false";
-    }
-    if (resolvedEnv.npm_config_fund == null) {
-      resolvedEnv.npm_config_fund = "false";
-    }
+    resolvedEnv.NPM_CONFIG_FUND ??= "false";
+    resolvedEnv.npm_config_fund ??= "false";
   }
   return markOpenClawExecEnv(resolvedEnv);
 }

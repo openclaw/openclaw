@@ -1,5 +1,5 @@
-// Console logging helpers format and write messages to console streams.
 import util from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { exitAfterSignalExitBarriers } from "../cli/signal-exit-barrier.js";
@@ -69,7 +69,7 @@ export function getConsoleSettings(): ConsoleLoggerSettings {
   }
   const settings = resolveConsoleSettings();
   loggingState.cachedConsoleSettings = settings;
-  return loggingState.cachedConsoleSettings as ConsoleSettings;
+  return settings;
 }
 
 // Route all console output (including tslog console writes) to stderr.
@@ -104,20 +104,12 @@ export function setConsoleTimestampPrefix(enabled: boolean): void {
   loggingState.consoleTimestampPrefix = enabled;
 }
 
-function normalizeConsoleSubsystem(subsystem?: string | null): string | null {
-  if (typeof subsystem !== "string") {
-    return null;
-  }
-  const normalized = subsystem.trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
 export function shouldLogSubsystemToConsole(subsystem?: string | null): boolean {
   const filter = loggingState.consoleSubsystemFilter;
   if (!filter || filter.length === 0) {
     return true;
   }
-  const normalizedSubsystem = normalizeConsoleSubsystem(subsystem);
+  const normalizedSubsystem = normalizeOptionalString(subsystem);
   if (!normalizedSubsystem) {
     return false;
   }

@@ -29,25 +29,6 @@ export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFacto
   sessionFactory = factory;
 }
 
-async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      task,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error("Chrome MCP handshake timed out"));
-        }, CHROME_MCP_HANDSHAKE_TIMEOUT_MS);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 async function createRealSession(
   owner: ChromeMcpSessionOwner,
   profileName: string,
@@ -56,6 +37,7 @@ async function createRealSession(
   const transport = new StdioClientTransport({
     command: options.command,
     args: options.args,
+    env: options.env,
     stderr: "pipe",
   });
   const client = new Client(
@@ -87,7 +69,7 @@ async function createRealSession(
   client.close = transport.close = () => owner.close(session);
   const ready = (async () => {
     try {
-      await withChromeMcpHandshakeTimeout(
+      await waitForChromeMcpOperation(
         (async () => {
           await client.connect(transport);
           const tools = await client.listTools();
@@ -96,6 +78,12 @@ async function createRealSession(
           }
           await refreshChromeMcpCleanupProcess(session);
         })(),
+        undefined,
+        {
+          ms: CHROME_MCP_HANDSHAKE_TIMEOUT_MS,
+          error: () => new Error("Chrome MCP handshake timed out"),
+          unref: true,
+        },
       );
     } catch (err) {
       try {
@@ -141,28 +129,44 @@ export async function waitForChromeMcpReady(
   timeoutMs?: number,
   signal?: AbortSignal,
 ): Promise<void> {
+  await waitForChromeMcpOperation(
+    session.ready,
+    signal,
+    timeoutMs && timeoutMs > 0
+      ? {
+          ms: timeoutMs,
+          error: () =>
+            new BrowserProfileUnavailableError(
+              `Chrome MCP existing-session attach for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}" timed out after ${timeoutMs}ms.`,
+            ),
+        }
+      : undefined,
+  );
+}
+
+export async function waitForChromeMcpOperation<T>(
+  pending: Promise<T>,
+  signal?: AbortSignal,
+  timeout?: { ms: number; error: () => Error; unref?: boolean },
+): Promise<T> {
   if (signal?.aborted) {
     throw signal.reason ?? new Error("aborted");
   }
-  if ((!timeoutMs || timeoutMs <= 0) && !signal) {
-    await session.ready;
-    return;
+  if (!signal && !timeout) {
+    return await pending;
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
   try {
-    const racers: Array<Promise<void> | Promise<never>> = [session.ready];
-    if (timeoutMs && timeoutMs > 0) {
+    const racers = [pending];
+    if (timeout) {
       racers.push(
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            reject(
-              new BrowserProfileUnavailableError(
-                `Chrome MCP existing-session attach for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}" timed out after ${timeoutMs}ms.`,
-              ),
-            );
-          }, timeoutMs);
+          timer = setTimeout(() => reject(timeout.error()), timeout.ms);
+          if (timeout.unref) {
+            timer.unref?.();
+          }
         }),
       );
     }
@@ -175,40 +179,12 @@ export async function waitForChromeMcpReady(
         }),
       );
     }
-    await Promise.race(racers);
+    return await Promise.race(racers);
   } finally {
     if (timer) {
       clearTimeout(timer);
     }
     if (signal && abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
-  }
-}
-
-export async function waitForChromeMcpPendingSession(
-  pending: Promise<ChromeMcpSession>,
-  signal?: AbortSignal,
-): Promise<ChromeMcpSession> {
-  if (signal?.aborted) {
-    throw signal.reason ?? new Error("aborted");
-  }
-  if (!signal) {
-    return await pending;
-  }
-
-  let abortListener: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      pending,
-      new Promise<never>((_, reject) => {
-        abortListener = () =>
-          reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
-        signal.addEventListener("abort", abortListener, { once: true });
-      }),
-    ]);
-  } finally {
-    if (abortListener) {
       signal.removeEventListener("abort", abortListener);
     }
   }
@@ -230,7 +206,7 @@ export function createChromeMcpSession(
     await closePromise;
   };
   const promise = (async () => {
-    const session = await waitForChromeMcpPendingSession(created, signal);
+    const session = await waitForChromeMcpOperation(created, signal);
     if (signal?.aborted) {
       await closeCreated(session);
       throw signal.reason ?? new Error("aborted");

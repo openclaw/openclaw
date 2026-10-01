@@ -22,11 +22,7 @@ import {
   readGatewayDispatchConfig,
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
-import {
-  resolveConfigPath as resolveConfigPathFromPaths,
-  resolveGatewayPort as resolveGatewayPortFromPaths,
-  resolveStateDir as resolveStateDirFromPaths,
-} from "../config/paths.js";
+import { resolveConfigPath, resolveGatewayPort, resolveStateDir } from "../config/paths.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -39,11 +35,14 @@ import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { resolveGatewayAuth } from "./auth-resolve.js";
 import {
+  GatewayCredentialsRequiredError,
   GatewayLocalBackendSharedAuthUnavailableError,
+  GatewayStoredDeviceAuthUnavailableError,
   loadStoredOperatorDeviceAuthToken,
   resolveGatewayCallDeviceAuth,
   type GatewayCallDeviceAuthOptions,
 } from "./call-device-auth.js";
+import { ensureGatewaySupportsRequiredFeatures } from "./call-required-features.js";
 import {
   ensureExplicitGatewayAuth,
   GatewayExplicitAuthRequiredError,
@@ -125,6 +124,7 @@ type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
     expectFinal?: boolean;
     timeoutMs?: number | null;
     signal?: AbortSignal;
+    prepareDispatchCurrent?: () => Promise<void>;
     assertDispatchCurrent?: () => void;
     onAccepted?: GatewayClientRequestOptions["onAccepted"];
     onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
@@ -166,33 +166,12 @@ export type CallGatewayOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
 
-export class GatewayCredentialsRequiredError extends Error {
-  readonly method: string;
-  readonly configPath: string;
-
-  constructor(params: { method: string; configPath: string }) {
-    super(
-      [
-        `gateway ${params.method} requires credentials before opening a websocket`,
-        "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
-        `Config: ${params.configPath}`,
-      ].join("\n"),
-    );
-    this.name = "GatewayCredentialsRequiredError";
-    this.method = params.method;
-    this.configPath = params.configPath;
-  }
-}
-
 export { GatewayExplicitAuthRequiredError } from "./client-bootstrap.js";
-export { GatewayLocalBackendSharedAuthUnavailableError } from "./call-device-auth.js";
-
-export class GatewayStoredDeviceAuthUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "GatewayStoredDeviceAuthUnavailableError";
-  }
-}
+export {
+  GatewayCredentialsRequiredError,
+  GatewayLocalBackendSharedAuthUnavailableError,
+  GatewayStoredDeviceAuthUnavailableError,
+} from "./call-device-auth.js";
 
 export type GatewayTransportErrorJson = {
   ok: false;
@@ -376,8 +355,9 @@ export function isGatewayExplicitAuthRequiredError(
 
 // Gateway dispatch owns only connection, auth, TLS, and shell-env resolution.
 // Loading the full runtime config here makes every RPC pay unrelated plugin/state startup costs.
-const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
-  getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
+async function loadGatewayConfig(): Promise<OpenClawConfig> {
+  return getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
+}
 
 async function stopGatewayClient(client: GatewayClient): Promise<void> {
   try {
@@ -400,10 +380,6 @@ function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string |
   return method ? `gateway:${method}` : "gateway:request";
 }
 
-async function loadGatewayConfig(): Promise<OpenClawConfig> {
-  return await defaultGetRuntimeConfig();
-}
-
 /**
  * Load config for a fully flag-addressed connection. Config only supplies
  * gateway.remote.edgeAuth here, so an unreadable or invalid config degrades to
@@ -417,20 +393,8 @@ async function loadGatewayConfigForExplicitConnection(): Promise<OpenClawConfig>
   }
 }
 
-function loadGatewayConfigForConnectionDetails(): OpenClawConfig {
-  return readGatewayDispatchConfig();
-}
-
-function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
-  return resolveStateDirFromPaths(env);
-}
-
 function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
-  return resolveConfigPathFromPaths(env, resolveGatewayStateDir(env));
-}
-
-function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEnv): number {
-  return resolveGatewayPortFromPaths(config, env);
+  return resolveConfigPath(env, resolveStateDir(env));
 }
 
 export function buildGatewayConnectionDetails(
@@ -445,9 +409,9 @@ export function buildGatewayConnectionDetails(
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
-    getRuntimeConfig: () => loadGatewayConfigForConnectionDetails(),
-    resolveConfigPath: (env) => resolveGatewayConfigPath(env),
-    resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
+    getRuntimeConfig: readGatewayDispatchConfig,
+    resolveConfigPath: resolveGatewayConfigPath,
+    resolveGatewayPort,
   });
 }
 
@@ -558,7 +522,7 @@ async function resolveGatewayCallContext(
   const config =
     opts.config ??
     (canSkipConfigLoad
-      ? ({} as OpenClawConfig)
+      ? {}
       : explicitConnection
         ? await loadGatewayConfigForExplicitConnection()
         : await loadGatewayConfig());
@@ -633,56 +597,6 @@ function createGatewayRequestAbortError(method: string): Error {
   return createAbortError(`gateway request aborted for ${method}`);
 }
 
-function ensureGatewaySupportsRequiredMethods(params: {
-  requiredMethods: string[] | undefined;
-  methods: string[] | undefined;
-  attemptedMethod: string;
-}): void {
-  const requiredMethods = Array.isArray(params.requiredMethods)
-    ? params.requiredMethods.map((entry) => entry.trim()).filter((entry) => entry.length > 0)
-    : [];
-  if (requiredMethods.length === 0) {
-    return;
-  }
-  const supportedMethods = new Set(
-    (Array.isArray(params.methods) ? params.methods : [])
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0),
-  );
-  for (const method of requiredMethods) {
-    if (supportedMethods.has(method)) {
-      continue;
-    }
-    throw new Error(
-      [
-        `active gateway does not support required method "${method}" for "${params.attemptedMethod}".`,
-        "Update or restart the active gateway and try again.",
-      ].join(" "),
-    );
-  }
-}
-
-function ensureGatewaySupportsRequiredCapabilities(params: {
-  requiredCapabilities: string[] | undefined;
-  capabilities: string[] | undefined;
-  attemptedMethod: string;
-}): void {
-  const required = (params.requiredCapabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
-  if (required.length === 0) {
-    return;
-  }
-  const supported = new Set(
-    (params.capabilities ?? []).map((entry) => entry.trim()).filter(Boolean),
-  );
-  for (const capability of required) {
-    if (!supported.has(capability)) {
-      throw new Error(
-        `active gateway does not support required capability "${capability}" for "${params.attemptedMethod}". Update or restart the active gateway and try again.`,
-      );
-    }
-  }
-}
-
 function isRequiredAgentRuntimeIdentityConnectError(err: Error): boolean {
   return err.message.includes(
     "gateway rejected required agent runtime identity auth field; refusing to retry without it",
@@ -713,6 +627,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   connectionDetails: GatewayConnectionDetails;
   deviceIdentity: DeviceIdentity | null;
   deviceAuthScope?: string;
+  sshTunnel?: GatewayClientOptions["sshTunnel"];
   storedAuth?: DeviceAuthEntry;
   surfaceGatewayClientRequestErrors: boolean;
 }): Promise<T> {
@@ -729,6 +644,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     safeTimerTimeoutMs,
     deviceIdentity,
     deviceAuthScope,
+    sshTunnel,
     storedAuth,
     surfaceGatewayClientRequestErrors,
   } = params;
@@ -743,6 +659,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     const startAbort = new AbortController();
     let primaryRequestStarted = false;
     let suppressedPreHelloCleanCloses = 0;
+    let connectionGeneration = 0;
     const cleanup = () => {
       startAbort.abort();
       if (abortHandler) {
@@ -802,6 +719,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
 
     const client: GatewayClient | undefined = new GatewayClient({
       url,
+      sshTunnel,
       token,
       password,
       edgeAuthHeaders,
@@ -811,7 +729,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: resolveGatewayClientDisplayName(opts),
       clientVersion: opts.clientVersion ?? VERSION,
-      caps: opts.caps,
+      caps: ["ultrafast", ...(opts.caps ?? [])],
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
@@ -827,6 +745,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: (hello) => {
+        const dispatchGeneration = ++connectionGeneration;
         if (timeoutMs === null && timer) {
           clearTimeout(timer);
           timer = undefined;
@@ -840,19 +759,27 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }
         void (async () => {
           try {
-            ensureGatewaySupportsRequiredMethods({
-              requiredMethods: opts.requiredMethods,
-              methods: hello.features?.methods,
+            ensureGatewaySupportsRequiredFeatures({
+              kind: "method",
+              required: Array.isArray(opts.requiredMethods) ? opts.requiredMethods : [],
+              supported: Array.isArray(hello.features?.methods) ? hello.features.methods : [],
               attemptedMethod: opts.method,
             });
-            ensureGatewaySupportsRequiredCapabilities({
-              requiredCapabilities: opts.requiredCapabilities,
-              capabilities: hello.features?.capabilities,
+            ensureGatewaySupportsRequiredFeatures({
+              kind: "capability",
+              required: opts.requiredCapabilities,
+              supported: hello.features?.capabilities,
               attemptedMethod: opts.method,
             });
             const activeClient = client;
             if (!activeClient) {
               throw new Error("gateway client not initialized");
+            }
+            if (opts.prepareDispatchCurrent) {
+              await opts.prepareDispatchCurrent();
+            }
+            if (settled || opts.signal?.aborted || dispatchGeneration !== connectionGeneration) {
+              return;
             }
             // This check must stay synchronous with request -> ws.send. Moving
             // an await into that chain requires moving enforcement to the send owner.
@@ -867,12 +794,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
             ignoreClose = true;
             stop(undefined, result);
           } catch (err) {
+            if (settled || dispatchGeneration !== connectionGeneration) {
+              return;
+            }
             ignoreClose = true;
             stop(err as Error);
           }
         })();
       },
       onClose: (code, reason, info?: GatewayClientCloseInfo) => {
+        connectionGeneration += 1;
         if (settled || ignoreClose) {
           return;
         }
@@ -1043,7 +974,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       throw new GatewayStoredDeviceAuthUnavailableError(
         [
           "No stored device auth for this gateway origin.",
-          `Run \`openclaw tui --url ${deviceAuthScope}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
+          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
         ].join("\n"),
       );
     }
@@ -1134,6 +1065,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     connectionDetails,
     deviceIdentity,
     deviceAuthScope,
+    sshTunnel: bootstrap.sshTunnel,
     ...(storedAuth ? { storedAuth } : {}),
     surfaceGatewayClientRequestErrors:
       useStoredDeviceAuth ||

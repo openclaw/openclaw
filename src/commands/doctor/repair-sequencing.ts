@@ -48,7 +48,6 @@ import {
 } from "./shared/installed-plugin-id-recovery.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
-import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import {
@@ -146,17 +145,10 @@ export async function runDoctorRepairSequence(params: {
     }
     appendNotes(warningNotes, mutation.warnings);
   };
-  type RepairStage = (config: DoctorConfigMutationState["candidate"]) =>
-    | {
-        config: DoctorConfigMutationState["candidate"];
-        changes: string[];
-        warnings?: string[];
-      }
-    | Promise<{
-        config: DoctorConfigMutationState["candidate"];
-        changes: string[];
-        warnings?: string[];
-      }>;
+  type RepairMutation = Parameters<typeof applyMutation>[0];
+  type RepairStage = (
+    config: DoctorConfigMutationState["candidate"],
+  ) => RepairMutation | Promise<RepairMutation>;
   const applyRepairStages = async (stages: readonly RepairStage[]): Promise<void> => {
     for (const repair of stages) {
       // Each descriptor consumes the previous repair's candidate; changing the
@@ -342,7 +334,7 @@ export async function runDoctorRepairSequence(params: {
   );
   appendNotes(warningNotes, emptyAllowlistWarnings);
 
-  await applyRepairStages([maybeRepairLegacyToolsBySenderKeys, maybeRepairExecSafeBinProfiles]);
+  await applyRepairStages([maybeRepairExecSafeBinProfiles]);
   appendRepairNotes(migrateLegacyTailscaleProfileIdentities({ env }));
   appendRepairNotes(repairMergedGatewayOwnerProfile({ env, shouldRepair: true }));
   appendRepairNotes(await removeStalePluginRuntimeSymlinks());

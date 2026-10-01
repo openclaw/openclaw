@@ -9,16 +9,14 @@ import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import type { QaProviderMode } from "./model-selection.js";
+import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import type { QaTransportDriver } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { renderQaMarkdownReport } from "./report.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
-import { splitModelRef } from "./suite-planning.js";
 import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
-import { createQaSuiteReportNotes } from "./suite-support.js";
 import {
   rejectRemovedQaChannelDriverSelection,
   type QaSuiteScenarioResult,
@@ -52,7 +50,7 @@ export async function invalidateQaSuiteArtifactGeneration(outputDir: string) {
   }
 }
 
-export type QaSuiteSummaryJsonParams = {
+type QaSuiteSummaryJsonParams = {
   status?: QaSuiteSummaryJson["run"]["status"];
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
@@ -72,12 +70,6 @@ export type QaSuiteSummaryJsonParams = {
   runtimePair?: [RuntimeId, RuntimeId];
 };
 
-/**
- * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.6 Luna parity gate
- * (agentic-parity-report.ts, #64441) and any future parity wrapper can
- * import this type instead of re-declaring the shape, so changes to the
- * summary schema propagate through to every consumer at type-check time.
- */
 export type QaSuiteGatewayRssSample = NonNullable<
   NonNullable<QaSuiteSummaryJson["metrics"]>["gatewayProcessRssSamples"]
 >[number];
@@ -87,13 +79,6 @@ export type QaSuiteGatewayHeapSnapshot = NonNullable<
 >[number];
 
 /**
- * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.6 Luna
- * parity gate (agentic-parity-report.ts, #64441) and any future parity
- * runner can assert-and-trust the provider/model that produced a given
- * summary instead of blindly accepting the caller's candidateLabel /
- * baselineLabel. Without the `run` block, a maintainer who swaps candidate
- * and baseline summary paths could silently produce a mislabeled verdict.
- *
  * `scenarioIds` is only recorded when the caller passed a non-empty array
  * (an explicit scenario selection). A missing or empty array means "no
  * filter, full lane-selected catalog", which the summary encodes as `null`
@@ -102,8 +87,8 @@ export type QaSuiteGatewayHeapSnapshot = NonNullable<
  */
 export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSuiteSummaryJson {
   rejectRemovedQaChannelDriverSelection(params);
-  const primarySplit = splitModelRef(params.primaryModel);
-  const alternateSplit = splitModelRef(params.alternateModel);
+  const primarySplit = splitQaModelRef(params.primaryModel);
+  const alternateSplit = splitQaModelRef(params.alternateModel);
   return {
     scenarios: params.scenarios,
     counts: {
@@ -171,10 +156,10 @@ export async function writeQaSuiteArtifacts(
     startedAt: params.startedAt,
     finishedAt: params.finishedAt,
     scenarios: params.scenarios,
-    notes: createQaSuiteReportNotes({
-      ...params,
-      transportArtifactNotes: params.transportArtifacts?.reportNotes,
-    }),
+    notes: [
+      ...params.transport.createReportNotes(params),
+      ...(params.transportArtifacts?.reportNotes ?? []),
+    ],
   });
   const artifactPaths = [
     { kind: "summary", path: path.basename(summaryPath) },

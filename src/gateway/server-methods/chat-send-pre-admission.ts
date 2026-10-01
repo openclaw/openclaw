@@ -7,6 +7,7 @@ import {
   SessionGoalOperationError,
 } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
   loadExactSessionEntryCandidates,
   readSessionSubmittedInput,
@@ -20,6 +21,7 @@ import { createChatAbortOps } from "../chat-abort-ops.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { formatForLog } from "../ws-log.js";
@@ -36,7 +38,7 @@ import {
   abortedPartialPersistenceError,
   withAbortedPartialPersistenceWarning,
 } from "./chat-aborted-partial.js";
-import { hasRestartRecoveryTerminalRun, resolveDurableChatClaim } from "./chat-restart-recovery.js";
+import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
   assertExpectedLeafActive,
@@ -47,7 +49,6 @@ import {
   SESSION_SETTINGS_CHANGED_ERROR_REASON,
 } from "./chat-send-session-settings.js";
 import type { LoadedChatSendSession } from "./chat-send-session.js";
-import { resolveChatSendStopOwnerScope } from "./chat-send-stop-owner-scope.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {
@@ -115,7 +116,7 @@ export function respondChatSendAdmissionError(
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
 }
 
-type ChatSendPreAdmissionParams = {
+export type ChatSendPreAdmissionParams = {
   request: NormalizedChatSendRequest;
   session: LoadedChatSendSession;
   respond: GatewayRequestHandlerOptions["respond"];
@@ -453,11 +454,6 @@ export async function runChatSendPreAdmission(
       respondChatSessionRoutingChanged(respond);
       return false;
     }
-    const stopOwnerScope = resolveChatSendStopOwnerScope({
-      cfg,
-      selectedAgentId: selectedAgent.agentId,
-      sessionKey,
-    });
     const stopStorePath = session.readSource?.path ?? storePath;
     const guard: { failure?: { error: unknown } } = {};
     const assertCurrent = () => {
@@ -497,7 +493,7 @@ export async function runChatSendPreAdmission(
         ops: createChatAbortOps(context),
         sessionKey,
         sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [rawSessionKey],
-        agentId: stopOwnerScope.agentId,
+        agentId: selectedAgent.agentId,
         sessionId: entry?.sessionId,
         session: {
           ok: true,
@@ -509,7 +505,7 @@ export async function runChatSendPreAdmission(
             agentId: session.agentId,
           },
         },
-        defaultAgentId: stopOwnerScope.defaultAgentId,
+        defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
         abortOrigin: "stop-command",
         stopReason: "stop",
         requester: resolveChatAbortRequester(client),

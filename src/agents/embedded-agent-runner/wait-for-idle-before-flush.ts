@@ -2,6 +2,7 @@
  * Waits for tool-result streams to become idle before flushing output.
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 
@@ -20,41 +21,28 @@ async function waitForAgentIdleBestEffort(
   agent: IdleAwareAgent | null | undefined,
   timeoutMs: number,
   abortSignal?: AbortSignal,
-): Promise<boolean> {
+): Promise<void> {
   const waitForIdle = agent?.waitForIdle;
   if (abortSignal?.aborted || typeof waitForIdle !== "function") {
-    return false;
+    return;
   }
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS);
 
-  const idleResolved = Symbol("idle");
-  const idleTimedOut = Symbol("timeout");
-  const idleAborted = Symbol("aborted");
-  let onAbort: (() => void) | undefined;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
-    const aborted = abortSignal
-      ? new Promise<symbol>((resolve) => {
-          onAbort = () => resolve(idleAborted);
-          abortSignal.addEventListener("abort", onAbort, { once: true });
-        })
-      : undefined;
-    const outcome = await Promise.race([
-      waitForIdle.call(agent).then(() => idleResolved),
-      new Promise<symbol>((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(idleTimedOut), resolvedTimeoutMs);
-        timeoutHandle.unref?.();
-      }),
-      ...(aborted ? [aborted] : []),
-    ]);
-    return outcome === idleTimedOut;
+    await racePromiseWithAbortSignal(
+      Promise.race([
+        waitForIdle.call(agent).then(() => undefined),
+        new Promise<void>((resolve) => {
+          timeoutHandle = setTimeout(resolve, resolvedTimeoutMs);
+          timeoutHandle.unref?.();
+        }),
+      ]),
+      abortSignal,
+    );
   } catch {
     // Best-effort during cleanup.
-    return false;
   } finally {
-    if (onAbort) {
-      abortSignal?.removeEventListener("abort", onAbort);
-    }
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }

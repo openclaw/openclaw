@@ -69,19 +69,20 @@ function markdownDisclosureTagKind(raw: string): MarkdownDisclosureTagKind | nul
 /** Disclosure markup is structural only when it starts the current Markdown block line. */
 export function scanMarkdownDisclosureLine(
   line: string,
-  codeSpans: ReadonlyArray<readonly [number, number]> = findMarkdownCodeSpans(line),
+  codeSpans?: ReadonlyArray<readonly [number, number]>,
   lineOffset = 0,
 ): MarkdownDisclosureTag[] | null {
   const first = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/i.exec(line);
   if (!first) {
     return null;
   }
+  const spans = codeSpans ?? findMarkdownCodeSpans(line);
   const tags: MarkdownDisclosureTag[] = [];
   for (const match of line.matchAll(DISCLOSURE_TAG_RE)) {
     const start = match.index ?? 0;
     if (
       isEscapedMarkdownCharacter(line, start) ||
-      isInsideMarkdownCode(lineOffset + start, codeSpans)
+      isInsideMarkdownCode(lineOffset + start, spans)
     ) {
       continue;
     }
@@ -168,11 +169,8 @@ function pushDisclosureLine(
   line: string,
   lineNumber: number,
   stack: MarkdownDetailsFrame[],
-): boolean {
-  const tags = scanMarkdownDisclosureLine(line);
-  if (!tags) {
-    return false;
-  }
+  tags: readonly MarkdownDisclosureTag[],
+): void {
   let cursor = 0;
   const flushText = (tag: MarkdownDisclosureTag, end = tag.end) => {
     // Unaccepted tags stay in the literal span between structural events.
@@ -197,7 +195,6 @@ function pushDisclosureLine(
     },
   });
   pushInlineBlock(state, line.slice(cursor), lineNumber);
-  return true;
 }
 
 function detailsBlockRule(
@@ -212,14 +209,15 @@ function detailsBlockRule(
   const start = (state.bMarks[startLine] ?? 0) + (state.tShift[startLine] ?? 0);
   const end = state.eMarks[startLine] ?? state.src.length;
   const line = state.src.slice(start, end);
-  if (!scanMarkdownDisclosureLine(line)) {
+  const tags = scanMarkdownDisclosureLine(line);
+  if (!tags) {
     return false;
   }
   if (silent) {
     return true;
   }
 
-  pushDisclosureLine(state, line, startLine, (state[DETAILS_STACK] ??= []));
+  pushDisclosureLine(state, line, startLine, (state[DETAILS_STACK] ??= []), tags);
   state.line = startLine + 1;
   return true;
 }
@@ -326,41 +324,24 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
     for (const token of state.tokens) {
       if (token.type === "details_open") {
         stack.push({ hasSummary: false });
-        output.push(token);
-        continue;
-      }
-      if (token.type === "summary_open") {
+      } else if (token.type === "summary_open") {
         const frame = stack.at(-1);
         if (frame) {
           frame.hasSummary = true;
         }
-        output.push(token);
-        continue;
-      }
-      if (token.type === "details_close") {
+      } else if (token.type === "details_close") {
         stack.pop();
-        output.push(token);
-        continue;
       }
       if (token.type !== "html_block" || stack.length === 0) {
         output.push(token);
         continue;
       }
 
-      let level = token.level;
-      const replacement: DetailsToken[] = [];
       const sink: DetailsTokenSink = {
         push(type, tag, nesting) {
           const next = new state.Token(type, tag, nesting);
           next.block = true;
-          if (nesting < 0) {
-            level -= 1;
-          }
-          next.level = level;
-          if (nesting > 0) {
-            level += 1;
-          }
-          replacement.push(next);
+          output.push(next);
           return next;
         },
       };
@@ -378,20 +359,18 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
       };
       for (const [lineOffset, line] of lines.entries()) {
         const hasLineBreak = lineOffset < lines.length - 1;
-        if (consumeMarkdownRawHtmlLine(line, rawHtml)) {
-          pendingHtml += line + (hasLineBreak ? "\n" : "");
-          continue;
-        }
-        if (!scanMarkdownDisclosureLine(line)) {
+        const tags = consumeMarkdownRawHtmlLine(line, rawHtml)
+          ? null
+          : scanMarkdownDisclosureLine(line);
+        if (!tags) {
           pendingHtml += line + (hasLineBreak ? "\n" : "");
           continue;
         }
         flushHtml();
         const lineNumber = (token.map?.[0] ?? 0) + lineOffset;
-        pushDisclosureLine(sink, line, lineNumber, stack);
+        pushDisclosureLine(sink, line, lineNumber, stack, tags);
       }
       flushHtml();
-      output.push(...replacement);
     }
 
     // Streaming can end with open details; balance only our structured tokens at EOF.

@@ -9,7 +9,14 @@ import type { ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 
-export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict" | "paused";
+export type ConfigAutoSaveStatus =
+  | "idle"
+  | "saving"
+  | "saved"
+  | "rejected"
+  | "error"
+  | "conflict"
+  | "paused";
 
 type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
@@ -47,9 +54,6 @@ export function createInitialConfigState(snapshot?: Partial<RuntimeConfigGateway
     configFormOriginal: initialConfigValue<Record<string, unknown> | null>(null),
     configFormDirty: false,
     configFormMode: initialConfigValue<"form" | "raw">("form"),
-    configSearchQuery: "",
-    configActiveSection: initialConfigValue<string | null>(null),
-    configActiveSubsection: initialConfigValue<string | null>(null),
     lastError: initialConfigValue<string | null>(null),
   };
 }

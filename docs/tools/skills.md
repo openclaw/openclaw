@@ -55,15 +55,21 @@ snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
 Managed worktree sessions keep their recorded canonical workspace as the skill
-source. A selected nested workspace stays nested: discovery does not walk up to
-its parent repository. Installing OpenClaw from a repository does not make that
+source. The configured agent workspace remains the primary skill source even when
+the session executes in a worktree; only selecting that worktree as the agent's
+workspace gives its skills primary precedence. A selected nested workspace stays
+nested: discovery does not walk up to its parent repository. Installing OpenClaw
+from a repository does not make that
 repository's `.agents/skills/` a global bundled skill source.
 
-Workspace and project skills overriding lower-priority sources are reported at
-info level. Other precedence collisions remain warnings. Each discovery pass
-groups collisions by skill name and winning/losing source, with the number of
-affected skill roots and representative paths. Identical content stays silent;
-already reported content pairs are not repeated on refresh.
+Each discovery pass reports one summary per winning/losing discovery root and
+source kind, with the skill count and up to three example names. Workspace or
+project skills overriding bundled skills, and managed-worktree skills overriding
+project checkout skills, are warnings; other collisions are informational.
+Worktree provenance uses the configured `worktreeRoot` (the state directory's
+`worktrees/` by default), without probing Git. Identical content stays silent.
+Unchanged root-pair summaries are not repeated on refresh; changes to content,
+declared metadata, or collision membership update the summary. Precedence is unchanged.
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 `SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
@@ -472,6 +478,23 @@ OpenClaw filters skills at load time using `metadata.openclaw` (JSON5 object
 embedded in the frontmatter, see the parsing note above). A skill with no
 `metadata.openclaw` block is always eligible unless explicitly disabled.
 
+Skill **inventory**, skill **readiness**, and skill **visibility** are related
+but different:
+
+- **Inventory** answers whether OpenClaw discovered the skill in a configured
+  root or bundled source.
+- **Readiness** answers whether the current runtime can satisfy the skill's
+  declared requirements, such as binaries, environment variables, config paths,
+  operating system constraints, or reachable node-hosted capabilities.
+- **Visibility** answers whether a ready, eligible skill is exposed to the
+  selected agent after agent allowlists, invocation flags, and session snapshot
+  rules are applied.
+
+A skill can be present in inventory but still not ready or visible. Use
+[`openclaw skills check`](/cli/skills#commands) when debugging a skill that
+appears in configuration but does not show up for an agent, or when its required
+tool, credential, or host capability is missing.
+
 ```markdown
 ---
 name: image-lab
@@ -735,6 +758,13 @@ the skills watchers. With watching enabled, later agent turns refresh file-backe
 skills through the existing snapshot preparation. Restart the Gateway after
 restoring watch capacity to enable native watching again.
 
+When native events are unavailable, skills polling runs every 30 seconds by
+default. This is also the minimum interval for explicitly requested polling;
+larger `CHOKIDAR_INTERVAL` values remain supported. Native event hints still
+trigger prompt refreshes with the normal debounce. Each watcher logs one warning
+when automatic selection falls back to polling, including the reported reason
+when available.
+
 Watcher subscriptions are retained for the 128 most recently used combinations of
 agent, configured workspace, and execution workspace. Subscriptions idle for an
 hour are also retired when another workspace prepares its skills. Shared skill
@@ -772,9 +802,10 @@ the total number of operating-system file watches.
     keep the same snapshot version and do not notify chat metadata consumers.
     Idle worktree watcher cleanup does not invalidate other workspaces.
     Copies with identical `SKILL.md` content and declared metadata do not produce
-    precedence collision warnings. Different content warns once per ordered
-    winner/loser content pair during a Gateway process, across workspaces and
-    rebuilds. Editing either copy can produce a new warning; precedence stays the same.
+    precedence collision logs. Different content is summarized per ordered
+    winner/loser discovery root and source kind. During a Gateway process,
+    refreshes with the same aggregate digest stay silent; editing either copy or
+    changing the colliding skill names updates the summary. Precedence stays the same.
 
     Use `allowSymlinkTargets`
     for intentional symlinked layouts where a skill

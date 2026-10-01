@@ -36,6 +36,20 @@ building nested completion findings, preventing stale prior-run child
 outputs from leaking into the current announce. Announce replies preserve
 thread/topic routing when available on channel adapters.
 
+After `sessions_yield`, the frozen batch waits for its own children and their
+descendants to settle. A still-running child from an earlier requester turn does
+not delay that batch's result; the earlier batch retains its own completion wake.
+
+Completion inputs retain their own turn identity across compaction and runtime
+context messages. If transcript persistence rejects a completion because its
+keyed input belongs to a closed turn, delivery records a permanent failure with
+the error. It does not retry other models or keep scheduling the same completion.
+
+If a chunk in a direct-message text fallback fails or is aborted after earlier
+chunks were sent, OpenClaw records an incomplete delivery. It stops automatic
+retries to avoid duplicating chunks the recipient already received. A successful
+child's result remains available for recovery.
+
 ### Private parent completion
 
 Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a
@@ -43,6 +57,18 @@ private turn of the original requester session. The parent can inspect the resul
 start another child, or reply `NO_REPLY`. OpenClaw does not automatically send the
 child result, parent final, or generated media to a channel. The parent can still
 choose to send a message through its permitted tools.
+
+If the parent called `sessions_yield` while waiting for private children, the
+yield hands the conversation back to it. When those children settle, the parent
+resumes and answers the original conversation under its normal reply rules: with
+automatic replies its final text is delivered; with `visibleReplies:
+"message_tool"` it must send the answer with the `message` tool, and plain final
+text stays internal. Child results stay internal input, nothing is sent
+automatically on the child's behalf, and `NO_REPLY` still stays silent. The
+resumed turn stays bound to the parent
+session that spawned the children: if that session is reset (for example with
+`/new`) or replaced before the parent resumes, the results are dropped and
+nothing is sent.
 
 This option supports hidden, native, one-shot runs only. It cannot be combined
 with ACP, `collect: true`, `visible: true`, `thread: true`, `mode: "session"`, or
@@ -54,6 +80,9 @@ settles. A normal parent finish releases each ready result for private review;
 removed parent does not transfer the result to another session. When a settled
 batch contains a private result, its combined review stays private; ordinary
 siblings retain their individual completion delivery.
+
+Inspecting a completed child's status before yielding does not consume or invalidate
+its private result.
 
 Waiting for the spawning parent turn does not consume a private result's delivery
 retry window. A normal parent finish starts that window when it releases the
@@ -82,6 +111,10 @@ OpenClaw preserves prompt-data escaping and stable order when it delivers severa
 results together. It does not shorten an answer to fit the former announce
 projection limits. The bounded lifecycle snapshot remains separate from the
 complete answer sent to the parent.
+
+A successful child with an empty final reply remains in the batch with its task
+identity, `ok` status, and `(no output)` result. Intentional silence and announce
+skip tokens keep their existing suppression behavior.
 
 For nested work, descendant findings help the child form its answer. The child's
 own final answer is what travels onward to its parent. If the child sends its

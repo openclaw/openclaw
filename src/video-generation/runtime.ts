@@ -3,6 +3,7 @@ import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseVideoGenerationModelRef } from "../media-generation/model-ref.js";
+import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getVideoGenerationProvider,
   listVideoGenerationProviders,
@@ -15,10 +16,6 @@ import {
   resolveMediaProviderRequestTimeoutMs,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
-import {
-  buildCapabilityProviderIndex,
-  normalizeCapabilityProviderId,
-} from "../plugins/provider-registry-shared.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
@@ -126,17 +123,11 @@ export async function generateVideo(
     return runVideoGeneration(params, deps);
   }
   return withVideoGenerationProviders(params.cfg, (providers) => {
-    const canonical = buildCapabilityProviderIndex(providers, "canonical");
-    const aliases = buildCapabilityProviderIndex(providers, "aliases");
+    const lookup = createMediaProviderLookup(providers);
     return runVideoGeneration(params, {
       ...deps,
-      getProvider:
-        deps.getProvider ??
-        ((id) => {
-          const normalized = normalizeCapabilityProviderId(id);
-          return normalized ? aliases.get(normalized) : undefined;
-        }),
-      listProviders: deps.listProviders ?? (() => [...canonical.values()]),
+      getProvider: deps.getProvider ?? lookup.getProvider,
+      listProviders: deps.listProviders ?? lookup.listProviders,
     });
   });
 }
@@ -181,7 +172,9 @@ async function runVideoGeneration(
     capability: "video",
     getProvider: (providerId) => getProvider(providerId, params.cfg),
     onFailure: (attempt) => {
-      logger.debug(`video-generation candidate failed: ${attempt.provider}/${attempt.model}`);
+      logger.warn(
+        `video-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
+      );
     },
     async prepareCandidate(candidate, provider) {
       const timeoutMs = resolveMediaProviderRequestTimeoutMs({

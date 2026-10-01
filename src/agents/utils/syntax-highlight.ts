@@ -58,12 +58,10 @@ function loadHighlightJsRuntime(): HighlightJs {
   return setHighlightJsRuntime(createRequire(import.meta.url)("highlight.js"));
 }
 
-/** Formatter applied to highlighted text segments. */
 type HighlightFormatter = (text: string) => string;
 /** Mapping from highlight.js scope names to text formatters. */
 type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
 
-/** Options used when highlighting code and rendering themed text. */
 interface HighlightOptions {
   language?: string;
   ignoreIllegals?: boolean;
@@ -96,19 +94,13 @@ function getScopeFormatter(scope: string, theme: HighlightTheme): HighlightForma
     return exact;
   }
 
-  const dotIndex = scope.indexOf(".");
-  if (dotIndex !== -1) {
-    const prefixFormatter = theme[scope.slice(0, dotIndex)];
-    if (prefixFormatter) {
-      return prefixFormatter;
-    }
-  }
-
-  const dashIndex = scope.indexOf("-");
-  if (dashIndex !== -1) {
-    const prefixFormatter = theme[scope.slice(0, dashIndex)];
-    if (prefixFormatter) {
-      return prefixFormatter;
+  for (const separator of [".", "-"]) {
+    const index = scope.indexOf(separator);
+    if (index !== -1) {
+      const prefixFormatter = theme[scope.slice(0, index)];
+      if (prefixFormatter) {
+        return prefixFormatter;
+      }
     }
   }
 
@@ -179,9 +171,7 @@ function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string
 
     if (html.startsWith(SPAN_CLOSE, index)) {
       flushText();
-      if (scopes.length > 0) {
-        scopes.pop();
-      }
+      scopes.pop();
       index += SPAN_CLOSE.length;
       continue;
     }

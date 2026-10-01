@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { expectDefined } from "../packages/normalization-core/src/expect.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
@@ -36,14 +36,25 @@ const TOOL_DISPLAY_PATH = path.join(
   "Resources",
   "tool-display.json",
 );
+const GENERATED_ROOT = path.join(
+  ROOT,
+  "apps",
+  "android",
+  "app",
+  "build",
+  "generated",
+  "native-i18n",
+);
 const GENERATED_KOTLIN_PATH = path.join(
-  SOURCE_ROOT,
+  GENERATED_ROOT,
+  "kotlin",
   "ai",
   "openclaw",
   "app",
   "i18n",
   "NativeStringResources.kt",
 );
+const GENERATED_RESOURCE_ROOT = path.join(GENERATED_ROOT, "res");
 const MANAGED_PREFIX = "native_";
 const ANDROID_QUALIFIERS: Record<string, string> = {
   id: "in",
@@ -310,16 +321,17 @@ async function readStrings(
 
 async function readAndroidSource(
   root = SOURCE_ROOT,
+  extensionPattern = /\.kt$/u,
 ): Promise<Array<{ path: string; source: string }>> {
   const entries = await readdir(root, { withFileTypes: true });
   const sources: Array<{ path: string; source: string }> = [];
   for (const entry of entries) {
     const fullPath = path.join(root, entry.name);
     if (entry.isDirectory()) {
-      sources.push(...(await readAndroidSource(fullPath)));
+      sources.push(...(await readAndroidSource(fullPath, extensionPattern)));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith(".kt")) {
+    if (entry.isFile() && extensionPattern.test(entry.name)) {
       sources.push({
         path: path.relative(ROOT, fullPath).split(path.sep).join("/"),
         source: await readFile(fullPath, "utf8"),
@@ -338,26 +350,11 @@ type AndroidResourceReferenceSource = {
   source: string;
 };
 
-async function readAndroidResourceReferences(
+function readAndroidResourceReferences(
   root = ANDROID_MAIN_ROOT,
 ): Promise<AndroidResourceReferenceSource[]> {
-  const entries = await readdir(root, { withFileTypes: true });
-  const sources: AndroidResourceReferenceSource[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      // Source-set roots exclude Gradle build output.
-      sources.push(...(await readAndroidResourceReferences(fullPath)));
-      continue;
-    }
-    if (entry.isFile() && /\.(?:kt|kts|xml)$/u.test(entry.name)) {
-      sources.push({
-        path: path.relative(ROOT, fullPath).split(path.sep).join("/"),
-        source: await readFile(fullPath, "utf8"),
-      });
-    }
-  }
-  return sources;
+  // Source-set roots exclude Gradle build output.
+  return readAndroidSource(root, /\.(?:kt|kts|xml)$/u);
 }
 
 export function findUnusedAndroidResourceKeys(
@@ -403,9 +400,6 @@ function collectExplicitRuntimeSources(
   const sources = new Set<string>();
   const callPattern = /\bnativeString(?:Resource)?\(\s*"((?:\\.|[^"\\])+)"/gu;
   for (const file of sourceFiles) {
-    if (file.path.endsWith("/i18n/NativeStringResources.kt")) {
-      continue;
-    }
     for (const match of file.source.matchAll(callPattern)) {
       if (match[1]) {
         sources.add(decodeKotlinLiteral(match[1]));
@@ -415,7 +409,10 @@ function collectExplicitRuntimeSources(
   return sources;
 }
 
-function collectToolDisplaySources(value: unknown, sources = new Set<string>()): Set<string> {
+export function collectToolDisplaySources(
+  value: unknown,
+  sources = new Set<string>(),
+): Set<string> {
   if (Array.isArray(value)) {
     for (const item of value) {
       collectToolDisplaySources(item, sources);
@@ -558,9 +555,6 @@ function isAllowedUiLiteral(repoPath: string, source: string): boolean {
 }
 
 function shouldScanUiLiterals(repoPath: string): boolean {
-  if (repoPath.endsWith("/i18n/NativeStringResources.kt")) {
-    return false;
-  }
   if (
     repoPath.endsWith("/AndroidScreenshotFixture.kt") ||
     repoPath.endsWith("/WearScreenshotMode.kt")
@@ -862,21 +856,11 @@ function collectTypedModelLiteralFindings(
     if (!className) {
       continue;
     }
-    let openingParen = (declaration.index ?? 0) + declaration[0].length;
-    while (/\s/u.test(source[openingParen] ?? "")) {
-      openingParen += 1;
-    }
-    if (source[openingParen] === "<") {
-      const closingTypeArguments = findClosingDelimiter(source, openingParen, "<", ">");
-      if (closingTypeArguments === null) {
-        continue;
-      }
-      openingParen = closingTypeArguments + 1;
-      while (/\s/u.test(source[openingParen] ?? "")) {
-        openingParen += 1;
-      }
-    }
-    if (source[openingParen] !== "(") {
+    const openingParen = findParameterOpening(
+      source,
+      (declaration.index ?? 0) + declaration[0].length,
+    );
+    if (openingParen === null) {
       continue;
     }
     const closingParen = findClosingDelimiter(source, openingParen, "(", ")");
@@ -901,24 +885,8 @@ function collectTypedModelLiteralFindings(
     }
     const callPattern = new RegExp(`\\b${className}\\b`, "gu");
     for (const call of source.matchAll(callPattern)) {
-      let callOpening = (call.index ?? 0) + call[0].length;
-      while (/\s/u.test(source[callOpening] ?? "")) {
-        callOpening += 1;
-      }
-      if (source[callOpening] === "<") {
-        const closingTypeArguments = findClosingDelimiter(source, callOpening, "<", ">");
-        if (closingTypeArguments === null) {
-          continue;
-        }
-        callOpening = closingTypeArguments + 1;
-        while (/\s/u.test(source[callOpening] ?? "")) {
-          callOpening += 1;
-        }
-      }
-      if (source[callOpening] !== "(") {
-        continue;
-      }
-      if (callOpening === openingParen) {
+      const callOpening = findParameterOpening(source, (call.index ?? 0) + call[0].length);
+      if (callOpening === null || callOpening === openingParen) {
         continue;
       }
       const callClosing = findClosingDelimiter(source, callOpening, "(", ")");
@@ -962,6 +930,24 @@ function collectTypedModelLiteralFindings(
     }
   }
   return findings;
+}
+
+function findParameterOpening(source: string, startOffset: number): number | null {
+  let offset = startOffset;
+  while (/\s/u.test(source[offset] ?? "")) {
+    offset += 1;
+  }
+  if (source[offset] === "<") {
+    const closingTypeArguments = findClosingDelimiter(source, offset, "<", ">");
+    if (closingTypeArguments === null) {
+      return null;
+    }
+    offset = closingTypeArguments + 1;
+    while (/\s/u.test(source[offset] ?? "")) {
+      offset += 1;
+    }
+  }
+  return source[offset] === "(" ? offset : null;
 }
 
 export function findUnlocalizedAndroidUiLiterals(
@@ -1041,22 +1027,6 @@ export function selectDeterministicTranslation(source: string, values: readonly 
       )
       .at(0)?.[0] ?? ""
   );
-}
-
-export function selectGeneratedTranslation(
-  source: string,
-  artifactTranslations: readonly string[],
-  existing?: { source: string; translation: string },
-): string {
-  // Tool-display sources can remain live after their matching UI inventory entries are retired.
-  // Preserve the checked-in locale value only while its English source is unchanged.
-  const candidates =
-    artifactTranslations.length > 0
-      ? artifactTranslations
-      : existing?.source === source && existing.translation !== source
-        ? [existing.translation]
-        : [];
-  return selectDeterministicTranslation(source, candidates);
 }
 
 async function readInventory(): Promise<NativeInventoryEntry[]> {
@@ -1182,21 +1152,19 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   const inventory = await readInventory();
   const [
     artifacts,
-    localeStrings,
+    baseStrings,
     thirdPartyBaseStrings,
     wearBaseStrings,
     sourceFiles,
     toolDisplaySources,
   ] = await Promise.all([
     readArtifacts(),
-    Promise.all(LOCALES.map((locale) => readStrings(locale))),
+    readStrings("values"),
     readStrings("values", ANDROID_THIRD_PARTY_RESOURCE_ROOT, THIRD_PARTY_STRINGS_FILE),
     readStrings("values", WEAR_RESOURCE_ROOT),
     readAllAndroidSource(),
     readToolDisplaySources(),
   ]);
-  const baseStrings = expectDefined(localeStrings[0], "English Android string resources");
-  const translatedStrings = localeStrings.slice(1);
   const wearInventoryBySource = new Map(
     inventory
       .filter((entry) => entry.sites.some((site) => site.path === WEAR_STRINGS_REPO_PATH))
@@ -1211,7 +1179,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     (entry) => !entry.key.startsWith(MANAGED_PREFIX),
   );
   const manualSourceToKey = new Map(manualBase.map((entry) => [entry.value, entry.key]));
-  const entriesBySource = new Map<string, NativeInventoryEntry[]>();
+  const sources = new Set<string>();
   for (const entry of inventory) {
     if (
       entry.surface !== "android" ||
@@ -1219,48 +1187,31 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     ) {
       continue;
     }
-    const group = entriesBySource.get(entry.source) ?? [];
-    group.push(entry);
-    entriesBySource.set(entry.source, group);
+    sources.add(entry.source);
   }
   for (const source of collectExplicitRuntimeSources(sourceFiles)) {
-    if (!entriesBySource.has(source)) {
-      entriesBySource.set(source, []);
-    }
+    sources.add(source);
   }
   for (const source of toolDisplaySources) {
-    if (!entriesBySource.has(source)) {
-      entriesBySource.set(source, []);
-    }
+    sources.add(source);
   }
   const sourceToKey = new Map<string, string>();
-  for (const source of entriesBySource.keys()) {
+  for (const source of sources) {
     sourceToKey.set(source, manualSourceToKey.get(source) ?? resourceKey(source));
   }
   const resources = new Map<string, string>();
   const contradictions: TranslationContradiction[] = [];
-  for (const [localeIndex, locale] of NATIVE_I18N_LOCALES.entries()) {
-    const manualTranslations = translatedStrings[localeIndex] ?? new Map();
+  for (const locale of NATIVE_I18N_LOCALES) {
     const localeTranslations = artifacts.get(locale) ?? {};
     const artifactTranslationsBySource = translationsBySource(inventory, localeTranslations);
     const generated = new Map<string, { source: string; value: string }>();
-    for (const source of entriesBySource.keys()) {
+    for (const source of sources) {
       const key = sourceToKey.get(source);
       if (!key || !key.startsWith(MANAGED_PREFIX)) {
         continue;
       }
       const translations = artifactTranslationsBySource.get(source) ?? [];
-      const existingSource = decodeAndroidResourceValue(baseStrings.get(key)?.rawValue ?? "");
-      const existingTranslation = decodeAndroidResourceValue(
-        manualTranslations.get(key)?.rawValue ?? "",
-      );
-      const selected = selectGeneratedTranslation(
-        source,
-        translations,
-        existingSource && existingTranslation
-          ? { source: existingSource, translation: existingTranslation }
-          : undefined,
-      );
+      const selected = selectDeterministicTranslation(source, translations);
       if (selected === source && translations.some((translation) => translation !== source)) {
         throw new Error(
           `Android translation selection kept the source despite a translated candidate: ${locale} ${JSON.stringify(source)}`,
@@ -1275,12 +1226,9 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
         value: selected || source,
       });
     }
-    const manual = [...manualTranslations.values()].filter(
-      (entry) => !entry.key.startsWith(MANAGED_PREFIX),
-    );
     resources.set(
-      path.join(RESOURCE_ROOT, localeDirectory(locale), "strings.xml"),
-      renderStringsXml(manual, generated),
+      path.join(GENERATED_RESOURCE_ROOT, localeDirectory(locale), "native_strings.xml"),
+      renderStringsXml([], generated),
     );
     const wearManual = localizeManualStrings(
       wearBaseStrings,
@@ -1318,8 +1266,8 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     });
   }
   resources.set(
-    path.join(RESOURCE_ROOT, "values", "strings.xml"),
-    renderStringsXml(manualBase, generatedBase),
+    path.join(GENERATED_RESOURCE_ROOT, "values", "native_strings.xml"),
+    renderStringsXml([], generatedBase),
   );
 
   const assistantSource = await readFile(
@@ -1343,7 +1291,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     contradictions,
     kotlin: renderKotlin(sourceToKey),
     resources,
-    sources: new Set(sourceToKey.keys()),
+    sources,
   };
 }
 
@@ -1354,182 +1302,51 @@ function formatProblems(problems: Array<readonly [string, string[]]>): string {
   ].join("\n");
 }
 
-/**
- * Managed app rows (native_*) and localized Wear catalogs are owned end-to-end
- * by the post-merge locale refresh workflow, so a source PR may legitimately
- * carry stale generated output. Every other delta is real drift.
- */
-function onlyManagedRowsPending(current: string, expected: string): boolean {
-  const currentRows = new Map(parseStrings(current).map((entry) => [entry.key, entry]));
-  const expectedRows = new Map(parseStrings(expected).map((entry) => [entry.key, entry]));
-  for (const [key, entry] of currentRows) {
-    const expectedEntry = expectedRows.get(key);
-    if (!expectedEntry) {
-      if (!key.startsWith(MANAGED_PREFIX)) {
-        return false;
-      }
-      continue;
-    }
-    if (expectedEntry.attrs !== entry.attrs || expectedEntry.rawValue !== entry.rawValue) {
-      return false;
+async function generateAndroidAppI18n() {
+  const catalog = await buildAndroidAppI18nCatalog();
+  await rm(GENERATED_ROOT, { recursive: true, force: true });
+  await mkdir(path.dirname(GENERATED_KOTLIN_PATH), { recursive: true });
+  await writeFile(GENERATED_KOTLIN_PATH, catalog.kotlin);
+  for (const [filePath, content] of catalog.resources) {
+    if (filePath.startsWith(`${GENERATED_RESOURCE_ROOT}${path.sep}`)) {
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, content);
     }
   }
-  for (const key of expectedRows.keys()) {
-    if (!currentRows.has(key) && !key.startsWith(MANAGED_PREFIX)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function obsoleteGeneratedSources(
-  currentKotlin: string,
-  catalog: GeneratedCatalog,
-): Map<string, string> {
-  const obsolete = new Map<string, string>();
-  const suffix = "  )\n";
-  const prefix = renderKotlin(new Map()).slice(0, -suffix.length);
-  if (!currentKotlin.startsWith(prefix) || !currentKotlin.endsWith(suffix)) {
-    return obsolete;
-  }
-  const remaining = currentKotlin
-    .slice(prefix.length, -suffix.length)
-    .replace(
-      /^ {4}"((?:\\.|[^"\\])*)" to R\.string\.(native_[a-f0-9]{16}),\n/gmu,
-      (line, literal: string, key: string) => {
-        const source = decodeKotlinLiteral(literal);
-        if (
-          catalog.sources.has(source) ||
-          literal !== escapeKotlin(source) ||
-          key !== resourceKey(source) ||
-          readKotlinInterpolations(source)?.length !== 0 ||
-          obsolete.has(key)
-        ) {
-          return line;
-        }
-        obsolete.set(key, source);
-        return "";
-      },
-    );
-  return `${prefix}${remaining}${suffix}` === catalog.kotlin ? obsolete : new Map();
-}
-
-function removeObsoleteGeneratedStrings(
-  current: string,
-  expected: string,
-  obsolete: ReadonlyMap<string, string>,
-): string {
-  const header = `${GENERATED_HEADER}\n`;
-  const headerIndex = expected.indexOf(header);
-  const prefix = expected.slice(0, headerIndex + header.length);
-  const suffix = "</resources>\n";
-  if (headerIndex < 0 || !current.startsWith(prefix) || !current.endsWith(suffix)) {
-    return current;
-  }
-  const seen = new Set<string>();
-  const remaining = current
-    .slice(prefix.length, -suffix.length)
-    .replace(/^ {4}<string name="native_[a-f0-9]{16}"[^\n]*<\/string>\n/gmu, (line) => {
-      const entry = parseStrings(line)[0];
-      const source = entry && obsolete.get(entry.key);
-      if (!entry || source === undefined || seen.has(entry.key)) {
-        return line;
-      }
-      seen.add(entry.key);
-      const value = decodeAndroidResourceValue(entry.rawValue);
-      return value.trim() && `${renderGeneratedString(entry.key, { source, value })}\n` === line
-        ? ""
-        : line;
-    });
-  return `${prefix}${remaining}${suffix}`;
+  return catalog;
 }
 
 export async function syncAndroidAppI18n(
-  options: {
-    check?: boolean;
-    tolerateManagedPending?: boolean;
-    reportObsolete?: (message: string) => void;
-  } = {},
+  options: { check?: boolean; tolerateManagedPending?: boolean } = {},
 ) {
   const catalog = await buildAndroidAppI18nCatalog();
-  const currentKotlin = await readFile(GENERATED_KOTLIN_PATH, "utf8").catch(() => "");
-  const obsolete =
-    options.check && options.reportObsolete
-      ? obsoleteGeneratedSources(currentKotlin, catalog)
-      : new Map<string, string>();
-  if (obsolete.size > 0) {
-    const references = (
-      await Promise.all([
-        readAndroidResourceReferences(),
-        readAndroidResourceReferences(path.dirname(ANDROID_PLAY_SOURCE_ROOT)),
-        readAndroidResourceReferences(ANDROID_THIRD_PARTY_ROOT),
-      ])
-    )
-      .flat()
-      .filter((entry) => path.resolve(ROOT, entry.path) !== GENERATED_KOTLIN_PATH);
-    const unused = new Set(findUnusedAndroidResourceKeys(obsolete.keys(), references));
-    const base = await readStrings("values");
-    for (const key of obsolete.keys()) {
-      // Stale lookup rows must still compile, and direct resource callers stay blocking.
-      if (!unused.has(key) || !base.has(key)) {
-        obsolete.clear();
-        break;
-      }
-    }
-  }
   const drift: string[] = [];
-  const obsoleteFiles: string[] = [];
-  let sawUnmanagedDrift = false;
   for (const [filePath, expected] of catalog.resources) {
+    // Build outputs are checked against their input contracts, never tracked projections.
+    if (filePath.startsWith(`${GENERATED_RESOURCE_ROOT}${path.sep}`)) {
+      continue;
+    }
     const current = await readFile(filePath, "utf8").catch(() => "");
     if (current === expected) {
       continue;
     }
     const relativeFilePath = path.relative(ROOT, filePath).split(path.sep).join("/");
     if (
-      obsolete.size > 0 &&
-      filePath.startsWith(`${RESOURCE_ROOT}${path.sep}`) &&
-      filePath.endsWith(`${path.sep}strings.xml`) &&
-      removeObsoleteGeneratedStrings(current, expected, obsolete) === expected
-    ) {
-      obsoleteFiles.push(relativeFilePath);
-      continue;
-    }
-    if (
       options.check &&
       options.tolerateManagedPending &&
       (WEAR_GENERATED_RESOURCE_RE.test(relativeFilePath) ||
-        THIRD_PARTY_GENERATED_RESOURCE_RE.test(relativeFilePath) ||
-        (filePath.endsWith("strings.xml") && onlyManagedRowsPending(current, expected)))
+        THIRD_PARTY_GENERATED_RESOURCE_RE.test(relativeFilePath))
     ) {
       continue;
     }
-    sawUnmanagedDrift = true;
     drift.push(relativeFilePath);
     if (!options.check) {
       await mkdir(path.dirname(filePath), { recursive: true });
       await writeFile(filePath, expected);
     }
   }
-  if (currentKotlin !== catalog.kotlin) {
-    // The Kotlin map derives 1:1 from the same managed catalog: tolerate it
-    // exactly when every resource delta above was managed-pending.
-    if (obsolete.size > 0) {
-      obsoleteFiles.push(path.relative(ROOT, GENERATED_KOTLIN_PATH).split(path.sep).join("/"));
-    } else if (!(options.check && options.tolerateManagedPending && !sawUnmanagedDrift)) {
-      drift.push(path.relative(ROOT, GENERATED_KOTLIN_PATH).split(path.sep).join("/"));
-      if (!options.check) {
-        await writeFile(GENERATED_KOTLIN_PATH, catalog.kotlin);
-      }
-    }
-  }
   if (options.check && drift.length > 0) {
     throw new Error(`Android generated localization drift:\n${drift.join("\n")}`);
-  }
-  if (obsoleteFiles.length > 0) {
-    options.reportObsolete?.(
-      `Android obsolete generated localization rows: ${obsoleteFiles.join(", ")}`,
-    );
   }
   if (catalog.contradictions.length > 0) {
     const limit = 20;
@@ -1550,7 +1367,8 @@ export async function syncAndroidAppI18n(
   return catalog;
 }
 
-export async function verifyAndroidAppI18n() {
+export async function verifyAndroidAppI18n(catalog?: GeneratedCatalog) {
+  const generated = catalog ?? (await buildAndroidAppI18nCatalog());
   const [
     sourceFiles,
     base,
@@ -1579,7 +1397,10 @@ export async function verifyAndroidAppI18n() {
   const manualBaseKeys = [...baseKeys].filter((key) => !key.startsWith(MANAGED_PREFIX));
   problems.push([
     "App English unused",
-    findUnusedAndroidResourceKeys(manualBaseKeys, referenceSource),
+    findUnusedAndroidResourceKeys(manualBaseKeys, [
+      ...referenceSource,
+      { path: GENERATED_KOTLIN_PATH, source: generated.kotlin },
+    ]),
   ]);
   problems.push([
     "Third-party English unused",
@@ -1604,12 +1425,23 @@ export async function verifyAndroidAppI18n() {
   );
 }
 
-export async function checkAndroidAppI18n(
-  options: { tolerateManagedPending?: boolean; reportObsolete?: (message: string) => void } = {},
-) {
-  await verifyAndroidAppI18n();
-  await syncAndroidAppI18n({ check: true, ...options });
-  const localeStrings = await Promise.all(LOCALES.map((locale) => readStrings(locale)));
+export async function checkAndroidAppI18n(options: { tolerateManagedPending?: boolean } = {}) {
+  const catalog = await syncAndroidAppI18n({ check: true, ...options });
+  await verifyAndroidAppI18n(catalog);
+  const localeStrings = await Promise.all(
+    LOCALES.map(async (locale) => {
+      const manual = await readStrings(locale);
+      const generated = catalog.resources.get(
+        path.join(GENERATED_RESOURCE_ROOT, locale, "native_strings.xml"),
+      );
+      return new Map([
+        ...manual,
+        ...parseStrings(expectDefined(generated, `Android resources for ${locale}`)).map(
+          (entry) => [entry.key, entry] as const,
+        ),
+      ]);
+    }),
+  );
   const wearLocaleStrings = options.tolerateManagedPending
     ? []
     : await Promise.all(LOCALES.map((locale) => readStrings(locale, WEAR_RESOURCE_ROOT)));
@@ -1675,11 +1507,13 @@ export async function checkAndroidAppI18n(
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const [command] = process.argv.slice(2);
-  if (command === "sync") {
+  if (command === "generate") {
+    await generateAndroidAppI18n();
+  } else if (command === "sync") {
     await syncAndroidAppI18n();
   } else if (command === "check") {
     await checkAndroidAppI18n();
   } else {
-    throw new Error("usage: node --import tsx scripts/android-app-i18n.ts <sync|check>");
+    throw new Error("usage: node scripts/android-app-i18n.ts <generate|sync|check>");
   }
 }

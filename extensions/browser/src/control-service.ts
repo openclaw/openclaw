@@ -1,8 +1,5 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-/**
- * Browser control service lifecycle for plugin-managed, in-process operation.
- */
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -13,7 +10,11 @@ import {
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
 import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
-import { getExtensionRelayModule } from "./browser/extension-relay.runtime.js";
+import {
+  getExtensionRelayModule,
+  getGatewayExtensionRelayModule,
+} from "./browser/extension-relay.runtime.js";
+import { stopBrowserScreencasts } from "./browser/screencast/session.js";
 import type { BrowserServerState } from "./browser/server-context.js";
 import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 
@@ -79,7 +80,6 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
   return state;
 }
 
-/** Starts Browser control without binding the HTTP server when config enables it. */
 export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
   return await withBrowserControlStart(startBrowserControlServiceUnlocked);
 }
@@ -94,13 +94,10 @@ export async function stopBrowserControlService(): Promise<void> {
   } finally {
     // Direct Gateway auth sockets can exist before Browser control lazy-starts,
     // so plugin shutdown must close them even when there is no runtime state.
-    const { disposeGatewayExtensionRelay } =
-      await import("./browser/extension-relay/gateway-relay-route.js");
-    disposeGatewayExtensionRelay();
-    const { stopBrowserScreencasts } = await import("./browser/screencast/session.js");
+    const gatewayRelay = await getGatewayExtensionRelayModule.peek();
+    gatewayRelay?.disposeGatewayExtensionRelay();
     await stopBrowserScreencasts();
   }
 }
 
-/** Re-export Browser control context accessors for gateway-local dispatch. */
 export { createBrowserControlContext, getBrowserControlState };

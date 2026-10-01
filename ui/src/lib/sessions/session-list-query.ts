@@ -30,6 +30,8 @@ import {
 
 const ROW_SNAPSHOT_REASONS = new Set([
   "patch",
+  "participants",
+  "placement",
   "send",
   "steer",
   "agent.run.started",
@@ -128,12 +130,16 @@ export function canApplySessionListSnapshot(
     }
     // A member whose rank only improves cannot evict another member. Missing rows,
     // pin/archive/owner changes and backwards clocks need authoritative admission.
-    if (info.updatedAt === null || info.updatedAt < (existing.updatedAt ?? 0)) {
+    if (
+      !info.isAncestorReference &&
+      (info.updatedAt === null || info.updatedAt < (existing.updatedAt ?? 0))
+    ) {
       return false;
     }
     // Owner-first and retained selection can add rows outside the shared page.
     // Promoting one can displace its boundary despite already being displayed.
     if (
+      !info.isAncestorReference &&
       info.updatedAt !== existing.updatedAt &&
       result.sessions.length >
         (result.nextOffset ??
@@ -309,6 +315,8 @@ export type ManagedSessionList = ObservedSessionList & {
   key: string;
   query: ReturnType<typeof normalizeManagedSessionListQuery>;
   retainedLimit: number;
+  /** Invalidation retires remaining pages without cancelling the correlated RPC. */
+  readGeneration: number;
   coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
   pending: Promise<void> | null;
   queued: ManagedSessionListRefresh | null;
@@ -327,6 +335,7 @@ export function isPrimarySessionListQuery(options: SessionListScope): boolean {
     !query.search &&
     !query.ownerId &&
     query.involvingMe !== true &&
+    query.includeOwnerSessionCounts !== true &&
     query.excludeSubagents !== true &&
     query.excludeCron !== true &&
     query.excludeSystem !== true &&

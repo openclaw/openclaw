@@ -41,6 +41,21 @@ export function isResponseDone(
   return interrupted || !isGemini38LiveExtendedThinkingModel(model) || interactionStatus === "IDLE";
 }
 
+// Gemini 3.1 and 3.8 Live send each spoken utterance as one complete inputTranscription
+// message and never set `finished` (3.8 verified on the wire on 2026-09-19, including a
+// 16 s utterance with a mid-sentence pause), so each message is a final user transcript.
+export function emitsCompleteInputTranscripts(model: string): boolean {
+  return isGemini31LiveModel(model) || isGemini38LiveModel(model);
+}
+
+// Gemini 3.1 Live ends the user's turn on `audioStreamEnd`. Gemini 3.8 Live ignores it and its
+// server VAD only detects the end of speech while trailing audio keeps arriving; once the client
+// stops streaming (with or without `audioStreamEnd`) the turn never completes (verified on the
+// wire on 2026-09-19). 3.8 therefore needs every silent frame forwarded.
+export function endsTurnOnAudioStreamEnd(model: string): boolean {
+  return !isGemini38LiveModel(model);
+}
+
 export function supportsAsyncFunctionCalling(model: string): boolean {
   return !isGemini31LiveModel(model);
 }

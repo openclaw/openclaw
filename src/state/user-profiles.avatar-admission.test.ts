@@ -2,22 +2,24 @@ import { copyFileSync, existsSync, readFileSync, renameSync, unlinkSync } from "
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createRetainedOperation } from "../infra/retained-operation.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import type { OpenClawStateReadOutcome } from "./openclaw-state-read.types.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
   readUserProfileIdentity,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
+import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import {
   adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
-  getProfileAvatar,
   UserProfileNotFoundError,
   setUserProfileRole,
 } from "./user-profiles.js";
@@ -75,10 +77,10 @@ vi.mock("./user-profile-list.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./user-profile-list.js")>();
   return {
     ...actual,
-    retainUserProfilePublication: (
-      ...args: Parameters<typeof actual.retainUserProfilePublication>
+    retainUserProfileMutationPublication: (
+      ...args: Parameters<typeof actual.retainUserProfileMutationPublication>
     ) => {
-      const publication = actual.retainUserProfilePublication(...args);
+      const publication = actual.retainUserProfileMutationPublication(...args);
       try {
         boundary.duringGrant?.();
       } catch (error) {
@@ -114,17 +116,23 @@ vi.mock("./openclaw-state-read-worker.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-read-worker.js")>();
   return {
     ...actual,
-    createOpenClawStateReadTransport: (
-      ...args: Parameters<typeof actual.createOpenClawStateReadTransport>
-    ) => {
-      const owned = actual.createOpenClawStateReadTransport(...args);
+    captureOpenClawStateReadSource: () => {
+      const source = actual.captureOpenClawStateReadSource();
       return {
-        ...owned,
-        read: async (...readArgs: Parameters<typeof owned.read>) => {
-          if (boundary.readFailure) {
-            throw boundary.readFailure;
-          }
-          return owned.read(...readArgs);
+        ...source,
+        createTransport: (...args: Parameters<typeof source.createTransport>) => {
+          const owned = source.createTransport(...args);
+          return {
+            ...owned,
+            startRead: (...readArgs: Parameters<typeof owned.startRead>) => {
+              if (boundary.readFailure) {
+                const completion = createRetainedOperation<OpenClawStateReadOutcome>(() => {});
+                completion.reject(boundary.readFailure);
+                return completion.operation;
+              }
+              return owned.startRead(...readArgs);
+            },
+          };
         },
       };
     },

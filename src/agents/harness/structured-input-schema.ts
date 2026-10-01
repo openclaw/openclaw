@@ -17,6 +17,7 @@ import type {
   StructuredInputCompilerOptions,
   StructuredInputField,
   StructuredInputRecord,
+  StructuredInputValue,
 } from "./structured-input-boundary.js";
 import type { AgentHarnessUserInputOption } from "./user-input-types.js";
 
@@ -136,10 +137,6 @@ function compileStringField(
     isOther: true,
     defaultValue: defaultText,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultText);
-      if (missing) {
-        return missing;
-      }
       const value = values[0] ?? "";
       const error = validate(value);
       return error ? invalid(context, error) : { kind: "present", value };
@@ -194,10 +191,6 @@ function compileNumberField(
     isOther: true,
     defaultValue,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
       const raw = values[0]?.trim() ?? "";
       if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/u.test(raw)) {
         return invalid(context, type === "integer" ? "must be an integer." : "must be a number.");
@@ -230,10 +223,6 @@ function compileBooleanField(
     isOther: false,
     defaultValue,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
       const selected = findChoice(choices, values[0]);
       return selected
         ? { kind: "present", value: selected.value === "true" }
@@ -262,10 +251,6 @@ function compileChoiceField(
     isOther: context.otherFieldId !== undefined,
     defaultValue,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
       const selected = findChoice(choices, values[0]);
       if (selected) {
         return { kind: "present", value: selected.value };
@@ -327,10 +312,6 @@ function compileMultiSelectField(
     multiSelect: true,
     defaultValue,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
       const decoded = values.flatMap((value) => {
         const choice = findChoice(choices, value);
         return choice ? [choice.value] : [];
@@ -407,10 +388,7 @@ function buildField(
     question: {
       id: context.questionId,
       header: boundText(title, 12),
-      question: boundText(
-        details.length > 0 ? `${title}\n${details.join(" ")}` : title,
-        MAX_FIELD_TEXT,
-      ),
+      question: boundText(`${title}\n${details.join(" ")}`, MAX_FIELD_TEXT),
       ...(params.multiSelect ? { multiSelect: true } : {}),
       isOther: params.isOther,
       isSecret: context.secret,
@@ -421,12 +399,12 @@ function buildField(
         })) ?? null,
     },
     decode: (values) => {
-      const decoded = params.decode(values);
+      const decoded = decodeMissing(context, values, params.defaultValue) ?? params.decode(values);
       if (decoded.kind !== "present") {
         return decoded;
       }
       const selectedDeclaredChoice = params.options?.some(
-        (choice) => choice.label.toLowerCase() === values[0]?.trim().toLowerCase(),
+        (choice) => choice.label.trim().toLowerCase() === values[0]?.trim().toLowerCase(),
       );
       const selectedOther =
         context.otherFieldId &&
@@ -478,14 +456,7 @@ function readChoices(
     if (!Array.isArray(oneOfValue)) {
       return "has an invalid oneOf.";
     }
-    return normalizeChoices(
-      oneOfValue.map((entry) => ({
-        value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-        label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-        description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-      })),
-      options.minimumChoiceCount ?? 1,
-    );
+    return normalizeChoices(oneOfValue.map(readChoice), options.minimumChoiceCount ?? 1);
   }
   return undefined;
 }
@@ -501,14 +472,15 @@ function readArrayChoices(
   if (!Array.isArray(entries)) {
     return "must declare string enum, anyOf, or oneOf array choices.";
   }
-  return normalizeChoices(
-    entries.map((entry) => ({
-      value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-      label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-      description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-    })),
-    options.minimumChoiceCount ?? 1,
-  );
+  return normalizeChoices(entries.map(readChoice), options.minimumChoiceCount ?? 1);
+}
+
+function readChoice(entry: StructuredInputValue) {
+  return {
+    value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
+    label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
+    description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
+  };
 }
 
 function normalizeChoices(
@@ -606,7 +578,7 @@ function matchesStringFormat(value: string, format: string): boolean {
 function findChoice(choices: readonly Choice[], raw: string | undefined): Choice | undefined {
   const value = raw?.trim().toLowerCase();
   return choices.find(
-    (choice) => choice.label.toLowerCase() === value || choice.value.toLowerCase() === value,
+    (choice) => choice.label.trim().toLowerCase() === value || choice.value.toLowerCase() === value,
   );
 }
 

@@ -5,7 +5,10 @@ import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/config.ts";
+import {
+  resolvePackagedUpgradeTimeouts,
+  resolveRunnerMatrix,
+} from "../../scripts/lib/cross-os-release-checks/config.ts";
 import { createReleaseCheckSelection } from "../../scripts/plan-release-workflow-matrix.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
@@ -31,6 +34,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  "timeout-minutes"?: number | string;
   "continue-on-error"?: boolean | string;
   if?: string;
   needs?: string | string[];
@@ -64,6 +68,26 @@ function step(workflowJob: WorkflowJob, name: string): WorkflowStep {
 }
 
 describe("cross-OS release checks workflow", () => {
+  it("lets Windows packaged-upgrade finish its bounded timeout recovery within the job", () => {
+    const consumer = job(readWorkflow(WORKFLOW_PATH), "cross_os_release_checks");
+    const expression = String(consumer["timeout-minutes"]).replace(/^\$\{\{(.*)\}\}$/u, "$1");
+    for (const osId of ["ubuntu", "windows", "macos"]) {
+      for (const suite of ["packaged-fresh", "packaged-upgrade", "dev-update", "installer-fresh"]) {
+        const minutes = runInNewContext(expression, { matrix: { os_id: osId, suite } });
+        if (osId === "windows" && suite === "packaged-upgrade") {
+          const installCeilingMs = 45 * 60_000;
+          const { wrapperTimeoutMs } = resolvePackagedUpgradeTimeouts(installCeilingMs, "win32");
+          expect(minutes * 60_000).toBeGreaterThanOrEqual(
+            2 * installCeilingMs + wrapperTimeoutMs + 20 * 60_000,
+          );
+          expect(minutes).toBeLessThanOrEqual(180);
+        } else {
+          expect(minutes).toBe(60);
+        }
+      }
+    }
+  });
+
   it("covers both packaged Node lines while preserving platform exceptions and proof identities", () => {
     const matrix = resolveRunnerMatrix({
       mode: "both",
@@ -90,7 +114,7 @@ describe("cross-OS release checks workflow", () => {
             .filter((entry) => entry.os_id === osId && entry.suite === suite)
             .map((entry) => entry.node_version),
         ).toEqual([
-          osId === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.19.0",
+          osId === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.21.0",
           "26.1.0",
         ]);
       }
@@ -100,7 +124,7 @@ describe("cross-OS release checks workflow", () => {
     ).toEqual({
       artifact_name: "windows",
       display_name: "Windows",
-      node_version: "24.19.0",
+      node_version: "24.21.0",
       lane: "upgrade",
       os_id: "windows",
       runner: "blacksmith-32vcpu-windows-2025",
@@ -112,7 +136,7 @@ describe("cross-OS release checks workflow", () => {
     ).toEqual({
       artifact_name: "linux",
       display_name: "Linux",
-      node_version: "24.19.0",
+      node_version: "24.21.0",
       lane: "fresh",
       os_id: "ubuntu",
       runner: "blacksmith-8vcpu-ubuntu-2404",
@@ -124,7 +148,7 @@ describe("cross-OS release checks workflow", () => {
     ).toEqual({
       artifact_name: "macos",
       display_name: "macOS",
-      node_version: "24.19.0",
+      node_version: "24.21.0",
       lane: "fresh",
       os_id: "macos",
       runner: "blacksmith-6vcpu-macos-15",
@@ -150,7 +174,7 @@ describe("cross-OS release checks workflow", () => {
       {
         artifact_name: "windows",
         display_name: "Windows",
-        node_version: "24.19.0",
+        node_version: "24.21.0",
         lane: "upgrade",
         os_id: "windows",
         runner: "blacksmith-32vcpu-windows-2025",
@@ -893,12 +917,7 @@ describe("cross-OS release checks workflow", () => {
     // Lane tooling has no installed packages. Keep the fixture outside the checkout
     // so a developer's node_modules cannot satisfy an accidental runtime import.
     const fixture = tempDirs.make("cross-os-no-packages-");
-    for (const source of [
-      "package.json",
-      "scripts",
-      "packages/normalization-core",
-      "src/infra/file-read.ts",
-    ]) {
+    for (const source of ["package.json", "scripts", "packages/normalization-core"]) {
       const target = join(fixture, source);
       mkdirSync(dirname(target), { recursive: true });
       cpSync(source, target, { recursive: true });

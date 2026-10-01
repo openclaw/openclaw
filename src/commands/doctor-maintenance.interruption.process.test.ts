@@ -51,13 +51,14 @@ function interruptionScript(
       ["/commands/doctor.js", 'export const doctorCommand = () => globalThis.doctorFixture.runDoctor();'],
       ["/config/paths.js", 'export const isDefaultInstallIdentity = () => true;'],
       ["/commands/doctor-service-repair-policy.js", 'export const shouldManageGatewayService = async () => true; export const isServiceRepairExternallyManaged = () => false; export const resolveUpdateParentGatewayActivation = () => undefined;'],
-      ["/commands/doctor-maintenance-admission.js", 'export const resolveDoctorUpdateAdmission = () => () => {};'],
+      ["/commands/doctor-maintenance-admission.js", 'export const resolveDoctorUpdateAdmission = () => ({ assertCurrent() {}, recordContinuation() {} });'],
       ["/commands/doctor-agent-lease-refusal.js", 'export const assertDoctorAgentLeaseAdmission = async () => {}; export const preflightExternalDoctorAgentLease = async () => {};'],
       ["/commands/doctor-maintenance-stale-service.js", 'export const inspectStaleDoctorGateway = async () => undefined;'],
       ["/infra/gateway-lock-legacy.js", 'export const assertLegacyGatewayStoppedForMaintenance = async () => {};'],
-      ["/infra/state-database-coordinator.js", 'export const acquireGatewayMaintenanceCoordinator = () => ({ release() {}, createSchemaFenceDelegate() {} }); export const acquireStateDatabaseCoordinator = () => ({ release() {} });'],
-      ["/state/openclaw-state-db-async-lifecycle.js", 'export const createOpenClawDatabaseMaintenanceScope = () => ({ run: run => run(), close: async () => globalThis.doctorFixture.record("stores-closed") });'],
-      ["/cli/update-cli/update-command-service-maintenance.js", 'export const maybeStopManagedServiceBeforeMutableUpdate = params => globalThis.doctorFixture.stop(params); export const maybeResumeWindowsTaskAutoStartAfterPackageUpdate = async () => {}; export const revalidateManagedGatewayServiceAfterUpdate = async () => globalThis.doctorFixture.verdict;'],
+      ["/infra/gateway-lock.js", 'export const acquireGatewayLock = async () => { let active = true; return { assertCurrent(assertPolicy) { if (!active) throw new Error("Fixture Gateway ownership released"); assertPolicy?.(); if (!active) throw new Error("Fixture Gateway ownership released"); }, run(operation) { if (!active) throw new Error("Fixture Gateway ownership released"); return operation(); }, async release() { active = false; } }; };'],
+      ["/state/openclaw-state-db-async-lifecycle.js", 'export const createOpenClawDatabaseMaintenanceScope = () => { let closed = false; return { run: run => run(), close: async () => { if (!closed) { globalThis.doctorFixture.record("stores-closed"); closed = true; } } }; };'],
+      ["/state/openclaw-state-maintenance-context.js", 'export const admitOpenClawMaintenanceLiveAuthorityReads = () => {};'],
+      ["/cli/update-cli/update-command-service-maintenance.js", 'export const maybeStopManagedServiceBeforeMutableUpdate = params => globalThis.doctorFixture.stop(params); export const revalidateManagedGatewayServiceAfterUpdate = async () => globalThis.doctorFixture.verdict;'],
       ["/commands/doctor-gateway-services.js", 'export const maybeRepairGatewayServiceConfig = cfg => globalThis.doctorFixture.repair(cfg);'],
       ["/daemon/service.js", 'export const resolveGatewayService = () => globalThis.doctorFixture.service; export const readGatewayServiceState = async () => globalThis.doctorFixture.state;'],
       ["/daemon/service-operation-lock.js", 'export const withGatewayServiceOperationLock = async (_env, run) => run(() => {});'],
@@ -106,6 +107,15 @@ function interruptionScript(
       try {
         await maintenance.run(async () => {
           if (${pendingApproval}) await fixture.approve();
+          if (${progress}) {
+            const { resolveSqliteInspectionSignal } = await import(${JSON.stringify(new URL("../../infra/sqlite-readonly-worker.js", registrar).href)});
+            const signal = resolveSqliteInspectionSignal(new AbortController().signal);
+            const interrupted = new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
+            process.send("inspection");
+            await interrupted;
+            record("inspection-cancelled");
+            if (!signal.reason.message.includes("SIGTERM")) throw new Error("Inspection lost its interruption reason");
+          }
           await new Promise(setImmediate);
           record("repair-complete");
         });
@@ -121,9 +131,11 @@ function interruptionScript(
     installCliSignalExitHandlers();
     const program = new Command();
     registerMaintenanceCommands(program);
+    // The synthetic prompt has no native input handle; retain its parent-control channel.
+    process.channel.ref();
     try { await withCliProcessScope(() => program.parseAsync(["node", "openclaw", "doctor", "--fix", "--non-interactive"])); }
     catch (error) { if (!(error instanceof ExitError) || error.code !== 0) throw error; }
-    if (process.connected) process.disconnect();
+    finally { if (process.connected) process.disconnect(); }
   `;
 }
 
@@ -150,7 +162,6 @@ it.skipIf(process.platform === "win32")(
 it.skipIf(process.platform === "win32").each([
   { interruption: "closed stdout", code: 0 },
   { interruption: "SIGINT", code: 130 },
-  { interruption: "SIGTERM", code: 143 },
   { interruption: "SIGPIPE", code: 141 },
   { interruption: "SIGTERM with progress", code: 143 },
   { interruption: "SIGTERM while approving", code: 143 },
@@ -205,17 +216,25 @@ it.skipIf(process.platform === "win32").each([
         }),
       ]);
       expect(ready[0]).toBe("stopped");
-      if (pendingApproval || restoringApproval) {
-        const approval = once(child, "message");
+      const inspection = interruption === "SIGTERM with progress";
+      const terminationSignal =
+        interruption === "SIGINT" ? "SIGINT" : interruption === "SIGPIPE" ? "SIGPIPE" : "SIGTERM";
+      if (pendingApproval || restoringApproval || inspection) {
+        const approval = Promise.race([
+          once(child, "message"),
+          closed.then(() => {
+            throw new Error("Doctor exited before requesting approval: " + stderr);
+          }),
+        ]);
         child.send("continue", () => {});
-        expect((await approval)[0]).toBe("approval");
+        expect((await approval)[0]).toBe(inspection ? "inspection" : "approval");
         child.kill("SIGTERM");
       } else if (interruption === "closed stdout") {
         child.stdout!.destroy();
       } else {
-        child.kill(interruption === "SIGTERM with progress" ? "SIGTERM" : interruption);
+        child.kill(terminationSignal);
       }
-      if (!pendingApproval && !restoringApproval) {
+      if (!pendingApproval && !restoringApproval && !inspection) {
         child.send("continue", () => {});
       }
       const [exitCode, signal] = await closed;
@@ -223,6 +242,7 @@ it.skipIf(process.platform === "win32").each([
       expect(JSON.parse(fs.readFileSync(eventsPath, "utf8")), stderr).toEqual([
         "stopped",
         ...(pendingApproval ? ["approval-declined"] : []),
+        ...(inspection ? ["inspection-cancelled"] : []),
         "repair-complete",
         "stores-closed",
         ...(restoringApproval ? ["approval-declined"] : []),
@@ -231,6 +251,13 @@ it.skipIf(process.platform === "win32").each([
       ]);
       expect(signal, stderr).toBeNull();
       expect(exitCode, stderr).toBe(code);
+      if (interruption !== "closed stdout") {
+        expect(stderr).toContain(
+          interruption === "SIGPIPE"
+            ? "Doctor interrupted;"
+            : `Doctor interrupted by ${interruption === "SIGINT" ? "SIGINT" : "SIGTERM"};`,
+        );
+      }
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");

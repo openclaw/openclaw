@@ -1,7 +1,10 @@
 import { SpanStatusCode } from "@opentelemetry/api";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { redactSensitiveText } from "../api.js";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
   assignGenAiSpanIdentityAttrs,
   assignPositiveNumberAttr,
@@ -66,31 +69,25 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     };
 
     const usage = evt.usage;
-    if (usage.input) {
-      tokensCounter.add(usage.input, { ...attrs, "openclaw.token": "input" });
-      genAiTokenUsageHistogram.record(usage.input, {
-        ...genAiAttrs,
-        "gen_ai.token.type": "input",
-      });
-    }
-    if (usage.output) {
-      tokensCounter.add(usage.output, { ...attrs, "openclaw.token": "output" });
-      genAiTokenUsageHistogram.record(usage.output, {
-        ...genAiAttrs,
-        "gen_ai.token.type": "output",
-      });
-    }
-    if (usage.cacheRead) {
-      tokensCounter.add(usage.cacheRead, { ...attrs, "openclaw.token": "cache_read" });
-    }
-    if (usage.cacheWrite) {
-      tokensCounter.add(usage.cacheWrite, { ...attrs, "openclaw.token": "cache_write" });
-    }
-    if (usage.promptTokens) {
-      tokensCounter.add(usage.promptTokens, { ...attrs, "openclaw.token": "prompt" });
-    }
-    if (usage.total) {
-      tokensCounter.add(usage.total, { ...attrs, "openclaw.token": "total" });
+    for (const [tokenType, field] of [
+      ["input", "input"],
+      ["output", "output"],
+      ["cache_read", "cacheRead"],
+      ["cache_write", "cacheWrite"],
+      ["prompt", "promptTokens"],
+      ["total", "total"],
+    ] as const) {
+      const amount = usage[field];
+      if (!amount) {
+        continue;
+      }
+      tokensCounter.add(amount, { ...attrs, "openclaw.token": tokenType });
+      if (tokenType === "input" || tokenType === "output") {
+        genAiTokenUsageHistogram.record(amount, {
+          ...genAiAttrs,
+          "gen_ai.token.type": tokenType,
+        });
+      }
     }
 
     if (evt.costUsd) {
@@ -99,17 +96,11 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     if (evt.durationMs) {
       durationHistogram.record(evt.durationMs, attrs);
     }
-    if (evt.context?.limit) {
-      contextHistogram.record(evt.context.limit, {
-        ...attrs,
-        "openclaw.context": "limit",
-      });
-    }
-    if (evt.context?.used) {
-      contextHistogram.record(evt.context.used, {
-        ...attrs,
-        "openclaw.context": "used",
-      });
+    for (const kind of ["limit", "used"] as const) {
+      const amount = evt.context?.[kind];
+      if (amount) {
+        contextHistogram.record(amount, { ...attrs, "openclaw.context": kind });
+      }
     }
 
     if (!tracesEnabled) {

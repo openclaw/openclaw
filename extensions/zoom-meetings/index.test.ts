@@ -6,8 +6,8 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
+import { ZOOM_MEETINGS_CLI_METADATA } from "./cli-metadata.js";
 import plugin from "./index.js";
-import { ZOOM_MEETINGS_CLI_METADATA } from "./src/cli-output-mode.js";
 
 const MEETING_URL = "https://zoom.us/j/12345678901?pwd=owned";
 
@@ -52,7 +52,13 @@ describe("Zoom meetings plugin surface", () => {
     const api = fixture.createApi({
       pluginConfig: {},
       runtime: {
-        gateway: { isAvailable: vi.fn(async () => true), request: gatewayRequest },
+        gateway: {
+          isAvailable: vi.fn(async () => true),
+          request: gatewayRequest,
+          async readSessionFacts() {
+            throw new Error("Unexpected session facts request");
+          },
+        },
       } as unknown as OpenClawPluginApi["runtime"],
       registerTool: (registered: unknown) => {
         tool = (

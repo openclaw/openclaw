@@ -2,21 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
-import type { resolveContextEngine } from "../../../context-engine/registry.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
-import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
-import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
-import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
@@ -35,6 +32,7 @@ import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approv
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
+import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
 import { resolveAttemptDispatchApiKey } from "./auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
@@ -44,13 +42,11 @@ import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparatio
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import { CODEX_HARNESS_ID, resolveAttemptTrajectoryAttribution } from "./runtime-resolution.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
-import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
-type ContextEngine = Awaited<ReturnType<typeof resolveContextEngine>>;
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 type TerminalRetryState = ReturnType<typeof createEmbeddedRunTerminalRetryState>;
 
@@ -101,10 +97,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     fastModeAutoProgressState,
     fastModeStartedAtMs,
     maybeAnnounceFastModeAutoOff,
-    notifyAgentEvent,
     notifyExecutionPhase,
     notifyRunProgress,
-    notifyToolResult,
     resolveAttemptFastModeParam,
   } = runInput.progressController;
   const { createAttemptControls } = runInput.laneController;
@@ -337,28 +331,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     params.execOverrides ??= {};
     params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
   }
-  const incognitoSystemPrompt = appendIncognitoSystemPrompt({
-    agentId: workspaceResolution.agentId,
-    extraSystemPrompt: params.extraSystemPrompt,
-    sessionKey: params.sessionKey,
-    storePath: params.sessionTarget?.storePath,
-  });
-  const extraSystemPrompt = await appendProgressCardSystemPrompt({
+  const { extraSystemPrompt, gitCoauthorPrompt } = await prepareAttemptSystemPromptAdditions({
     agentId: workspaceResolution.agentId,
     authProfileId: runtime.lastProfileId,
     config: params.config,
-    extraSystemPrompt: incognitoSystemPrompt,
+    extraSystemPrompt: params.extraSystemPrompt,
     modelId,
     provider,
-    sessionKey: params.sessionKey,
-    toolsAllow: params.toolsAllow,
-  });
-  const gitCoauthorPrompt = resolveSessionGitCoauthorPrompt({
-    config: params.config,
-    agentId: workspaceResolution.agentId,
+    sessionId,
     sessionKey: params.sessionKey,
     storePath: params.sessionTarget?.storePath,
+    toolsAllow: params.toolsAllow,
   });
+  assertActiveRun();
   let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
   let skillReferencePaths = pluginSandbox?.readOnlyResourceMounts?.map((mount) => ({
     skillFile: path.join(mount.hostPath, "SKILL.md"),
@@ -393,9 +378,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     admittedRunContext,
     abortSignal: attemptAbortController.signal,
     onAbort: () => {
-      if (!params.abortSignal?.aborted) {
-        params.replyOperation?.abortByUser();
-      }
+      params.replyOperation?.abortByUser();
     },
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
@@ -549,8 +532,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       : {}),
     ...(params.sessionKey
       ? {
-          agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
+          agentHarnessCompletionScope: createAgentHarnessCompletionScope({
             requesterSessionKey: params.sessionKey,
+            requesterAgentId: workspaceResolution.agentId,
             gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
           }),
         }
@@ -613,9 +597,13 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     onReasoningStream: params.onReasoningStream,
     streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
     onReasoningEnd: params.onReasoningEnd,
-    onToolResult: notifyToolResult,
+    onToolResult: async (payload) => {
+      await params.onToolResult?.(payload);
+    },
     onAgentToolResult: params.onAgentToolResult,
-    onAgentEvent: notifyAgentEvent,
+    onAgentEvent: async (event) => {
+      await params.onAgentEvent?.(event);
+    },
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
@@ -635,7 +623,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
-    ...resolveSkillWorkshopAttemptParams(params),
+    skillWorkshopAutonomousCapture: params.skillWorkshopAutonomousCapture,
+    skillWorkshopUpdateProposals: params.skillWorkshopUpdateProposals,
+    skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
+    skillWorkshopProposalEnv: params.skillWorkshopProposalEnv,
+    skillWorkshopOrigin: params.skillWorkshopOrigin,
+    skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+    skillWorkshopProposalRevision: params.skillWorkshopProposalRevision,
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
     enforceFinalTag: params.enforceFinalTag,
@@ -679,6 +674,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       ],
     suppressNextUserMessagePersistence,
     beforeAgentFinalizeRevisionAttempts,
+    completionCheck: terminalRetryState.completionCheck,
     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
     suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: params.assistantErrorTranscript,

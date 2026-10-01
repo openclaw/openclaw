@@ -3,7 +3,6 @@ import path from "node:path";
 import { aroundEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../../test/helpers/managed-handoff-isolation.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../../infra/state-database-coordinator.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as handoffDatabase from "../../infra/update-managed-service-handoff-database.js";
@@ -102,7 +101,7 @@ export function registerPrivateHandoffBindingTests() {
       });
     try {
       expect(resolveManagedUpdateLeaseDatabasePath()).toBe(binding.databasePath);
-      await withStateDatabaseCoordinatorRuntimeDirectory(binding.directory, runTest);
+      await runTest();
     } finally {
       database.mockRestore();
       resolveTemp.mockRestore();

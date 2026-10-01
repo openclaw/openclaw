@@ -14,10 +14,10 @@ import {
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { createWorkerEnvironmentStore } from "./store.js";
-import type { RepositoryWorkerProjectSnapshot } from "./workspace-git-base.js";
 
 export const PROJECT_KEY = "a".repeat(64);
 export const PREPARATION_KEY = "b".repeat(64);
@@ -188,7 +188,7 @@ export function usePreparedPoolFixture() {
     const executionMode = "worker-turn";
     const identity = { sessionId, sessionKey, agentId: "main", executionMode } as const;
     const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-    const requested = placements.startDispatch(identity);
+    const requested = await placements.startDispatch(identity);
     const assigned = record.preparation
       ? placements.bindPreparedEnvironment({
           ...identity,

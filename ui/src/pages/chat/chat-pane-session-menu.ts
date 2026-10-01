@@ -37,6 +37,7 @@ import {
 import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navigation.ts";
 import { showToast } from "../../lib/toast.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
+import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
@@ -44,6 +45,7 @@ import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.ts";
 
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
+  private readonly headerSessionDataMemo = new ChatPaneHeaderMemo<SessionMenuData>();
   protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
     // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
     return (
@@ -105,21 +107,42 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       "main",
       parseAgentSessionKey(row.key)?.agentId ?? row.agentId,
     ).sessionKey;
-    return {
-      label: this.resolveHeaderSessionTitle(row),
-      sessionId: row.sessionId ?? null,
-      isChild: Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey]))),
-      pinned: row.pinned === true,
-      pinnable,
-      unread: row.unread === true,
-      hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
-      archived: row.archived === true,
-      archiving: this.context.sessions.archiveVisibility(row.key) === "pending",
-      category: normalizeOptionalString(row.category) ?? null,
-      icon: normalizeOptionalString(row.icon) ?? null,
-      color: normalizeOptionalString(row.color) ?? null,
-      categoryClearReturnsToGroups: false,
-    };
+    const label = this.resolveHeaderSessionTitle(row);
+    const isChild = Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey])));
+    const archiving = this.context.sessions.archiveVisibility(row.key) === "pending";
+    return this.headerSessionDataMemo.read(
+      [
+        label,
+        row.sessionId,
+        isChild,
+        row.pinned,
+        pinnable,
+        row.snoozedUntil,
+        row.unread,
+        row.hiddenFromInvolvingMe,
+        row.archived,
+        archiving,
+        row.category,
+        row.icon,
+        row.color,
+      ],
+      () => ({
+        label,
+        sessionId: row.sessionId ?? null,
+        isChild,
+        pinned: row.pinned === true,
+        pinnable,
+        snoozedUntil: row.snoozedUntil ?? null,
+        unread: row.unread === true,
+        hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
+        archived: row.archived === true,
+        archiving,
+        category: normalizeOptionalString(row.category) ?? null,
+        icon: normalizeOptionalString(row.icon) ?? null,
+        color: normalizeOptionalString(row.color) ?? null,
+        categoryClearReturnsToGroups: false,
+      }),
+    );
   }
 
   private headerSessionOperationsLoad: Promise<
@@ -140,13 +163,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         .catch(() => null);
       headerPlatformByClient.set(client, platformRequest);
     }
-    try {
-      const platform = await platformRequest;
-      if (this.connectedClient === client && this.connectionGeneration === generation) {
-        this.headerPlatform = platform;
-      }
-    } catch {
-      // Optional label refinement. Generic file-manager copy remains correct.
+    const platform = await platformRequest;
+    if (this.connectedClient === client && this.connectionGeneration === generation) {
+      this.headerPlatform = platform;
     }
   }
 
@@ -256,46 +275,33 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           ),
       };
       switch (action.kind) {
-        case "toggle-pin": {
-          const currentSession = resolveCurrentSession(true);
-          if (currentSession) {
-            await operations.patchSession(
-              host,
-              currentSession,
-              { pinned: !currentSession.pinned },
-              scope,
-              { sessionScope: true },
-            );
-          }
-          break;
-        }
         case "toggle-involving-me":
           await operations.setSessionInvolvement(host, session, !row.hiddenFromInvolvingMe, scope);
           break;
-        case "toggle-unread": {
-          const currentSession = resolveCurrentSession(true);
-          if (currentSession) {
-            await operations.patchSession(
-              host,
-              currentSession,
-              { unread: !currentSession.unread },
-              scope,
-            );
-          }
-          break;
-        }
+        case "toggle-pin":
+        case "toggle-unread":
         case "set-icon":
         case "set-color":
         case "reset-appearance": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
             const patch =
-              action.kind === "set-icon"
-                ? { icon: action.icon }
-                : action.kind === "set-color"
-                  ? { color: action.color }
-                  : { icon: null, color: null };
-            await operations.patchSession(host, currentSession, patch, scope);
+              action.kind === "toggle-pin"
+                ? { pinned: !currentSession.pinned }
+                : action.kind === "toggle-unread"
+                  ? { unread: !currentSession.unread }
+                  : action.kind === "set-icon"
+                    ? { icon: action.icon }
+                    : action.kind === "set-color"
+                      ? { color: action.color }
+                      : { icon: null, color: null };
+            await operations.patchSession(
+              host,
+              currentSession,
+              patch,
+              scope,
+              action.kind === "toggle-pin" ? { sessionScope: true } : undefined,
+            );
           }
           break;
         }
@@ -337,6 +343,14 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           }
           break;
         }
+        case "snooze":
+          await operations.snoozeSessionWithUndo(host, session, action.snoozedUntil, scope);
+          break;
+        case "wake":
+          await operations.patchSession(host, session, { snoozedUntil: null }, scope, {
+            sessionScope: true,
+          });
+          break;
         case "toggle-archived":
           if (session.archived) {
             await operations.patchSession(host, session, { archived: false }, scope, {

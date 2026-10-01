@@ -15,7 +15,10 @@ import {
   createToolExecutionMatcher,
   TOOL_EXECUTION_GATED_MESSAGE,
 } from "../../tool-policy-shared.js";
-import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
+import {
+  withRuntimeToolSchemaQuarantine,
+  type RuntimeToolSchemaQuarantineRecorder,
+} from "../../tool-schema-quarantine.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -36,7 +39,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type PreparedToolBase = Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
 type PreparedBundleTools = Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
 
-export function prepareEmbeddedAttemptToolCatalog(input: {
+export async function prepareEmbeddedAttemptToolCatalog(input: {
   attempt: EmbeddedRunAttemptParams;
   setup: EmbeddedAttemptSetup;
   preparedToolBase: PreparedToolBase;
@@ -44,7 +47,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   abortSignal: AbortSignal;
   executeCodeModeTool: ToolSearchCatalogToolExecutor;
 }) {
-  const buildCatalog = () => {
+  const buildCatalog = (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
     const { attempt, preparedToolBase } = input;
     const {
       codeModeControlsEnabledForRun,
@@ -77,7 +80,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       },
     });
     const toolSearch = compacted.catalog;
-    logRuntimeToolSchemaQuarantine({
+    recordQuarantine({
       diagnostics: compacted.diagnostics,
       tools: compacted.projectedTools,
       runId: attempt.runId,
@@ -169,7 +172,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       toolSearchRunPlan,
     };
   };
-  const current = buildCatalog();
+  const current = await withRuntimeToolSchemaQuarantine(buildCatalog);
   const promptPlanKeys = [
     "visibleAllowedToolNames",
     "liveAllowedToolNames",
@@ -197,8 +200,8 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         }
       }
     },
-    refreshTools: () => {
-      const next = buildCatalog();
+    refreshTools: (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
+      const next = buildCatalog(recordQuarantine);
       current.effectiveTools.splice(0, current.effectiveTools.length, ...next.effectiveTools);
       for (const key of [
         "visibleAllowedToolNames",

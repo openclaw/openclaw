@@ -1,6 +1,3 @@
-/**
- * Process-local cache for successful Codex plugin catalog and installed snapshots.
- */
 import type { v2 } from "./protocol.js";
 
 // Matches the sibling app-inventory cache window: upstream refreshes its remote
@@ -8,7 +5,6 @@ import type { v2 } from "./protocol.js";
 // a configured plugin for the whole process lifetime.
 const CODEX_PLUGIN_METADATA_CACHE_TTL_MS = 60 * 60 * 1_000;
 
-/** Plugin catalog query whose request shape affects the returned marketplaces. */
 export type CodexPluginMetadataQueryKind = "curated-global" | "installed";
 
 type CodexPluginMetadataMethod<QueryKind extends CodexPluginMetadataQueryKind> =
@@ -20,13 +16,11 @@ type CodexPluginMetadataRequestParams<QueryKind extends CodexPluginMetadataQuery
 type CodexPluginMetadataResponse<QueryKind extends CodexPluginMetadataQueryKind> =
   QueryKind extends "installed" ? v2.PluginInstalledResponse : v2.PluginListResponse;
 
-/** Request callback used to read Codex plugin metadata. */
 type CodexPluginMetadataRequest<QueryKind extends CodexPluginMetadataQueryKind> = (
   method: CodexPluginMetadataMethod<QueryKind>,
   params: CodexPluginMetadataRequestParams<QueryKind>,
 ) => Promise<CodexPluginMetadataResponse<QueryKind>>;
 
-/** Successful plugin metadata snapshot scoped to one app-server runtime. */
 type CodexPluginMetadataSnapshot<
   QueryKind extends CodexPluginMetadataQueryKind = CodexPluginMetadataQueryKind,
 > = {
@@ -60,7 +54,6 @@ type InFlightCodexPluginMetadataLoad = {
   promise: Promise<CodexPluginMetadataSnapshot>;
 };
 
-/** Process-local plugin metadata cache with coalesced loads per query. */
 export class CodexPluginMetadataCache {
   private readonly entries = new Map<string, CachedCodexPluginMetadataEntry>();
   private readonly inFlight = new Map<string, InFlightCodexPluginMetadataLoad>();
@@ -69,7 +62,6 @@ export class CodexPluginMetadataCache {
 
   constructor(private readonly nowMs: () => number = Date.now) {}
 
-  /** Returns a fresh cached snapshot without issuing a request. */
   read<QueryKind extends CodexPluginMetadataQueryKind>(
     appCacheKey: string,
     queryKind: QueryKind,
@@ -162,7 +154,6 @@ export class CodexPluginMetadataCache {
     }
   }
 
-  /** Invalidates all plugin metadata queries for one app-server runtime. */
   invalidate(appCacheKey: string): void {
     this.generations.set(appCacheKey, (this.generations.get(appCacheKey) ?? 0) + 1);
     for (const [entryKey, entry] of this.entries) {
@@ -186,7 +177,6 @@ export class CodexPluginMetadataCache {
   }
 }
 
-/** Shared plugin metadata cache used by Codex app-server runtime paths. */
 export const defaultCodexPluginMetadataCache = new CodexPluginMetadataCache();
 
 function buildMetadataCacheEntryKey(

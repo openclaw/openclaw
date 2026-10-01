@@ -100,9 +100,10 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         tailscaleMode: "off",
       }),
     );
-    mocks.commitConfig.mockImplementation(
-      async ({ nextConfig }: { nextConfig: OpenClawConfig }) => nextConfig,
-    );
+    // An early config conflict can leave the one-shot real writer unused.
+    mocks.commitConfig
+      .mockReset()
+      .mockImplementation(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => nextConfig);
     mocks.ensureOnboardingAgent.mockImplementation(
       async ({ config }: { config: OpenClawConfig }) => ({
         config,
@@ -420,7 +421,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       opts: {
         ...localOptions,
         authChoice: "demo-api-key",
-        gatewayPort: 70_000,
+        gatewayBind: "custom",
       },
       runtime,
       baseConfig: {},

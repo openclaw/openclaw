@@ -10,6 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
+  getPreparedModelCatalogOwnerSnapshot,
+  getPublishedPreparedModelCatalogOwnerSnapshot,
+} from "../agents/prepared-model-catalog.js";
+import {
   getPreparedModelFullCatalogAuth,
   setPreparedModelFullCatalogAuth,
 } from "../agents/prepared-model-runtime-auth.js";
@@ -50,7 +54,7 @@ vi.mock("./server-methods/chat-metadata-runtime.js", async (importOriginal) => {
       actual.createGatewayChatMetadataRuntime({
         ...params,
         deps: {
-          getPreparedOwner: () => owner,
+          getPreparedOwner: getPublishedPreparedModelCatalogOwnerSnapshot,
           getSkillsVersion: () => 0,
           getPluginRegistryVersion: () => 0,
           buildCommands,
@@ -71,7 +75,10 @@ afterEach(async ({ task }) => {
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
-async function createRenewalLifecycle() {
+async function createRenewalLifecycle(
+  minimalTestGateway = false,
+  allowGatewaySubagentBinding = false,
+) {
   const config: OpenClawConfig = { agents: { entries: { main: {} } } };
   mocks.configuredAgentIds = ["main"];
   mocks.authStorage.getAll.mockReturnValue({
@@ -94,6 +101,7 @@ async function createRenewalLifecycle() {
   await refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
     catalogMode: "static",
+    ...(allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
   });
   owner = getPreparedModelRuntimeSnapshot({
     config,
@@ -104,11 +112,17 @@ async function createRenewalLifecycle() {
   const observedCatalogs: ModelCatalogSnapshot[] = [];
   const broadcast = vi.fn(() => {
     // A connected consumer receives serialized status, not the owner's live status getters.
-    observedCatalogs.push(structuredClone(owner.readFullModelCatalog!()!));
+    const current = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId: "main" });
+    if (!current) {
+      throw new Error("Metadata publication omitted its model owner");
+    }
+    observedCatalogs.push(
+      structuredClone(current.readFullModelCatalog?.() ?? current.modelCatalog),
+    );
   });
   const lifecycle = await createGatewayChatMetadataLifecycle({
     getConfig: () => config,
-    minimalTestGateway: false,
+    minimalTestGateway,
     log: { warn: mocks.warn } as never,
   });
   const sidecars = createGatewaySidecarStopOwner();
@@ -121,10 +135,64 @@ async function createRenewalLifecycle() {
   observedCatalogs.length = 0;
   buildCommands.mockClear();
   buildProjection.mockClear();
-  return { inventory, broadcast, observedCatalogs, lifecycle, stop: () => sidecars.stop() };
+  return { config, inventory, broadcast, observedCatalogs, lifecycle, stop: () => sidecars.stop() };
 }
 
 describe("catalog renewal metadata broadcasts", () => {
+  it("prepares Gateway binding when minimal metadata finds an unbound model owner", async () => {
+    const harness = await createRenewalLifecycle(true, false);
+    try {
+      expect(owner.isCurrent()).toBe(false);
+      const bound = getPreparedModelCatalogOwnerSnapshot({
+        config: harness.config,
+        agentId: "main",
+        allowGatewaySubagentBinding: true,
+      });
+      expect(bound?.isCurrent()).toBe(true);
+      await harness.lifecycle.read({ agentId: "main" });
+      expect(bound?.isCurrent()).toBe(true);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("retains the published model owner across minimal metadata reads and catalog renewal", async () => {
+    const harness = await createRenewalLifecycle(true, true);
+    try {
+      expect(owner.isCurrent()).toBe(true);
+      const next = structuredClone(harness.inventory);
+      next.entries.push({ provider: "custom", id: "renewed", name: "Renewed" });
+      mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(next);
+      await owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] });
+      const metadata = await harness.lifecycle.read({ agentId: "main" });
+      expect(metadata.models?.map(({ id }) => id).toSorted()).toEqual(
+        next.entries.map(({ id }) => id).toSorted(),
+      );
+      expect(owner.isCurrent()).toBe(true);
+      expect(harness.broadcast).toHaveBeenCalledOnce();
+      await harness.lifecycle.read({ agentId: "main" });
+      expect(harness.broadcast).toHaveBeenCalledOnce();
+      expect(owner.isCurrent()).toBe(true);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("observes expired published inventory without starting provider discovery", async () => {
+    const harness = await createRenewalLifecycle();
+    const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+    inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
+    const acquisitions = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+    try {
+      await harness.lifecycle.refresh();
+      const metadata = await harness.lifecycle.read({ agentId: "main" });
+      expect(metadata.models).toMatchObject(harness.inventory.entries);
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it.each(["identical", "usage", "auth", "added", "removed", "outcome", "failed"] as const)(
     "publishes only settled visible changes for a renewal (%s)",
     async (change) => {
@@ -177,7 +245,7 @@ describe("catalog renewal metadata broadcasts", () => {
       });
       const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
       inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
-      owner.readFullModelCatalog!();
+      owner.refreshExpiredModelCatalog!();
       let renewal: Promise<unknown> | undefined;
       try {
         await entered.promise;

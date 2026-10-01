@@ -1,4 +1,5 @@
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -148,11 +149,7 @@ function readPayload(card: ToolCard): Record<string, unknown> | null {
   if (!card.outputText || card.outputText.length > 100_000) {
     return null;
   }
-  try {
-    return asNullableRecord(JSON.parse(card.outputText));
-  } catch {
-    return null;
-  }
+  return safeParseJsonRecord(card.outputText) ?? null;
 }
 
 function readSourceCandidates(

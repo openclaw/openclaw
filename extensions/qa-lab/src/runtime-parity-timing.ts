@@ -1,4 +1,4 @@
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 
 type QaRuntimeWallClockMetrics = {
   totalWallClockMs: number | null;

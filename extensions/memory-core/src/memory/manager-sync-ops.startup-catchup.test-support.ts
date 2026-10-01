@@ -1,6 +1,6 @@
 // Shared harness and fixtures for manager sync-ops startup catch-up tests.
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   resolveStateDir,
   type OpenClawConfig,
@@ -18,7 +18,7 @@ import {
   resolveConfiguredScopeHash,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
   path: string;
@@ -54,12 +54,17 @@ let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) 
 export function resetTranscriptUpdateListener(): void {
   transcriptUpdateListener = undefined;
 }
-export const startupHarnessDatabases = new Set<DatabaseSync>();
+export const startupHarnessDatabases = new Set<MemoryIndexDatabase>();
 
 type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
 
-function createStartupHarnessDatabase(sourceRows: SourceStateRow[]): DatabaseSync {
-  const db = new DatabaseSync(":memory:");
+function createStartupHarnessDatabase(sourceRows: SourceStateRow[]): MemoryIndexDatabase {
+  const database = MemoryIndexDatabase.openShadow(
+    path.join(resolveStateDir(), `startup-index-${randomUUID()}.sqlite`),
+    false,
+  );
+  startupHarnessDatabases.add(database);
+  const db = database.db;
   db.exec(`
     CREATE TABLE memory_index_sources (
       path TEXT NOT NULL,
@@ -88,14 +93,13 @@ function createStartupHarnessDatabase(sourceRows: SourceStateRow[]): DatabaseSyn
   for (const row of sourceRows) {
     insert.run(row.path, row.hash, row.mtime, row.size);
   }
-  startupHarnessDatabases.add(db);
-  return db;
+  return database;
 }
 export function emitSessionTranscriptUpdate(update: MemorySessionTranscriptUpdate): void {
   transcriptUpdateListener?.(update);
 }
 
-export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
+export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Startup catch-up harness does not acquire embedding providers");
   };
@@ -161,12 +165,11 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     private readonly indexSessionUpdates = false,
     private readonly subscribeToRealEvents = false,
     private readonly deferSessionIndex = false,
-    database?: DatabaseSync,
+    database?: MemoryIndexDatabase,
   ) {
     super();
     this.sources.add("sessions");
-    const db = database ?? createStartupHarnessDatabase(sourceRows);
-    this.publishedDatabase = new MemoryIndexDatabase(db);
+    this.publishedDatabase = database ?? createStartupHarnessDatabase(sourceRows);
   }
 
   restartForStartup(): SessionStartupCatchupHarness {
@@ -175,7 +178,7 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
       this.indexSessionUpdates,
       false,
       this.deferSessionIndex,
-      this.db,
+      this.publishedDatabase,
     );
   }
 
@@ -374,7 +377,7 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     source: MemorySource,
     expectedHash?: string,
   ): Promise<void> {
-    // This in-memory harness tests corpus selection. File-owned publication,
+    // This harness tests corpus selection. File-owned publication,
     // workspace locking and conditional deletion have separate integration tests.
     this.deletedSources.push({ path: pathname, source, expectedHash });
     this.db

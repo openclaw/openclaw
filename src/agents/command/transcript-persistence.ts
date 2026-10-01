@@ -24,27 +24,17 @@ import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
-import type { ContextUsage } from "../usage.js";
+import type { NormalizedUsage } from "../usage.js";
 
-type TranscriptUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-  contextUsage?: ContextUsage;
-};
+type TranscriptUsage = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "total" | "contextUsage"
+>;
 
-type PersistTextTurnTranscriptParams = {
-  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+type TextTurnTranscriptContext = {
   inputProvenance?: InputProvenance;
   body: string;
   transcriptBody?: string;
-  userMessage?: PersistedUserTurnMessage;
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-  assistantIdempotencyKey?: string;
-  expectedSessionId?: string;
-  finalText: string;
   sessionId: string;
   sessionKey: string;
   sessionFile?: string;
@@ -55,6 +45,15 @@ type PersistTextTurnTranscriptParams = {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+};
+
+type PersistTextTurnTranscriptParams = TextTurnTranscriptContext & {
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+  userMessage?: PersistedUserTurnMessage;
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  assistantIdempotencyKey?: string;
+  expectedSessionId?: string;
+  finalText: string;
   skipAssistantTurn?: boolean;
   assistant: {
     api: string;
@@ -73,20 +72,7 @@ type PersistTextTurnTranscriptResult =
     }
   | { kind: "session-rebound"; sessionEntry: undefined };
 
-const ACP_TRANSCRIPT_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-} as const;
+const ACP_TRANSCRIPT_USAGE = buildUsageWithNoCost({});
 const CLI_TRANSCRIPT_UNAVAILABLE_USAGE = {
   input: 0,
   output: 0,
@@ -270,28 +256,17 @@ export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): s
     .join("\n\n");
 }
 
-export async function persistAcpTurnTranscript(params: {
-  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-  inputProvenance?: InputProvenance;
-  body: string;
-  transcriptBody?: string;
-  userInput?: UserTurnInput;
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-  assistantIdempotencyKey?: string;
-  expectedSessionId?: string;
-  finalText: string;
-  terminalOutcome: AgentRunTerminalOutcome;
-  sessionId: string;
-  sessionKey: string;
-  sessionFile?: string;
-  sessionEntry: SessionEntry | undefined;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  sessionAgentId: string;
-  threadId?: string | number;
-  sessionCwd: string;
-  config: OpenClawConfig;
-}): Promise<PersistTextTurnTranscriptResult> {
+export async function persistAcpTurnTranscript(
+  params: TextTurnTranscriptContext & {
+    prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+    userInput?: UserTurnInput;
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+    assistantIdempotencyKey?: string;
+    expectedSessionId?: string;
+    finalText: string;
+    terminalOutcome: AgentRunTerminalOutcome;
+  },
+): Promise<PersistTextTurnTranscriptResult> {
   const outcome = classifyAgentRunTerminalOutcome(params.terminalOutcome);
   return await persistTextTurnTranscript({
     ...params,
@@ -305,25 +280,14 @@ export async function persistAcpTurnTranscript(params: {
   });
 }
 
-export async function persistCliTurnTranscript(params: {
-  inputProvenance?: InputProvenance;
-  body: string;
-  transcriptBody?: string;
-  userMessage?: PersistedUserTurnMessage;
-  result: EmbeddedAgentRunResult;
-  sessionId: string;
-  sessionKey: string;
-  sessionFile?: string;
-  sessionEntry: SessionEntry | undefined;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  sessionAgentId: string;
-  threadId?: string | number;
-  sessionCwd: string;
-  config: OpenClawConfig;
-  skipUserTurn?: boolean;
-  skipAssistantTurn?: boolean;
-}): Promise<PersistTextTurnTranscriptResult> {
+export async function persistCliTurnTranscript(
+  params: TextTurnTranscriptContext & {
+    userMessage?: PersistedUserTurnMessage;
+    result: EmbeddedAgentRunResult;
+    skipUserTurn?: boolean;
+    skipAssistantTurn?: boolean;
+  },
+): Promise<PersistTextTurnTranscriptResult> {
   const { result, skipUserTurn: requestedSkipUserTurn, ...transcript } = params;
   const replyText = resolveCliTranscriptReplyText(result);
   const provider = result.meta.agentMeta?.provider?.trim() ?? "cli";

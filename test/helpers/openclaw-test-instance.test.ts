@@ -35,7 +35,7 @@ import {
   testing,
 } from "./openclaw-test-instance.js";
 import { isProcessAlive, waitForDead, waitForFile, waitForFixtureFile } from "./process-wait.js";
-import { createDeferred, withTestTimeout } from "./promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 const MIGRATION_CONVERGENCE_REFUSAL =
@@ -44,6 +44,7 @@ const RESTART_MARKER =
   "[openclaw-test-instance] restarting gateway after migration convergence refusal";
 const LEGACY_STORE_PATH = "/fixture/sessions/sessions.json";
 const LEGACY_MIGRATION_REFUSAL = `Legacy session store requires migration: ${LEGACY_STORE_PATH}. Run "openclaw doctor --fix" against the same state/config before starting OpenClaw.`;
+const PROFILED_LEGACY_MIGRATION_REFUSAL = `Legacy session store requires migration: ${LEGACY_STORE_PATH}. Run "openclaw --profile qa-fixture doctor --fix" against the same state/config before starting OpenClaw.`;
 const LEGACY_STARTUP_FAILURE = [
   "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
   `- Legacy sessions store unreadable; left in place at ${LEGACY_STORE_PATH}`,
@@ -326,8 +327,8 @@ if (kind === "cli" || kind === "cli-drain") {
   process.exit(Number(argv[0]));
 }
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
-const legacyRefusal = kind.startsWith("startup-") ? ${JSON.stringify(LEGACY_STARTUP_FAILURE)} : ${JSON.stringify(LEGACY_MIGRATION_REFUSAL)};
-if (kind === "legacy-refuse" || kind === "startup-legacy-refuse") { process.stderr.write(legacyRefusal + "\\n"); process.exit(78); }
+const legacyRefusal = kind.startsWith("startup-") ? ${JSON.stringify(LEGACY_STARTUP_FAILURE)} : kind.startsWith("profile-") ? ${JSON.stringify(PROFILED_LEGACY_MIGRATION_REFUSAL)} : ${JSON.stringify(LEGACY_MIGRATION_REFUSAL)};
+if (kind === "legacy-refuse" || kind === "startup-legacy-refuse" || kind === "profile-legacy-refuse") { process.stderr.write(legacyRefusal + "\\n"); process.exit(78); }
 if (kind === "late-legacy-refuse" || kind === "startup-late-legacy-refuse") {
   spawnInheritedWriter("stderr", legacyRefusal + "\\n");
   process.exit(78);
@@ -361,6 +362,10 @@ if (kind === "near") { process.stderr.write(refusal.slice(0, -1) + " fixture\\n"
 if (kind === "stdout") { process.stdout.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "status2") { process.stderr.write(refusal + " fixture\\n"); process.exit(2); }
 if (kind === "signal") { process.stderr.write(refusal + " fixture\\n"); process.kill(process.pid, "SIGTERM"); }
+if (kind === "late-unrelated") {
+  spawnInheritedWriter("stderr", "unrelated startup failure\\n");
+  process.exit(1);
+}
 if (kind === "held-unrelated") await waitForControl(controlUrl + "/wait");
 if (kind === "unrelated" || kind === "held-unrelated") { process.stderr.write("unrelated startup failure\\n"); process.exit(1); }
 const server = createServer(async (req, res) => {
@@ -406,6 +411,7 @@ writeFileSync("dist/.runtime-postbuildstamp", "");
       .split(",")
       .some(
         (kind) =>
+          kind === "late-unrelated" ||
           kind === "late-refuse" ||
           kind === "late-legacy-refuse" ||
           kind === "startup-late-legacy-refuse" ||
@@ -587,7 +593,7 @@ describe("openclaw test instance", () => {
     const serverSpy = vi.spyOn(net, "createServer");
     const probe = net.connect(instance.port, "127.0.0.1");
     try {
-      await withTestTimeout(once(probe, "close"), 1_000, "reservation retained a probe connection");
+      await withinTest(once(probe, "close"), signal);
       await startGatewayForPortLifecycle(instance, signal);
       expect(instance.readiness).toMatchObject([
         { outcome: "ready", lastProbe: { phase: "complete", status: 200, ready: true } },
@@ -609,40 +615,54 @@ describe("openclaw test instance", () => {
     }
   });
 
-  it("preserves the refusal when reacquiring the same port fails", async () => {
-    const control = await createGatewayControl();
-    const { instance } = await createFakeGateway("held-unrelated", 1_000, 1_500, control);
-    const competitor = net.createServer((socket) => socket.destroy());
-    const startup = trackOperation(instance.startGateway());
-    const outcome = startup.catch((error: unknown) => error);
-    try {
-      await Promise.race([control.reached, startup]);
-      await new Promise<void>((resolve, reject) => {
-        competitor.once("error", reject);
-        competitor.listen(instance.port, "127.0.0.1", resolve);
-      });
-      await control.release();
-      const error = await outcome;
-      expect(error).toBeInstanceOf(AggregateError);
-      expect((error as AggregateError).errors).toEqual([
-        expect.objectContaining({ message: expect.stringContaining("unrelated startup failure") }),
-        expect.objectContaining({ code: "EADDRINUSE" }),
-      ]);
-      expect(instance.child).toBeUndefined();
-      await instance.cleanup();
-      await instance.stopGateway();
-      expect(competitor.listening).toBe(true);
-      await expectPathMissing(instance.state.root);
-    } finally {
-      control.unblock();
-      await outcome;
-      if (competitor.listening) {
+  it.each(["held-unrelated", "late-unrelated"])(
+    "preserves the refusal when reacquiring the same port fails (%s)",
+    async (action) => {
+      const control = await createGatewayControl();
+      const { instance } = await createFakeGateway(action, 1_000, 1_500, control);
+      const exited = createDeferred();
+      control.observers.onLaunch = () => {
+        instance.child?.once("exit", () => exited.resolve());
+      };
+      const competitor = net.createServer((socket) => socket.destroy());
+      const startup = trackOperation(instance.startGateway());
+      const outcome = startup.catch((error: unknown) => error);
+      try {
+        await Promise.race([control.reached, startup]);
         await new Promise<void>((resolve, reject) => {
-          competitor.close((error) => (error ? reject(error) : resolve()));
+          competitor.once("error", reject);
+          competitor.listen(instance.port, "127.0.0.1", resolve);
         });
+        if (action === "late-unrelated") {
+          await Promise.race([exited.promise, outcome]);
+          expect(instance.child?.stderr.closed).toBe(false);
+          expect(instance.logs()).not.toContain("unrelated startup failure");
+        }
+        await control.release();
+        const error = await outcome;
+        expect(error).toBeInstanceOf(AggregateError);
+        expect((error as AggregateError).errors).toEqual([
+          expect.objectContaining({
+            message: expect.stringContaining("unrelated startup failure"),
+          }),
+          expect.objectContaining({ code: "EADDRINUSE" }),
+        ]);
+        expect(instance.child).toBeUndefined();
+        await instance.cleanup();
+        await instance.stopGateway();
+        expect(competitor.listening).toBe(true);
+        await expectPathMissing(instance.state.root);
+      } finally {
+        control.unblock();
+        await outcome;
+        if (competitor.listening) {
+          await new Promise<void>((resolve, reject) => {
+            competitor.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
       }
-    }
-  });
+    },
+  );
 
   it("leaves explicitly supplied ports owned by the caller", async () => {
     const caller = net.createServer();
@@ -778,7 +798,11 @@ describe("openclaw test instance", () => {
       const timeoutMs = mode === "wait" ? 1_000 : 30_000;
       const command = trackOperation(scope.run(true, () => instance.cli([mode], { timeoutMs })));
       if (mode === "drain") {
-        await withTestTimeout(control!.reached, 5_000, "CLI stdout writer did not reach its gate");
+        await awaitGateBeforeSettlement(
+          control!.reached,
+          command,
+          "CLI stdout writer did not reach its gate",
+        );
         const [attempt] = await readAttempts();
         await waitForDead(attempt!.pid, 5_000);
         await control!.release();
@@ -832,9 +856,9 @@ describe("openclaw test instance", () => {
     const command = trackOperation(instance.cli(["fixture"], { timeoutMs: 10_000 }));
     let writerPid: number | undefined;
     try {
-      await withTestTimeout(
+      await awaitGateBeforeSettlement(
         control.reached,
-        5_000,
+        command,
         "CLI stderr fixture did not reach its release gate",
       );
       const [attempt] = await readAttempts();
@@ -1171,53 +1195,107 @@ describe("openclaw test instance", () => {
     await expectPathMissing(instance.state.root);
   });
 
-  it("orders a new start after an intervening stop instead of joining the earlier start", async () => {
+  it("orders a new start after an intervening stop instead of joining the earlier start", async ({
+    signal,
+  }) => {
     const control = await createGatewayControl();
     const { instance } = await createFakeGateway("held-ready,ready", 1_000, 1_500, control);
-    const firstStart = trackOperation(instance.startGateway());
-    await Promise.race([control.reached, firstStart]);
-    const stopped = trackOperation(instance.stopGateway());
-    const secondStart = trackOperation(instance.startGateway());
+    // This case owns start/stop ordering, independently of native bootstrap speed.
+    signal.throwIfAborted();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const restoreClock = () => clock.mockRestore();
+    signal.addEventListener("abort", restoreClock, { once: true });
+    let firstStart: Promise<void> | undefined;
+    let stopped: Promise<void> | undefined;
+    let secondStart: Promise<void> | undefined;
+    try {
+      firstStart = trackOperation(instance.startGateway());
+      await Promise.race([control.reached, firstStart]);
+      stopped = trackOperation(instance.stopGateway());
+      secondStart = trackOperation(instance.startGateway());
 
-    await control.release();
-    await Promise.allSettled([firstStart]);
-    await stopped;
-    await secondStart;
+      await control.release();
+      await Promise.allSettled([firstStart]);
+      await stopped;
+      await secondStart;
 
-    expect(control.launches).toHaveLength(2);
-    expect(control.launches[1]).not.toBe(control.launches[0]);
-    expect(isProcessAlive(control.launches[0]!)).toBe(false);
-    expect(instance.child?.pid).toBe(
-      (process.platform === "win32" ? control.parents : control.launches)[1],
-    );
-    const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`);
-    expect(await response.json()).toEqual({ ready: true });
+      expect(control.launches).toHaveLength(2);
+      expect(control.launches[1]).not.toBe(control.launches[0]);
+      expect(isProcessAlive(control.launches[0]!)).toBe(false);
+      expect(instance.child?.pid).toBe(
+        (process.platform === "win32" ? control.parents : control.launches)[1],
+      );
+      const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`);
+      expect(await response.json()).toEqual({ ready: true });
+    } finally {
+      restoreClock();
+      signal.removeEventListener("abort", restoreClock);
+      control.unblock();
+      await Promise.allSettled([firstStart, stopped, secondStart]);
+    }
   });
 
-  it("starts a ready replacement after a real readiness deadline expires", async () => {
+  it("starts a ready replacement after a real readiness deadline expires", async ({ signal }) => {
     const control = await createGatewayControl();
     const { instance } = await createFakeGateway("never-ready,ready", 1_000, 1_500, control);
     let firstOwnerPid: number | undefined;
     control.observers.onLaunch = () => {
       firstOwnerPid = instance.child?.pid;
     };
-    const error = await trackOperation(instance.startGateway()).catch(
-      (failure: unknown) => failure,
-    );
+    // Charge the unchanged real deadline only after the child proves it is running but unready.
+    signal.throwIfAborted();
+    const now = Date.now.bind(Date);
+    const fixtureTime = now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(fixtureTime);
+    const restoreClock = () => clock.mockRestore();
+    signal.addEventListener("abort", restoreClock, { once: true });
+    let readinessStartedAt: number | undefined;
+    const nativeFetch = globalThis.fetch;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+      const response = await nativeFetch(...args);
+      if (
+        args[0] === `http://127.0.0.1:${instance.port}/readyz` &&
+        readinessStartedAt === undefined
+      ) {
+        const json = response.json.bind(response);
+        vi.spyOn(response, "json").mockImplementation(async () => {
+          const result: unknown = await json();
+          expect(response.status).toBe(200);
+          expect(result).toEqual({ ready: false });
+          const startedAt = now();
+          readinessStartedAt = startedAt;
+          clock.mockImplementation(() => fixtureTime + now() - startedAt);
+          return result;
+        });
+      }
+      return response;
+    });
+    let error: unknown;
+    try {
+      error = await trackOperation(instance.startGateway()).catch((failure: unknown) => failure);
+    } finally {
+      restoreClock();
+      signal.removeEventListener("abort", restoreClock);
+      fetchSpy.mockRestore();
+    }
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("timeout waiting for gateway readiness");
+    expect(readinessStartedAt).toBeTypeOf("number");
     const firstPid = control.launches[0];
     expect(firstPid).toBeTypeOf("number");
     expect(firstOwnerPid).toBeTypeOf("number");
-    expect(readReadinessReceipt(error)).toMatchObject({
+    const receipt = readReadinessReceipt(error);
+    expect(receipt).toMatchObject({
       child: { pid: firstOwnerPid, exitCode: null, signalCode: null },
+      lastFailedResponse: { phase: "complete", status: 200, ready: false },
     });
+    expect(receipt.elapsedMs).toBeGreaterThanOrEqual(1_000);
     // Assert automatic failure cleanup before a replacement start can reap the owner.
     expect(instance.child).toBeUndefined();
     expect(isProcessAlive(firstPid as number)).toBe(false);
     await expect(fs.stat(instance.state.root)).resolves.toBeDefined();
 
-    await trackOperation(instance.startGateway());
+    await startGatewayForPortLifecycle(instance, signal);
     const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`);
     expect(await response.json()).toEqual({ ready: true });
     expect(control.launches).toHaveLength(2);
@@ -1286,13 +1364,16 @@ describe("openclaw test instance", () => {
 
   it.for([
     "legacy-refuse",
+    "profile-legacy-refuse",
     "late-legacy-refuse",
     "startup-legacy-refuse",
     "startup-late-legacy-refuse",
   ])("reports a typed %s only after the child's stderr closes", async (action) => {
     const message = action.startsWith("startup-")
       ? LEGACY_STARTUP_FAILURE
-      : LEGACY_MIGRATION_REFUSAL;
+      : action === "profile-legacy-refuse"
+        ? PROFILED_LEGACY_MIGRATION_REFUSAL
+        : LEGACY_MIGRATION_REFUSAL;
     const control = action.includes("late-") ? await createGatewayControl() : undefined;
     const { instance, readAttempts } = await createFakeGateway(
       `${action},config-refuse`,
@@ -1300,6 +1381,9 @@ describe("openclaw test instance", () => {
       1_500,
       control,
     );
+    if (action === "profile-legacy-refuse" || action.startsWith("startup-")) {
+      instance.env.OPENCLAW_PROFILE = "qa-fixture";
+    }
     const exited = createDeferred();
     if (control) {
       control.observers.onLaunch = () => {
@@ -1338,10 +1422,14 @@ describe("openclaw test instance", () => {
     "legacy-stdout",
     "legacy-status1",
     "legacy-no-advice",
+    "profile-legacy-refuse",
     "startup-no-advice",
     "startup-warning",
   ])("does not classify %s as an explained legacy migration refusal", async (action) => {
     const { instance, readAttempts } = await createFakeGateway(action);
+    if (action === "profile-legacy-refuse") {
+      instance.env.OPENCLAW_PROFILE = "different-fixture";
+    }
     const error = await instance.startGateway().catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(GatewayStartupRefusedError);
@@ -1711,7 +1799,7 @@ describe("openclaw test instance", () => {
         });
         const exited = once(leader, "exit");
         const closed = once(leader, "close");
-        // A spawn error rejects both event promises; the bounded joins below own it.
+        // A spawn error rejects both event promises; the joins below own it.
         void closed.catch(() => undefined);
         // A timeout must reap the raw group even before preparation reaches its gate.
         const abortGroup = () => {
@@ -1758,7 +1846,7 @@ describe("openclaw test instance", () => {
             expect(inspectManagedProcessGroup(leader, { errorPolicy: "indeterminate" })).toBe(
               "dead",
             );
-            await withTestTimeout(closed, 500, "fixture pipes did not close after SIGKILL");
+            await withinTest(closed, signal);
             await waitForDead(resistantPid, 500);
             expect(inspectManagedProcessGroup(leader, { errorPolicy: "indeterminate" })).toBe(
               "dead",
@@ -1777,7 +1865,7 @@ describe("openclaw test instance", () => {
               }
             }
           }
-          await withTestTimeout(closed, 500, "fixture pipes did not close after SIGKILL");
+          await closed;
           if (resistantPid) {
             await waitForDead(resistantPid, 500);
           }
@@ -1882,14 +1970,10 @@ describe("openclaw test instance", () => {
         // A free socket is not evidence that the retained process owner has closed.
         await expect(isPortReserved(instance.port)).resolves.toBe(false);
 
-        // Register before release, but charge only post-release drain to the stop budget.
+        // Register before release so the native close cannot be missed.
         const closed = trackOperation(once(firstChild, "close"));
         await fs.writeFile(`${tracePath}.draining-release`, "");
-        await withTestTimeout(
-          closed,
-          stopTimeoutMs * 2,
-          "terminal fixture did not close after release",
-        );
+        await closed;
         expect(firstChild.stdout.closed).toBe(true);
         expect(firstChild.stderr.closed).toBe(true);
         clock.mockReturnValue(Date.now());
@@ -2127,8 +2211,7 @@ describe("openclaw test instance", () => {
       await stopTrimming?.();
     });
 
-    // Use the existing fixture-hook budget for TS bootstrap. Neither trimming
-    // deadline starts until the real helper reaches its held HTTP request.
+    // Use the fixture-hook budget for TS bootstrap before exercising trimming.
     beforeEach(async ({ signal }) => {
       const cases = [
         { chunks: ["€a", "b"], limit: 4, expected: "ab" },
@@ -2174,12 +2257,8 @@ describe("openclaw test instance", () => {
         await closed;
       };
       exerciseTrimming = async () => {
-        // Arm the anti-hang deadline after importing the real helper, before releasing it.
-        const { stdout } = await withTestTimeout(
-          control.release().then(() => completed),
-          10_000,
-          "UTF-8 log trimming did not complete after loading the actual helper",
-        );
+        await control.release();
+        const { stdout } = await completed;
         expect(stdout).toBe("UTF-8 cases completed");
       };
       await trackOperation(

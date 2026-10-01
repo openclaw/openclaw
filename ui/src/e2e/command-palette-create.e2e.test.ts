@@ -15,6 +15,7 @@ import {
   openFromForeground,
   expectForegroundUnchanged,
 } from "./command-palette.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -92,6 +93,23 @@ suite.define(() => {
         suite.server.baseUrl,
       );
       await gateway.waitForRequest("environments.list");
+      const hints = palette.locator(".cmd-palette__hint");
+      await expect.poll(() => hints.count()).toBe(3);
+      const alignment = await hints.evaluateAll((rows) =>
+        rows.map((row) => {
+          const key = row.querySelector("kbd");
+          const label = row.querySelector(":scope > span");
+          if (!key || !label) {
+            throw new Error("Shortcut hint is missing its keycap or label");
+          }
+          const keyBox = key.getBoundingClientRect();
+          const labelBox = label.getBoundingClientRect();
+          return keyBox.y + keyBox.height / 2 - labelBox.y - labelBox.height / 2;
+        }),
+      );
+      for (const delta of alignment) {
+        expect(Math.abs(delta)).toBeLessThan(0.1);
+      }
       const capture = captureAfter(page, "palette-manual-scroll");
       const prompt = [
         "FIRST WORDS: Review the complete task before starting.",
@@ -168,11 +186,10 @@ suite.define(() => {
           );
           await input.fill("appearance");
           await palette.getByRole("option", { name: /^Appearance audit/ }).waitFor();
-          await palette
-            .locator(".cmd-palette__search")
-            .getByRole("status")
-            .filter({ hasText: "Models unavailable" })
-            .waitFor();
+          await expect
+            .poll(() => palette.locator(".cmd-palette__results").getAttribute("aria-busy"))
+            .toBe("false");
+          expect(await palette.locator(".cmd-palette__source-error").count()).toBe(0);
           const search = palette.locator(".cmd-palette__search");
           const original = (await palette.locator(".cmd-palette").boundingBox())!;
           const inputTop = (await input.boundingBox())!.y;
@@ -507,7 +524,7 @@ suite.define(() => {
         );
         const module = await holdModuleResponse(
           page,
-          /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
         );
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, foregroundKey));

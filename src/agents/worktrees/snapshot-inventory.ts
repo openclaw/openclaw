@@ -16,12 +16,19 @@ import {
   parseGitIndexPaths,
   parseGitTreePaths,
   rawPathExists,
+  rawPathStat,
   splitNullBuffer,
   type GitIndexPath,
   type GitTreePath,
 } from "./git-path-inventory.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
-import { commandError, requireGit, requireGitBuffer, runGit } from "./git.js";
+import {
+  commandError,
+  requireGit,
+  requireGitBuffer,
+  resolveGitMetadataPath,
+  runGit,
+} from "./git.js";
 import {
   captureExactState,
   exactSnapshotPrefix,
@@ -180,17 +187,6 @@ async function inspectOtherPaths(
   );
 }
 
-async function rawDirectoryExists(target: string | Buffer): Promise<boolean> {
-  try {
-    return (await fs.lstat(target)).isDirectory();
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotInventory> {
   const head = await requireGit(input.checkoutPath, ["rev-parse", "--verify", "HEAD^{commit}"]);
   const headPaths = parseGitTreePaths(
@@ -228,7 +224,7 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
     // for Git to drop by name; its untracked children arrive through the listing.
     if (
       !headKeys.has(gitPathKey(entry.path)) &&
-      (await rawDirectoryExists(checkoutPathFromGitBytes(input.checkoutPath, entry.path)))
+      (await rawPathStat(checkoutPathFromGitBytes(input.checkoutPath, entry.path)))?.isDirectory()
     ) {
       continue;
     }
@@ -302,12 +298,7 @@ async function seedSnapshotIndex(
   inventory: SnapshotInventory,
   indexEnv: SnapshotIndexEnvironment,
 ): Promise<void> {
-  const source = path.resolve(
-    input.checkoutPath,
-    normalizeGitPathForFilesystem(
-      await requireGit(input.checkoutPath, ["rev-parse", "--git-path", "index"]),
-    ),
-  );
+  const source = await resolveGitMetadataPath(input.checkoutPath, "index");
   const destination = indexEnv.GIT_INDEX_FILE;
   try {
     const stat = await fs.stat(source);

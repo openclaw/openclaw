@@ -1,22 +1,9 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import { peekSystemEvents } from "../../infra/system-events.js";
-import { createQueuedTaskRunCore as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
 
-export function createQueuedTaskRunCore(
-  params: Parameters<typeof createQueuedTaskRunOrNull>[0],
-): TaskRecord {
-  // Task creation can legally return null for invalid inputs; tests here always
-  // need a concrete queued task record.
-  const task = createQueuedTaskRunOrNull(params);
-  if (!task) {
-    throw new Error("expected queued task creation to succeed");
-  }
-  return task;
-}
 export function createBackgroundMaintenanceEngine(
   maintain: NonNullable<ContextEngine["maintain"]>,
   id = "test",
@@ -52,6 +39,34 @@ export function expectRecordFields(
   }
 }
 
-export function expectSystemEventContaining(sessionKey: string, text: string) {
-  expect(peekSystemEvents(sessionKey).join("\n")).toContain(text);
+export async function loadContextEngineMaintenanceModuleForTest() {
+  // Import once and reset the owned singleton state between cases.
+  const { runContextEngineMaintenance, waitForDeferredTurnMaintenanceForSession } =
+    await import("./context-engine-maintenance.js");
+  const { resetDeferredTurnMaintenanceStateForTest } =
+    await import("./context-engine-maintenance.test-support.js");
+  resetDeferredTurnMaintenanceStateForTest();
+  return {
+    runContextEngineMaintenance,
+    waitForDeferredTurnMaintenanceForSession,
+    resetDeferredTurnMaintenanceStateForTest,
+  };
+}
+
+export function createMaintenanceSessionManagerOpenFixture() {
+  let current: { getSessionTarget: () => SessionTranscriptRuntimeTarget } | undefined;
+  const open = vi.fn((target: SessionTranscriptRuntimeTarget) => {
+    current = { getSessionTarget: () => target };
+    return current;
+  });
+  return {
+    open,
+    get current() {
+      return current;
+    },
+    reset() {
+      current = undefined;
+      open.mockClear();
+    },
+  };
 }

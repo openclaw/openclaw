@@ -26,7 +26,6 @@ import {
 } from "./session-accessor.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
-import { applySessionStoreProjection } from "./session-accessor.sqlite-projection.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
@@ -63,8 +62,8 @@ function observeSlowWriters(
 }
 
 it.each(
-  ["session.store-projection", "session.entry-replacements", "session.lifecycle.mutate"].flatMap(
-    (operation) => [false, true].map((split) => ({ operation, split })),
+  ["session.entry-replacements", "session.lifecycle.mutate"].flatMap((operation) =>
+    [false, true].map((split) => ({ operation, split })),
   ),
 )(
   "attributes $operation to its real inline/split commits (split: $split)",
@@ -140,19 +139,7 @@ it.each(
       };
       try {
         await withPluginRuntimeRegistryScope(registry, async () => {
-          if (operation === "session.store-projection") {
-            const result = await applySessionStoreProjection({
-              storePath,
-              skipMaintenance: true,
-              update: async (store) => {
-                prepared();
-                delete store[sourceKey];
-                store[targetKey] = updated;
-                return { persist: true, result: resultToken };
-              },
-            });
-            expect(result).toBe(resultToken);
-          } else if (operation === "session.entry-replacements") {
+          if (operation === "session.entry-replacements") {
             const result = split
               ? await applySessionEntryCanonicalReplacements({
                   storePath,
@@ -344,7 +331,7 @@ it("records successful archive pruning stages", async () => {
   });
 });
 
-it("coalesces automatic maintenance through the shared reclamation writer", async () => {
+it("coalesces automatic maintenance without redundant writer admissions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const staleKey = "agent:main:subagent:writer-stale";
@@ -390,6 +377,7 @@ it("coalesces automatic maintenance through the shared reclamation writer", asyn
       kickSessionEntryMaintenanceAfterWrite(request);
       await finalized.promise;
       await yieldToEventLoop();
+      // Native commits retain admission; preparation and empty archive probes add no writer spans.
       expect(operations).toEqual([
         "session.maintenance.plan",
         "session.reclamation.retain",
@@ -399,13 +387,10 @@ it("coalesces automatic maintenance through the shared reclamation writer", asyn
         "session.reclamation.worker-commit",
         "session.reclamation.retain",
         "session.reclamation.worker-commit",
-        "session.maintenance.finalize",
-        "session.archive.publish-prepare",
       ]);
       expect(reclamationKinds).toEqual([
         "maintenance-plan",
         "maintenance-plan",
-        "maintenance-finalize",
         "maintenance-finalize",
       ]);
       expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();

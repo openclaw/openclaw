@@ -1,16 +1,17 @@
 import { ChildProcess } from "node:child_process";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { isPortFree } from "../test-utils/ports.js";
-import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import {
   ensureProviderLocalService,
   getManagedProviderLocalServiceDiagnosticsForTest,
@@ -30,19 +31,51 @@ function captureServicePid(healthUrl: string, pids: Set<number>): number {
   return pid;
 }
 
-async function killOwnedServices(pids: Set<number>): Promise<void> {
+const serviceClosures = new Map<ChildProcess, Promise<void>>();
+const observeServiceSpawn = (message: unknown) => {
+  if (
+    message &&
+    typeof message === "object" &&
+    "process" in message &&
+    message.process instanceof ChildProcess
+  ) {
+    const child = message.process;
+    // Node publishes child_process from the constructor, before spawn assigns its PID.
+    serviceClosures.set(
+      child,
+      new Promise<void>((resolve) => {
+        child.once("close", () => resolve());
+      }),
+    );
+  }
+};
+
+async function killOwnedServices(pids: Set<number>, signal: AbortSignal): Promise<void> {
   for (const pid of pids) {
     killPidIfAlive(pid);
   }
   for (const pid of pids) {
-    expect(await waitForPidToExit(pid)).toBe(true);
+    const closed = [...serviceClosures].find(([child]) => child.pid === pid)?.[1];
+    if (!closed) {
+      throw new Error(`Expected retained local service ${pid}`);
+    }
+    await withinTest(closed, signal);
+    expect(isPidAlive(pid)).toBe(false);
   }
 }
 
 describe("provider local service shutdown", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const fixture = createProviderLocalServiceTestFixture();
-  afterEach(fixture.cleanup);
+  beforeEach(() => subscribe("child_process", observeServiceSpawn));
+  afterEach(async () => {
+    try {
+      await fixture.cleanup();
+    } finally {
+      unsubscribe("child_process", observeServiceSpawn);
+      serviceClosures.clear();
+    }
+  });
 
   it("waits for a stubborn descendant after its parent exits", async () => {
     const port = await fixture.claimPort();
@@ -89,7 +122,7 @@ describe("provider local service shutdown", () => {
   // Windows terminates SIGTERM targets directly, so it cannot exercise a gated signal handler.
   it.runIf(process.platform !== "win32")(
     "joins an idle stop before shutdown or same-key acquisition can finish",
-    async () => {
+    async ({ signal }) => {
       const port = await fixture.claimPort();
       const healthUrl = `http://127.0.0.1:${port}/v1/models`;
       const stopping = createDeferred();
@@ -211,7 +244,7 @@ describe("provider local service shutdown", () => {
           await Promise.allSettled(pending);
           await stopManagedProviderLocalServices();
         },
-        () => killOwnedServices(pids),
+        () => killOwnedServices(pids, signal),
         () =>
           new Promise<void>((resolve, reject) => {
             control.close((error) => (error ? reject(error) : resolve()));
@@ -220,7 +253,7 @@ describe("provider local service shutdown", () => {
     },
   );
 
-  it("keeps a replacement service owned when a retired lease releases late", async () => {
+  it("keeps a replacement service owned when a retired lease releases late", async ({ signal }) => {
     const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const pids = new Set<number>();
@@ -265,11 +298,13 @@ describe("provider local service shutdown", () => {
         replacementLease.release();
       },
       stopManagedProviderLocalServices,
-      () => killOwnedServices(pids),
+      () => killOwnedServices(pids, signal),
     );
   });
 
-  it("recovers on a later acquisition after a failed process-exit observation", async () => {
+  it("recovers on a later acquisition after a failed process-exit observation", async ({
+    signal,
+  }) => {
     const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const pids = new Set<number>();
@@ -311,7 +346,6 @@ describe("provider local service shutdown", () => {
         if (!child) {
           throw new Error("Expected the owned child process");
         }
-        lease.release();
         // Hold the platform's authoritative completion fact while the child really exits.
         let restoreObservation: () => void;
         if (process.platform === "win32") {
@@ -332,20 +366,41 @@ describe("provider local service shutdown", () => {
           };
         } else {
           const realKill = process.kill.bind(process);
-          const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-            if (pid === -originalPid && signal === 0) {
+          const kill = vi.spyOn(process, "kill").mockImplementation((pid, processSignal) => {
+            if (pid === -originalPid && processSignal === 0) {
               return true;
             }
-            return realKill(pid, signal);
+            return realKill(pid, processSignal);
           });
           restoreObservation = () => kill.mockRestore();
         }
+        const closed =
+          process.platform === "win32"
+            ? undefined
+            : once(child, "close", { signal: AbortSignal.timeout(5_000) });
         try {
-          await expect(stopManagedProviderLocalServices()).rejects.toThrow(
+          if (closed) {
+            vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+          }
+          lease.release();
+          const stopped = stopManagedProviderLocalServices();
+          void stopped.catch(() => {});
+          if (closed) {
+            try {
+              // Native close must finish before advancing the withheld observation's deadlines.
+              await closed;
+            } finally {
+              await vi.runAllTimersAsync();
+            }
+          }
+          await expect(stopped).rejects.toThrow(
             `Local model service process tree ${originalPid} did not stop`,
           );
           expect(hasManagedProviderLocalServices()).toBe(true);
         } finally {
+          if (closed) {
+            vi.useRealTimers();
+          }
           restoreObservation();
         }
 
@@ -364,7 +419,7 @@ describe("provider local service shutdown", () => {
         expect(await isPortFree(port)).toBe(true);
       },
       stopManagedProviderLocalServices,
-      () => killOwnedServices(pids),
+      () => killOwnedServices(pids, signal),
       () => unsubscribe("child_process", observeSpawn),
     );
   });

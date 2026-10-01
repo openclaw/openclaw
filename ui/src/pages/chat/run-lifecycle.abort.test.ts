@@ -22,6 +22,32 @@ function makeSessionsResult(rows: (Pick<GatewaySessionRow, "key"> & Partial<Gate
 }
 
 describe("hasAbortableSessionRun", () => {
+  it("reads the target once and visits each row once per abortability check", () => {
+    const target = vi.fn(() => "Agent:Main:Target");
+    const keys = ["agent:main:other", "agent:main:target"].map((key) => vi.fn(() => key));
+    const host = {
+      get sessionKey() {
+        return target();
+      },
+      sessionsResult: sessionsResult(
+        keys.map((key, index) => ({
+          get key() {
+            return key();
+          },
+          kind: "direct" as const,
+          updatedAt: 1,
+          hasActiveSubagentRun: index === 1,
+        })),
+        1,
+      ),
+    };
+    for (let i = 0; i < 3; i++) {
+      expect(hasAbortableSessionRun(host)).toBe(true);
+    }
+    expect(target).toHaveBeenCalledTimes(3);
+    keys.forEach((key) => expect(key).toHaveBeenCalledTimes(3));
+  });
+
   it("recognizes the canonical main row while chat uses its main alias", () => {
     expect(
       hasAbortableSessionRun({
@@ -58,33 +84,42 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
 }
 
 describe("handleAbortChat", () => {
-  it("dispatches sessions.abort when only descendant work remains", async () => {
-    const request = vi.fn(async () => ({ status: "aborted" }));
-    const host = makeAbortHost({
-      client: createTestGatewayClient(request),
-      chatMessage: "@Alex interrupted draft",
-      chatMentions: [{ profileId: "alex-profile", start: 0, end: 5 }],
-      sessionsResult: makeSessionsResult([
-        {
-          key: "agent:main",
-          hasActiveRun: false,
-          hasActiveSubagentRun: true,
-          status: "done",
-        },
-      ]),
-    });
+  it.each([false, true])(
+    "dispatches descendant Stop with preserveDraft=%s",
+    async (preserveDraft) => {
+      const request = vi.fn(async () => ({ status: "aborted" }));
+      const host = makeAbortHost({
+        client: createTestGatewayClient(request),
+        chatMessage: "@Alex interrupted draft",
+        chatReplyTarget: { messageId: "original", text: "Quoted source" },
+        chatMentions: [{ profileId: "alex-profile", start: 0, end: 5 }],
+        sessionsResult: makeSessionsResult([
+          {
+            key: "agent:main",
+            hasActiveRun: false,
+            hasActiveSubagentRun: true,
+            status: "done",
+          },
+        ]),
+      });
 
-    expect(hasDirectSessionRun(host)).toBe(false);
-    expect(hasAbortableSessionRun(host)).toBe(true);
-    await handleAbortChat(host);
+      expect(hasDirectSessionRun(host)).toBe(false);
+      expect(hasAbortableSessionRun(host)).toBe(true);
+      await handleAbortChat(host, { preserveDraft });
 
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: "agent:main",
-      clearQueued: true,
-    });
-    expect(host.chatMessage).toBe("");
-    expect(host.chatMentions).toEqual([]);
-  });
+      expect(request).toHaveBeenCalledWith("sessions.abort", {
+        key: "agent:main",
+        clearQueued: true,
+      });
+      expect(host.chatMessage).toBe(preserveDraft ? "@Alex interrupted draft" : "");
+      expect(host.chatMentions).toEqual(
+        preserveDraft ? [{ profileId: "alex-profile", start: 0, end: 5 }] : [],
+      );
+      expect(host.chatReplyTarget).toEqual(
+        preserveDraft ? { messageId: "original", text: "Quoted source" } : null,
+      );
+    },
+  );
 
   it("routes recovered embedded Stop through sessions.abort with its run id", async () => {
     const request = vi.fn(async () => ({ status: "aborted" }));

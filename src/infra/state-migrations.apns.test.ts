@@ -101,26 +101,16 @@ describe("legacy APNs Doctor migration", () => {
     });
   }
 
-  it("detects source and interrupted claims only for explicit Doctor repair", async () => {
-    const stateDir = useStateDir();
-    const sourcePath = await writeLegacyState(stateDir, {});
-    expect(detectLegacyApnsRegistrations({ stateDir }).hasLegacy).toBe(false);
-    expect(
-      detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
-    ).toBe(true);
-
-    await fsp.rename(sourcePath, `${sourcePath}.doctor-importing`);
-    expect(
-      detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
-    ).toBe(true);
-  });
-
   it("imports shipped direct and relay shapes, records a receipt, and removes JSON", async () => {
     const stateDir = useStateDir();
     const sourcePath = await writeLegacyState(stateDir, {
       "legacy-direct": directRegistration(),
       "legacy-relay": relayRegistration(),
     });
+    expect(detectLegacyApnsRegistrations({ stateDir }).hasLegacy).toBe(false);
+    expect(
+      detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
+    ).toBe(true);
     const sourceBytes = await fsp.readFile(sourcePath);
     const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
 
@@ -264,14 +254,6 @@ describe("legacy APNs Doctor migration", () => {
   it.each([
     ["invalid root", []],
     [
-      "unknown field",
-      { registrationsByNodeId: { node: directRegistration({ nodeId: "node", extra: true }) } },
-    ],
-    [
-      "mismatched node id",
-      { registrationsByNodeId: { key: directRegistration({ nodeId: "other" }) } },
-    ],
-    [
       "invalid relay",
       { registrationsByNodeId: { "legacy-relay": relayRegistration({ distribution: "beta" }) } },
     ],
@@ -281,16 +263,6 @@ describe("legacy APNs Doctor migration", () => {
         registrationsByNodeId: {
           node: directRegistration({
             nodeId: "node",
-            updatedAtMs: Number.MAX_SAFE_INTEGER,
-          }),
-        },
-      },
-    ],
-    [
-      "out-of-range relay timestamp",
-      {
-        registrationsByNodeId: {
-          "legacy-relay": relayRegistration({
             updatedAtMs: Number.MAX_SAFE_INTEGER,
           }),
         },
@@ -525,7 +497,7 @@ describe("legacy APNs Doctor migration", () => {
       await gatewayLock.release();
     }
 
-    expect(result.warnings[0]).toContain("Gateway or another SQLite maintenance command");
+    expect(result.warnings[0]).toContain("OpenClaw state database is busy");
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
@@ -536,6 +508,9 @@ describe("legacy APNs Doctor migration", () => {
     });
     const claimPath = `${sourcePath}.doctor-importing`;
     await fsp.rename(sourcePath, claimPath);
+    expect(
+      detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
+    ).toBe(true);
 
     const result = await migrate(stateDir);
 

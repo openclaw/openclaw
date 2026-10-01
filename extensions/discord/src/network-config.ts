@@ -1,4 +1,3 @@
-// Discord helper module supports network config behavior.
 import * as dns from "node:dns";
 import type { LookupFunction } from "node:net";
 import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -20,17 +19,11 @@ function isDiscordTransportHostname(hostname: string): boolean {
 }
 
 function reorderLookupAddresses(addresses: dns.LookupAddress[]): dns.LookupAddress[] {
-  if (!Array.isArray(addresses) || addresses.length < 2) {
+  if (addresses.length < 2) {
     return addresses;
   }
   const ipv4 = addresses.filter((entry) => entry.family === 4);
   const ipv6 = addresses.filter((entry) => entry.family === 6);
-  if (ipv4.length === 0) {
-    return ipv6;
-  }
-  if (ipv6.length === 0) {
-    return ipv4;
-  }
   return [...ipv4, ...ipv6];
 }
 

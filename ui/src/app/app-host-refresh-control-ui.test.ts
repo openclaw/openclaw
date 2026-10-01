@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { sessionRosterCacheGeneration } from "../lib/sessions/session-roster-cache.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
   createGatewayStoreTestStore,
@@ -15,6 +16,8 @@ import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import "./app-host.ts";
 
 vi.hoisted(() => {
+  // Build identity is captured on import, including imports from an earlier shared test.
+  vi.resetModules();
   vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", {
     version: "1.0.0",
     buildId: "serving-build",
@@ -69,6 +72,25 @@ describe("OpenClaw shell Control UI refresh", () => {
     document.body.replaceChildren();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("retires cached roster admission before publishing a replacement connection", () => {
+    const generation = sessionRosterCacheGeneration;
+    const observed: number[] = [];
+    const unsubscribe = store.gateway.subscribe((snapshot) => {
+      if (snapshot.phase === "connecting") {
+        observed.push(sessionRosterCacheGeneration);
+      }
+    });
+    try {
+      store.gateway.connect({ bootstrapToken: "synthetic-replacement-bootstrap" });
+      expect(observed.length).toBeGreaterThan(0);
+      for (const current of observed) {
+        expect(current).toBeGreaterThan(generation);
+      }
+    } finally {
+      unsubscribe();
+    }
   });
 
   it.each(["clear", "replace"])(

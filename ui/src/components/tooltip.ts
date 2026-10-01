@@ -1,10 +1,13 @@
 // Control UI adapter for Web Awesome tooltips. OpenClaw keeps its terse
 // wrapper API and manual dismissal; Web Awesome owns positioning and rendering.
-import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
-import { css, html } from "lit";
-import { property, query } from "lit/decorators.js";
+import { css, html, type TemplateResult } from "lit";
+import { property, query, state } from "lit/decorators.js";
+import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { showToast } from "../lib/toast.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
+import { kbdStyles } from "./kbd-styles.ts";
 import {
   isTooltipTextRedundant,
   isTooltipTriggerElement,
@@ -97,7 +100,12 @@ class Tooltip extends OpenClawLitElement {
   static readonly #activeByDocument = new WeakMap<Document, Tooltip>();
 
   static readonly consumeEscape = (event: KeyboardEvent, ownerDocument: Document): boolean => {
-    if (event.key !== "Escape" || event.defaultPrevented) {
+    if (
+      event.key !== "Escape" ||
+      event.defaultPrevented ||
+      event.isComposing ||
+      event.keyCode === 229
+    ) {
       return false;
     }
     const active = Tooltip.#activeByDocument.get(ownerDocument);
@@ -128,6 +136,9 @@ class Tooltip extends OpenClawLitElement {
 
   @property() content = "";
 
+  /** Noninteractive presentation; content remains the accessible description. */
+  @property({ attribute: false }) contentTemplate?: TemplateResult;
+
   @property() placement: WaTooltip["placement"] = "top";
 
   @property({ type: Number }) closeDelay = RICH_CONTENT_CLOSE_DELAY;
@@ -150,6 +161,8 @@ class Tooltip extends OpenClawLitElement {
 
   @query("wa-tooltip") private webAwesomeTooltip?: WaTooltip;
 
+  @state() private materialized = false;
+
   #triggerElement: HTMLElement | SVGElement | null = null;
   #pinned = false;
   #describedElement: Element | null = null;
@@ -167,78 +180,85 @@ class Tooltip extends OpenClawLitElement {
   readonly #tooltipId = createTooltipId();
   readonly #descriptionId = `${this.#tooltipId}-description`;
 
-  static override styles = css`
-    :host {
-      display: contents;
-    }
+  static override styles = [
+    kbdStyles,
+    css`
+      :host {
+        display: contents;
+      }
 
-    wa-tooltip {
-      --max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
-      --wa-tooltip-arrow-size: var(--openclaw-tooltip-arrow-size, 0px);
-      --wa-tooltip-background-color: var(
-        --openclaw-tooltip-background-color,
-        color-mix(in srgb, var(--bg-elevated) 97%, var(--text) 3%)
-      );
-      --wa-tooltip-border-color: var(
-        --openclaw-tooltip-border-color,
-        var(--overlay-border, var(--border-strong))
-      );
-      --wa-tooltip-border-width: 1px;
-      --wa-tooltip-border-style: solid;
-      --wa-tooltip-content-color: var(--text);
-      --wa-tooltip-border-radius: var(--openclaw-tooltip-border-radius, var(--radius-md));
-      --show-duration: var(--openclaw-tooltip-popup-show-duration, var(--wa-transition-fast));
-      --hide-duration: var(--openclaw-tooltip-popup-hide-duration, var(--wa-transition-fast));
-      font-family: var(--font-body);
-    }
+      wa-tooltip:not(:defined) {
+        display: none;
+      }
 
-    wa-tooltip::part(body) {
-      padding: var(--openclaw-tooltip-padding, 5px 7px);
-      box-shadow: var(--openclaw-tooltip-shadow, var(--overlay-shadow, var(--shadow-md)));
-      font-size: 11px;
-      font-weight: 500;
-      line-height: 1.25;
-      overflow-wrap: anywhere;
-    }
-
-    :host(.sidebar-hover-tooltip) wa-tooltip[open]::part(base__popup) {
-      animation: var(--openclaw-tooltip-open-animation);
-    }
-
-    @media (prefers-reduced-motion: reduce) {
       wa-tooltip {
-        --show-duration: 0ms;
-        --hide-duration: 0ms;
+        --max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
+        --wa-tooltip-arrow-size: var(--openclaw-tooltip-arrow-size, 0px);
+        --wa-tooltip-background-color: var(
+          --openclaw-tooltip-background-color,
+          color-mix(in srgb, var(--bg-elevated) 97%, var(--text) 3%)
+        );
+        --wa-tooltip-border-color: var(
+          --openclaw-tooltip-border-color,
+          var(--overlay-border, var(--border-strong))
+        );
+        --wa-tooltip-border-width: 1px;
+        --wa-tooltip-border-style: solid;
+        --wa-tooltip-content-color: var(--text);
+        --wa-tooltip-border-radius: var(--openclaw-tooltip-border-radius, var(--radius-md));
+        --show-duration: var(--openclaw-tooltip-popup-show-duration, var(--wa-transition-fast));
+        --hide-duration: var(--openclaw-tooltip-popup-hide-duration, var(--wa-transition-fast));
+        font-family: var(--font-body);
+      }
+
+      wa-tooltip::part(body) {
+        padding: var(--openclaw-tooltip-padding, 5px 7px);
+        box-shadow: var(--openclaw-tooltip-shadow, var(--overlay-shadow, var(--shadow-md)));
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 1.25;
+        overflow-wrap: anywhere;
       }
 
       :host(.sidebar-hover-tooltip) wa-tooltip[open]::part(base__popup) {
-        animation: none;
+        animation: var(--openclaw-tooltip-open-animation);
       }
-    }
 
-    @keyframes openclaw-tooltip-hover-card-in {
-      from {
-        opacity: 0;
-        transform: scale(0.95);
+      @media (prefers-reduced-motion: reduce) {
+        wa-tooltip {
+          --show-duration: 0ms;
+          --hide-duration: 0ms;
+        }
+
+        :host(.sidebar-hover-tooltip) wa-tooltip[open]::part(base__popup) {
+          animation: none;
+        }
       }
-      to {
-        opacity: 1;
-        transform: scale(1);
+
+      @keyframes openclaw-tooltip-hover-card-in {
+        from {
+          opacity: 0;
+          transform: scale(0.95);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
       }
-    }
 
-    .tooltip-content {
-      display: block;
-      text-align: center;
-      white-space: pre-line;
-    }
+      .tooltip-content {
+        display: block;
+        text-align: center;
+        white-space: pre-line;
+      }
 
-    .tooltip-rich-content {
-      display: block;
-      pointer-events: auto;
-      text-align: left;
-    }
-  `;
+      .tooltip-rich-content {
+        display: block;
+        pointer-events: auto;
+        text-align: left;
+      }
+    `,
+  ];
 
   override connectedCallback() {
     super.connectedCallback();
@@ -248,14 +268,10 @@ class Tooltip extends OpenClawLitElement {
   protected override updated() {
     this.#attachTrigger();
     this.#syncDescription();
-    this.#syncWebAwesomeTooltip();
+    void this.#syncWebAwesomeTooltip();
     // Closed tooltips check redundancy in show(); measuring their triggers here
     // forces layout while a new transcript is still rendering.
-    if (
-      this.disabled ||
-      !this.#tooltipText ||
-      (this.webAwesomeTooltip?.open && this.#isRedundant())
-    ) {
+    if (this.disabled || !this.#tooltipText || (this.hasAttribute("open") && this.#isRedundant())) {
       this.#close();
     }
   }
@@ -302,7 +318,7 @@ class Tooltip extends OpenClawLitElement {
     trigger.addEventListener("click", this.#handleClick, true);
     this.#observeRichContent();
     this.#syncDescription();
-    this.#syncWebAwesomeTooltip();
+    void this.#syncWebAwesomeTooltip();
   }
 
   #detachTrigger() {
@@ -338,7 +354,7 @@ class Tooltip extends OpenClawLitElement {
     });
   }
 
-  #syncWebAwesomeTooltip() {
+  async #syncWebAwesomeTooltip() {
     const tooltip = this.webAwesomeTooltip;
     if (!tooltip) {
       return;
@@ -346,20 +362,27 @@ class Tooltip extends OpenClawLitElement {
     tooltip.showDelay = 0;
     tooltip.hideDelay = 0;
     const trigger = this.#triggerElement;
+    if (!customElements.get("wa-tooltip")) {
+      tooltip.anchor = trigger;
+      return;
+    }
     // WaTooltip's initial `for` watcher clears a directly assigned anchor.
     // Reapply it after that update or an open tooltip has no popup geometry.
-    void tooltip.updateComplete.then(() => {
-      if (this.webAwesomeTooltip === tooltip && this.#triggerElement === trigger) {
-        tooltip.anchor = trigger;
-        if (this.autoSize) {
-          tooltip.popup.setAttribute("auto-size", "vertical");
-        } else {
-          tooltip.popup.removeAttribute("auto-size");
-        }
-        tooltip.popup.autoSizePadding = this.autoSize ? 8 : 0;
-        tooltip.popup.shiftPadding = this.autoSize ? 8 : 0;
+    await tooltip.updateComplete;
+    if (this.webAwesomeTooltip === tooltip && this.#triggerElement === trigger) {
+      tooltip.anchor = trigger;
+      const popup = tooltip.popup;
+      if (!popup) {
+        return;
       }
-    });
+      if (this.autoSize) {
+        popup.setAttribute("auto-size", "vertical");
+      } else {
+        popup.removeAttribute("auto-size");
+      }
+      popup.autoSizePadding = this.autoSize ? 8 : 0;
+      popup.shiftPadding = this.autoSize ? 8 : 0;
+    }
   }
 
   readonly #handlePointerEnter = (event: Event) => {
@@ -436,14 +459,14 @@ class Tooltip extends OpenClawLitElement {
   readonly #handleClick = () => {
     if (this.openOnClick && !this.#pinned) {
       this.#show();
-      this.#pinned = this.webAwesomeTooltip?.open === true;
+      this.#pinned = this.hasAttribute("open");
       return;
     }
     this.#close();
   };
 
   #scheduleOpen() {
-    if (this.disabled || this.webAwesomeTooltip?.open || this.#openTimer !== null) {
+    if (this.disabled || this.hasAttribute("open") || this.#openTimer !== null) {
       return;
     }
     const provider = this.#tooltipProvider;
@@ -458,16 +481,35 @@ class Tooltip extends OpenClawLitElement {
   }
 
   #show() {
-    const tooltip = this.webAwesomeTooltip;
-    if (
-      this.disabled ||
-      !tooltip ||
-      !this.#triggerElement ||
-      !this.#tooltipText ||
-      this.#isRedundant()
-    ) {
+    if (this.disabled || !this.#triggerElement || !this.#tooltipText || this.#isRedundant()) {
       return;
     }
+    this.materialized = true;
+    // Intent and dismissal stay synchronous while the popup renders and upgrades.
+    void ensureCustomElementDefined(
+      "wa-tooltip",
+      () => import("@awesome.me/webawesome/dist/components/tooltip/tooltip.js"),
+    )
+      .then(async () => {
+        await this.updateComplete;
+        await this.#syncWebAwesomeTooltip();
+        const tooltip = this.webAwesomeTooltip;
+        if (
+          tooltip &&
+          this.isConnected &&
+          Tooltip.#activeByDocument.get(this.ownerDocument) === this
+        ) {
+          // Side cards flip vertically on narrow viewports.
+          tooltip.placement = this.#resolvedPlacement();
+          tooltip.open = true;
+        }
+      })
+      .catch((error: unknown) => {
+        if (Tooltip.#activeByDocument.get(this.ownerDocument) === this) {
+          this.#close();
+          showToast({ message: formatUiError(error) });
+        }
+      });
     this.#clearTimers(false);
     const active = Tooltip.#activeByDocument.get(this.ownerDocument);
     if (active && active !== this) {
@@ -478,10 +520,6 @@ class Tooltip extends OpenClawLitElement {
     Tooltip.#activeByDocument.set(this.ownerDocument, this);
     this.#tooltipProvider?.openTooltip();
     this.#syncDescription();
-    // Side cards cannot fit beside a menu on narrow viewports; let WA flip
-    // vertically and shift within the viewport instead.
-    tooltip.placement = this.#resolvedPlacement();
-    tooltip.open = true;
     // Light-DOM owners can retain a revealed trigger without another popup lifecycle.
     this.setAttribute("open", "");
     this.ownerDocument.addEventListener("pointerdown", this.#handleDocumentDismiss, true);
@@ -585,10 +623,16 @@ class Tooltip extends OpenClawLitElement {
       (root instanceof ShadowRoot ? root : this).append(description);
       this.#descriptionElement = description;
     }
-    this.#descriptionElement.textContent = richText || this.content;
+    const descriptionText = richText || this.content;
+    if (this.#descriptionElement.textContent !== descriptionText) {
+      this.#descriptionElement.textContent = descriptionText;
+    }
     const ids = new Set((current ?? "").split(/\s+/u).filter(Boolean));
     ids.add(this.#descriptionId);
-    trigger.setAttribute("aria-describedby", [...ids].join(" "));
+    const descriptionIds = [...ids].join(" ");
+    if (current !== descriptionIds) {
+      trigger.setAttribute("aria-describedby", descriptionIds);
+    }
   }
 
   #restoreDescription() {
@@ -703,25 +747,30 @@ class Tooltip extends OpenClawLitElement {
   }
 
   override render() {
+    // The hidden content slot keeps rich descriptions available before the popup exists.
     return html`
       <slot @slotchange=${() => this.#attachTrigger()}></slot>
-      <wa-tooltip
-        id=${this.#tooltipId}
-        placement=${this.#resolvedPlacement()}
-        trigger="manual"
-        @wa-hide=${() => this.#close()}
-      >
-        <span class="tooltip-content">${this.content}</span>
-        <span
-          class="tooltip-rich-content"
-          @pointerenter=${this.#handleContentPointerEnter}
-          @pointerleave=${this.#handleContentPointerLeave}
-          @focusin=${this.#handleFocusIn}
-          @focusout=${this.#handleFocusOut}
-        >
-          <slot name="content" @slotchange=${this.#handleContentSlotChange}></slot>
-        </span>
-      </wa-tooltip>
+      ${
+        this.materialized
+          ? html`<wa-tooltip
+              id=${this.#tooltipId}
+              placement=${this.#resolvedPlacement()}
+              trigger="manual"
+              @wa-hide=${() => this.#close()}
+            >
+              <span class="tooltip-content">${this.contentTemplate ?? this.content}</span>
+              <span
+                class="tooltip-rich-content"
+                @pointerenter=${this.#handleContentPointerEnter}
+                @pointerleave=${this.#handleContentPointerLeave}
+                @focusin=${this.#handleFocusIn}
+                @focusout=${this.#handleFocusOut}
+              >
+                <slot name="content" @slotchange=${this.#handleContentSlotChange}></slot>
+              </span>
+            </wa-tooltip>`
+          : html` <slot name="content" hidden @slotchange=${this.#handleContentSlotChange}></slot> `
+      }
     `;
   }
 

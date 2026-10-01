@@ -1,4 +1,3 @@
-// Sms plugin module implements inbound behavior.
 import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -311,13 +310,9 @@ export async function dispatchSmsInboundEvent(params: {
         },
       },
     });
+  } finally {
     if (adoptionState === "pending" || adoptionState === "abandoned") {
       await materialized.cleanup();
     }
-  } catch (error) {
-    if (adoptionState === "pending" || adoptionState === "abandoned") {
-      await materialized.cleanup();
-    }
-    throw error;
   }
 }

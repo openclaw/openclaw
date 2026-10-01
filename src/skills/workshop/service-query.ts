@@ -12,7 +12,10 @@ import { resolveSkillProposalName } from "./frontmatter.js";
 import { dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { captureSkillWorkshopStoreOptions } from "./store-client.js";
-import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
+import type {
+  SkillWorkshopDirectoryStoreOptions,
+  SkillWorkshopStoreOptions,
+} from "./store-sqlite-schema.js";
 import {
   SkillProposalDraftMissingError,
   readSkillProposal,
@@ -34,17 +37,14 @@ type SkillProposalScopeOptions = SkillWorkshopStoreOptions & {
   config: OpenClawConfig;
 };
 
-type RequiredProposalReadOptions = {
-  config: OpenClawConfig;
-  reconcile?: boolean;
-  store?: SkillWorkshopStoreOptions;
-};
-
 export async function listSkillProposals(
   options: SkillProposalScopeOptions,
 ): Promise<SkillProposalManifest> {
   const store = captureSkillWorkshopStoreOptions(options);
-  const manifest = await readSkillProposalManifest(store, store);
+  const manifest = await readSkillProposalManifest(store, {
+    agentId: store.agentId,
+    status: "pending",
+  });
   const missingDrafts = new Set<string>();
   // The agent collection lease bounds concurrent manifest reconciliation.
   for (const proposal of manifest.proposals) {
@@ -65,7 +65,7 @@ export async function listSkillProposals(
       missingDrafts.add(error.proposalId);
     }
   }
-  const reconciled = await readSkillProposalManifest(store, store);
+  const reconciled = await readSkillProposalManifest(store, { agentId: store.agentId });
   // Freshly read manifest rows are locally owned; mark degraded entries in place.
   for (const proposal of reconciled.proposals) {
     if (missingDrafts.has(proposal.id)) {
@@ -135,20 +135,14 @@ export async function resolvePendingSkillProposal(input: {
 
 export async function readRequiredProposal(
   proposalId: string,
-  env: NodeJS.ProcessEnv | undefined,
-  agentId: string | undefined,
-  readOptions: RequiredProposalReadOptions,
+  store: SkillWorkshopDirectoryStoreOptions,
+  options: { reconcile?: boolean } = {},
 ): Promise<SkillProposalReadResult> {
   const read = await readSkillProposal(
     proposalId,
-    {
-      ...readOptions.store,
-      env: readOptions.store?.env ?? env,
-      agentId,
-      config: readOptions.config,
-    },
-    { agentId },
-    readOptions,
+    store,
+    { agentId: store.agentId },
+    { config: store.config, ...options },
   );
   if (!read) {
     throw new Error(`Skill proposal not found: ${proposalId}`);

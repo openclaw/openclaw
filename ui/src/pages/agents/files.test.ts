@@ -238,6 +238,7 @@ describe("agent file requests", () => {
     expect(state.agentFileContents).toEqual({ "AGENTS.md": "saved" });
     expect(state.agentFileDrafts).toEqual({ "AGENTS.md": "saved" });
     expect(state.agentFilesLoading).toBe(false);
+    expect(state.agentFileSaving).toBe(false);
   });
 
   it("allows another file's read and a fresh post-save refresh", async () => {
@@ -278,23 +279,11 @@ describe("agent file requests", () => {
   });
 
   it("does not let an old-client read overwrite or finish a replacement read", async () => {
-    let resolveOld!: (value: AgentsFilesGetResult) => void;
-    let resolveNext!: (value: AgentsFilesGetResult) => void;
-    const oldClient = {
-      request: vi.fn(
-        () =>
-          new Promise<AgentsFilesGetResult>((resolve) => {
-            resolveOld = resolve;
-          }),
-      ),
-    } as unknown as GatewayBrowserClient;
+    const oldRead = createDeferred<AgentsFilesGetResult>();
+    const nextRead = createDeferred<AgentsFilesGetResult>();
+    const oldClient = { request: vi.fn(() => oldRead.promise) } as unknown as GatewayBrowserClient;
     const nextClient = {
-      request: vi.fn(
-        () =>
-          new Promise<AgentsFilesGetResult>((resolve) => {
-            resolveNext = resolve;
-          }),
-      ),
+      request: vi.fn(() => nextRead.promise),
     } as unknown as GatewayBrowserClient;
     const state = createState(oldClient);
 
@@ -304,27 +293,20 @@ describe("agent file requests", () => {
     state.agentFilesLoading = false;
     const nextLoad = loadAgentFileContent(state, "main", "AGENTS.md");
 
-    resolveOld(fileResult("old"));
+    oldRead.resolve(fileResult("old"));
     await oldLoad;
     expect(state.agentFileContents).toEqual({});
     expect(state.agentFilesLoading).toBe(true);
 
-    resolveNext(fileResult("new"));
+    nextRead.resolve(fileResult("new"));
     await nextLoad;
     expect(state.agentFileContents).toEqual({ "AGENTS.md": "new" });
     expect(state.agentFilesLoading).toBe(false);
   });
 
   it.each(["client", "capability"] as const)("ignores an old-%s save completion", async (owner) => {
-    let resolveSave!: (value: AgentsFilesSetResult) => void;
-    const oldClient = {
-      request: vi.fn(
-        () =>
-          new Promise<AgentsFilesSetResult>((resolve) => {
-            resolveSave = resolve;
-          }),
-      ),
-    } as unknown as GatewayBrowserClient;
+    const saved = createDeferred<AgentsFilesSetResult>();
+    const oldClient = { request: vi.fn(() => saved.promise) } as unknown as GatewayBrowserClient;
     const state = createState(oldClient);
     state.agentFileDrafts = { "AGENTS.md": "old" };
     const save = saveAgentFile(state, "main", "AGENTS.md", "old");
@@ -336,7 +318,7 @@ describe("agent file requests", () => {
       state.agents = { recordFile: vi.fn() };
     }
     state.agentFileSaving = false;
-    resolveSave({ ok: true, ...fileResult("old") });
+    saved.resolve({ ok: true, ...fileResult("old") });
     await save;
 
     expect(state.agentFileContents).toEqual({});
@@ -344,38 +326,16 @@ describe("agent file requests", () => {
     expect(state.agents.recordFile).not.toHaveBeenCalled();
   });
 
-  it("commits the submitted draft when it stays current", async () => {
-    const client = {
-      request: vi.fn().mockResolvedValue({ ok: true, ...fileResult("submitted") }),
-    } as unknown as GatewayBrowserClient;
-    const state = createState(client);
-    state.agentFileContents = { "AGENTS.md": "original" };
-    state.agentFileDrafts = { "AGENTS.md": "submitted" };
-
-    await saveAgentFile(state, "main", "AGENTS.md", "submitted");
-
-    expect(state.agentFileContents).toEqual({ "AGENTS.md": "submitted" });
-    expect(state.agentFileDrafts).toEqual({ "AGENTS.md": "submitted" });
-    expect(state.agentFileSaving).toBe(false);
-  });
-
   it("preserves edits made while a save is pending", async () => {
-    let resolveSave!: (value: AgentsFilesSetResult) => void;
-    const client = {
-      request: vi.fn(
-        () =>
-          new Promise<AgentsFilesSetResult>((resolve) => {
-            resolveSave = resolve;
-          }),
-      ),
-    } as unknown as GatewayBrowserClient;
+    const saved = createDeferred<AgentsFilesSetResult>();
+    const client = { request: vi.fn(() => saved.promise) } as unknown as GatewayBrowserClient;
     const state = createState(client);
     state.agentFileContents = { "AGENTS.md": "original" };
     state.agentFileDrafts = { "AGENTS.md": "submitted" };
 
     const save = saveAgentFile(state, "main", "AGENTS.md", "submitted");
     state.agentFileDrafts = { "AGENTS.md": "typed while saving" };
-    resolveSave({ ok: true, ...fileResult("submitted") });
+    saved.resolve({ ok: true, ...fileResult("submitted") });
     await save;
 
     expect(state.agentFileContents).toEqual({ "AGENTS.md": "submitted" });

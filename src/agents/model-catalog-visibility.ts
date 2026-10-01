@@ -10,7 +10,7 @@ import type {
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityRef,
 } from "./model-auth-availability.js";
-import { compareModelCatalogEntries } from "./model-catalog-order.js";
+import { compareModelCatalogEntries, orderModelCatalogForPicker } from "./model-catalog-order.js";
 import type {
   ModelCatalogRoutePolicy,
   ModelCatalogRouteProjection,
@@ -81,7 +81,10 @@ type LogicalModelCatalogParams = {
   routePolicy: ModelCatalogRoutePolicy;
   routeVariants?: readonly ModelCatalogEntry[];
   retainedModel?: ModelRef;
+  selectedModel?: ModelRef;
   metadataSnapshot?: PluginMetadataSnapshot;
+  /** Only a lifecycle owner can certify that captured catalog policy remains current. */
+  isCurrent?: () => boolean;
 };
 
 /** Resolves logical rows while keeping provider-owned physical route precedence. */
@@ -165,9 +168,51 @@ export async function prepareLogicalVisibleModelCatalog(
     metadataSnapshot: params.metadataSnapshot,
   });
   const catalogKeys = new Set(params.catalog.map(createModelCatalogIdentityKeyResolver()));
+  let previousStates: Map<string, LogicalModelCatalogEntryState> | undefined;
+  let previousCatalog: ModelCatalogEntry[] | undefined;
   return () => {
-    // Membership and row availability consume this one observation after every await.
+    // Observe revocable readiness each time; stable membership keeps its prepared ordering.
     const states = new Map([...readers].map(([key, read]) => [key, read()]));
+    const retainedStates = previousStates;
+    if (
+      params.isCurrent?.() &&
+      previousCatalog &&
+      retainedStates &&
+      [...states].every(([key, state]) => {
+        const previous = retainedStates.get(key);
+        const route = state.routeProjection;
+        const previousRoute = previous?.routeProjection;
+        return (
+          previous !== undefined &&
+          previous.authBacked === state.authBacked &&
+          previous.compatible === state.compatible &&
+          previous.routeManaged === state.routeManaged &&
+          previous.nativeRuntime === state.nativeRuntime &&
+          previousRoute?.kind === route.kind &&
+          (route.kind === "unmanaged" ||
+            (previousRoute.kind !== "unmanaged" && previousRoute.policy === route.policy)) &&
+          (route.kind !== "selected" ||
+            (previousRoute.kind === "selected" && previousRoute.route === route.route))
+        );
+      })
+    ) {
+      return [...previousCatalog];
+    }
+    const publish = (catalog: ModelCatalogEntry[]) => {
+      if (!params.isCurrent?.()) {
+        previousStates = undefined;
+        previousCatalog = undefined;
+        return catalog;
+      }
+      previousStates = new Map(
+        [...states].map(([key, state]) => [
+          key,
+          { ...state, routeProjection: { ...state.routeProjection } },
+        ]),
+      );
+      previousCatalog = [...catalog];
+      return catalog;
+    };
     const publicationKeyOf = createModelCatalogIdentityKeyResolver();
     const getEntryState = (entry: ModelCatalogEntry) => {
       const state = states.get(publicationKeyOf(entry));
@@ -194,10 +239,13 @@ export async function prepareLogicalVisibleModelCatalog(
         }
         return [row];
       });
-      return sortModelCatalogEntries(dedupeByKey(projected, publicationKeyOf));
+      return orderModelCatalogForPicker(
+        dedupeByKey(projected, publicationKeyOf),
+        params.selectedModel ?? params.retainedModel,
+      );
     };
     if (params.view === "all") {
-      return projectEntries(params.catalog);
+      return publish(projectEntries(params.catalog));
     }
     const defaultVisibleCatalog = wildcard
       ? sortModelCatalogEntries(
@@ -257,13 +305,15 @@ export async function prepareLogicalVisibleModelCatalog(
     });
     // Selected physical routes must lead dedupe so sibling metadata cannot win.
     // Deprecated/disabled rows stay selectable; configured and current refs remain picker-visible.
-    return projectEntries([...preferred, ...kept, ...retained, ...routeBacked]).filter(
-      (entry) =>
-        (params.view === "configured" ||
-          policy.allows({ provider: entry.provider, model: entry.id })) &&
-        (publicationKeyOf(entry) === retainedKey ||
-          (entry.status !== "deprecated" && entry.status !== "disabled") ||
-          configuredKeys.has(publicationKeyOf(entry))),
+    return publish(
+      projectEntries([...preferred, ...kept, ...retained, ...routeBacked]).filter(
+        (entry) =>
+          (params.view === "configured" ||
+            policy.allows({ provider: entry.provider, model: entry.id })) &&
+          (publicationKeyOf(entry) === retainedKey ||
+            (entry.status !== "deprecated" && entry.status !== "disabled") ||
+            configuredKeys.has(publicationKeyOf(entry))),
+      ),
     );
   };
 }

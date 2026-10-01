@@ -13,7 +13,6 @@ import { isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
-import { resolvePluginProviders } from "../plugins/provider-auth-choice.runtime.js";
 import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
@@ -30,18 +29,8 @@ import { resolveLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
 import { GENERIC_PROVIDER_AUTH_CHOICES } from "./auth-choice-options.static.js";
 import { resolveOnboardingSetupTarget } from "./onboard-agent-target.js";
-import {
-  applyCustomApiConfig,
-  CustomApiError,
-  parseNonInteractiveCustomApiFlags,
-  resolveCustomProviderId,
-} from "./onboard-custom-config.js";
-import { runGuidedOnboarding } from "./onboard-guided.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { hasInteractiveOnboardingTty } from "./onboard-interactive-runner.js";
-import { runInteractiveSetup } from "./onboard-interactive.js";
-import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
-import { resolveNonInteractiveApiKey as resolveNonInteractiveCredential } from "./onboard-non-interactive/api-keys.js";
 import { inferAuthChoiceFromFlags } from "./onboard-non-interactive/local/auth-choice-inference.js";
 import { applyNonInteractiveGatewayConfig } from "./onboard-non-interactive/local/gateway-config.js";
 import {
@@ -303,6 +292,8 @@ async function validateResetAuthChoice(params: {
   if (!params.opts.nonInteractive || authChoice === "skip") {
     return true;
   }
+  const { resolveNonInteractiveApiKey: resolveNonInteractiveCredential } =
+    await import("./onboard-non-interactive/api-keys.js");
   const target = resolveOnboardingSetupTarget(
     params.baseConfig,
     params.opts.agentName || params.opts.team
@@ -318,6 +309,12 @@ async function validateResetAuthChoice(params: {
       : undefined,
   );
   if (authChoice === "custom-api-key") {
+    const {
+      applyCustomApiConfig,
+      CustomApiError,
+      parseNonInteractiveCustomApiFlags,
+      resolveCustomProviderId,
+    } = await import("./onboard-custom-config.js");
     try {
       const custom = parseNonInteractiveCustomApiFlags({
         baseUrl: params.opts.customBaseUrl,
@@ -350,13 +347,9 @@ async function validateResetAuthChoice(params: {
         return false;
       }
       applyCustomApiConfig({
+        ...custom,
         config: params.baseConfig,
-        baseUrl: custom.baseUrl,
-        modelId: custom.modelId,
-        compatibility: custom.compatibility,
         apiKey: undefined,
-        providerId: custom.providerId,
-        supportsImageInput: custom.supportsImageInput,
       });
     } catch (error) {
       const message =
@@ -366,11 +359,10 @@ async function validateResetAuthChoice(params: {
           : `Invalid custom provider config: ${formatErrorMessage(error)}`;
       return rejectOption(params.opts, params.runtime, message);
     }
-  }
-  if (authChoice !== "custom-api-key") {
+  } else {
     const runtimeProvider = providerAuthChoice
       ? resolveProviderMatch(
-          resolvePluginProviders({
+          (await import("../plugins/provider-auth-choice.runtime.js")).resolvePluginProviders({
             config: params.baseConfig,
             workspaceDir: params.workspaceDir,
             mode: "setup",
@@ -492,16 +484,9 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.installDaemon !== undefined || opts.customImageInput !== undefined) {
     return true;
   }
-  for (const [key, value] of Object.entries(opts)) {
-    if (GUIDED_SAFE_ONBOARD_KEYS.has(key) || key === "installDaemon") {
-      continue;
-    }
-    if (value === undefined || value === false) {
-      continue;
-    }
-    return true;
-  }
-  return false;
+  return Object.entries(opts).some(
+    ([key, value]) => !GUIDED_SAFE_ONBOARD_KEYS.has(key) && value !== undefined && value !== false,
+  );
 }
 
 /** Runs the onboard command after normalizing legacy flags and setup mode. */
@@ -538,6 +523,14 @@ export async function setupWizardCommand(
   }
   if (!validatePreflightOptions(normalizedOpts, runtime)) {
     return;
+  }
+  if (normalizedOpts.workspace?.trim()) {
+    const { validateSetupWorkspacePath } = await import("../wizard/setup.workspace.js");
+    const error = validateSetupWorkspacePath(normalizedOpts.workspace.trim());
+    if (error) {
+      rejectOption(normalizedOpts, runtime, `Invalid --workspace: ${error}`);
+      return;
+    }
   }
   if (
     normalizedOpts.team &&
@@ -634,10 +627,10 @@ export async function setupWizardCommand(
   }
 
   const runSetup = normalizedOpts.nonInteractive
-    ? runNonInteractiveSetup
+    ? (await import("./onboard-non-interactive.js")).runNonInteractiveSetup
     : wantsClassicInteractiveSetup(normalizedOpts)
-      ? runInteractiveSetup
-      : runGuidedOnboarding;
+      ? (await import("./onboard-interactive.js")).runInteractiveSetup
+      : (await import("./onboard-guided.js")).runGuidedOnboarding;
 
   const runSetupAfterOptionalReset = async () => {
     if (normalizedOpts.reset) {

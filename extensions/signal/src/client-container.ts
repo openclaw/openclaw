@@ -1,11 +1,3 @@
-/**
- * Signal client for bbernhard/signal-cli-rest-api container.
- * Uses WebSocket for receiving messages and REST API for sending.
- *
- * This is a separate implementation from client.ts (native signal-cli)
- * to keep the two modes cleanly isolated.
- */
-
 import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import {
@@ -14,6 +6,8 @@ import {
   parseMediaContentLength,
 } from "openclaw/plugin-sdk/media-runtime";
 import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
   parseStrictNonNegativeInteger,
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
@@ -23,39 +17,12 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import type { SignalRpcOptions } from "./client-types.js";
+import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
 import { WebSocket } from "./ws-runtime.js";
 
-type ContainerRpcOptions = {
-  baseUrl: string;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
+type ContainerRpcOptions = SignalRpcOptions & {
   maxAttachmentBytes?: number;
-  assertDirectAdapterHandoff?: () => void;
-};
-
-type ContainerWebSocketMessage = {
-  envelope?: {
-    syncMessage?: unknown;
-    dataMessage?: {
-      message?: string;
-      groupInfo?: { groupId?: string; groupName?: string };
-      attachments?: Array<{
-        id?: string;
-        contentType?: string;
-        filename?: string;
-        size?: number;
-      }>;
-      quote?: { text?: string };
-      reaction?: unknown;
-    };
-    editMessage?: { dataMessage?: unknown };
-    reactionMessage?: unknown;
-    sourceNumber?: string;
-    sourceUuid?: string;
-    sourceName?: string;
-    timestamp?: number;
-  };
-  exception?: { message?: string };
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -147,17 +114,6 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   );
 }
 
-function normalizeMaxResponseBytes(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES;
-  }
-  return Math.floor(value);
-}
-
-function readContentLength(res: Response): number | undefined {
-  return parseMediaContentLength(res.headers?.get("content-length") ?? null) ?? undefined;
-}
-
 function signalRestIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: number }): Error {
   return new Error(`Signal REST response body stalled after ${chunkTimeoutMs}ms`);
 }
@@ -202,8 +158,8 @@ async function readCappedResponseBuffer(
   bodyIdleTimeoutMs: number,
   bodyTimeoutMs: () => number,
 ): Promise<Buffer> {
-  const contentLength = readContentLength(res);
-  if (contentLength !== undefined && contentLength > maxResponseBytes) {
+  const contentLength = parseMediaContentLength(res.headers?.get("content-length") ?? null);
+  if (contentLength !== null && contentLength > maxResponseBytes) {
     throw new Error("Signal REST attachment exceeded size limit");
   }
   return await readResponseWithLimit(res, maxResponseBytes, {
@@ -221,9 +177,6 @@ async function releaseUnreadResponseBody(res: Response | undefined): Promise<voi
   }
 }
 
-/**
- * Check if bbernhard container REST API is available.
- */
 export async function containerCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -317,9 +270,6 @@ function containerReceiveCheck(
   });
 }
 
-/**
- * Make a REST API request to bbernhard container.
- */
 async function containerRestRequest<T = unknown>(
   endpoint: string,
   opts: ContainerRpcOptions,
@@ -384,9 +334,6 @@ async function containerRestRequest<T = unknown>(
   });
 }
 
-/**
- * Fetch attachment binary from bbernhard container.
- */
 async function containerFetchAttachment(
   attachmentId: string,
   opts: ContainerRpcOptions,
@@ -412,7 +359,9 @@ async function containerFetchAttachment(
 
       return await readCappedResponseBuffer(
         fetched,
-        normalizeMaxResponseBytes(opts.maxResponseBytes),
+        Math.floor(
+          asPositiveFiniteNumber(opts.maxResponseBytes) ?? DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES,
+        ),
         bodyIdleTimeoutMs,
         bodyTimeoutMs,
       );
@@ -432,7 +381,7 @@ export async function streamContainerEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  onEvent: (event: ContainerWebSocketMessage) => unknown;
+  onEvent: (event: SignalReceivePayload) => unknown;
   onStreamOpen?: () => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
@@ -500,7 +449,7 @@ export async function streamContainerEvents(params: {
       }
       try {
         const text = data.toString();
-        const envelope = JSON.parse(text) as ContainerWebSocketMessage;
+        const envelope = JSON.parse(text) as SignalReceivePayload;
         if (envelope) {
           // WebSocket callbacks are synchronous. Chain async durable appends so
           // transport delivery order and receive-handler failures are preserved.
@@ -715,13 +664,10 @@ export async function containerRpcRequest<T = unknown>(
       const attachments = p.attachments as string[] | undefined;
       if (attachments?.length) {
         // Container API only accepts base64-encoded attachments, not file paths.
-        const configuredMaxBytes = opts.maxAttachmentBytes;
-        const maxAttachmentBytes =
-          typeof configuredMaxBytes === "number" &&
-          Number.isFinite(configuredMaxBytes) &&
-          configuredMaxBytes >= 0
-            ? Math.floor(configuredMaxBytes)
-            : DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES;
+        const maxAttachmentBytes = Math.floor(
+          asNonNegativeFiniteNumber(opts.maxAttachmentBytes) ??
+            DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES,
+        );
         payload.base64_attachments = await filesToBase64DataUris(attachments, maxAttachmentBytes);
       }
       const quoteTimestamp = parseStrictNonNegativeInteger(
@@ -802,7 +748,6 @@ export async function containerRpcRequest<T = unknown>(
         timeoutMs: opts.timeoutMs,
         maxResponseBytes: opts.maxResponseBytes,
       });
-      // Convert to native format: { data: base64String }
       if (!buffer) {
         return { data: undefined } as T;
       }
@@ -821,4 +766,3 @@ export async function containerRpcRequest<T = unknown>(
       throw new Error(`Unsupported container RPC method: ${method}`);
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

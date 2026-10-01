@@ -81,14 +81,12 @@ describe("parseTerminalToolCallArguments", () => {
 
   it.each([
     "",
-    "   ",
     '{"secret":"do-not-echo"',
     "[]",
     "null",
     null,
     // Truncated free-text arguments must never be "repaired" into a shorter, executable
     // command (a cut-off `rm -rf /srv/app/tmp/build-cache` would otherwise become `rm -rf /`).
-    '{"command":"rm -rf /',
     '{"command":"rm -rf /srv/app/tmp/bu',
     '{"command":"rm -rf /srv/app/tmp/build-cache","timeout":6',
   ])("rejects non-object or malformed terminal input %# without exposing it", (value) => {

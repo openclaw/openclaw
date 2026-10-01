@@ -19,7 +19,6 @@ describe("new-session catalog target", () => {
       agentId: "main",
       requestedAgentId: "main",
       catalogId: "claude",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };
@@ -38,7 +37,6 @@ describe("new-session catalog target", () => {
     const requested = {
       requestedAgentId: "research",
       catalogId: "claude",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };
@@ -56,7 +54,6 @@ describe("new-session catalog target", () => {
       agentId: "",
       requestedAgentId: "research",
       catalogId: "claude",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };
@@ -70,12 +67,11 @@ describe("new-session catalog target", () => {
       agentId: "main",
       requestedAgentId: "main",
       catalogId: "",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };
-    const first = { ...plain, requestedModel: "example/first", model: "example/first" };
-    const second = { ...plain, requestedModel: "example/second", model: "example/second" };
+    const first = { ...plain, requestedModel: "example/first" };
+    const second = { ...plain, requestedModel: "example/second" };
     expect(routeKey(plain)).toBe('["main","",""]');
     expect(routeKey(first)).not.toBe(routeKey(plain));
     expect(routeKey(first)).not.toBe(routeKey(second));
@@ -132,24 +128,10 @@ describe("new-session catalog target", () => {
     await expect(
       resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude", "research"),
     ).resolves.toEqual({
-      model: "",
       catalogLabel: "Claude Code",
       startTerminal: true,
       terminalHosts: [{ hostId: "node:dev", label: "Dev" }],
     });
-  });
-
-  it("preserves a valid requested agent for catalog-targeted sessions", () => {
-    expect(
-      resolveAgentId(
-        {
-          agentId: "research",
-          catalogId: "claude",
-        },
-        agents,
-        "main",
-      ),
-    ).toBe("research");
   });
 
   it("canonicalizes the requested agent or falls back before catalog resolution", () => {
@@ -172,7 +154,6 @@ describe("new-session catalog target", () => {
       agentId: "main",
       requestedAgentId: "main",
       catalogId: "",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
       group: "Client",

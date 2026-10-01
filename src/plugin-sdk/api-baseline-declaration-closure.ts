@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
-import type { Program, Project } from "typescript/unstable/sync";
+import type { Printer, Program, Project } from "typescript/unstable/sync";
 import { formatNativeTypeScriptDiagnostics } from "../../scripts/lib/native-typescript-diagnostics.mts";
 import {
   normalizePluginSdkApiDeclarationText,
@@ -150,12 +150,12 @@ function importTypeTarget(node: ts.ImportTypeNode): string | null {
 
 export function createDeclarationClosureRenderer(params: {
   project: Project;
+  printer: Printer;
   sourceProgram: Program;
   emittedSources: ReadonlySet<string>;
   repoRoot: string;
 }): (sourceFile: ts.SourceFile, exportName: string) => DeclarationClosure | null {
-  const { project, sourceProgram: program, emittedSources, repoRoot } = params;
-  const printer = project.emitter;
+  const { project, printer, sourceProgram: program, emittedSources, repoRoot } = params;
   const isGlobalAugmentation = (node: ts.Node): node is ts.ModuleDeclaration =>
     ts.isModuleDeclaration(node) &&
     ts.isIdentifier(node.name) &&

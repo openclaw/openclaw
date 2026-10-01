@@ -1,5 +1,3 @@
-// Gateway plugin runtime adapter.
-// Loads plugin registries and builds fallback request context for non-WS paths.
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -36,9 +34,8 @@ import type {
   PluginRuntime,
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
-import type { PluginOrigin } from "../plugins/types.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
-import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
+import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayContextResolver, GatewayRequestHandler } from "./server-methods/types.js";
 import {
@@ -46,12 +43,14 @@ import {
   dispatchGatewayMethodInProcessRaw,
   getInProcessGatewayRequestContext,
 } from "./server-plugin-in-process-dispatch.js";
+import { readTrustedPluginSessionFacts } from "./server-plugin-session-facts.js";
 import {
   canTrustedOfficialPluginRequestScopes,
   createGatewaySubagentRuntime,
   resolvePluginSubagentOverridePolicies,
   type PluginSubagentOverridePolicies,
 } from "./server-plugin-subagent-runtime.js";
+import { withTrustedPluginUserProfileIdentity } from "./server-plugin-user-profile.js";
 import {
   createGatewayHooksRuntime,
   hasInProcessGatewayContext,
@@ -67,19 +66,8 @@ export {
 export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-dispatch.js";
 export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
+export { readTrustedPluginSessionFacts, withTrustedPluginUserProfileIdentity };
 export { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
-
-// ── Internal gateway dispatch for plugin runtime ────────────────────
-
-function resolveRuntimeNodeInvokeSyntheticScopes(params: {
-  pluginId?: string;
-  pluginOrigin?: PluginOrigin;
-  pluginTrustedOfficialInstall?: boolean;
-  requestedScopes?: OperatorScope[];
-}): OperatorScope[] | undefined {
-  // Requested scopes may replace caller scopes, so only bundled or trusted official plugins qualify.
-  return canTrustedOfficialPluginRequestScopes(params) ? params.requestedScopes : undefined;
-}
 
 export async function dispatchTrustedPluginGatewayMethod<T>(
   method: string,
@@ -120,12 +108,11 @@ export function createGatewayNodesRuntime(
   ) => {
     const scope = getPluginRuntimeGatewayRequestScope();
     const pluginId = scope?.pluginId?.trim() || undefined;
-    const requestedScopes = resolveRuntimeNodeInvokeSyntheticScopes({
-      pluginId,
-      pluginOrigin: scope?.pluginOrigin,
-      pluginTrustedOfficialInstall: scope?.pluginTrustedOfficialInstall,
-      requestedScopes: normalizeOperatorScopeList(params.scopes),
-    });
+    const normalizedScopes = normalizeOperatorScopeList(params.scopes);
+    // Requested scopes may replace caller scopes, so only trusted plugins qualify.
+    const requestedScopes = canTrustedOfficialPluginRequestScopes({ ...scope, pluginId })
+      ? normalizedScopes
+      : undefined;
     const callerScopes =
       stream && scope?.client
         ? (normalizeOperatorScopeList(scope.client.connect.scopes) ?? [])
@@ -232,6 +219,10 @@ function createGatewayPluginRuntimeBindings(
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
+        readSessionFacts: (params) =>
+          readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
+        withUserProfileIdentity: (params, run) =>
+          withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),
       },
       hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, signal),
@@ -239,8 +230,6 @@ function createGatewayPluginRuntimeBindings(
     },
   };
 }
-
-// ── Plugin loading ──────────────────────────────────────────────────
 
 export function loadGatewayPlugins(params: {
   cfg: OpenClawConfig;

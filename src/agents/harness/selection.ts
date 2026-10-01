@@ -53,13 +53,11 @@ import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
-import type { AgentHarnessPolicy } from "./policy.js";
 import {
   buildAgentHarnessSelectionDecision,
   resolveAgentHarnessSelectionDecision,
   type AgentHarnessSelectionParams,
   type AgentHarnessSelectionDecisionParams,
-  type AgentHarnessSelectionCandidate,
   type AgentHarnessSelectionDecision as AgentHarnessSelectionFact,
   type AgentHarnessPreparedModelProvider,
 } from "./selection-decision.js";
@@ -201,12 +199,17 @@ export async function runAgentHarnessAttempt(
   // redirect its transcript or credentials through a second support decision.
   const selection =
     nativeSessionRuntime?.auth === "native"
-      ? buildSelectionDecision({
+      ? {
+          ...buildAgentHarnessSelectionDecision({
+            harness: isBuiltInOpenClawAgentHarness(nativeSessionRuntime.harness)
+              ? undefined
+              : nativeSessionRuntime.harness,
+            policy: { runtime: nativeSessionRuntime.harness.id, runtimeSource: "model" },
+            selectedReason: "forced_plugin",
+            candidates: [],
+          }),
           harness: nativeSessionRuntime.harness,
-          policy: { runtime: nativeSessionRuntime.harness.id, runtimeSource: "model" },
-          selectedReason: "forced_plugin",
-          candidates: [],
-        })
+        }
       : selectPreparedAgentHarness(params);
   const harness = selection.harness;
   const nativeOwnsModel = nativeSessionRuntime?.auth === "native";
@@ -494,7 +497,7 @@ async function runAgentHarnessOperation<T>(
   params: EmbeddedRunAttemptParams,
   execute: () => Promise<T>,
 ): Promise<T> {
-  await prepareActiveNodeContext();
+  await prepareActiveNodeContext(readRunOperatorAuthority(params)?.profileId);
   resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)?.();
   const activeTrace = getActiveDiagnosticTraceContext();
   const harnessTrace = freezeDiagnosticTraceContext(
@@ -607,8 +610,10 @@ function withoutPluginHarnessPrivateState(
   // separate projections can drift and expose authority on less common operations.
   const {
     admittedRunContext: _admittedRunContext,
+    runtimePluginToolGrant: _runtimePluginToolGrant,
     assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,
+    completionCheck: _completionCheck,
     onContextAccountingEvent: _onContextAccountingEvent,
     onCompactionRequestBudget: _onCompactionRequestBudget,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
@@ -671,11 +676,7 @@ function applyPluginHarnessDenyAllToolPolicy(
   params: import("./types.js").AgentHarnessAttemptParamsV2,
   policies: ResolvedPluginHarnessToolPolicies,
 ): import("./types.js").AgentHarnessAttemptParamsV2 {
-  if (
-    isHostScopedAgentToolActive("openclaw") &&
-    params.toolsAllow?.length === 1 &&
-    normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "openclaw"
-  ) {
+  if (isHostScopedAgentToolActive("openclaw") && isSystemAgentOnlyAllowlist(params.toolsAllow)) {
     return params;
   }
   const prompt = resolvePluginHarnessDenyAllToolPolicyPrompt(policies);
@@ -695,21 +696,6 @@ function appendPluginHarnessToolPolicyPrompt(existing: string | undefined, promp
     return prompt;
   }
   return trimmed.includes(prompt) ? trimmed : `${trimmed}\n\n${prompt}`;
-}
-
-function buildSelectionDecision(params: {
-  harness: AgentHarness;
-  policy: AgentHarnessPolicy;
-  selectedReason: AgentHarnessSelectionDecision["selectedReason"];
-  candidates: AgentHarnessSelectionCandidate[];
-}): AgentHarnessSelectionDecision {
-  return {
-    ...buildAgentHarnessSelectionDecision({
-      ...params,
-      harness: isBuiltInOpenClawAgentHarness(params.harness) ? undefined : params.harness,
-    }),
-    harness: params.harness,
-  };
 }
 
 function logAgentHarnessSelection(

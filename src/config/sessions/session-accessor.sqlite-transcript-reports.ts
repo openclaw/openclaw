@@ -1,14 +1,19 @@
+import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -22,12 +27,17 @@ import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
-import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import { publishSessionEntryWorkerMetadataInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
+import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   captureLifecycleDatabaseScope,
+  assertSqliteTranscriptWriteIdentity,
+  prepareSqliteScope,
+  resolveSqliteScope,
   resolveSqliteTranscriptScope,
+  resolveSqliteWriteAdmissionScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedTranscriptScope,
@@ -48,8 +58,13 @@ import type {
   TranscriptReportWorkerTarget,
 } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
+import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
+import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import {
   assertOwnedTranscriptWriteCommit,
   captureOwnedTranscriptWriteAssertion,
@@ -145,108 +160,201 @@ async function withReportWorker<T>(
       sessionEntryChanged?: boolean;
     }) => void,
   ) => Promise<Result<T, TranscriptAppendRefusal>>,
+  sessionEntryCurrent?: SessionEntryCurrentCheck,
 ): Promise<Result<T, TranscriptAppendRefusal>> {
   // Preserve the logical target for live authority and pin the physical owner before yielding.
-  const fenced = withOwnedSessionTranscriptWriterFence(scope);
+  const fenced = withOwnedSessionTranscriptWriterFence({
+    ...scope,
+    ...(scope.storePath ? { storePath: path.resolve(scope.storePath) } : {}),
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  });
   const assertOwned = captureOwnedTranscriptWriteAssertion(fenced);
-  const resolved = captureLifecycleDatabaseScope(resolveSqliteTranscriptScope(fenced));
-  const options = toDatabaseOptions(resolved);
-  const execution = captureOpenClawAgentDatabaseExecution(options);
-  const cliWriter =
-    kind === "append"
-      ? getCliHistoryWriter({ ...resolved, storePath: resolveOpenClawAgentSqlitePath(options) })
-      : undefined;
-  const assertCurrent = () => {
-    execution.assertCurrent();
-    assertOwned();
-    cliWriter?.assertCurrent();
-  };
-  const { env: _env, ...workerResolved } = resolved;
-  const target: TranscriptReportWorkerTarget = {
-    resolved: workerResolved,
-    ...(cliWriter
-      ? {
-          cliWriter: {
-            runId: cliWriter.runId,
-            authFingerprint: cliWriter.authFingerprint,
-            lifecycleRevision: cliWriter.lifecycleRevision,
-            expectedWriterRunId: cliWriter.expectedWriterRunId,
-          },
-        }
-      : {}),
-    fence: {
-      expectedLifecycleRevision: fenced.expectedLifecycleRevision,
-      expectedWriterRunId: fenced.expectedWriterRunId,
-    },
-  };
-  try {
-    const result = await settleReportOperation(
-      () =>
-        runExclusiveSqliteSessionWrite(
-          resolved,
-          () =>
-            withOpenClawAgentDatabaseAsync(
-              options,
-              async (database) => {
-                assertCurrent();
-                const worker =
-                  await openOpenClawAgentSqliteWorkerStore<TranscriptReportWorkerOperations>(
-                    options,
-                    database.db,
-                    {
-                      moduleUrl: resolveRuntimeWorkerUrl(
-                        runtimeProcessEntrypoints.sessionTranscriptReports,
-                      ),
-                      input: target,
-                    },
-                  );
-                return settleReportOperation(
-                  () =>
-                    worker.run(
-                      (operation) =>
-                        run(operation, assertCurrent, (publication) => {
-                          if (publication.cliHistoryChanged || publication.sessionEntryChanged) {
-                            publishSessionEntryCacheInvalidation(database, {
-                              sessionKey: resolved.sessionKey,
-                              facts: { kind: "unchanged" },
-                            });
-                          }
-                          if (publication.projectionNeedsReconcile) {
-                            startSessionTranscriptIndexReconcile({
-                              ...options,
-                              preferredSessionId: resolved.sessionId,
-                            });
-                          }
-                        }),
-                      assertCurrent,
-                    ),
-                  () => worker.close(),
-                );
-              },
-              assertCurrent,
-            ),
-          "session.transcript.report",
-        ),
-      () => execution.release(),
+  assertSqliteTranscriptWriteIdentity(fenced);
+  assertOwned();
+  const source = sessionEntryCurrent?.source;
+  const storePath =
+    fenced.storePath ??
+    resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(fenced)));
+  const candidates = captureSessionStoreReadCandidates(storePath);
+  const identities = new Map(
+    candidates
+      .filter((candidate) => !candidate.scope)
+      .map((candidate) => {
+        const identity = readDatabasePathIdentitySync(candidate.path);
+        return [identity.canonicalPath, identity] as const;
+      }),
+  );
+  const sourceIdentity = source ? readDatabasePathIdentitySync(source.path) : undefined;
+  const assertSourceCurrent = () => {
+    if (!source) {
+      return;
+    }
+    assertExistingDatabaseIdentity(
+      source.path,
+      `file:${source.databaseIdentity}`,
+      source.databaseBirthtime,
     );
-    if (!result.ok && fenced.expectedWriterRunId !== undefined) {
-      throw new SessionTranscriptWriterClaimReboundError(result.error);
+  };
+  assertSourceCurrent();
+  const targetScope = { ...fenced, storePath };
+  const admission = resolveSqliteWriteAdmissionScope(targetScope);
+  const prepare = async () => {
+    const resolved = captureLifecycleDatabaseScope({
+      ...(await prepareSqliteScope(targetScope)),
+      sessionId: fenced.sessionId,
+    });
+    if (admission && resolved.path !== admission.path) {
+      throw new Error("Transcript report preparation changed its reserved database path");
     }
-    return result;
-  } catch (error) {
-    // Preserve the stored-JSON error contract across the broker serialization boundary.
-    if (error instanceof Error && error.name === "SyntaxError") {
-      throw new SyntaxError(error.message, { cause: error });
+    const databaseOptions = toDatabaseOptions(resolved);
+    const options = { ...databaseOptions, path: resolveOpenClawAgentSqlitePath(databaseOptions) };
+    const physicalPath = assertSessionStoreReadCandidate(options.path, candidates);
+    if (
+      source &&
+      (resolved.sessionKey !== source.sessionKey ||
+        databaseOptions.agentId !== source.agentId ||
+        physicalPath !== sourceIdentity?.canonicalPath)
+    ) {
+      throw new Error("Transcript report target differs from its session source restriction");
     }
-    throw error;
-  }
+    const identity = identities.get(physicalPath) ?? readDatabasePathIdentitySync(options.path);
+    if (!identities.has(physicalPath) && identity.key.startsWith("file:")) {
+      throw new Error("Transcript report target appeared after source capture");
+    }
+    const assertTargetCurrent = () => {
+      assertSourceCurrent();
+      assertSessionStoreReadCandidate(options.path, candidates);
+      if (identity.key.startsWith("file:")) {
+        assertExistingDatabaseIdentity(options.path, identity.key, identity.birthtime);
+      }
+      assertOwned();
+    };
+    assertTargetCurrent();
+    const operate = async () => {
+      assertTargetCurrent();
+      const execution = captureOpenClawAgentDatabaseExecution(
+        options,
+        identity.key.startsWith("file:")
+          ? {
+              expectedIdentity: {
+                kind: "file",
+                physicalIdentity: identity.key.slice("file:".length),
+                nativeLocation: identity.canonicalPath,
+                birthtime: identity.birthtime,
+              },
+            }
+          : { expectedCreationIdentity: identity },
+      );
+      const cliWriter =
+        kind === "append"
+          ? getCliHistoryWriter({ ...resolved, storePath: resolveOpenClawAgentSqlitePath(options) })
+          : undefined;
+      const assertCurrent = () => {
+        execution.assertCurrent();
+        assertTargetCurrent();
+        cliWriter?.assertCurrent();
+      };
+      const { env: _env, ...workerResolved } = resolved;
+      const target: TranscriptReportWorkerTarget = {
+        resolved: workerResolved,
+        sessionEntryCurrentSource: sessionEntryCurrent?.source,
+        ...(cliWriter
+          ? {
+              cliWriter: {
+                runId: cliWriter.runId,
+                authFingerprint: cliWriter.authFingerprint,
+                lifecycleRevision: cliWriter.lifecycleRevision,
+                expectedWriterRunId: cliWriter.expectedWriterRunId,
+              },
+            }
+          : {}),
+        fence: {
+          expectedLifecycleRevision: fenced.expectedLifecycleRevision,
+          expectedWriterRunId: fenced.expectedWriterRunId,
+        },
+      };
+      try {
+        const result = await settleReportOperation(
+          async () => {
+            await prepareSessionEntryReplacementDatabase(options, assertCurrent, execution);
+            assertCurrent();
+            const databaseIdentity = execution.fileIdentity?.physicalIdentity;
+            if (!databaseIdentity) {
+              throw new Error("Transcript report has no prepared native database identity");
+            }
+            const worker =
+              await openOpenClawAgentSqliteWorkerStore<TranscriptReportWorkerOperations>(
+                options,
+                { execution },
+                {
+                  moduleUrl: resolveRuntimeWorkerUrl(
+                    runtimeProcessEntrypoints.sessionTranscriptReports,
+                  ),
+                  input: target,
+                  assertAdmission: (request) =>
+                    request.stage === "transaction" || request.stage === "commit"
+                      ? assertSessionEntryCurrentAdmission(request, sessionEntryCurrent)
+                      : request,
+                },
+              );
+            return settleReportOperation(
+              () =>
+                worker.run(
+                  (operation) =>
+                    run(operation, assertCurrent, (publication) => {
+                      if (publication.cliHistoryChanged || publication.sessionEntryChanged) {
+                        publishSessionEntryWorkerMetadataInvalidation({
+                          agentId: resolved.agentId,
+                          storePath: execution.path,
+                          databaseIdentity,
+                          sessionKey: resolved.sessionKey,
+                        });
+                      }
+                      if (publication.projectionNeedsReconcile) {
+                        startSessionTranscriptIndexReconcile({
+                          ...options,
+                          preferredSessionId: resolved.sessionId,
+                        });
+                      }
+                    }),
+                  assertCurrent,
+                ),
+              () => worker.close(),
+            );
+          },
+          () => execution.release(),
+        );
+        if (!result.ok && fenced.expectedWriterRunId !== undefined) {
+          throw new SessionTranscriptWriterClaimReboundError(result.error);
+        }
+        return result;
+      } catch (error) {
+        // Preserve the stored-JSON error contract across the broker serialization boundary.
+        if (error instanceof Error && error.name === "SyntaxError") {
+          throw new SyntaxError(error.message, { cause: error });
+        }
+        throw error;
+      }
+    };
+    return admission
+      ? operate()
+      : runExclusiveSqliteSessionWrite(resolved, operate, "session.transcript.report");
+  };
+  return admission
+    ? runExclusiveSqliteSessionWrite(admission, prepare, "session.transcript.report")
+    : prepare();
 }
 
 function isProcessHeldTranscript(scope: SessionTranscriptWriteScope): boolean {
-  const resolved = captureLifecycleDatabaseScope(resolveSqliteTranscriptScope(scope));
-  return isIncognitoOpenClawAgentSqlitePath(
-    resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
-    toDatabaseOptions(resolved),
+  return (
+    isIncognitoSessionKey(scope.sessionKey) ||
+    Boolean(
+      scope.storePath &&
+      isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
+        agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+        env: scope.env,
+      }),
+    )
   );
 }
 
@@ -367,8 +475,12 @@ export async function appendSessionTranscriptReportNative(
 export async function appendSessionTranscriptReport(
   scope: SessionTranscriptWriteScope,
   report: TranscriptReport,
+  options?: { sessionEntryCurrent?: SessionEntryCurrentCheck },
 ): Promise<Result<void, TranscriptAppendRefusal>> {
   if (isProcessHeldTranscript(scope)) {
+    if (options?.sessionEntryCurrent) {
+      throw new Error("A file session source cannot authorize a process-held transcript report");
+    }
     return appendSessionTranscriptReportNative(scope, report);
   }
   if (report.kind === "assistant") {
@@ -379,14 +491,19 @@ export async function appendSessionTranscriptReport(
       throw new Error("Assistant report requires prepared transcript storage bytes");
     }
     const input = { ...report, message: preparedMessage.persistedMessage, preparedMessage };
-    return withReportWorker(scope, "append", async (operation, _assertCurrent, publish) => {
-      const result = await operation.execute({ type: "assistant", input });
-      if (!result.ok) {
-        return result;
-      }
-      publish(result.value);
-      return ok(undefined);
-    });
+    return withReportWorker(
+      scope,
+      "append",
+      async (operation, _assertCurrent, publish) => {
+        const result = await operation.execute({ type: "assistant", input });
+        if (!result.ok) {
+          return result;
+        }
+        publish(result.value);
+        return ok(undefined);
+      },
+      options?.sessionEntryCurrent,
+    );
   }
   const selection = {
     kind: report.kind,
@@ -394,33 +511,38 @@ export async function appendSessionTranscriptReport(
     suppressWhenAssistantRun: report.suppressWhenAssistantRun,
   };
   const selectReport = report.selectReport;
-  return withReportWorker(scope, "append", async (operation, assertCurrent, publish) => {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const prepared = await operation.execute({ type: "prepare", input: selection });
-      assertCurrent();
-      if (!prepared.ok) {
-        return prepared;
+  return withReportWorker(
+    scope,
+    "append",
+    async (operation, assertCurrent, publish) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const prepared = await operation.execute({ type: "prepare", input: selection });
+        assertCurrent();
+        if (!prepared.ok) {
+          return prepared;
+        }
+        if (prepared.value.suppressed) {
+          return ok(undefined);
+        }
+        const selected = selectReport(prepared.value.latest);
+        assertCurrent();
+        if (!selected) {
+          return ok(undefined);
+        }
+        const input = prepareCustomTranscriptReport(selected, prepared.value.appendParentId);
+        assertCurrent();
+        const result = await operation.execute({ type: "append", input });
+        if (!result.ok) {
+          return result;
+        }
+        if (result.value.committed) {
+          publish(result.value);
+          return ok(undefined);
+        }
+        // Only a proven no-write revision mismatch permits another selection; errors never replay.
       }
-      if (prepared.value.suppressed) {
-        return ok(undefined);
-      }
-      const selected = selectReport(prepared.value.latest);
-      assertCurrent();
-      if (!selected) {
-        return ok(undefined);
-      }
-      const input = prepareCustomTranscriptReport(selected, prepared.value.appendParentId);
-      assertCurrent();
-      const result = await operation.execute({ type: "append", input });
-      if (!result.ok) {
-        return result;
-      }
-      if (result.value.committed) {
-        publish(result.value);
-        return ok(undefined);
-      }
-      // Only a proven no-write revision mismatch permits another selection; errors never replay.
-    }
-    throw new Error("Session transcript kept changing while selecting its report");
-  });
+      throw new Error("Session transcript kept changing while selecting its report");
+    },
+    options?.sessionEntryCurrent,
+  );
 }

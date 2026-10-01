@@ -24,11 +24,7 @@ const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
   allowH2: false as const,
 });
 
-/**
- * Module-level bridge so `resolveDispatcherTimeoutMs` in fetch-guard.ts
- * can read the global dispatcher timeout without relying on Undici's
- * non-public `.options` field.
- */
+/** Shares the global timeout with guarded fetch without reading Undici's private options. */
 export let globalUndiciStreamTimeoutMs: number | undefined;
 
 let lastAppliedTimeoutKey: string | null = null;
@@ -270,42 +266,30 @@ function applyGlobalDispatcherStreamTimeouts(params: {
  * dispatcher already uses env or managed proxy routing.
  */
 export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }): void {
+  ensureDispatcherStreamTimeouts(opts, true);
+}
+
+/** Forces timeout/family policy onto the current supported global dispatcher. */
+export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: number }): void {
+  ensureDispatcherStreamTimeouts(opts, false);
+}
+
+function ensureDispatcherStreamTimeouts(
+  opts: { timeoutMs?: number } | undefined,
+  proxyOnly: boolean,
+): void {
   const timeoutMs = resolveStreamTimeoutMs(opts);
   if (timeoutMs === null) {
     return;
   }
   globalUndiciStreamTimeoutMs = timeoutMs;
-  if (!hasEnvHttpProxyAgentConfigured()) {
+  if (proxyOnly && !hasEnvHttpProxyAgentConfigured()) {
     lastAppliedTimeoutKey = null;
     return;
   }
   const runtime = loadUndiciGlobalDispatcherDeps();
   const current = resolveCurrentDispatcherInfo(runtime);
-  if (current === null) {
-    return;
-  }
-  if (current.kind !== "env-proxy" && current.kind !== "proxyline-managed") {
-    return;
-  }
-
-  applyGlobalDispatcherStreamTimeouts({
-    runtime,
-    dispatcher: current.dispatcher,
-    kind: current.kind,
-    timeoutMs,
-  });
-}
-
-/** Forces timeout/family policy onto the current supported global dispatcher. */
-export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: number }): void {
-  const timeoutMs = resolveStreamTimeoutMs(opts);
-  if (timeoutMs === null) {
-    return;
-  }
-  globalUndiciStreamTimeoutMs = timeoutMs;
-  const runtime = loadUndiciGlobalDispatcherDeps();
-  const current = resolveCurrentDispatcherInfo(runtime);
-  if (current === null) {
+  if (current === null || (proxyOnly && current.kind === "agent")) {
     return;
   }
   applyGlobalDispatcherStreamTimeouts({

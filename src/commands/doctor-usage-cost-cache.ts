@@ -1,4 +1,3 @@
-/** Doctor cleanup for rebuildable legacy usage-cost cache sidecars. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -100,10 +99,7 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
     );
     return null;
   });
-  if (!files) {
-    return;
-  }
-  if (files.length === 0) {
+  if (!files?.length) {
     return;
   }
   if (!params.shouldRepair) {
@@ -139,8 +135,7 @@ async function maybeRemoveLegacySkillUploadTree(params: {
 }): Promise<void> {
   const stateDir = resolveStateDir(params.env ?? process.env, params.homedir ?? os.homedir);
   const uploadRoot = path.join(stateDir, "tmp", "skill-uploads");
-  const stats = await fs.lstat(uploadRoot).catch(() => null);
-  if (!stats) {
+  if (!(await fs.lstat(uploadRoot).catch(() => null))) {
     return;
   }
   if (!params.shouldRepair) {
@@ -151,12 +146,7 @@ async function maybeRemoveLegacySkillUploadTree(params: {
     return;
   }
   try {
-    // Removing a symlink removes only the fixed legacy entry, never its target.
-    if (stats.isSymbolicLink()) {
-      await fs.unlink(uploadRoot);
-    } else {
-      await fs.rm(uploadRoot, { recursive: true, force: true });
-    }
+    await fs.rm(uploadRoot, { recursive: true, force: true });
   } catch (error) {
     note(`Failed removing legacy skill-upload staging: ${String(error)}`, "Skill uploads");
     return;

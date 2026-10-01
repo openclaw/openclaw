@@ -12,6 +12,7 @@ import {
 } from "../config/sessions/session-sharing-store.native.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -193,16 +194,13 @@ test("sessions.list preserves separate registered targets under a fixed store ow
 });
 
 test.for(
-  (["delete", "draft", "join", "leave"] as const).flatMap((change) => [
-    { change, alias: false },
-    { change, alias: true },
-  ]),
+  (["delete", "draft", "join", "leave"] as const).map((change) => ({
+    change,
+    alias: process.platform !== "win32",
+  })),
 )(
   "sessions.list refreshes $change against the selected physical database (alias=$alias)",
-  async ({ change, alias }, context) => {
-    if (alias && process.platform === "win32") {
-      context.skip();
-    }
+  async ({ change, alias }) => {
     const rootStateDir = process.env.OPENCLAW_STATE_DIR;
     if (!rootStateDir) {
       throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
@@ -384,7 +382,11 @@ test("captured sentinel rows never substitute a later same-owner session after d
       });
       await projection.ensureMaterialized();
       expect(prepareProjectedSessionPresentation(projection, client).present(captured)).toBeNull();
-      const connection = createGatewayConnectionState({ bootId: "retired-sentinel", cfg });
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "retired-sentinel",
+        cfg,
+      });
       const send = vi.fn();
       const recipient = {
         ...client,

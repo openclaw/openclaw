@@ -1,4 +1,3 @@
-// Qa Matrix plugin module implements shared scenario runtime E2EE behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
@@ -62,12 +61,7 @@ export function requireMatrixQaPassword(
   context: MatrixQaScenarioContext,
   actor: "driver" | "observer" | "sut",
 ) {
-  const password =
-    actor === "driver"
-      ? context.driverPassword
-      : actor === "observer"
-        ? context.observerPassword
-        : context.sutPassword;
+  const password = context[`${actor}Password`];
   if (!password) {
     throw new Error(`Matrix E2EE ${actor} password is required for this scenario`);
   }
@@ -307,40 +301,35 @@ export function isMatrixQaE2eeNoticeTriggeredSutReply(params: {
   );
 }
 
-export async function createMatrixQaE2eeDriverClient(
+export async function createMatrixQaE2eeAccountClient(
   context: MatrixQaScenarioContext,
-  scenarioId: MatrixQaE2eeScenarioId,
-  opts: { actorId?: "driver" | `driver-${string}` } = {},
+  account: Pick<
+    Parameters<typeof createMatrixQaE2eeScenarioClient>[0],
+    "accessToken" | "actorId" | "deviceId" | "password" | "scenarioId" | "userId"
+  >,
 ) {
   return await createMatrixQaE2eeScenarioClient({
-    accessToken: context.driverAccessToken,
-    actorId: opts.actorId ?? "driver",
+    ...account,
     baseUrl: context.baseUrl,
-    deviceId: context.driverDeviceId,
     observedEvents: context.observedEvents,
     outputDir: requireMatrixQaE2eeOutputDir(context),
-    password: context.driverPassword,
-    scenarioId,
     timeoutMs: context.timeoutMs,
-    userId: context.driverUserId,
   });
 }
 
-async function createMatrixQaE2eeObserverClient(
+export async function createMatrixQaE2eeActorClient(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
+  actor: "driver" | "observer",
+  opts: { actorId?: "driver" | `driver-${string}` } = {},
 ) {
-  return await createMatrixQaE2eeScenarioClient({
-    accessToken: context.observerAccessToken,
-    actorId: "observer",
-    baseUrl: context.baseUrl,
-    deviceId: context.observerDeviceId,
-    observedEvents: context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(context),
-    password: context.observerPassword,
+  return await createMatrixQaE2eeAccountClient(context, {
+    accessToken: context[`${actor}AccessToken`],
+    actorId: opts.actorId ?? actor,
+    deviceId: context[`${actor}DeviceId`],
+    password: context[`${actor}Password`],
     scenarioId,
-    timeoutMs: context.timeoutMs,
-    userId: context.observerUserId,
+    userId: context[`${actor}UserId`],
   });
 }
 
@@ -352,11 +341,11 @@ export async function withMatrixQaE2eeDriverAndObserver<T>(
     observer: MatrixQaE2eeScenarioClient;
   }) => Promise<T>,
 ) {
-  const driver = await createMatrixQaE2eeDriverClient(context, scenarioId);
+  const driver = await createMatrixQaE2eeActorClient(context, scenarioId, "driver");
   let observer: MatrixQaE2eeScenarioClient | undefined;
   const [outcome] = await Promise.allSettled([
     (async () => {
-      observer = await createMatrixQaE2eeObserverClient(context, scenarioId);
+      observer = await createMatrixQaE2eeActorClient(context, scenarioId, "observer");
       return await run({ driver, observer });
     })(),
   ]);

@@ -13,22 +13,19 @@ import type {
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/media-services.js";
-import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
+import { extractOriginalFilename } from "../../media/store.js";
 import { formatGeneratedAttachmentLines } from "../generated-attachments.js";
 import { ToolInputError } from "./common.js";
-import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
+import { persistGeneratedMediaBuffers } from "./generated-media-batch-persistence.js";
+import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
+import { imageGenerationTaskLifecycle } from "./media-generate-background.js";
 import {
-  imageGenerationTaskLifecycle,
-  type ImageGenerationTaskHandle,
-} from "./media-generate-background.js";
-import {
+  buildMediaGenerateToolExecutionResult,
   describeMediaGenerationResult,
   resolveMediaGenerationResultGeometry,
-  type MediaGenerateToolExecutionResult,
 } from "./media-generate-result-shared.js";
 import {
   buildMediaReferenceDetails,
-  buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
   type LoadedMediaToolReference,
 } from "./media-tool-shared.js";
@@ -55,7 +52,7 @@ export async function executeImageGenerationJob(params: {
   ssrfPolicy?: SsrFPolicy;
   filename?: string;
   loadedReferenceImages: LoadedMediaToolReference<ImageGenerationSourceImage>[];
-  taskHandle?: ImageGenerationTaskHandle | null;
+  taskHandle?: MediaGenerationTaskHandle | null;
   autoProviderFallback?: boolean;
   providers: ImageGenerationProvider[];
 }) {
@@ -93,7 +90,6 @@ export async function executeImageGenerationJob(params: {
       progressSummary: "Saving generated image",
     });
   }
-  const ignoredOverrides = result.ignoredOverrides ?? [];
   const { displayProvider, displayModel, warning } = describeMediaGenerationResult(result);
   const {
     normalizedSize,
@@ -103,20 +99,11 @@ export async function executeImageGenerationJob(params: {
   } = resolveMediaGenerationResultGeometry(result, params.size);
   const appliedResolution = result.appliedResolution ?? normalizedResolution;
 
-  const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "image");
-  const savedImages = await persistGeneratedMediaBatch({
+  const savedImages = await persistGeneratedMediaBuffers({
+    assets: result.images,
     subdir: GENERATED_IMAGE_MEDIA_SUBDIR,
-    mode: "concurrent",
-    saves: result.images.map((image) => async () => {
-      const savedMedia = await saveMediaBuffer(
-        image.buffer,
-        image.mimeType,
-        GENERATED_IMAGE_MEDIA_SUBDIR,
-        mediaMaxBytes,
-        params.filename || image.fileName,
-      );
-      return { value: savedMedia, savedMedia };
-    }),
+    maxBytes: resolveGeneratedMediaMaxBytes(params.effectiveCfg, "image"),
+    filename: params.filename,
   });
 
   const revisedPrompts = result.images
@@ -134,30 +121,15 @@ export async function executeImageGenerationJob(params: {
     ...(warning ? [`Warning: ${warning}`] : []),
     ...formatGeneratedAttachmentLines(attachments),
   ];
-  return {
-    provider: result.provider,
-    model: result.model,
-    count: savedImages.length,
+  const execution = buildMediaGenerateToolExecutionResult({
+    result,
     attachments,
-    contentText: lines.join("\n"),
-    wakeResult: lines.join("\n"),
+    mediaUrls: savedImages.map((media) => media.path),
+    lines,
+    taskHandle: params.taskHandle,
+    warning,
     details: {
-      provider: result.provider,
-      model: result.model,
-      count: savedImages.length,
-      media: {
-        mediaUrls: savedImages.map((image) => image.path),
-        attachments,
-      },
-      attachments,
-      paths: savedImages.map((image) => image.path),
-      ...buildTaskRunDetails(params.taskHandle),
-      ...buildMediaReferenceDetails({
-        entries: params.loadedReferenceImages,
-        singleKey: "image",
-        pluralKey: "images",
-        getResolvedInput: (entry) => entry.resolvedInput,
-      }),
+      ...buildMediaReferenceDetails(params.loadedReferenceImages, "image"),
       ...(appliedResolution ? { resolution: appliedResolution } : {}),
       ...(normalizedSize || (params.size && !sizeTranslatedToAspectRatio)
         ? { size: normalizedSize ?? params.size }
@@ -170,14 +142,12 @@ export async function executeImageGenerationJob(params: {
       ...(params.background ? { background: params.background } : {}),
       ...(params.filename ? { filename: params.filename } : {}),
       ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-      attempts: result.attempts,
-      ...(result.normalization ? { normalization: result.normalization } : {}),
-      metadata: result.metadata,
-      ...(warning ? { warning } : {}),
-      ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
-      ...(revisedPrompts.length > 0 ? { revisedPrompts } : {}),
     },
-  } satisfies MediaGenerateToolExecutionResult;
+  });
+  if (revisedPrompts.length > 0) {
+    execution.details.revisedPrompts = revisedPrompts;
+  }
+  return execution;
 }
 
 export async function inferImageGenerationResolution(

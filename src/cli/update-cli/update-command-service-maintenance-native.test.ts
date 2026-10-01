@@ -27,13 +27,13 @@ import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "../../infra/update-managed-service-handoff-lease.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRunAsync } from "../../infra/update-run-ledger.js";
+import * as phaseWrites from "../../infra/update-run-write.async.js";
 import * as exec from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import * as pidAlive from "../../shared/pid-alive.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 
@@ -45,15 +45,13 @@ const { runNativeMaintenanceUpdate } =
 it
   .runIf(process.platform === "darwin" || process.platform === "linux")
   .each([
-    "direct helper",
     "activation helper",
     "activation helper with retained service root",
-    "ordinary nested caller",
+    "held service phase acknowledgement",
+    "revoked after service phase acknowledgement",
     "tuple-only caller",
-    "ordinary external Stop",
     "unrecorded helper",
     "revoked at native stop",
-    "revoked after inspection",
     "revoked after inspection with disable",
     "revoked after disable",
     "revoked before port cleanup",
@@ -71,8 +69,14 @@ it
       await fs.writeFile(path.join(callerRoot, "openclaw.mjs"), "// Fixture package entrypoint.\n");
     }
     const runId = randomUUID();
+    const heldServicePhase =
+      scenario === "held service phase acknowledgement" ||
+      scenario === "revoked after service phase acknowledgement";
     const productionCaller =
-      scenario === "activation helper" || retainedService || scenario === "revoked at native stop";
+      scenario === "activation helper" ||
+      retainedService ||
+      heldServicePhase ||
+      scenario === "revoked at native stop";
     const label = "ai.openclaw.native-stop-test";
     // Each case needs its own process: successful bootout must prove actual exit,
     // while refusal cases must leave that same serving identity alive.
@@ -107,7 +111,7 @@ it
           meta: { root: callerRoot, runId, handoffId: claim.lease.owner },
         }),
       );
-      if (scenario === "ordinary nested caller" || scenario === "unrecorded helper") {
+      if (scenario === "unrecorded helper") {
         expect(store.release(claim.lease)).toBe(true);
       }
       mockProcessPlatform("darwin");
@@ -184,13 +188,12 @@ it
       });
       const intent = () => db.prepare("SELECT pid, reason FROM gateway_restart_intent").get();
       let atBootout: ReturnType<typeof intent>;
-      vi.spyOn(ancestry, "getSelfAndAncestorPidsSync").mockReturnValue(
-        new Set(
-          scenario === "ordinary external Stop"
-            ? [process.pid, process.ppid, 1]
-            : [process.pid, process.ppid, gatewayPid],
-        ),
-      );
+      const callerPids = new Set([process.pid, process.ppid, gatewayPid]);
+      vi.spyOn(ancestry, "getSelfAndAncestorPidsSync").mockReturnValue(callerPids);
+      vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+        pids: callerPids,
+        complete: true,
+      });
       // The native manager and port are the external boundaries; stopLaunchAgent stays real.
       const cleanup = vi.spyOn(ancestry, "cleanStaleGatewayProcessesSync").mockReturnValue([]);
       vi.spyOn(ports, "inspectPortUsage").mockResolvedValue({
@@ -222,11 +225,7 @@ it
         }
         if (args[0] === "print") {
           inspections += 1;
-          if (
-            inspections === 2 &&
-            (scenario === "revoked after inspection" ||
-              scenario === "revoked after inspection with disable")
-          ) {
+          if (inspections === 2 && scenario === "revoked after inspection with disable") {
             expect(store.release(claim.lease)).toBe(true);
           }
           return loaded
@@ -263,7 +262,7 @@ it
       });
       await withEnvAsync(
         {
-          OPENCLAW_UPDATE_RUN_HANDOFF: scenario === "ordinary nested caller" ? undefined : "1",
+          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
           [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
           OPENCLAW_LAUNCHD_LABEL: label,
           OPENCLAW_SERVICE_MARKER: undefined,
@@ -279,21 +278,73 @@ it
               "../../daemon/service.js",
             );
           const service = resolveGatewayService();
-          if (scenario === "revoked at native stop") {
-            const nativeStop = service.stop;
-            vi.spyOn(service, "stop").mockImplementation(async (args) => {
-              // Revoke after caller inspection, immediately before the real guarded adapter.
-              const leaseDb = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-              try {
-                leaseDb
-                  .prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?")
-                  .run("revoked-native-stop-owner", root);
-              } finally {
-                leaseDb.close();
-              }
-              await nativeStop(args);
-            });
+          const revokeExecutor = () => {
+            const leaseDb = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
+            try {
+              leaseDb
+                .prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?")
+                .run("revoked-native-stop-owner", root);
+            } finally {
+              leaseDb.close();
+            }
+          };
+          const receiptCommitted = createDeferredCore();
+          const releaseReceipt = createDeferredCore();
+          const stopEntered = createDeferredCore();
+          let observingServiceWrite = false;
+          let activatingReceipts = 0;
+          const hostWrites: string[] = [];
+          const observeSql = (sql: string) => {
+            if (
+              observingServiceWrite &&
+              /\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+["`]?update_runs\b/i.test(sql)
+            ) {
+              hostWrites.push(sql);
+            }
+          };
+          const prepare = heldServicePhase
+            ? vi.spyOn(DatabaseSync.prototype, "prepare")
+            : undefined;
+          const execute = heldServicePhase ? vi.spyOn(DatabaseSync.prototype, "exec") : undefined;
+          if (prepare && execute) {
+            DatabaseSync.prototype.prepare = function (this: DatabaseSync, sql) {
+              observeSql(sql);
+              return prepare.call(this, sql);
+            };
+            DatabaseSync.prototype.exec = function (this: DatabaseSync, sql) {
+              observeSql(sql);
+              return execute.call(this, sql);
+            };
           }
+          const originalWrite = phaseWrites.recordUpdateRunPhaseAsync;
+          const phaseWrite = heldServicePhase
+            ? vi
+                .spyOn(phaseWrites, "recordUpdateRunPhaseAsync")
+                .mockImplementation(async (...args) => {
+                  const record = await originalWrite(...args);
+                  if (args[1] === "activating") {
+                    activatingReceipts += 1;
+                    if (activatingReceipts === 1) {
+                      // Execution's earlier phase is migrated; observe only service preparation.
+                      observingServiceWrite = true;
+                    } else if (activatingReceipts === 2) {
+                      receiptCommitted.resolve();
+                      await releaseReceipt.promise;
+                    }
+                  }
+                  return record;
+                })
+            : undefined;
+          const nativeStop = service.stop;
+          const stopCall = vi.spyOn(service, "stop").mockImplementation(async (args) => {
+            observingServiceWrite = false;
+            stopEntered.resolve();
+            if (scenario === "revoked at native stop") {
+              // Revoke after caller inspection, immediately before the real guarded adapter.
+              revokeExecutor();
+            }
+            await nativeStop(args);
+          });
           mocks.service.mockReturnValue(service);
           const nativeArgs = {
             env: process.env,
@@ -301,7 +352,7 @@ it
             disable:
               scenario === "revoked after inspection with disable" ||
               scenario === "revoked after disable",
-            ...(scenario === "ordinary nested caller" ? {} : { updateHandoff: { root, runId } }),
+            updateHandoff: { root, runId },
           };
           const stop = () =>
             productionCaller
@@ -311,9 +362,7 @@ it
                   claim.lease.owner,
                   retainedService ? root : undefined,
                 )
-              : scenario === "ordinary nested caller" ||
-                  scenario === "tuple-only caller" ||
-                  scenario === "ordinary external Stop"
+              : scenario === "tuple-only caller"
                 ? service.stop(nativeArgs)
                 : withGatewayServiceOperationLock(process.env, (assertCurrent) =>
                     withGatewayServiceUpdateAuthority(
@@ -325,53 +374,87 @@ it
                     ),
                   );
           const authorized =
-            scenario === "direct helper" ||
             scenario === "activation helper" ||
             retainedService ||
-            scenario === "ordinary external Stop";
-          if (authorized) {
-            await stop();
-            if (retainedService) {
-              expect(store.read(root)).toEqual({ kind: "absent" });
+            scenario === "held service phase acknowledgement";
+          const pending = stop();
+          try {
+            if (heldServicePhase) {
+              const reached = await Promise.race([
+                receiptCommitted.promise.then(() => "service-receipt"),
+                stopEntered.promise.then(() => "native-stop"),
+                pending.then(() => "command-completed"),
+              ]);
+              // The baseline reaches native stop before the service-owned receipt.
+              expect(hostWrites).toEqual([]);
+              expect(reached).toBe("service-receipt");
+              expect(activatingReceipts).toBe(2);
+              expect(stopCall).not.toHaveBeenCalled();
+              expect(loaded).toBe(true);
+              expect(pidAlive.isPidAlive(gatewayPid)).toBe(true);
+              expect(await getUpdateRunAsync(runId, { env: effectiveEnv })).toMatchObject({
+                runId,
+                phase: "activating",
+                status: "running",
+              });
+              observingServiceWrite = false;
+              if (scenario === "revoked after service phase acknowledgement") {
+                revokeExecutor();
+              }
+              releaseReceipt.resolve();
             }
-          } else {
-            await expect(stop()).rejects.toThrow(
-              productionCaller
-                ? /Update executor ownership is no longer current/
-                : `Refusing to stop LaunchAgent ${label} from inside the same launchd service`,
+            if (authorized) {
+              await pending;
+              if (retainedService) {
+                expect(store.read(root)).toEqual({ kind: "absent" });
+              }
+            } else {
+              await expect(pending).rejects.toThrow(
+                productionCaller
+                  ? /Update executor ownership is no longer current/
+                  : `Refusing to stop LaunchAgent ${label} from inside the same launchd service`,
+              );
+            }
+            if (scenario === "revoked after service phase acknowledgement") {
+              expect(stopCall).not.toHaveBeenCalled();
+            }
+            const target = `${launchdRuntime.resolveLaunchAgentGuiDomain()}/${label}`;
+            const bootedOut = authorized || scenario === "revoked before port cleanup";
+            expect(
+              nativeCalls.filter(
+                ([command]) => command !== "print" && command !== "print-disabled",
+              ),
+            ).toEqual(
+              bootedOut
+                ? [["bootout", target]]
+                : scenario === "revoked after disable"
+                  ? [["disable", target]]
+                  : [],
             );
+            expect(loaded).toBe(!bootedOut);
+            expect(pidAlive.isPidAlive(gatewayPid)).toBe(!bootedOut);
+            expect(atBootout).toEqual(
+              bootedOut ? { pid: gatewayPid, reason: "update.run" } : undefined,
+            );
+            expect(intent()).toEqual(
+              bootedOut ? { pid: gatewayPid, reason: "update.run" } : undefined,
+            );
+            expect(cleanup).not.toHaveBeenCalled();
+          } finally {
+            releaseReceipt.resolve();
+            await pending.catch(() => undefined);
+            phaseWrite?.mockRestore();
+            prepare?.mockRestore();
+            execute?.mockRestore();
+            stopCall.mockRestore();
           }
-          const target = `${launchdRuntime.resolveLaunchAgentGuiDomain()}/${label}`;
-          const bootedOut = authorized || scenario === "revoked before port cleanup";
-          expect(
-            nativeCalls.filter(([command]) => command !== "print" && command !== "print-disabled"),
-          ).toEqual(
-            bootedOut
-              ? [["bootout", target]]
-              : scenario === "revoked after disable"
-                ? [["disable", target]]
-                : [],
-          );
-          expect(loaded).toBe(!bootedOut);
-          expect(pidAlive.isPidAlive(gatewayPid)).toBe(!bootedOut);
-          expect(atBootout).toEqual(
-            bootedOut && scenario !== "ordinary external Stop"
-              ? { pid: gatewayPid, reason: "update.run" }
-              : undefined,
-          );
-          expect(intent()).toEqual(
-            bootedOut && scenario !== "ordinary external Stop"
-              ? { pid: gatewayPid, reason: "update.run" }
-              : undefined,
-          );
-          expect(cleanup).not.toHaveBeenCalled();
         },
       );
     } finally {
       await stopChildProcess(child, 5000);
       await closed;
       output.destroy();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
     }
   }),
 );

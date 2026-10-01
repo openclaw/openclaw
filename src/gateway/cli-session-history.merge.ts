@@ -143,7 +143,7 @@ function extractComparableText(
   const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
   return {
     hasCliImageMentions: stripResult.stripped,
-    ...(stripResult.stripped && isClaudeCliImportedUserMessage(message, role)
+    ...(stripResult.stripped && isClaudeImport
       ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
       : {}),
     ...(normalized ? { text: normalized } : {}),
@@ -357,10 +357,11 @@ function findFirstTimestampCandidateInRange(
   return best;
 }
 
-function findMinimumOrderCursor(
+function findUnconsumedTimestampCursor(
   entries: ComparableHistoryMessage[],
   startCursor: number,
   minimumOrder: number,
+  consumed: Set<ComparableHistoryMessage>,
 ): number {
   let cursor = startCursor;
   let end = entries.length;
@@ -372,6 +373,13 @@ function findMinimumOrderCursor(
     } else {
       end = middle;
     }
+  }
+  while (cursor < entries.length) {
+    const candidate = entries[cursor];
+    if (candidate && candidate.order >= minimumOrder && !consumed.has(candidate)) {
+      break;
+    }
+    cursor += 1;
   }
   return cursor;
 }
@@ -402,30 +410,18 @@ function findTimestampMatch(
   // An alternate text view can impose a higher floor than this index owns.
   // Keep order-only skips local until a match commits that floor for this text.
   if (timestamp === undefined) {
-    let missingCursor = findMinimumOrderCursor(
+    const missingCursor = findUnconsumedTimestampCursor(
       summary.missingTimestamps,
       summary.missingTimestampCursor,
       minimumOrder,
+      consumed,
     );
-    let timestampedCursor = findMinimumOrderCursor(
+    const timestampedCursor = findUnconsumedTimestampCursor(
       summary.timestampedByOrder,
       summary.timestampedOrderCursor,
       minimumOrder,
+      consumed,
     );
-    while (missingCursor < summary.missingTimestamps.length) {
-      const candidate = summary.missingTimestamps[missingCursor];
-      if (candidate && candidate.order >= minimumOrder && !consumed.has(candidate)) {
-        break;
-      }
-      missingCursor += 1;
-    }
-    while (timestampedCursor < summary.timestampedByOrder.length) {
-      const candidate = summary.timestampedByOrder[timestampedCursor];
-      if (candidate && candidate.order >= minimumOrder && !consumed.has(candidate)) {
-        break;
-      }
-      timestampedCursor += 1;
-    }
     const missing = summary.missingTimestamps[missingCursor];
     const timestamped = summary.timestampedByOrder[timestampedCursor];
     const candidate =
@@ -466,20 +462,17 @@ function findTimestampMatch(
     }
     return timestamped;
   }
-  let missingCursor = findMinimumOrderCursor(
+  const missingCursor = findUnconsumedTimestampCursor(
     summary.missingTimestamps,
     summary.missingTimestampCursor,
     minimumOrder,
+    consumed,
   );
-  while (missingCursor < summary.missingTimestamps.length) {
-    const candidate = summary.missingTimestamps[missingCursor];
-    if (candidate && candidate.order >= minimumOrder && !consumed.has(candidate)) {
-      summary.missingTimestampCursor = missingCursor + 1;
-      return candidate;
-    }
-    missingCursor += 1;
+  const candidate = summary.missingTimestamps[missingCursor];
+  if (candidate) {
+    summary.missingTimestampCursor = missingCursor + 1;
   }
-  return undefined;
+  return candidate;
 }
 
 function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): void {
@@ -502,23 +495,6 @@ function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMess
     byText.set(entry.text, summary);
   }
   addTimestampToSummary(summary, entry);
-}
-
-function findRoleTextCandidate(
-  index: RoleTextIndex,
-  entry: ComparableHistoryMessage,
-  consumed: Set<ComparableHistoryMessage>,
-  minimumOrder: number,
-): ComparableHistoryMessage | undefined {
-  if (!entry.role || !entry.text) {
-    return undefined;
-  }
-  return findTimestampMatch(
-    index.get(entry.role)?.get(entry.text),
-    entry.timestamp,
-    consumed,
-    minimumOrder,
-  );
 }
 
 function hasLocalImageMediaFacts(entry: ComparableHistoryMessage): boolean {
@@ -644,35 +620,18 @@ export function mergeImportedChatHistoryMessages(params: {
     }
     const turnKey = imported.hasCliImageMentions ? imported.cliImageTurnKey : undefined;
     const imageCandidates = turnKey ? localImageMediaCandidates.get(turnKey) : undefined;
-    let imageDuplicate: ComparableHistoryMessage | undefined;
-    if (imageCandidates) {
-      imageDuplicate = imageCandidates.entries[imageCandidates.cursor];
-      while (imageDuplicate && consumedLocalCandidates.has(imageDuplicate)) {
-        imageCandidates.cursor += 1;
-        imageDuplicate = imageCandidates.entries[imageCandidates.cursor];
-      }
-      if (imageDuplicate) {
-        imageCandidates.cursor += 1;
-      }
-    }
-    if (imageDuplicate) {
-      // Each local image turn suppresses one import while retaining the native
-      // identity on the media-bearing row that remains visible.
-      const projected = projectImportedIdentity(imageDuplicate.message, imported.message);
-      if (projected !== imageDuplicate.message) {
-        imageDuplicate.message = projected;
-        imageDuplicate.externalIdentityKey = resolveImportedExternalIdentityKey(projected);
-        if (imageDuplicate.externalIdentityKey) {
-          exactExternalIdentityIndex.set(imageDuplicate.externalIdentityKey, imageDuplicate);
-        }
-        changed = true;
-      }
-      consumedLocalCandidates.add(imageDuplicate);
-      advanceRoleTextMinimumOrder(imported, imageDuplicate);
-      continue;
-    }
     let duplicate: ComparableHistoryMessage | undefined;
-    if (!imported.hasCliImageMentions) {
+    if (imageCandidates) {
+      duplicate = imageCandidates.entries[imageCandidates.cursor];
+      while (duplicate && consumedLocalCandidates.has(duplicate)) {
+        imageCandidates.cursor += 1;
+        duplicate = imageCandidates.entries[imageCandidates.cursor];
+      }
+      if (duplicate) {
+        imageCandidates.cursor += 1;
+      }
+    }
+    if (!duplicate && !imported.hasCliImageMentions) {
       const index = imported.externalIdentityKey
         ? identitylessRoleTextIndex
         : allMessageRoleTextIndex;
@@ -685,9 +644,9 @@ export function mergeImportedChatHistoryMessages(params: {
           continue;
         }
         const minimumOrder = Math.max(importedMinimumOrder, byText?.get(text) ?? 0);
-        duplicate = findRoleTextCandidate(
-          index,
-          { ...imported, text },
+        duplicate = findTimestampMatch(
+          index.get(imported.role)?.get(text),
+          imported.timestamp,
           consumedLocalCandidates,
           minimumOrder,
         );

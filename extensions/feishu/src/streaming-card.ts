@@ -14,7 +14,8 @@ import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
-import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
+import { resolveFeishuCardTemplate } from "./native-card.js";
+import type { CardHeaderConfig } from "./send.js";
 import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -61,19 +62,12 @@ export class FeishuStreamingFinalizationError extends Error {
   }
 }
 
-/** Options for customising the initial streaming card appearance. */
-type StreamingCardOptions = {
-  /** Optional header with title and color template. */
-  header?: CardHeaderConfig;
-  /** Optional grey note footer text. */
-  note?: string;
-};
-
 type StreamingStartOptions = {
   replyToMessageId?: string;
   replyInThread?: boolean;
   rootId?: string;
   header?: CardHeaderConfig;
+  note?: string;
 };
 
 const STREAMING_UPDATE_THROTTLE_MS = 160;
@@ -224,10 +218,10 @@ export function mergeStreamingText(
   if (!previous || next === previous) {
     return next;
   }
-  if (next.startsWith(previous) || next.includes(previous)) {
+  if (next.includes(previous)) {
     return next;
   }
-  if (previous.startsWith(next) || previous.includes(next)) {
+  if (previous.includes(next)) {
     return previous;
   }
   const maxOverlap = Math.min(previous.length, next.length);
@@ -239,7 +233,6 @@ export function mergeStreamingText(
   return `${previous}${next}`;
 }
 
-/** Streaming card session manager */
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;
@@ -311,7 +304,7 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: StreamingCardOptions & StreamingStartOptions,
+    options?: StreamingStartOptions,
   ): Promise<void> {
     if (this.state) {
       return;
@@ -567,15 +560,11 @@ export class FeishuStreamingSession {
     // Only send final update if content differs from what's already displayed.
     // An explicit empty final text clears a transient preview before closeout.
     if ((text || finalText !== undefined) && text !== this.state.sentText) {
-      const sent = text.startsWith(this.state.sentText)
-        ? await this.writeCardContent(text, false, (e) => {
-            finalWriteError = e;
-            this.log?.(`Final update failed: ${String(e)}`);
-          })
-        : await this.writeCardContent(text, true, (e) => {
-            finalWriteError = e;
-            this.log?.(`Final replace failed: ${String(e)}`);
-          });
+      const replace = !text.startsWith(this.state.sentText);
+      const sent = await this.writeCardContent(text, replace, (e) => {
+        finalWriteError = e;
+        this.log?.(`Final ${replace ? "replace" : "update"} failed: ${String(e)}`);
+      });
       this.state.currentText = text;
       if (sent) {
         this.state.sentText = text;
@@ -583,12 +572,10 @@ export class FeishuStreamingSession {
       }
     }
 
-    // Update note with final model/provider info
     if (options?.note) {
       await this.updateNoteContent(options.note);
     }
 
-    // Close streaming mode
     // A rejected final write must not advertise content that CardKit never accepted.
     const acceptedText = this.state.sentText;
     this.state.sequence += 1;

@@ -1,5 +1,6 @@
 import { formatToolAggregate } from "../../auto-reply/tool-meta.js";
 import { redactToolDetail } from "../../logging/redact.js";
+import { formatFencedCodeBlock } from "../../shared/markdown-code.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
@@ -83,8 +84,7 @@ export function formatNativeToolOutput(
   if (!formattedOutput) {
     return formatNativeToolSummary(toolName, meta);
   }
-  const fence = markdownFenceForText(formattedOutput);
-  return `${formatNativeToolSummary(toolName, meta)}\n${fence}txt\n${formattedOutput}\n${fence}`;
+  return `${formatNativeToolSummary(toolName, meta)}\n${formatFencedCodeBlock(formattedOutput, "txt")}`;
 }
 
 /**
@@ -170,22 +170,4 @@ function appendBoundedToolTranscriptText(
 function toolTranscriptTruncationNotice(originalLength: number, nativeToolLabel: string): string {
   const noticeText = `...(OpenClaw truncated ${nativeToolLabel} native tool output: original ${originalLength} chars, showing ${TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS}; rerun with narrower args.)`;
   return `\n${noticeText}`;
-}
-
-function markdownFenceForText(text: string): string {
-  return "`".repeat(Math.max(3, longestBacktickRun(text) + 1));
-}
-
-function longestBacktickRun(value: string): number {
-  let longest = 0;
-  let current = 0;
-  for (const char of value) {
-    if (char === "`") {
-      current += 1;
-      longest = Math.max(longest, current);
-      continue;
-    }
-    current = 0;
-  }
-  return longest;
 }

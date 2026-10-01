@@ -178,13 +178,18 @@ describe("workspace upload byte stream", () => {
       baseManifestRaw: upload.baseRaw,
       currentManifestRaw: upload.currentRaw,
     });
-    const commit = vi.fn();
+    const commit = vi.fn(async () => {});
     diagnostics.stage("apply-result");
     const result = await applyStagedWorkerWorkspaceResult({
       root: local,
       stagedResultRef,
       expectedBaseManifestRef: upload.baseManifestRef,
-      journal: { load: () => undefined, begin: () => {}, commit, abort: () => {} },
+      journal: {
+        load: async () => undefined,
+        begin: async () => {},
+        commit,
+        abort: async () => {},
+      },
     });
     diagnostics.stage("assertions");
     expect(result.manifestRef).toBe(upload.currentManifestRef);

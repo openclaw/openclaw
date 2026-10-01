@@ -1,4 +1,9 @@
-import { WorktreeRemovalContentionError } from "./registry.js";
+import { hasErrnoCode } from "../../infra/errno.js";
+import { WorktreeRemovalContentionError } from "./run-lease-owner.js";
+
+export function isWorktreePermissionError(error: unknown): boolean {
+  return hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM");
+}
 
 export class WorktreeBranchMovedError extends Error {}
 

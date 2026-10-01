@@ -93,22 +93,33 @@ Other selection rules:
 
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to discover provider models. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
+- Chat and New Session keep the Default reset choice pinned in its provider group, then put the selected model before the remaining catalog choices. Models settings puts the selected model first. Other rows keep the Gateway's catalog order, including provider-curated recommendations where supplied. Text `/models <provider>` pages also put the current model first instead of alphabetizing the catalog. Picker search checks the full list, not just the visible rows.
+- Signing in to a provider keeps existing choices visible in open Control UI and terminal model pickers while discovery refreshes in the background. Changes to model restrictions, operator roles, or catalog mode still retire the old choices until the replacement catalog is ready.
+- The first catalog published after Gateway startup uses the same provider-owned model order as later refreshes. Captured rows inherit provider recommendations where available; rows without a provider rank keep the catalog's alphabetical fallback.
 
 On shared Gateways, an administrator can also configure a [named role's model
 policy](/gateway/operator-scopes#named-operator-roles). Model discovery and the
 Control UI, macOS, and iOS chat pickers show only the models permitted by that policy.
 This also applies to New Session in the Control UI. The Default choice uses a permitted automatic default; it does not grant additional
-manual choices. Configuration changes discard old choices before refreshing the
-catalog. Saved conversations retain their historical model information.
+manual choices. Changes to model restrictions, operator roles, or catalog mode
+discard old choices before refreshing the catalog. Saved conversations retain
+their historical model information.
 Filtering alone does not overwrite saved New Session model preferences. A saved
 choice can return when the policy permits it again; explicitly choosing another
 model still updates the preference.
 
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
-and native apps. Ordinary browsing and opening or reopening a model picker read
-the published catalog without starting provider discovery.
+and native apps. Chat and session metadata read published rows without starting
+provider discovery. Model-inventory requests return those rows immediately and
+can renew expired provider inventory in the background. A selected native model
+can load its own metadata while that renewal is still running.
+
+In chat apps, `/models` and model picker buttons return the newest completed list
+without waiting for discovery. Pending providers show `checking models…`.
+Open the menu again to see newly discovered models; completing discovery does not
+edit a list that was already sent.
 
 If preparing a large fleet takes longer than the two-minute startup budget, the
 Gateway starts with the agent model runtimes that have finished preparing. A
@@ -262,8 +273,10 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 ### Choose the same model with different runtimes
 
 Set `pickerRuntimes` on an exact model entry to offer additional runtime choices
-in the Control UI. The entries share the model name and differ by their harness
-label. The configured `agentRuntime` remains the default:
+in the Control UI. Each entry shows its harness label. When both OpenClaw and
+Codex are configured for the same model, the Codex choice appends `codex` to its
+name. A model with only one configured harness keeps its plain name. The
+configured `agentRuntime` remains the default:
 
 ```json5
 {
@@ -428,16 +441,25 @@ JSON `GET` at startup and then checks at most every six hours. The request sends
 no prompts, credentials, model usage, or configuration payload beyond the
 normal HTTP user agent and conditional cache headers.
 
-The downloaded bundle is stored in the shared SQLite state database and becomes
-visible after the next Gateway restart. Remote data can update or add models
-only for providers declared by installed plugin manifests. It cannot supply API
-base URLs or request headers, and a catalog older than the installed release's
-build stamp is ignored.
+The downloaded bundle is stored in the shared SQLite state database. The Gateway
+prepares a new catalog generation in the background, then publishes its model
+rows and prices together without restarting. Picker reads keep using the current
+generation during preparation; a failed or superseded preparation leaves it in
+place. Admitted runs retain their captured generation, and each usage-estimation
+operation uses one pricing context.
 
-The Gateway reports when a checked catalog needs a restart to become active,
-including a bundle downloaded by another process. Repeated checks of the same
-source and generation do not repeat the notice. Checking for an update does not
-activate the downloaded rows or prices.
+Remote data can update or add models only for providers declared by installed
+plugin manifests. It cannot supply API base URLs or request headers, and a
+catalog older than the installed release's build stamp is ignored. Hosted
+metadata does not override a provider's account-discovery or model-admission
+rules.
+
+The background check also notices bundles downloaded by another process.
+An explicit Gateway model-list refresh triggers adoption after returning the
+current rows; it does not wait for adoption or another agent's discovery.
+A corrupt saved bundle leaves the accepted generation serving.
+`openclaw models refresh` reports the download result, not whether a running
+Gateway has finished publishing it.
 
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
@@ -453,9 +475,8 @@ or retired are skipped. If models.dev itself is unreachable or malformed,
 publication fails and the last published artifact stays in place. A single
 missing or renamed upstream provider only skips that provider's hydration; its
 manifest rows still publish, so one provider cannot block catalog updates for
-the rest. This is a
-publication-time contract: it adds no Gateway fetches or hot reload, and updated
-metadata still becomes visible after a Gateway restart.
+the rest. Hydration runs at publication time, not in the Gateway. Downloaded
+metadata follows the shared catalog generation publication described above.
 Its scheduled workflow checks OpenClaw's default-branch plugin manifests and
 public pricing sources every four hours. Every catalog content change is
 preserved as a public commit. Provider-owned policies select complete price

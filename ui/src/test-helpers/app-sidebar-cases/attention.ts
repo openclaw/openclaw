@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -323,6 +324,34 @@ describe("AppSidebar session attention", () => {
     });
   });
 
+  it("keeps status expiry retired through queued updates after disconnect", async () => {
+    vi.useFakeTimers();
+    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+    setRows(sessionsHarness, [agentAttentionRow()]);
+    const { sidebar, provider } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessionsHarness.sessions,
+    );
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+
+    sidebar.requestUpdate();
+    provider.remove();
+    await sidebar.updateComplete;
+    const requestUpdate = vi.spyOn(sidebar, "requestUpdate");
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    document.body.append(provider);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
+
+    setRows(sessionsHarness, [agentAttentionRow()]);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
+  });
+
   it("does not render an expired agent declaration", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [
@@ -393,7 +422,7 @@ describe("AppSidebar session attention", () => {
       createGateway({} as GatewayBrowserClient),
       createSessionsHarness("main", [mainKey]).sessions,
       "panel",
-      null,
+      TWO_AGENTS,
       [approval],
     );
 
@@ -468,7 +497,12 @@ describe("AppSidebar session attention", () => {
         failedRow(failedKey, { label: "Source review", spawnedBy: childKey }),
       ] satisfies GatewaySessionRow[]
     ).map((row) => Object.assign({}, row, { agentId: "main" }));
-    const { sidebar, sessions: sessionsHarness, result } = await mountRoster(TWO_AGENTS, rows);
+    const {
+      sidebar,
+      sessions: sessionsHarness,
+      result,
+      context,
+    } = await mountRoster(TWO_AGENTS, rows);
     const parentRow = () => sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
     const childFailure = "Child session Source review failed: Provider credits exhausted";
     expect(parentRow().textContent).toContain(childFailure);
@@ -491,6 +525,7 @@ describe("AppSidebar session attention", () => {
       row.key === failedKey ? Object.assign({}, row, { lastReadAt: 2 }) : row,
     );
     setRows(sessionsHarness, result.sessions);
+    await rosterActivityStore(context).refresh();
     await waitForFast(() => {
       expect(parentRow()).not.toBeNull();
       expect(parentRow().querySelector('[data-session-attention="error"]')).toBeNull();

@@ -12,7 +12,6 @@ export type NewSessionRouteData = {
   groupWorktree?: boolean;
   groupCatalogGeneration?: number;
   groupDefaultsStatus?: import("../../lib/sessions/session-capability.ts").SessionGroupDefaultsStatus;
-  model: string;
   catalogLabel: string;
   startTerminal: boolean;
   terminalHosts?: Array<{ hostId: string; label: string }>;

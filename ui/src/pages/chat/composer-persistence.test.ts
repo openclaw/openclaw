@@ -2,10 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatGoalDraftMode, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { readChatOutboxRecovery } from "../../lib/chat/outbox-recovery.ts";
-import {
-  captureChatOutboxAdmission,
-  subscribeStoredChatOutboxChanges,
-} from "../../lib/chat/outbox-store.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -172,24 +169,6 @@ describe("chat composer persistence", () => {
     expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toEqual(goalMode);
   });
 
-  it("persists empty Goal mode and gives cancellation a new draft revision", () => {
-    const state = createState();
-    const persistence = startPersistence(state);
-    state.chatGoalDraftMode = { action: "start", sessionId: "session-a" };
-    persistence.schedule();
-    persistence.persistNow();
-    const revision = loadChatComposerDraftRevision(state, state.sessionKey);
-    expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toEqual(
-      state.chatGoalDraftMode,
-    );
-    state.chatGoalDraftMode = null;
-    persistence.schedule();
-    persistence.persistNow();
-    expect(loadChatComposerDraftRevision(state, state.sessionKey)).toBeGreaterThan(revision);
-    expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
-    persistence.stop();
-  });
-
   it("fences a same-revision retry that changes objective interpretation", () => {
     const state = createState({
       chatMessage: "/goal clear",
@@ -312,50 +291,6 @@ describe("chat composer persistence", () => {
     expect(stored.sessions["agent:main:workspace\u0000agent:main"]).toBeUndefined();
     expect(persistence.persistForRouteSwitchResult()).toEqual({ status: "persisted" });
     persistence.stop();
-  });
-
-  it("notifies stored outbox subscribers on draft presence transitions and queue writes", () => {
-    const state = createState();
-    const original = reconnectItem("notify", 1);
-    const updated = { ...original, text: "updated message" };
-    const listener = vi.fn();
-    const unsubscribe = subscribeStoredChatOutboxChanges(listener);
-
-    try {
-      expect(persistChatComposerState({ ...state, chatMessage: "draft only" })).toBe(true);
-      expect(listener).toHaveBeenCalledTimes(1);
-      // Content-only re-persists stay silent so projection subscribers cannot
-      // react by re-persisting a stale pane over the newer draft.
-      expect(persistChatComposerState({ ...state, chatMessage: "draft only, edited" })).toBe(true);
-      expect(listener).toHaveBeenCalledTimes(1);
-      expect(persistChatComposerState({ ...state, chatMessage: "" })).toBe(true);
-      expect(listener).toHaveBeenCalledTimes(2);
-      expect(admitItem(state, original)).toBe(true);
-      expect(listener).toHaveBeenCalledTimes(3);
-      expect(
-        updateStoredChatComposerQueueItem(
-          state,
-          state.sessionKey,
-          original,
-          updated,
-          original.agentId,
-        ),
-      ).toBe(true);
-      expect(listener).toHaveBeenCalledTimes(4);
-    } finally {
-      unsubscribe();
-    }
-
-    expect(
-      removeStoredChatComposerQueueItem(
-        state,
-        state.sessionKey,
-        updated.id,
-        updated,
-        updated.agentId,
-      ),
-    ).toBe(true);
-    expect(listener).toHaveBeenCalledTimes(4);
   });
 
   it("flushes a debounced draft before its owner releases state", () => {

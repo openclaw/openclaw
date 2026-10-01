@@ -7,11 +7,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { renderTelegramHtmlText } from "./format.js";
-import {
-  createTelegramIngressSubject,
-  createTelegramIngressResolver,
-  telegramAllowEntries,
-} from "./ingress.js";
+import { createTelegramIngressResolver, telegramAllowEntries } from "./ingress.js";
 
 type TelegramDmAccessLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
@@ -44,7 +40,7 @@ async function decideTelegramDmAccess(params: {
   effectiveDmAllow: NormalizedAllowFrom;
 }) {
   const result = await createTelegramIngressResolver({ accountId: params.accountId }).message({
-    subject: createTelegramIngressSubject(params.sender.candidateId),
+    subject: { stableId: params.sender.candidateId },
     conversation: {
       kind: "direct",
       id: params.sender.candidateId,

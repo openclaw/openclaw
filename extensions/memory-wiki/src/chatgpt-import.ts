@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements chatgpt import behavior.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -33,6 +32,7 @@ import {
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
+import { readExistingWikiPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const CHATGPT_PREFERENCE_SIGNAL_RE =
@@ -143,45 +143,15 @@ function normalizeWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
-function isMissingConversationPageError(error: unknown): boolean {
-  return asNullableRecord(error)?.code === "ENOENT";
-}
-
-async function readExistingConversationPage(absolutePath: string): Promise<string> {
-  try {
-    return await fs.readFile(absolutePath, "utf8");
-  } catch {
-    try {
-      return await fs.readFile(absolutePath, "utf8");
-    } catch (retryError) {
-      if (isMissingConversationPageError(retryError)) {
-        return "";
-      }
-      throw retryError;
-    }
-  }
-}
-
-function resolveConversationSourcePath(exportInputPath: string): {
-  exportPath: string;
-  conversationsPath: string;
-} {
-  const resolved = path.resolve(exportInputPath);
-  const conversationsPath = resolved.endsWith(".json")
-    ? resolved
-    : path.join(resolved, "conversations.json");
-  return {
-    exportPath: resolved,
-    conversationsPath,
-  };
-}
-
 async function loadConversations(exportInputPath: string): Promise<{
   exportPath: string;
   conversationsPath: string;
   conversations: Record<string, unknown>[];
 }> {
-  const { exportPath, conversationsPath } = resolveConversationSourcePath(exportInputPath);
+  const exportPath = path.resolve(exportInputPath);
+  const conversationsPath = exportPath.endsWith(".json")
+    ? exportPath
+    : path.join(exportPath, "conversations.json");
   const raw = await fs.readFile(conversationsPath, "utf8");
   const parsed = JSON.parse(raw) as unknown;
   const conversations = Array.isArray(parsed)
@@ -303,104 +273,75 @@ function inferRisk(title: string, sampleText: string): ChatGptRiskAssessment {
 function inferLabels(title: string, sampleText: string): string[] {
   const blob = `${title}\n${sampleText}`.toLowerCase();
   const labels = new Set<string>(["domain/personal"]);
-  const addAreaTopic = (area: string, topics: string[]) => {
-    labels.add(area);
-    for (const topic of topics) {
-      labels.add(topic);
-    }
+  const addAreaTopic = (area: string, topic = area) => {
+    labels.add(`area/${area}`);
+    labels.add(`topic/${topic}`);
   };
-  const hasTranslation =
+  if (
     /\b(translate|translation|traduc\w*|traducc\w*|traduç\w*|traducci[oó]n|traduccio|traducció|traduzione)\b/i.test(
       blob,
-    );
-  const hasLearning =
-    /\b(anki|flashcards?|grammar|conjugat\w*|declension|pronunciation|vocab(?:ular(?:y|io))?|lesson|tutor|teacher|jlpt|kanji|hiragana|katakana|study|learn|practice)\b/i.test(
-      blob,
-    );
-  const hasLanguageName =
-    /\b(japanese|portuguese|catalan|castellano|espa[nñ]ol|franc[eé]s|french|italian|german|spanish)\b/i.test(
-      blob,
-    );
-  if (hasTranslation) {
+    )
+  ) {
     labels.add("topic/translation");
   }
-  if (
-    hasLearning ||
-    (hasLanguageName && /\b(learn|study|practice|lesson|tutor|grammar)\b/i.test(blob))
-  ) {
-    addAreaTopic("area/language-learning", ["topic/language-learning"]);
-  }
-  if (
-    /\b(hike|trail|hotel|flight|trip|travel|airport|itinerary|booking|airbnb|train|stay)\b/i.test(
-      blob,
-    )
-  ) {
-    labels.add("area/travel");
-    labels.add("topic/travel");
-  }
-  if (
-    /\b(recipe|cook|cooking|bread|sourdough|pizza|espresso|coffee|mousse|cast iron|meatballs?)\b/i.test(
-      blob,
-    )
-  ) {
-    addAreaTopic("area/cooking", ["topic/cooking"]);
-  }
-  if (
-    /\b(garden|orchard|plant|soil|compost|agroforestry|permaculture|mulch|beds?|irrigation|seeds?)\b/i.test(
-      blob,
-    )
-  ) {
-    addAreaTopic("area/gardening", ["topic/gardening"]);
-  }
-  if (/\b(dating|relationship|partner|jealous|breakup|trust)\b/i.test(blob)) {
-    addAreaTopic("area/relationships", ["topic/relationships"]);
-  }
-  if (
-    /\b(investment|invest|portfolio|dividend|yield|coupon|valuation|return|mortgage|loan|kraken|crypto|covered call|call option|put option|option chain|bond|stocks?)\b/i.test(
-      blob,
-    )
-  ) {
-    addAreaTopic("area/finance", ["topic/finance"]);
-  }
-  if (
-    /\b(contract|mou|tax|impuesto|legal|law|lawsuit|visa|immigration|license|licencia|dispute|claim|insurance|non-residence|residency)\b/i.test(
-      blob,
-    )
-  ) {
-    addAreaTopic("area/legal-tax", ["topic/legal-tax"]);
-  }
-  if (
-    /\b(supplement|medication|diagnos(?:is|e)|symptom|therapy|depress(?:ion|ed)|anxiet(?:y|ies)|mri|migraine|injur(?:y|ies)|pain|cortisol|sleep|dentist|dermatolog(?:ist|y))\b/i.test(
-      blob,
-    )
-  ) {
-    addAreaTopic("area/health", ["topic/health"]);
-  }
-  if (
-    /\b(book (an )?appointment|rebook|open (a )?new account|driving test|exam|gestor(?:a)?|itv)\b/i.test(
-      blob,
-    )
-  ) {
-    addAreaTopic("area/life-admin", ["topic/life-admin"]);
+  const areas: Array<[string, RegExp]> = [
+    [
+      "language-learning",
+      /\b(anki|flashcards?|grammar|conjugat\w*|declension|pronunciation|vocab(?:ular(?:y|io))?|lesson|tutor|teacher|jlpt|kanji|hiragana|katakana|study|learn|practice)\b/i,
+    ],
+    [
+      "travel",
+      /\b(hike|trail|hotel|flight|trip|travel|airport|itinerary|booking|airbnb|train|stay)\b/i,
+    ],
+    [
+      "cooking",
+      /\b(recipe|cook|cooking|bread|sourdough|pizza|espresso|coffee|mousse|cast iron|meatballs?)\b/i,
+    ],
+    [
+      "gardening",
+      /\b(garden|orchard|plant|soil|compost|agroforestry|permaculture|mulch|beds?|irrigation|seeds?)\b/i,
+    ],
+    ["relationships", /\b(dating|relationship|partner|jealous|breakup|trust)\b/i],
+    [
+      "finance",
+      /\b(investment|invest|portfolio|dividend|yield|coupon|valuation|return|mortgage|loan|kraken|crypto|covered call|call option|put option|option chain|bond|stocks?)\b/i,
+    ],
+    [
+      "legal-tax",
+      /\b(contract|mou|tax|impuesto|legal|law|lawsuit|visa|immigration|license|licencia|dispute|claim|insurance|non-residence|residency)\b/i,
+    ],
+    [
+      "health",
+      /\b(supplement|medication|diagnos(?:is|e)|symptom|therapy|depress(?:ion|ed)|anxiet(?:y|ies)|mri|migraine|injur(?:y|ies)|pain|cortisol|sleep|dentist|dermatolog(?:ist|y))\b/i,
+    ],
+    [
+      "life-admin",
+      /\b(book (an )?appointment|rebook|open (a )?new account|driving test|exam|gestor(?:a)?|itv)\b/i,
+    ],
+  ];
+  for (const [area, pattern] of areas) {
+    if (pattern.test(blob)) {
+      addAreaTopic(area);
+    }
   }
   if (/\b(frc|robot|robotics|wpilib|limelight|chiefdelphi)\b/i.test(blob)) {
-    addAreaTopic("area/work", ["topic/robotics"]);
+    addAreaTopic("work", "robotics");
   } else if (
     /\b(docker|git|python|node|npm|pip|sql|postgres|api|bug|stack trace|permission denied)\b/i.test(
       blob,
     )
   ) {
-    addAreaTopic("area/work", ["topic/software"]);
+    addAreaTopic("work", "software");
   } else if (/\b(job|interview|cover letter|resume|cv)\b/i.test(blob)) {
-    addAreaTopic("area/work", ["topic/career"]);
+    addAreaTopic("work", "career");
   }
   if (/\b(wifi|wi-fi|starlink|router|mesh|network|orbi|milesight|coverage)\b/i.test(blob)) {
-    addAreaTopic("area/home", ["topic/home-infrastructure"]);
+    addAreaTopic("home", "home-infrastructure");
   }
   if (
     /\b(p38|range rover|porsche|bmw|bobcat|excavator|auger|trailer|chainsaw|stihl)\b/i.test(blob)
   ) {
-    addAreaTopic("area/vehicles", ["topic/vehicles"]);
+    addAreaTopic("vehicles");
   }
   if (![...labels].some((label) => label.startsWith("area/"))) {
     labels.add("area/other");
@@ -453,11 +394,10 @@ function resolveConversationPagePath(record: { conversationId: string; createdAt
   const conversationSlug = record.conversationId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
   const pageId = `source.chatgpt.${conversationSlug || createHash("sha1").update(record.conversationId).digest("hex").slice(0, 12)}`;
   const datePrefix = record.createdAt?.slice(0, 10) ?? "undated";
-  const shortId = conversationSlug.slice(0, 8) || "export";
   return {
     pageId,
     pagePath: path
-      .join("sources", `chatgpt-${datePrefix}-${conversationSlug || shortId}.md`)
+      .join("sources", `chatgpt-${datePrefix}-${conversationSlug || "export"}.md`)
       .replace(/\\/g, "/"),
   };
 }
@@ -479,17 +419,18 @@ function toConversationRecord(
   const userTexts = transcript.filter((entry) => entry.role === "user").map((entry) => entry.text);
   const assistantTexts = transcript.filter((entry) => entry.role === "assistant");
   const sampleText = userTexts.slice(0, 6).join("\n");
+  const createdAt = isoFromUnix(conversation.create_time);
   const risk = inferRisk(title, sampleText);
   const labels = inferLabels(title, sampleText);
   const { pageId, pagePath } = resolveConversationPagePath({
     conversationId,
-    createdAt: isoFromUnix(conversation.create_time),
+    createdAt,
   });
   return {
     conversationId,
     title,
-    createdAt: isoFromUnix(conversation.create_time),
-    updatedAt: isoFromUnix(conversation.update_time) ?? isoFromUnix(conversation.create_time),
+    createdAt,
+    updatedAt: isoFromUnix(conversation.update_time) ?? createdAt,
     sourcePath,
     pageId,
     pagePath,
@@ -564,40 +505,10 @@ function renderConversationPage(record: ChatGptConversationRecord): string {
   });
 }
 
-function replaceSimpleManagedBlock(params: {
-  original: string;
-  startMarker: string;
-  endMarker: string;
-  replacement: string;
-}): string {
-  const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const blockPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`);
-  return params.original.replace(blockPattern, () => params.replacement);
-}
-
-function extractSimpleManagedBlock(params: {
-  body: string;
-  startMarker: string;
-  endMarker: string;
-}): string | null {
-  const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const blockPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`);
-  return params.body.match(blockPattern)?.[0] ?? null;
-}
-
-function extractManagedBlockBody(params: {
-  body: string;
-  startMarker: string;
-  endMarker: string;
-}): string | null {
-  const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const blockPattern = new RegExp(`${escapedStart}\\n?([\\s\\S]*?)\\n?${escapedEnd}`);
-  const captured = params.body.match(blockPattern)?.[1];
-  return typeof captured === "string" ? captured.trim() : null;
-}
+const HUMAN_BLOCK_PATTERN = new RegExp(`${HUMAN_START_MARKER}[\\s\\S]*?${HUMAN_END_MARKER}`);
+const RELATED_BLOCK_BODY_PATTERN = new RegExp(
+  `${WIKI_RELATED_START_MARKER}\\n?([\\s\\S]*?)\\n?${WIKI_RELATED_END_MARKER}`,
+);
 
 function preserveExistingPageBlocks(rendered: string, existing: string): string {
   if (!existing.trim()) {
@@ -607,25 +518,12 @@ function preserveExistingPageBlocks(rendered: string, existing: string): string 
   const parsedRendered = parseWikiMarkdown(rendered);
   let nextBody = parsedRendered.body;
 
-  const humanBlock = extractSimpleManagedBlock({
-    body: parsedExisting.body,
-    startMarker: HUMAN_START_MARKER,
-    endMarker: HUMAN_END_MARKER,
-  });
+  const humanBlock = parsedExisting.body.match(HUMAN_BLOCK_PATTERN)?.[0];
   if (humanBlock) {
-    nextBody = replaceSimpleManagedBlock({
-      original: nextBody,
-      startMarker: HUMAN_START_MARKER,
-      endMarker: HUMAN_END_MARKER,
-      replacement: humanBlock,
-    });
+    nextBody = nextBody.replace(HUMAN_BLOCK_PATTERN, () => humanBlock);
   }
 
-  const relatedBody = extractManagedBlockBody({
-    body: parsedExisting.body,
-    startMarker: WIKI_RELATED_START_MARKER,
-    endMarker: WIKI_RELATED_END_MARKER,
-  });
+  const relatedBody = parsedExisting.body.match(RELATED_BLOCK_BODY_PATTERN)?.[1]?.trim();
   if (relatedBody) {
     nextBody = replaceManagedMarkdownBlock({
       original: nextBody,
@@ -696,11 +594,8 @@ async function writeTrackedImportPage(params: {
   existing: string;
   rendered: string;
   record: ChatGptImportRunRecord;
-}): Promise<ChatGptImportOperation> {
+}): Promise<void> {
   const absolutePath = path.join(params.vaultRoot, params.relativePath);
-  if (params.existing === params.rendered) {
-    return "skip";
-  }
   // Hash the exact import-owned bytes before writing. A later compile must not
   // let a concurrent user save become the recorded rollback baseline.
   const contentHash = hashChatGptImportContent(params.rendered);
@@ -708,7 +603,7 @@ async function writeTrackedImportPage(params: {
   if (!params.existing) {
     await fs.writeFile(absolutePath, params.rendered, "utf8");
     params.record.createdPaths.push({ path: params.relativePath, contentHash });
-    return "create";
+    return;
   }
   const snapshotHash = createHash("sha1").update(params.relativePath).digest("hex").slice(0, 12);
   const snapshotRelativePath = path.join("snapshots", `${snapshotHash}.md`).replace(/\\/g, "/");
@@ -721,7 +616,6 @@ async function writeTrackedImportPage(params: {
     snapshotPath: snapshotRelativePath,
     contentHash,
   });
-  return "update";
 }
 
 async function importChatGptConversationsUnlocked(params: {
@@ -755,7 +649,10 @@ async function importChatGptConversationsUnlocked(params: {
   for (const record of records) {
     const rendered = renderConversationPage(record);
     const absolutePath = path.join(params.config.vault.path, record.pagePath);
-    const existing = await readExistingConversationPage(absolutePath);
+    const existing = await readExistingWikiPage(
+      () => fs.readFile(absolutePath, "utf8"),
+      (error) => asNullableRecord(error)?.code === "ENOENT",
+    );
     const stabilized = preserveExistingPageBlocks(rendered, existing);
     const operation: ChatGptImportOperation =
       existing === stabilized ? "skip" : existing ? "update" : "create";
@@ -822,33 +719,29 @@ async function importChatGptConversationsUnlocked(params: {
 
   let indexUpdatedFiles: string[] = [];
   if (!params.dryRun && importRunRecord) {
-    if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
-      await writeMemoryWikiImportRunRecord(params.config.vault.path, importRunRecord);
-      const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Memory Wiki ChatGPT import run ${importRunRecord.runId} changed source pages, but vault compilation failed: ${message}. After fixing the compile error, run \`openclaw wiki chatgpt rollback ${importRunRecord.runId}\` to restore the imported pages.`,
-          { cause: error },
-        );
-      });
-      indexUpdatedFiles = compile.updatedFiles;
-      await appendMemoryWikiLog(params.config.vault.path, {
-        type: "ingest",
-        timestamp: nowIso,
-        details: {
-          sourceType: "chatgpt-export",
-          runId: importRunRecord.runId,
-          exportPath,
-          sourcePath: conversationsPath,
-          conversationCount: records.length,
-          createdCount: importRunRecord.createdPaths.length,
-          updatedCount: importRunRecord.updatedPaths.length,
-          skippedCount,
-        },
-      });
-    } else {
-      runId = undefined;
-    }
+    await writeMemoryWikiImportRunRecord(params.config.vault.path, importRunRecord);
+    const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Memory Wiki ChatGPT import run ${importRunRecord.runId} changed source pages, but vault compilation failed: ${message}. After fixing the compile error, run \`openclaw wiki chatgpt rollback ${importRunRecord.runId}\` to restore the imported pages.`,
+        { cause: error },
+      );
+    });
+    indexUpdatedFiles = compile.updatedFiles;
+    await appendMemoryWikiLog(params.config.vault.path, {
+      type: "ingest",
+      timestamp: nowIso,
+      details: {
+        sourceType: "chatgpt-export",
+        runId: importRunRecord.runId,
+        exportPath,
+        sourcePath: conversationsPath,
+        conversationCount: records.length,
+        createdCount: importRunRecord.createdPaths.length,
+        updatedCount: importRunRecord.updatedPaths.length,
+        skippedCount,
+      },
+    });
   }
 
   return {
@@ -1154,41 +1047,22 @@ async function rollbackChatGptImportRunUnlocked(params: {
     if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: recoverySlots })) {
       await writeMemoryWikiImportRunRecord(vaultRoot, record);
     }
-    for (const ref of refs.filter((candidate) => candidate.kind === "created")) {
-      let removed = false;
-      for (let attempt = 0; attempt < MAX_ROLLBACK_RECREATE_ATTEMPTS; attempt += 1) {
-        const slot = await moveTargetToRecovery({
-          vaultRoot: vaultFs,
-          runRoot: runFs,
-          runRelativePath,
-          ref,
-        });
-        if (!slot) {
-          removed = true;
-          break;
-        }
-        if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: [slot] })) {
-          await writeMemoryWikiImportRunRecord(vaultRoot, record);
-        }
-      }
-      if (!removed) {
-        throw new Error(
-          `Memory Wiki rollback could not remove ${ref.entry.path} after ${MAX_ROLLBACK_RECREATE_ATTEMPTS} concurrent recreations`,
-        );
-      }
-    }
-    for (const ref of refs.filter((candidate) => candidate.kind === "updated")) {
+    for (const ref of refs) {
       const { entry } = ref;
-      if (!entry.snapshotPath) {
+      if (ref.kind === "updated" && !entry.snapshotPath) {
         continue;
       }
-      resolveContainedImportPath(runDir, entry.snapshotPath, "Memory Wiki import snapshot path");
-      const snapshot = await runFs.readText(entry.snapshotPath);
-      resolveContainedImportPath(vaultRoot, entry.path, "Memory Wiki import page path");
-      let restored = false;
+      const snapshot =
+        ref.kind === "updated" && entry.snapshotPath
+          ? await runFs.readText(entry.snapshotPath)
+          : undefined;
+      let completed = false;
       for (let attempt = 0; attempt < MAX_ROLLBACK_RECREATE_ATTEMPTS; attempt += 1) {
-        if (await targetMatchesSnapshot(vaultFs, entry.path, snapshot)) {
-          restored = true;
+        if (
+          snapshot !== undefined &&
+          (await targetMatchesSnapshot(vaultFs, entry.path, snapshot))
+        ) {
+          completed = true;
           break;
         }
         const slot = await moveTargetToRecovery({
@@ -1197,14 +1071,19 @@ async function rollbackChatGptImportRunUnlocked(params: {
           runRelativePath,
           ref,
         });
-        if (slot) {
-          if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: [slot] })) {
-            await writeMemoryWikiImportRunRecord(vaultRoot, record);
+        if (slot && (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: [slot] }))) {
+          await writeMemoryWikiImportRunRecord(vaultRoot, record);
+        }
+        if (snapshot === undefined) {
+          if (slot) {
+            continue;
           }
+          completed = true;
+          break;
         }
         try {
           await vaultFs.create(entry.path, snapshot, { encoding: "utf8", mkdir: true });
-          restored = true;
+          completed = true;
           break;
         } catch (error) {
           if (!isFsSafeErrorCode(error, "already-exists")) {
@@ -1212,9 +1091,9 @@ async function rollbackChatGptImportRunUnlocked(params: {
           }
         }
       }
-      if (!restored) {
+      if (!completed) {
         throw new Error(
-          `Memory Wiki rollback could not restore ${entry.path} after ${MAX_ROLLBACK_RECREATE_ATTEMPTS} concurrent recreations`,
+          `Memory Wiki rollback could not ${ref.kind === "created" ? "remove" : "restore"} ${entry.path} after ${MAX_ROLLBACK_RECREATE_ATTEMPTS} concurrent recreations`,
         );
       }
     }

@@ -33,13 +33,9 @@ export function classifyProviderFailoverSignalWithPlugin(params: {
   return undefined;
 }
 
-function resolveProviderPluginsForScopedHook(params: {
-  provider?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderFailoverErrorContext;
-}): ProviderPlugin[] {
+function resolveProviderPluginsForScopedHook(
+  params: Parameters<typeof classifyProviderFailoverSignalWithPlugin>[0],
+): ProviderPlugin[] {
   if (!params.provider) {
     return resolveLoadedProviderPluginsForHooks(params) ?? [];
   }

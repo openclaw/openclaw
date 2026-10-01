@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, nothing, render, type ReactiveController } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
@@ -12,7 +12,6 @@ import {
 } from "../test-helpers/chat-scroll-input.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
-import { createTranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import {
   publishTranscriptScroll,
   subscribeTranscriptScroll,
@@ -31,7 +30,7 @@ describe("chat transcript scroll ownership", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("does not follow a captured footer commit while end anchoring is suspended", () => {
+  it("does not follow a captured end anchor while end anchoring is suspended", () => {
     const element = document.createElement("div");
     Object.defineProperties(element, {
       clientHeight: { configurable: true, value: 400 },
@@ -40,18 +39,16 @@ describe("chat transcript scroll ownership", () => {
     element.scrollTop = 600;
     const anchor = new TranscriptEndAnchor();
     anchor.capture(element);
-    anchor.prepareUpdate(element, true, createTranscriptOffsetState());
     Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1200 });
-    expect(anchor.isResizingCommit(element)).toBe(true);
+    expect(anchor.isResizeAnchor(element)).toBe(true);
     const follow = vi.fn();
 
-    anchor.releaseCommit();
     anchor.reconcile(element, true, true, follow);
 
     expect(follow).not.toHaveBeenCalled();
   });
 
-  it("does not override native movement during a commit with an unchanged scroll range", () => {
+  it("does not override native movement with an unchanged scroll range", () => {
     const element = document.createElement("div");
     Object.defineProperties(element, {
       clientHeight: { configurable: true, value: 400 },
@@ -60,18 +57,16 @@ describe("chat transcript scroll ownership", () => {
     element.scrollTop = 600;
     const anchor = new TranscriptEndAnchor();
     anchor.capture(element);
-    anchor.prepareUpdate(element, true, createTranscriptOffsetState());
     element.scrollTop -= 8;
     const follow = vi.fn();
 
-    anchor.releaseCommit();
     anchor.reconcile(element, true, false, follow);
 
     expect(follow).not.toHaveBeenCalled();
     expect(element.scrollTop).toBe(592);
   });
 
-  it("preserves a commit's native clamp when the footer restores the original scroll range", () => {
+  it("preserves native movement after row growth changes the scroll range", () => {
     const element = document.createElement("div");
     Object.defineProperties(element, {
       clientHeight: { configurable: true, value: 400 },
@@ -80,83 +75,19 @@ describe("chat transcript scroll ownership", () => {
     element.scrollTop = 600;
     const anchor = new TranscriptEndAnchor();
     anchor.capture(element);
-    anchor.prepareUpdate(element, true, createTranscriptOffsetState());
-    Object.defineProperty(element, "clientHeight", { configurable: true, value: 500 });
-    element.scrollTop = 500;
-    anchor.commitUpdate(element);
-    Object.defineProperty(element, "clientHeight", { configurable: true, value: 400 });
-    const follow = vi.fn(() => {
-      element.scrollTop = 600;
-    });
-
-    expect(anchor.isResizingCommit(element)).toBe(true);
-    anchor.releaseCommit();
-    anchor.reconcile(element, true, false, follow);
-
-    expect(follow).toHaveBeenCalledOnce();
-    expect(element.scrollTop).toBe(600);
-  });
-
-  it.each(["footer", "row"] as const)(
-    "preserves native movement after an observed %s commit changes the scroll range",
-    (kind) => {
-      const element = document.createElement("div");
-      Object.defineProperties(element, {
-        clientHeight: { configurable: true, value: 400 },
-        scrollHeight: { configurable: true, value: 1000 },
-      });
-      element.scrollTop = 600;
-      const anchor = new TranscriptEndAnchor();
-      anchor.capture(element);
-      anchor.prepareUpdate(element, true, createTranscriptOffsetState());
-      if (kind === "footer") {
-        Object.defineProperty(element, "clientHeight", { configurable: true, value: 500 });
-        element.scrollTop = 500;
-      } else {
-        Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1100 });
-      }
-      anchor.commitUpdate(element);
-      Object.defineProperty(element, "clientHeight", { configurable: true, value: 400 });
-      element.scrollTop -= 8;
-      const movedPosition = element.scrollTop;
-      const follow = vi.fn();
-
-      expect(anchor.isResizingCommit(element)).toBe(false);
-      anchor.releaseCommit();
-      anchor.reconcile(element, true, false, follow);
-
-      expect(follow).not.toHaveBeenCalled();
-      expect(element.scrollTop).toBe(movedPosition);
-    },
-  );
-
-  it("does not recapture native movement when another footer commit follows before reconciliation", () => {
-    const element = document.createElement("div");
-    Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
-    });
-    element.scrollTop = 600;
-    const anchor = new TranscriptEndAnchor();
-    anchor.capture(element);
-    anchor.prepareUpdate(element, true, createTranscriptOffsetState());
-    anchor.commitUpdate(element);
+    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1100 });
     element.scrollTop -= 8;
-    anchor.prepareUpdate(element, true, createTranscriptOffsetState());
-    Object.defineProperty(element, "clientHeight", { configurable: true, value: 500 });
-    element.scrollTop = 500;
-    anchor.commitUpdate(element);
-    Object.defineProperty(element, "clientHeight", { configurable: true, value: 400 });
+    const movedPosition = element.scrollTop;
     const follow = vi.fn();
 
-    anchor.releaseCommit();
+    expect(anchor.isResizeAnchor(element)).toBe(false);
     anchor.reconcile(element, true, false, follow);
 
     expect(follow).not.toHaveBeenCalled();
-    expect(element.scrollTop).toBe(500);
+    expect(element.scrollTop).toBe(movedPosition);
   });
 
-  it("does not reacquire precommit following from a cancelled reader anchor", () => {
+  it("does not reacquire following from a cancelled reader anchor", () => {
     const element = document.createElement("div");
     Object.defineProperties(element, {
       clientHeight: { configurable: true, value: 400 },
@@ -167,16 +98,14 @@ describe("chat transcript scroll ownership", () => {
     anchor.capture(element);
     // Wheel/keyboard input can precede its native offset change and the Lit update.
     anchor.clear();
-    anchor.prepareUpdate(element, true, createTranscriptOffsetState());
     Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1200 });
     const follow = vi.fn();
-    anchor.releaseCommit();
     anchor.reconcile(element, true, false, follow);
     expect(follow).not.toHaveBeenCalled();
     expect(element.scrollTop).toBe(600);
   });
 
-  it("does not treat a native end clamp as an observed precommit follower", () => {
+  it("does not treat a native end clamp as an observed follower", () => {
     const element = document.createElement("div");
     Object.defineProperties(element, {
       clientHeight: { configurable: true, value: 400 },
@@ -189,14 +118,111 @@ describe("chat transcript scroll ownership", () => {
     anchor.reconcile(element, true, false, vi.fn());
     Object.defineProperty(element, "scrollHeight", { configurable: true, value: 750 });
     element.scrollTop = 350;
-    anchor.prepareUpdate(element, true, createTranscriptOffsetState());
-    expect(anchor.isResizingCommit(element)).toBe(false);
+    expect(anchor.isResizeAnchor(element)).toBe(false);
     Object.defineProperty(element, "scrollHeight", { configurable: true, value: 950 });
     const follow = vi.fn();
-    anchor.releaseCommit();
     anchor.reconcile(element, true, false, follow);
     expect(follow).not.toHaveBeenCalled();
   });
+
+  it.each(["resize clamp", "native return"] as const)(
+    "distinguishes a %s after same-range reader scrolling before composer layout",
+    async (movement) => {
+      // The frame fixture must restore native rAF after the fake clock is uninstalled.
+      vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+      const flushFrames = stubAnimationFrames();
+      transcriptDomState.measuredRowHeight = 1000;
+      const container = document.body.appendChild(document.createElement("div"));
+      let viewportHeight = 400;
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, get: () => viewportHeight },
+        scrollHeight: { configurable: true, value: 1000 },
+      });
+      container.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
+        const offset = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+        container.scrollTop = Math.min(offset, 1000 - viewportHeight);
+      };
+      let updateRequested = true;
+      const onReaderScroll = vi.fn();
+      const transcript = new ChatTranscriptController(
+        {
+          addController: vi.fn(),
+          removeController: vi.fn(),
+          requestUpdate: () => {
+            updateRequested = true;
+          },
+          updateComplete: Promise.resolve(true),
+        },
+        () => `composer-reader-${movement}`,
+        { canFollowEnd: () => false, onReaderScroll },
+      );
+      const rows: TestContentRow[] = [
+        { kind: "content", key: "long-run", content: html`<div>Long transcript run</div>` },
+      ];
+      const commitRequestedUpdate = async () => {
+        // Let queued row and scroll-element refs attach before committing.
+        await Promise.resolve();
+        if (updateRequested) {
+          updateRequested = false;
+          render(
+            transcript.renderSession(`agent:main:composer-reader-${movement}`, (session) => {
+              session.setContentReady(true);
+              return session.render(
+                rows,
+                (row) => (row.kind === "content" ? row.content : nothing),
+                null,
+                false,
+              );
+            }),
+            container,
+          );
+          transcript.hostUpdated();
+        }
+        // Connected row refs measure after their two owned microtask checkpoints.
+        await Promise.resolve();
+        await Promise.resolve();
+        flushFrames();
+      };
+      transcript.hostConnected();
+      try {
+        await commitRequestedUpdate();
+        await commitRequestedUpdate();
+        transcript.scrollToOffset(100);
+        await commitRequestedUpdate();
+        await commitRequestedUpdate();
+
+        container.scrollTop = 200;
+        container.dispatchEvent(new Event("scroll"));
+        await commitRequestedUpdate();
+        // Both offsets stay in one long row and away from the physical end.
+        container.scrollTop = 550;
+        container.dispatchEvent(new Event("scroll"));
+        await commitRequestedUpdate();
+        onReaderScroll.mockClear();
+
+        publishTranscriptScroll(container, { type: "composer-input" });
+        if (movement === "resize clamp") {
+          viewportHeight = 500;
+          container.scrollTop = 500;
+        } else {
+          // Native movement can reach the old end before its scroll event.
+          container.scrollTop = 600;
+          viewportHeight = 300;
+        }
+        container.dispatchEvent(new Event("scroll"));
+
+        expect(container.scrollTop).toBe(movement === "resize clamp" ? 500 : 700);
+        if (movement === "resize clamp") {
+          expect(onReaderScroll).not.toHaveBeenCalled();
+        } else {
+          expect(onReaderScroll).toHaveBeenCalledExactlyOnceWith(true);
+        }
+      } finally {
+        transcript.hostDisconnected();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     ...(["following", "reading", "wheel", "key", "pointer", "touch"] as const).map((intent) => ({
@@ -207,7 +233,7 @@ describe("chat transcript scroll ownership", () => {
       (["growth", "shrink"] as const).map((nativeResize) => ({ intent, nativeResize })),
     ),
   ])(
-    "preserves $intent ownership across native $nativeResize, a footer clamp and late row growth",
+    "preserves $intent ownership through composer $nativeResize and row growth",
     async ({ intent, nativeResize }) => {
       const flushFrames = stubAnimationFrames();
       const policy = makeChatHost({ chatHasAutoScrolled: true });
@@ -262,8 +288,7 @@ describe("chat transcript scroll ownership", () => {
           });
           container.scrollTop = nativeResize === "growth" ? 1572 : 1550;
         }
-        const controller: ReactiveController = transcript;
-        controller.hostUpdate?.();
+        publishTranscriptScroll(container, { type: "composer-layout", changed: true });
         stopObserving();
         if (nativeResize !== "none") {
           const follows = intent !== "reading";
@@ -274,15 +299,7 @@ describe("chat transcript scroll ownership", () => {
             follows ? [{ before: nativeResize === "growth" ? 1572 : 1600, after: endOffset }] : [],
           );
         }
-        // The empty footer briefly enlarges the viewport. The browser clamps
-        // against that geometry before the final footer and row sizes commit.
-        Object.defineProperty(container, "clientHeight", { configurable: true, value: 650 });
-        container.scrollTop = 1350;
-        Object.defineProperties(container, {
-          clientHeight: { configurable: true, value: 600 },
-          scrollHeight: { configurable: true, value: 2087 },
-        });
-        // Native events arrive after the synchronous DOM commit hooks.
+        Object.defineProperty(container, "scrollHeight", { configurable: true, value: 2087 });
         transcript.hostUpdated();
         if (intent === "wheel") {
           container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
@@ -418,13 +435,13 @@ describe("chat transcript scroll ownership", () => {
       key: `row:${index}`,
       content: html`<div>row ${index}</div>`,
     }));
-    const { container } = await mountTestTranscript("measurement-reader", rows, transcript);
+    const { container, renderRows } = await mountTestTranscript(
+      "measurement-reader",
+      rows,
+      transcript,
+    );
     try {
-      const sizer = expectDefined(
-        container.querySelector<HTMLElement>(".chat-virtual-sizer"),
-        "transcript extent",
-      );
-      const total = Number.parseFloat(sizer.style.height);
+      const total = transcriptSize(container);
       let maxScrollTop = total + 84 - 600;
       Object.defineProperties(container, {
         clientHeight: { configurable: true, value: 600 },
@@ -449,6 +466,8 @@ describe("chat transcript scroll ownership", () => {
       vi.useFakeTimers();
       container.dispatchEvent(new Event("scroll"));
       vi.advanceTimersByTime(150);
+      renderRows(rows);
+      await vi.advanceTimersByTimeAsync(0);
       const row = expectDefined(
         container.querySelector<HTMLElement>('[data-index="6"]'),
         "row above the viewport",
@@ -521,7 +540,13 @@ describe("chat transcript scroll ownership", () => {
     ],
     ["transcript text", "PageUp", html`<span>History</span>`, false],
     ["readonly content", "End", html`<div contenteditable="false">History</div>`, false],
-    ...nativeControlNavigationCases,
+    // The pane keyboard suite covers native-control/platform variants.
+    // Retain downward nested scrolling and media boundaries in restoration.
+    ["native video", "End", html`<video controls></video>`, true],
+    ["native audio paging", "PageDown", html`<audio controls></audio>`, false],
+    ...nativeControlNavigationCases.filter(
+      ([name, key]) => name.startsWith("Mac textarea ") && (key === "End" || key === "PageDown"),
+    ),
   ] as const)(
     "resolves pending restoration ownership for %s",
     async (command, key, content, preservesRestore, fixture = {}) => {

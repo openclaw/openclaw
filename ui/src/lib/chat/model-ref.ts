@@ -1,4 +1,3 @@
-// Chat model reference normalization.
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 
@@ -173,55 +172,45 @@ type ChatModelDisplayLookup = ReadonlyMap<string, string>;
 export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<string, string> {
   const nameToValues = new Map<string, Set<string>>();
   const nameProviderToValues = new Map<string, Set<string>>();
-
-  for (const entry of catalog) {
+  const entries = catalog.map((entry) => {
     const name = resolveCatalogDisplayName(entry);
+    return {
+      entry,
+      name,
+      qualifiedKey: normalizeAgentModelRefForConfig(
+        buildQualifiedChatModelValue(entry.id, entry.provider),
+      ),
+      nameKey: name.toLowerCase(),
+      providerKey: createNameProviderKey(name, entry.provider),
+    };
+  });
+
+  for (const { name, qualifiedKey, nameKey, providerKey } of entries) {
     if (!name) {
       continue;
     }
-
-    const qualifiedKey = normalizeAgentModelRefForConfig(
-      buildQualifiedChatModelValue(entry.id, entry.provider),
-    );
-    const normalizedName = name.toLowerCase();
-    const providerKey = createNameProviderKey(name, entry.provider);
-
-    const nameValues = nameToValues.get(normalizedName) ?? new Set<string>();
+    const nameValues = nameToValues.get(nameKey) ?? new Set<string>();
     nameValues.add(qualifiedKey);
-    nameToValues.set(normalizedName, nameValues);
+    nameToValues.set(nameKey, nameValues);
 
     const nameProviderValues = nameProviderToValues.get(providerKey) ?? new Set<string>();
     nameProviderValues.add(qualifiedKey);
     nameProviderToValues.set(providerKey, nameProviderValues);
   }
 
-  const displayLookup = new Map<string, string>();
-  for (const entry of catalog) {
-    const qualifiedKey = normalizeAgentModelRefForConfig(
-      buildQualifiedChatModelValue(entry.id, entry.provider),
-    );
-    const name = resolveCatalogDisplayName(entry);
-    if (!name) {
-      displayLookup.set(qualifiedKey, formatRawCatalogLabel(entry));
-      continue;
-    }
-
-    const normalizedName = name.toLowerCase();
-    if ((nameToValues.get(normalizedName)?.size ?? 0) <= 1) {
-      displayLookup.set(qualifiedKey, name);
-      continue;
-    }
-
-    const provider = entry.provider?.trim();
-    if ((nameProviderToValues.get(createNameProviderKey(name, provider))?.size ?? 0) <= 1) {
-      displayLookup.set(qualifiedKey, provider ? `${name} · ${provider}` : `${name} · ${entry.id}`);
-      continue;
-    }
-
-    displayLookup.set(qualifiedKey, `${name} · ${formatRawCatalogLabel(entry)}`);
-  }
-
-  return displayLookup;
+  return new Map(
+    entries.map(({ entry, name, qualifiedKey, nameKey, providerKey }) => {
+      let label = name || formatRawCatalogLabel(entry);
+      if (name && (nameToValues.get(nameKey)?.size ?? 0) > 1) {
+        const detail =
+          (nameProviderToValues.get(providerKey)?.size ?? 0) <= 1
+            ? entry.provider?.trim() || entry.id
+            : formatRawCatalogLabel(entry);
+        label = `${name} · ${detail}`;
+      }
+      return [qualifiedKey, label];
+    }),
+  );
 }
 
 export function formatCatalogChatModelDisplayFromLookup(

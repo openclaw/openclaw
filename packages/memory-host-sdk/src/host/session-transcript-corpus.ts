@@ -3,7 +3,7 @@ import fsSync, { type BigIntStats, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeAgentId } from "./config-utils.js";
-import { isFileMissingError } from "./fs-utils.js";
+import { isFileMissingError, normalizeComparablePath } from "./fs-utils.js";
 import {
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionsDir,
@@ -18,6 +18,7 @@ import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   parseUsageCountedSessionIdFromFileName,
+  readSessionEntrySummariesInWorker,
   readTranscriptContentRevisionSync,
   resolveSessionAgentId,
   resolveSessionTranscriptsDirForAgent,
@@ -96,11 +97,6 @@ type SessionEntrySummary = {
 
 function isDreamingNarrativeSessionKeyLike(value: unknown): boolean {
   return typeof value === "string" && isDreamingNarrativeSessionStoreKey(value);
-}
-
-function normalizeComparablePath(pathname: string): string {
-  const resolved = path.resolve(pathname);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function normalizeRealComparablePath(pathname: string): string {
@@ -389,20 +385,12 @@ function projectSessionTranscriptCorpusEntries(
   scope: ReturnType<typeof resolveSessionTranscriptCorpusScope>,
   options: SessionTranscriptCorpusOptions,
   artifacts: readonly SessionTranscriptCorpusArtifact[],
+  sessionEntries: readonly SessionEntrySummary[],
 ): SessionTranscriptCorpusEntry[] {
   const { cfg, env, normalizedAgentId, storePath, isSharedFixedStore } = scope;
   const includeContentRevision = options.includeContentRevision !== false;
   const activeEntriesBySessionId = new Map<string, SessionTranscriptCorpusEntry>();
   const entryOwnersBySessionId = new Map<string, string>();
-  const listEntries =
-    options.readOnly === true ? listSessionEntriesReadOnly : listSessionEntriesCore;
-  const sessionEntries = listEntries({
-    agentId: normalizedAgentId,
-    env,
-    hydrateSkillPromptRefs: false,
-    projection: "list",
-    storePath,
-  });
   const retainedInstances = options.includeRetainedSqlite
     ? listSessionTranscriptInstances({
         agentId: normalizedAgentId,
@@ -425,19 +413,23 @@ function projectSessionTranscriptCorpusEntries(
     ...retainedInstances.map(({ entry, sessionKey }) => ({ entry, sessionKey })),
     ...sessionEntries,
   ]);
-  for (const summary of sessionEntries) {
+  const resolveSessionOwnership = (key: string) => {
     const sessionKey = isSharedFixedStore
-      ? summary.sessionKey
+      ? key
       : canonicalizeMainSessionAlias({
           cfg,
           agentId: normalizedAgentId,
-          sessionKey: summary.sessionKey,
+          sessionKey: key,
         });
     const ownerAgentId = resolveSessionAgentId({
       config: cfg,
       sessionKey,
       ...(isSharedFixedStore ? {} : { fallbackAgentId: normalizedAgentId }),
     });
+    return { sessionKey, ownerAgentId };
+  };
+  for (const summary of sessionEntries) {
+    const { ownerAgentId } = resolveSessionOwnership(summary.sessionKey);
     const entry = toSessionStoreCorpusEntry(
       ownerAgentId,
       storePath,
@@ -461,18 +453,7 @@ function projectSessionTranscriptCorpusEntries(
       if (activeEntriesBySessionId.has(instance.sessionId)) {
         continue;
       }
-      const sessionKey = isSharedFixedStore
-        ? instance.sessionKey
-        : canonicalizeMainSessionAlias({
-            cfg,
-            agentId: normalizedAgentId,
-            sessionKey: instance.sessionKey,
-          });
-      const ownerAgentId = resolveSessionAgentId({
-        config: cfg,
-        sessionKey,
-        ...(isSharedFixedStore ? {} : { fallbackAgentId: normalizedAgentId }),
-      });
+      const { sessionKey, ownerAgentId } = resolveSessionOwnership(instance.sessionKey);
       if (ownerAgentId !== normalizedAgentId) {
         continue;
       }
@@ -547,7 +528,27 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
       }
     }
   }
-  return projectSessionTranscriptCorpusEntries(scope, options, artifacts);
+  return projectSessionTranscriptCorpusEntries(
+    scope,
+    options,
+    artifacts,
+    readCorpusSessionEntries(scope, options),
+  );
+}
+
+function readCorpusSessionEntries(
+  scope: ReturnType<typeof resolveSessionTranscriptCorpusScope>,
+  options: SessionTranscriptCorpusOptions,
+): SessionEntrySummary[] {
+  const listEntries =
+    options.readOnly === true ? listSessionEntriesReadOnly : listSessionEntriesCore;
+  return listEntries({
+    agentId: scope.normalizedAgentId,
+    env: scope.env,
+    hydrateSkillPromptRefs: false,
+    projection: "list",
+    storePath: scope.storePath,
+  });
 }
 
 /**
@@ -601,5 +602,13 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
   }
   // Read current session ownership only after the filesystem awaits, while retaining
   // the caller's resolved store and alias configuration for this complete projection.
-  return projectSessionTranscriptCorpusEntries(scope, capturedOptions, artifacts);
+  const sessionEntries =
+    capturedOptions.readOnly === true
+      ? await readSessionEntrySummariesInWorker({
+          agentId: scope.normalizedAgentId,
+          env: scope.env,
+          storePath: scope.storePath,
+        })
+      : readCorpusSessionEntries(scope, capturedOptions);
+  return projectSessionTranscriptCorpusEntries(scope, capturedOptions, artifacts, sessionEntries);
 }

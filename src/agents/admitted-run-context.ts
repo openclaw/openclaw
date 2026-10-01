@@ -9,6 +9,7 @@ import {
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -47,6 +48,14 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   source?: object;
   /** Retains the original source independently of a foreground run or request. */
   retain?: () => () => void;
+  /** Live assignment from the original prepared profile lease. */
+  readCurrentRoleAssignment?: (this: void) => string | null;
+  /** Prepared role permissions; source-policy changes revoke the owning authority. */
+  rolePolicy?: Readonly<{
+    sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
+    sandboxRequired: boolean;
+    agents: "*" | readonly string[];
+  }>;
   modelPolicy?: PreparedOperatorModelPolicy;
   /** Committed policy changes invalidate only executions using a removed model. */
   onModelPolicyChanged?: (listener: () => void) => () => void;
@@ -61,6 +70,21 @@ export function createAdmittedRunOperatorAuthority(
   const check = source.assertCurrent;
   const signal = source.signal;
   let revoked = false;
+  let revocationReason: unknown;
+  const assertCurrent = () => {
+    if (revoked) {
+      throw revocationReason;
+    }
+    try {
+      signal?.throwIfAborted();
+      check();
+    } catch (error) {
+      revoked = true;
+      revocationReason = error;
+      throw error;
+    }
+  };
+  const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
   const authority = Object.freeze({
     profileId: source.profileId,
     scopes: Object.freeze([...source.scopes]),
@@ -74,18 +98,22 @@ export function createAdmittedRunOperatorAuthority(
     get modelPolicy() {
       return source.modelPolicy;
     },
-    assertCurrent: () => {
-      if (revoked) {
-        throw new Error("operator execution authority is no longer active");
-      }
-      try {
-        signal?.throwIfAborted();
-        check();
-      } catch (error) {
-        revoked = true;
-        throw error;
-      }
-    },
+    assertCurrent,
+    readCurrentRoleAssignment: readCurrentRoleAssignment
+      ? () => {
+          assertCurrent();
+          return readCurrentRoleAssignment();
+        }
+      : undefined,
+    rolePolicy: source.rolePolicy
+      ? Object.freeze({
+          ...source.rolePolicy,
+          agents:
+            source.rolePolicy.agents === "*"
+              ? "*"
+              : Object.freeze([...new Set(source.rolePolicy.agents)].toSorted()),
+        })
+      : undefined,
   });
   operatorAuthorityIssuers.add(authority);
   return authority;

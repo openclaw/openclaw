@@ -1,7 +1,10 @@
-// Memory Lancedb helper module supports config behavior.
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseFiniteNumber,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type MemoryConfig = {
   embedding: {
@@ -72,14 +75,6 @@ function resolveEmbeddingModel(
   return model;
 }
 
-function resolveFiniteIntegerConfig(value: unknown): number | undefined {
-  if (typeof value !== "number") {
-    return undefined;
-  }
-  const parsed = parseFiniteNumber(value);
-  return parsed === undefined ? undefined : Math.floor(parsed);
-}
-
 function resolveBoundedIntegerConfig(params: {
   value: unknown;
   fallback: number;
@@ -87,7 +82,7 @@ function resolveBoundedIntegerConfig(params: {
   max: number;
   label: string;
 }): number {
-  const resolved = resolveFiniteIntegerConfig(params.value) ?? params.fallback;
+  const resolved = resolveOptionalIntegerOption(params.value) ?? params.fallback;
   if (resolved < params.min || resolved > params.max) {
     throw new Error(`${params.label} must be between ${params.min} and ${params.max}`);
   }
@@ -108,10 +103,10 @@ function resolveEmbeddingDimensions(embedding: Record<string, unknown>): number 
 
 export const memoryConfigSchema = {
   parse(value: unknown): MemoryConfig {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (!isRecord(value)) {
       throw new Error("memory config required");
     }
-    const cfg = value as Record<string, unknown>;
+    const cfg = value;
     assertAllowedKeys(
       cfg,
       [
@@ -128,8 +123,8 @@ export const memoryConfigSchema = {
       "memory config",
     );
 
-    const embedding = cfg.embedding as Record<string, unknown> | undefined;
-    if (!embedding || typeof embedding !== "object" || Array.isArray(embedding)) {
+    const embedding = cfg.embedding;
+    if (!isRecord(embedding)) {
       throw new Error("embedding config required");
     }
     assertAllowedKeys(embedding, [...EMBEDDING_CONFIG_KEYS], "embedding config");
@@ -181,24 +176,18 @@ export const memoryConfigSchema = {
       }
     }
 
-    const dreaming =
-      cfg.dreaming === undefined
-        ? undefined
-        : cfg.dreaming && typeof cfg.dreaming === "object" && !Array.isArray(cfg.dreaming)
-          ? (cfg.dreaming as Record<string, unknown>)
-          : (() => {
-              throw new Error("dreaming config must be an object");
-            })();
+    const dreaming = cfg.dreaming;
+    if (dreaming !== undefined && !isRecord(dreaming)) {
+      throw new Error("dreaming config must be an object");
+    }
 
-    // Parse storageOptions (object with string values)
     let storageOptions: Record<string, string> | undefined;
-    const storageOpts = cfg.storageOptions as Record<string, unknown> | undefined;
+    const storageOpts = cfg.storageOptions;
     if (storageOpts !== undefined && storageOpts !== null) {
-      if (!storageOpts || typeof storageOpts !== "object" || Array.isArray(storageOpts)) {
+      if (!isRecord(storageOpts)) {
         throw new Error("storageOptions must be an object");
       }
       storageOptions = {};
-      // Validate all values are strings
       for (const [key, valueLocal] of Object.entries(storageOpts)) {
         if (typeof valueLocal !== "string") {
           throw new Error(`storageOptions.${key} must be a string`);

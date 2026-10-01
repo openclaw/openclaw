@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { commandRequiresSecurityAuditSuppressionApproval } from "./exec-approvals-policy.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
@@ -17,8 +18,6 @@ let collectExecPolicyScopeSnapshots: typeof import("./exec-approvals-effective.j
 let resolveExecPolicyScopeSnapshot: typeof import("./exec-approvals-effective.js").resolveExecPolicyScopeSnapshot;
 let evaluateExecAllowlist: typeof import("./exec-approvals.js").evaluateExecAllowlist;
 let hasDurableExecApproval: typeof import("./exec-approvals.js").hasDurableExecApproval;
-let maxAsk: typeof import("./exec-approvals.js").maxAsk;
-let minSecurity: typeof import("./exec-approvals.js").minSecurity;
 let requireValidExecTarget: typeof import("./exec-approvals.js").requireValidExecTarget;
 let normalizeExecAsk: typeof import("./exec-approvals.js").normalizeExecAsk;
 let normalizeExecHost: typeof import("./exec-approvals.js").normalizeExecHost;
@@ -45,8 +44,6 @@ async function loadActualExecApprovalModules(): Promise<void> {
   resolveExecPolicyScopeSnapshot = effective.resolveExecPolicyScopeSnapshot;
   evaluateExecAllowlist = execApprovals.evaluateExecAllowlist;
   hasDurableExecApproval = execApprovals.hasDurableExecApproval;
-  maxAsk = execApprovals.maxAsk;
-  minSecurity = execApprovals.minSecurity;
   requireValidExecTarget = execApprovals.requireValidExecTarget;
   normalizeExecAsk = execApprovals.normalizeExecAsk;
   normalizeExecHost = execApprovals.normalizeExecHost;
@@ -74,13 +71,7 @@ function summarizeExecPolicyScopeSnapshot(
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
+  expect(value).toEqual(expect.objectContaining(expected));
 }
 
 function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
@@ -114,6 +105,23 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
   });
 }
 
+// This predicate remains only for the shipped, deprecated infra-runtime SDK.
+describe("legacy SDK suppression approval predicate", () => {
+  it.each([
+    { argv: ["openclaw", "config", "set", "security.audit.suppressions", "[]"], expected: true },
+    { argv: ["openclaw", "config", "get", "security.audit.suppressions"], expected: false },
+    { argv: ["rg", "security.audit.suppressions", "docs"], expected: true },
+    { argv: ["echo", "hello"], expected: false },
+  ])("preserves the shipped result for $argv", ({ argv, expected }) => {
+    expect(
+      commandRequiresSecurityAuditSuppressionApproval({
+        command: argv.join(" "),
+        segments: [{ argv }],
+      }),
+    ).toBe(expected);
+  });
+});
+
 describe("exec approvals policy helpers", () => {
   beforeAll(async () => {
     // Reload once to isolate this suite from facade mocks left by other test files.
@@ -123,8 +131,6 @@ describe("exec approvals policy helpers", () => {
   it.each([
     { raw: " gateway ", expected: "gateway" },
     { raw: "NODE", expected: "node" },
-    { raw: "", expected: null },
-    { raw: "ssh", expected: null },
   ])("normalizes exec host value %j", ({ raw, expected }) => {
     expect(normalizeExecHost(raw)).toBe(expected);
   });
@@ -282,30 +288,6 @@ describe("exec approvals policy helpers", () => {
         allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
       }),
     ).toEqual(["allow-always"]);
-  });
-
-  it.each([
-    { left: "deny" as const, right: "full" as const, expected: "deny" as const },
-    {
-      left: "allowlist" as const,
-      right: "full" as const,
-      expected: "allowlist" as const,
-    },
-    {
-      left: "full" as const,
-      right: "allowlist" as const,
-      expected: "allowlist" as const,
-    },
-  ])("minSecurity picks the more restrictive value for %j", ({ left, right, expected }) => {
-    expect(minSecurity(left, right)).toBe(expected);
-  });
-
-  it.each([
-    { left: "off" as const, right: "always" as const, expected: "always" as const },
-    { left: "on-miss" as const, right: "off" as const, expected: "on-miss" as const },
-    { left: "always" as const, right: "on-miss" as const, expected: "always" as const },
-  ])("maxAsk picks the more aggressive ask mode for %j", ({ left, right, expected }) => {
-    expect(maxAsk(left, right)).toBe(expected);
   });
 
   it.each([

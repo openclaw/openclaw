@@ -277,17 +277,7 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
             AVAudioFrameCount(ceil(Double(buffer.frameLength) * WatchOpusCodec.sampleRate / buffer.format.sampleRate)) +
             960
         guard let output = AVAudioPCMBuffer(pcmFormat: codec.pcmFormat, frameCapacity: capacity) else { return }
-        var supplied = false
-        var error: NSError?
-        _ = resampler.convert(to: output, error: &error) { _, status in
-            guard !supplied else { status.pointee = .noDataNow
-                return nil
-            }
-            supplied = true
-            status.pointee = .haveData
-            return buffer
-        }
-        if let error { throw error }
+        _ = try resampler.convert(buffer, to: output)
         for index in 0..<Int(output.frameLength) {
             frame.floatChannelData![0][self.frameOffset] = output.floatChannelData![0][index]
             self.frameOffset += 1

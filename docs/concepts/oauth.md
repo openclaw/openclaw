@@ -158,6 +158,17 @@ and [Z.AI / GLM Coding Plan](/providers/zai).
 
 OpenClaw's OAuth registry and adapters live in `src/llm/utils/oauth/`. Shared provider helpers live in `src/plugin-sdk/provider-oauth-runtime.ts` and `src/plugin-sdk/provider-auth-runtime.ts`. The auth commands in `src/commands/models/auth.ts` run the selected provider method and persist the returned profiles.
 
+### Restarting sign-in in Model Setup
+
+In **Model Setup**, starting the same sign-in again replaces your unfinished
+attempt for the same agent and workspace. This includes **Sign in with ChatGPT**
+and other provider sign-in flows. Use the newest browser link; callbacks from
+the previous attempt are no longer accepted.
+
+Another user's sign-in, a different setup flow, or an attempt already saving
+credentials or configuration stays protected. Let that operation finish before
+retrying.
+
 ### Anthropic setup-token
 
 Flow shape:
@@ -283,6 +294,7 @@ Related docs:
 
 ## Related
 
+- [OpenAI authentication](/providers/openai/authentication) - login methods, identity, and capabilities
 - [Authentication](/gateway/authentication) - model provider auth overview
 - [Secrets](/gateway/secrets) - credential storage and SecretRef
 - [Configuration Reference](/gateway/config-secrets-env#auth-storage) - auth config keys

@@ -118,6 +118,7 @@ describe("export name collision guard", () => {
         "src/boards/sqlite-board-store.worker.ts",
         "src/agents/sessions/session-manager-metadata.worker.ts",
         "src/config/sessions/session-sharing-store.worker.ts",
+        "src/config/sessions/session-transcript-projection-publication.worker.ts",
         "src/infra/heartbeat-outcome-store.worker.ts",
       ],
     },
@@ -240,6 +241,101 @@ describe("export name collision guard", () => {
         ...collectModuleExportNames(...parseFixture(content, "src/runtime-facade.ts")).definitions,
       ]).toEqual([]);
     }
+  });
+
+  it.each([
+    [
+      "function",
+      `export async function runThing(first: string, second?: number) {
+        const runtime = await import("./runtime.js");
+        return runtime.runThing(first, second);
+      }`,
+    ],
+    [
+      "const arrow",
+      `export const runThing = async (...args: unknown[]) => {
+        const runtime = await import("./runtime.js");
+        return runtime.runThing(...args);
+      };`,
+    ],
+    [
+      "inline import",
+      `export async function runThing(...args: unknown[]) {
+        return (await import("./runtime.js")).runThing(...args);
+      }`,
+    ],
+  ])("does not duplicate a literal-import %s forwarder", (_name, content) => {
+    expect(
+      findExportNameCollisions([
+        { path: "src/facade.ts", content },
+        { path: "src/runtime.ts", content: "export function runThing() {}" },
+      ]),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["computed import", "const runtime = await import(target); return runtime.runThing(...args);"],
+    [
+      "ordinary call with an argument",
+      'const runtime = await loadRuntime("./runtime.js"); return runtime.runThing(...args);',
+    ],
+    [
+      "added argument",
+      'const runtime = await import("./runtime.js"); return runtime.runThing(...args, fallback);',
+    ],
+    [
+      "changed member",
+      'const runtime = await import("./runtime.js"); return runtime.otherThing(...args);',
+    ],
+    [
+      "extra behavior",
+      'const runtime = await import("./runtime.js"); prepare(); return runtime.runThing(...args);',
+    ],
+    [
+      "inline changed arguments",
+      'return (await import("./runtime.js")).runThing(...args, fallback);',
+    ],
+  ])("keeps a dynamic-import wrapper with %s as a collision", (_name, body) => {
+    expect(
+      findExportNameCollisions([
+        { path: "src/facade.ts", content: `export async function runThing(...args) { ${body} }` },
+        { path: "src/runtime.ts", content: "export function runThing() {}" },
+      ]),
+    ).toEqual([{ name: "runThing", files: ["src/facade.ts", "src/runtime.ts"] }]);
+  });
+
+  it.each([
+    [
+      "untyped named alias",
+      'import { runTask as runTaskInner } from "./inner.js";',
+      "export const runTask = runTaskInner;",
+    ],
+    [
+      "typed named alias",
+      'import { runTask as runTaskInner } from "./inner.js";',
+      "export const runTask: () => string = runTaskInner;",
+    ],
+    [
+      "namespace property alias",
+      'import * as runtime from "./inner.js";',
+      "export const runTask = runtime.runTask;",
+    ],
+    [
+      "type-asserted namespace element alias",
+      'import * as runtime from "./inner.js";',
+      'export const runTask = (runtime["runTask"] as () => string);',
+    ],
+  ])("records %s as a re-export instead of a value definition", (_name, imported, declaration) => {
+    const result = collectModuleExportNames(
+      ...parseFixture(`${imported}\n${declaration}`, "src/facade.ts"),
+    );
+
+    expect([...result.exportedNames]).toEqual(["runTask"]);
+    expect([...result.definitions]).toEqual([]);
+    expect([...result.valueDefinitions]).toEqual([]);
+    expect(result.namedReExports).toEqual([
+      { exportedName: "runTask", importedName: "runTask", moduleSpecifier: "./inner.js" },
+    ]);
   });
 
   it.each([

@@ -35,7 +35,7 @@ validate_pr_temp_storage() {
 path_is_docsish() {
   local path="$1"
   case "$path" in
-    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|mintlify.json|docs.json)
+    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|docs.json)
       return 0
       ;;
   esac

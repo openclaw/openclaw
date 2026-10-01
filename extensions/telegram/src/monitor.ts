@@ -1,10 +1,10 @@
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -12,14 +12,15 @@ import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import type { MonitorTelegramOpts } from "./monitor.types.js";
 import { acquireTelegramPollingLease } from "./polling-lease.js";
-import { makeProxyFetch } from "./proxy.js";
 import {
   createTelegramUpdateOffsetPersistence,
   normalizeTelegramUpdateId,
 } from "./update-offset-persistence.js";
-import type {
-  TelegramOffsetRotationReason,
-  TelegramUpdateOffsetRotationInfo,
+import {
+  prepareTelegramAccount,
+  writeTelegramUpdateOffset,
+  type TelegramOffsetRotationReason,
+  type TelegramAccountRotationInfo,
 } from "./update-offset-store.js";
 
 const TELEGRAM_OFFSET_ROTATION_LABELS: Record<TelegramOffsetRotationReason, string> = {
@@ -30,20 +31,18 @@ const TELEGRAM_OFFSET_ROTATION_LABELS: Record<TelegramOffsetRotationReason, stri
 
 function formatTelegramOffsetRotationMessage(
   accountId: string,
-  info: TelegramUpdateOffsetRotationInfo,
+  info: TelegramAccountRotationInfo,
 ): string {
   const previousLabel = info.previousBotId ?? "(legacy unscoped offset)";
   const reasonLabel = TELEGRAM_OFFSET_ROTATION_LABELS[info.reason];
-  return `[telegram] Detected ${reasonLabel} for account "${accountId}" (was ${previousLabel}, now ${info.currentBotId}); discarding stale update offset ${info.staleLastUpdateId} and starting fresh.`;
+  return `[telegram] Detected ${reasonLabel} for account "${accountId}" (was ${previousLabel}, now ${info.currentBotId}); discarding stale update offset ${info.staleLastUpdateId ?? "(none)"} and starting fresh.`;
 }
 
 const loadTelegramMonitorPollingRuntime = createLazyRuntimeModule(
-  () => import("./monitor-polling.runtime.js"),
+  () => import("./polling-session.js"),
 );
 
-const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(
-  () => import("./monitor-webhook.runtime.js"),
-);
+const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(() => import("./webhook.js"));
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);
@@ -76,63 +75,19 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
   const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
 
-  if (opts.useWebhook) {
-    const { startTelegramWebhook } = await loadTelegramMonitorWebhookRuntime();
-    if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
-      registerChannelRuntimeContext({
-        channelRuntime: opts.channelRuntime,
-        channelId: "telegram",
+  const pollingLease = opts.useWebhook
+    ? undefined
+    : await acquireTelegramPollingLease({
+        token,
         accountId: account.accountId,
-        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
-        context: { token },
         abortSignal: opts.abortSignal,
       });
-    }
-    const webhook = await startTelegramWebhook({
-      token,
-      accountId: account.accountId,
-      ownerAgentId,
-      config: cfg,
-      path: opts.webhookPath,
-      port: opts.webhookPort,
-      secret: opts.webhookSecret ?? account.config.webhookSecret,
-      host: opts.webhookHost ?? account.config.webhookHost,
-      runtime: opts.runtime as RuntimeEnv,
-      buildContext: pluginChannelRuntime?.inbound.buildContext,
-      // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
-      dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
-      fetch: proxyFetch,
-      abortSignal: opts.abortSignal,
-      publicUrl: opts.webhookUrl,
-      webhookCertPath: opts.webhookCertPath,
-      setStatus: opts.setStatus,
-    });
-    try {
-      await waitForAbortSignal(opts.abortSignal);
-    } finally {
-      await webhook.stop();
-    }
-    return;
-  }
-
-  const {
-    TelegramPollingSession,
-    deleteTelegramUpdateOffset,
-    readTelegramUpdateOffset,
-    writeTelegramUpdateOffset,
-  } = await loadTelegramMonitorPollingRuntime();
-
-  const pollingLease = await acquireTelegramPollingLease({
-    token,
-    accountId: account.accountId,
-    abortSignal: opts.abortSignal,
-  });
-  if (pollingLease.waitedForPrevious) {
+  if (pollingLease?.waitedForPrevious) {
     log(
       `[telegram][diag] waited for previous polling session for bot token ${pollingLease.tokenFingerprint} before starting account "${account.accountId}".`,
     );
   }
-  if (pollingLease.replacedStoppingPrevious) {
+  if (pollingLease?.replacedStoppingPrevious) {
     log(
       `[telegram][diag] previous polling session for bot token ${pollingLease.tokenFingerprint} did not stop within the lease wait; starting a replacement for account "${account.accountId}".`,
     );
@@ -150,18 +105,44 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       });
     }
 
-    const persistedOffsetRaw = await readTelegramUpdateOffset({
-      accountId: account.accountId,
-      botToken: token,
-      onRotationDetected: async (info) => {
-        log(formatTelegramOffsetRotationMessage(account.accountId, info));
-        try {
-          await deleteTelegramUpdateOffset({ accountId: account.accountId });
-        } catch (err) {
-          logError(`telegram: failed to delete stale update offset after rotation: ${String(err)}`);
-        }
-      },
-    });
+    const persistedOffsetRaw = opts.abortSignal?.aborted
+      ? null
+      : await prepareTelegramAccount({
+          accountId: account.accountId,
+          botToken: token,
+          abortSignal: opts.abortSignal,
+          onRotationDetected: (info) =>
+            log(formatTelegramOffsetRotationMessage(account.accountId, info)),
+        });
+    if (opts.useWebhook) {
+      const { startTelegramWebhook } = await loadTelegramMonitorWebhookRuntime();
+      const webhook = await startTelegramWebhook({
+        token,
+        accountId: account.accountId,
+        ownerAgentId,
+        config: cfg,
+        path: opts.webhookPath,
+        legacyWebhook: opts.legacyWebhook ?? account.config.legacyWebhook,
+        secret: opts.webhookSecret ?? account.config.webhookSecret,
+        runtime: opts.runtime,
+        buildContext: pluginChannelRuntime?.inbound.buildContext,
+        // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+        dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
+        fetch: proxyFetch,
+        abortSignal: opts.abortSignal,
+        publicUrl: opts.webhookUrl ?? account.config.webhookUrl,
+        webhookCertPath: opts.webhookCertPath,
+        setStatus: opts.setStatus,
+      });
+      try {
+        await waitForAbortSignal(opts.abortSignal);
+      } finally {
+        await webhook.stop();
+      }
+      return;
+    }
+
+    const { TelegramPollingSession } = await loadTelegramMonitorPollingRuntime();
     const lastUpdateId = normalizeTelegramUpdateId(persistedOffsetRaw);
     if (persistedOffsetRaw !== null && lastUpdateId === null) {
       log(
@@ -227,6 +208,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       await offsetPersistence.stop();
     }
   } finally {
-    pollingLease.release();
+    pollingLease?.release();
   }
 }

@@ -17,6 +17,7 @@ const instance = randomUUID();
 let ownWindowsCreationTime;
 let census;
 let actorLease;
+let operationDeadline;
 const workspace = path.join(root, "workspace");
 const runnerTemp = path.join(root, "temp");
 const lease = path.join(root, "lease");
@@ -81,7 +82,6 @@ function prepareDocsPublisher() {
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
     "tsx.mjs",
-    "lib/mintlify-accordion.mjs",
     "docs-mdx-repair.md",
   ]) {
     const output = path.join(target, ".openclaw-sync", name);
@@ -163,10 +163,10 @@ function assertActorLease() {
   }
 }
 
-function readWindowsProcessCensus(pids) {
+function readWindowsProcessCensus(pids, deadline = operationDeadline) {
   return mode === "supervise"
-    ? census.read(pids)
-    : requestWindowsProcessCensus(root, actorLease, pids);
+    ? census.read(pids, deadline)
+    : requestWindowsProcessCensus(root, actorLease, pids, deadline);
 }
 
 async function record(pid, role, attempt = 0) {
@@ -199,7 +199,7 @@ function records() {
     .map((file) => JSON.parse(fs.readFileSync(path.join(recordsDir, file), "utf8")));
 }
 
-async function liveRecords() {
+async function liveRecords(deadline = operationDeadline) {
   const owned = records().filter(
     (entry) =>
       !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)) &&
@@ -212,7 +212,7 @@ async function liveRecords() {
   const alive = new Set();
   const pids = new Set(owned.map((entry) => entry.pid));
   const windowsCensus =
-    process.platform === "win32" ? await readWindowsProcessCensus([...pids]) : undefined;
+    process.platform === "win32" ? await readWindowsProcessCensus([...pids], deadline) : undefined;
   if (windowsCensus) {
     for (const entry of owned) {
       if (typeof entry.creationTime !== "string" || !/^\d+$/.test(entry.creationTime)) {
@@ -406,7 +406,7 @@ function holdLease() {
     try {
       return fs.readFileSync(lease, "utf8") === actorLease;
     } catch (error) {
-      if (error.code === "ENOENT") return false;
+      if (error.code === "ENOENT" || error.code === "EPERM") return false;
       throw error;
     }
   };
@@ -452,7 +452,7 @@ function writeConsumer(target, tool) {
 }
 
 async function command() {
-  const actorDeadline = holdLease();
+  operationDeadline = holdLease();
   const descendant = mode === "child" || mode === "grandchild";
   // Descendants publish their actual attempt below. Replacing a provisional PID
   // record can race a Windows reader and fail before readiness with EPERM.
@@ -464,12 +464,12 @@ async function command() {
   }
   if (mode === "observe") {
     await boundary(args[0]);
-    if (args[0] === "backoff-ready" && options.cancelDuringBackoff && !options.performance) {
+    if (args[0] === "backoff-ready" && options.cancelDuringBackoff) {
       publish("backoff-ready.json", true);
       await until(
         () => fs.existsSync(path.join(root, "backoff-release.json")),
         "backoff cancellation acknowledgement",
-        actorDeadline,
+        operationDeadline,
       );
     }
     process.exit(0);
@@ -591,20 +591,46 @@ async function command() {
       const result = spawnSync("bash", [options.publisher.gh, ...args], { stdio: "inherit" });
       process.exit(result.status ?? 1);
     }
+    if (mode === "gh" && options.docsAgent) {
+      const runsEndpoint = `repos/${process.env.GITHUB_REPOSITORY}/actions/workflows/docs-agent.yml/runs`;
+      if (
+        args[0] === "api" &&
+        args[1] === "--method" &&
+        args[2] === "GET" &&
+        args[3] === runsEndpoint
+      ) {
+        fs.writeSync(1, JSON.stringify({ workflow_runs: options.workflowRuns ?? [] }));
+      } else {
+        const selected = options.workflowJobs?.find(
+          ({ runId, runAttempt }) =>
+            args[3] ===
+            `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+        );
+        if (
+          args.length !== 4 ||
+          args[0] !== "api" ||
+          args[1] !== "--paginate" ||
+          args[2] !== "--slurp" ||
+          !selected
+        ) {
+          throw new Error(`Unexpected Docs Agent gh request: ${JSON.stringify(args)}`);
+        }
+        fs.writeSync(1, JSON.stringify([{ jobs: selected.jobs }]));
+      }
+      process.exit(0);
+    }
     if (mode === "gh") {
       fs.writeSync(
         1,
-        options.docsAgent
-          ? JSON.stringify({ workflow_runs: options.workflowRuns ?? [] })
-          : options.lsRemoteResults
-            ? args.includes(".status")
-              ? "ahead\n"
-              : `${"c".repeat(40)}\n`
-            : JSON.stringify({
-                state: "open",
-                head: { sha: "a".repeat(40) },
-                base: { repo: { full_name: "fixture/checkout" } },
-              }),
+        options.lsRemoteResults
+          ? args.includes(".status")
+            ? "ahead\n"
+            : `${"c".repeat(40)}\n`
+          : JSON.stringify({
+              state: "open",
+              head: { sha: "a".repeat(40) },
+              base: { repo: { full_name: "fixture/checkout" } },
+            }),
       );
     }
     process.exit(0);
@@ -1216,7 +1242,7 @@ async function supervise() {
         }
         await until(
           async () => {
-            report.cleanupRemaining = await liveRecords();
+            report.cleanupRemaining = await liveRecords(actorEnd);
             return report.cleanupRemaining.length === 0;
           },
           "fixture cleanup",
@@ -1294,7 +1320,7 @@ async function supervise() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.once(signal, () => void stop(`supervisor received ${signal}`));
   }
-  const supervisorDeadline = Date.now() + 45_000;
+  operationDeadline = Date.now() + 45_000;
   setTimeout(() => void stop("fixture deadline exceeded"), 45_000);
   try {
     if (process.platform === "win32") {
@@ -1375,7 +1401,13 @@ async function supervise() {
       process.platform === "win32"
         ? [
             "-c",
-            'export PATH="$(cygpath -u "$1"):$PATH"; export TEMP="$3" TMP="$4"; source "$2"',
+            `export PATH="$(cygpath -u "$1"):$PATH"
+git() {
+  ${gitArgs.map((value) => quote(shellPath(value))).join(" ")} "$@"
+}
+export -f git
+export TEMP="$3" TMP="$4"
+source "$2"`,
             "checkout-fixture",
             bin,
             checkoutScript,
@@ -1449,7 +1481,7 @@ async function supervise() {
       process.kill(owner.pid, "SIGTERM");
       report.cancelledDuringCleanup = true;
     }
-    if (options.cancelDuringBackoff && !options.performance) {
+    if (options.cancelDuringBackoff) {
       try {
         await until(
           () =>
@@ -1458,7 +1490,7 @@ async function supervise() {
             shell.signalCode !== null ||
             fs.existsSync(path.join(root, "backoff-ready.json")),
           "owned backoff readiness",
-          supervisorDeadline,
+          operationDeadline,
         );
         if (!stopping && shell.exitCode === null && shell.signalCode === null) {
           await boundary("backoff-cancel");
@@ -1467,19 +1499,6 @@ async function supervise() {
       } finally {
         publish("backoff-release.json", true);
       }
-    } else if (
-      options.cancelDuringBackoff &&
-      (await waitForReady(
-        () =>
-          options.performance
-            ? fs.readFileSync(eventsFile, "utf8").includes('"name":"backoff"')
-            : fs.readFileSync(path.join(root, "workflow.log"), "utf8").includes("; retrying"),
-        shell,
-        () => Boolean(stopping),
-      ))
-    ) {
-      await boundary("backoff-cancel");
-      shell.kill("SIGTERM");
     }
     const code = await closed;
     if (stopping) {

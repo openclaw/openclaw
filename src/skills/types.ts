@@ -1,5 +1,4 @@
 import type { SkillLibraryFile } from "../../packages/gateway-protocol/src/schema/skill-library.js";
-// Skill types expose the shared skill contracts used by discovery, loading, and runtime flows.
 import type { Skill } from "./loading/skill-contract.js";
 
 export type SkillInstallSpec = {
@@ -147,7 +146,10 @@ export type SkillSnapshot = {
   skillOverrides?: Record<string, boolean>;
   /** Effective node-exec eligibility used to select connected node-hosted skills. */
   nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
+  /** Runtime-only skills selected for the bounded prompt projection. */
   resolvedSkills?: Skill[];
+  /** Runtime-only model-discoverable skills before prompt budgeting; excludes hidden skills. */
+  discoverySkills?: Skill[];
   /** Present only when a session merges skills from distinct agent and execution roots. */
   skillRoots?: {
     agentWorkspaceDir: string;

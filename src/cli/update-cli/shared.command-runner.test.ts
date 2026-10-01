@@ -3,11 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
-import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   ensureGitCheckout,
-  parseTimeoutMsOrExit,
+  parseUpdateTimeoutMs,
   resolveGlobalManager,
   resolveUpdateRoot,
   runUpdateStep,
@@ -44,26 +43,19 @@ describe("update CLI shared helpers", () => {
   });
 
   it("requires timeout values to be complete positive integer seconds", () => {
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
-
-    try {
-      expect(parseTimeoutMsOrExit("")).toBeNull();
-      expect(parseTimeoutMsOrExit("1.5")).toBeNull();
-      expect(parseTimeoutMsOrExit("10abc")).toBeNull();
-      expect(parseTimeoutMsOrExit("0x10")).toBeNull();
-      expect(parseTimeoutMsOrExit("0")).toBeNull();
-      expect(parseTimeoutMsOrExit("-1")).toBeNull();
-      expect(parseTimeoutMsOrExit("   ")).toBeNull();
-      expect(parseTimeoutMsOrExit(String(Number.MAX_SAFE_INTEGER))).toBeNull();
-
-      expect(error).toHaveBeenCalledTimes(8);
-      expect(error).toHaveBeenCalledWith("--timeout must be a positive integer (seconds)");
-      expect(exit).toHaveBeenCalledTimes(8);
-      expect(exit).toHaveBeenCalledWith(1);
-    } finally {
-      error.mockRestore();
-      exit.mockRestore();
+    for (const timeout of [
+      "",
+      "1.5",
+      "10abc",
+      "0x10",
+      "0",
+      "-1",
+      "   ",
+      String(Number.MAX_SAFE_INTEGER),
+    ]) {
+      expect(() => parseUpdateTimeoutMs(timeout)).toThrow(
+        "--timeout must be a positive integer (seconds)",
+      );
     }
   });
 
@@ -93,21 +85,24 @@ describe("update CLI shared helpers", () => {
     );
   });
 
-  it("parses complete positive integer timeout values as milliseconds", () => {
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+  it("can close a package install's stdin without supplying interactive approval", async () => {
+    await runUpdateStep({
+      name: "package-install",
+      argv: ["pnpm", "add", "-g", "openclaw@2.0.0"],
+      input: "",
+    });
 
-    try {
-      expect(parseTimeoutMsOrExit(" 10 ")).toBe(10_000);
-      expect(parseTimeoutMsOrExit("+10")).toBe(10_000);
-      expect(parseTimeoutMsOrExit("001")).toBe(1_000);
-      expect(parseTimeoutMsOrExit()).toBeUndefined();
-      expect(error).not.toHaveBeenCalled();
-      expect(exit).not.toHaveBeenCalled();
-    } finally {
-      error.mockRestore();
-      exit.mockRestore();
-    }
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["pnpm", "add", "-g", "openclaw@2.0.0"],
+      expect.objectContaining({ input: "" }),
+    );
+  });
+
+  it("parses complete positive integer timeout values as milliseconds", () => {
+    expect(parseUpdateTimeoutMs(" 10 ")).toBe(10_000);
+    expect(parseUpdateTimeoutMs("+10")).toBe(10_000);
+    expect(parseUpdateTimeoutMs("001")).toBe(1_000);
+    expect(parseUpdateTimeoutMs()).toBeUndefined();
   });
 
   it.runIf(process.platform !== "win32")(
@@ -273,7 +268,7 @@ describe("update CLI shared helpers", () => {
           "complete\n",
         );
         await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
-        await expect(fs.readdir(checkoutDir)).resolves.toEqual([".git", "checkout.marker"]);
+        expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
         expect(runCommandWithTimeout).toHaveBeenCalledWith(
           [
             "git",

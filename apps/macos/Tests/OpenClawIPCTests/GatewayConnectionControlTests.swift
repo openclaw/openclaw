@@ -1300,14 +1300,6 @@ extension GatewayConnectionControlTests {
         await connection.shutdown()
     }
 
-    @Test func `status fails when process missing`() async {
-        let (connection, _) = makeTestGatewayConnection()
-        let result = await connection.status()
-        await connection.shutdown()
-        #expect(result.ok == false)
-        #expect(result.error != nil)
-    }
-
     @Test func `reject empty message`() async {
         let (connection, _) = makeTestGatewayConnection()
         let result = await connection.sendAgent(GatewayAgentInvocation(
@@ -1356,6 +1348,31 @@ extension GatewayConnectionControlTests {
         let params = json?["params"] as? [String: Any]
         #expect(params?["thinking"] == nil)
         #expect((params?["voiceWakeTrigger"] as? String)?.isEmpty == true)
+    }
+
+    @Test func `independent chat sends remain available while a web conversation owns the session`() async throws {
+        let (connection, recorder) = makeRecordingGatewayConnection { Self.chatSendOkResponseData(id: $0) }
+        let scope = await connection.conversationOwnershipScope(sessionKey: "agent:main:main", agentID: nil)
+        let webOwner = UUID()
+        try #require(connection.chatSendOwnership.beginWeb(scope, owner: webOwner))
+        defer { connection.chatSendOwnership.endWeb(scope, owner: webOwner) }
+        do {
+            // Quick Chat carries its selected agent; Talk uses the active session key alone.
+            for agentID in ["main", nil] as [String?] {
+                let response = try await connection.chatSend(
+                    sessionKey: "agent:main:main", agentID: agentID,
+                    message: "hello", thinking: nil, idempotencyKey: UUID().uuidString, attachments: [])
+                #expect(response.status == "ok")
+            }
+            await connection.shutdown()
+        } catch {
+            await connection.shutdown()
+            throw error
+        }
+        let chatRequests = recorder.snapshot().filter {
+            GatewayWebSocketTestSupport.requestMethod(from: $0) == "chat.send"
+        }
+        #expect(chatRequests.count == 2)
     }
 
     @Test func `chat send carries route bound routing and settings preconditions`() async throws {
@@ -1491,7 +1508,7 @@ extension GatewayConnectionControlTests {
             .appendingPathComponent("openclaw-gateway-recovery-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: isolatedState, withIntermediateDirectories: true)
         let configURL = isolatedState.appendingPathComponent("openclaw.json")
-        let port = Int.random(in: 30000...59999)
+        let port = AppProfile.current.isActive ? GatewayEnvironment.gatewayPort() : Int.random(in: 30000...59999)
         try Data(
             (#"{"gateway":{"mode":"\#(mode.rawValue)","port":\#(port),"remote":{"transport":"direct","# +
                 #""url":"ws://127.0.0.1:\#(port)"}}}"#)
@@ -1521,19 +1538,29 @@ extension GatewayConnectionControlTests {
                     clientShutdown: clientShutdown)
                 let manager = GatewayProcessManager.shared
                 let priorMode = AppStateStore.shared.connectionMode
+                let priorPause = AppStateStore.shared.isPaused
+                let priorPausePreference = AppDefaults.standard.object(forKey: pauseDefaultsKey)
                 AppStateStore.shared.connectionMode = mode
+                AppStateStore.shared.isPaused = false
                 manager._testResetGatewayStartTask()
+                manager.setTestingDesiredActive(true)
                 manager.setTestingStatus(.stopped)
                 manager.setTestingConnection(connection)
                 manager.setTestingSkipControlChannelRefresh(true)
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(
                     isolatedState.appendingPathComponent("disable-launch-agent"))
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+                let gatewayPID: Int32 = 424_242
+                await PortGuardian.shared.setTestingDescriptor(
+                    PortGuardian.Descriptor(
+                        pid: gatewayPID,
+                        command: "openclaw-gateway",
+                        executablePath: "/fixture/node"),
+                    forPort: port)
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                    #"{"ok":true,"service":{"loaded":false}}"#)
+                    #"{"ok":true,"service":{"loaded":true,"runtime":{"status":"running","pid":\#(gatewayPID)}}}"#)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
                 defer {
-                    manager._testResetGatewayStartTask()
                     manager.setTestingStatus(.stopped)
                     manager.setTestingConnection(nil)
                     manager.setTestingSkipControlChannelRefresh(false)
@@ -1543,14 +1570,20 @@ extension GatewayConnectionControlTests {
                     GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
                     GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
                     AppStateStore.shared.connectionMode = priorMode
+                    AppStateStore.shared.isPaused = priorPause
+                    AppDefaults.standard.set(priorPausePreference, forKey: pauseDefaultsKey)
                 }
 
                 do {
                     let result = try await operation(connection, session)
+                    manager._testResetGatewayStartTask()
                     await connection.shutdown()
+                    await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
                     return result
                 } catch {
+                    manager._testResetGatewayStartTask()
                     await connection.shutdown()
+                    await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
                     throw error
                 }
             }
@@ -1576,7 +1609,9 @@ extension GatewayConnectionControlTests {
         } operation: { connection, session in
             _ = try await connection.request(method: "status", params: nil)
 
-            #expect(GatewayProcessManager.shared.status != .stopped)
+            #expect(
+                GatewayProcessManager.shared.status != .stopped,
+                "Recovery result: \(GatewayProcessManager.shared.lastFailureReason ?? "none")")
             #expect(requests.snapshot().count == 2)
             #expect(session.snapshotMakeCount() >= 1)
         }

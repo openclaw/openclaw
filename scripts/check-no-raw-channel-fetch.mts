@@ -49,9 +49,8 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("qa-lab", "src/suite.ts", 330),
   bundledPluginCallsite("qa-lab", "src/suite.ts", 341),
   // The QA dashboard calls its same-origin local API from the browser, where server SSRF helpers do not run.
-  bundledPluginCallsite("qa-lab", "web/src/http.ts", 24),
-  bundledPluginCallsite("qa-lab", "web/src/http.ts", 32),
-  bundledPluginCallsite("qa-lab", "web/src/http.ts", 43),
+  bundledPluginCallsite("qa-lab", "web/src/http.ts", 20),
+  bundledPluginCallsite("qa-lab", "web/src/http.ts", 31),
   bundledPluginCallsite("signal", "src/install-signal-cli.ts", 224),
   bundledPluginCallsite("slack", "src/monitor/media.ts", 106),
   bundledPluginCallsite("slack", "src/monitor/media.ts", 125),
@@ -76,18 +75,12 @@ function isRawFetchCall(expression: ts.Expression) {
   return false;
 }
 
-/**
- * Finds raw `fetch(...)` and `globalThis.fetch(...)` call lines.
- */
 function findRawFetchCallLines(_content: string, _fileName: string, sourceFile: ts.SourceFile) {
   return collectCallExpressionLines(sourceFile, (node) =>
     isRawFetchCall(node.expression) ? node.expression : null,
   );
 }
 
-/**
- * Runs the raw channel/plugin fetch guard.
- */
 async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,

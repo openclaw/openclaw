@@ -5,11 +5,15 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { UPGRADE_SURVIVOR_ASSERTION_SCENARIOS } from "../../../lib/upgrade-survivor-policy.mjs";
+import {
+  UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
+  usesStructuredToolSearchAtBaseline,
+} from "../../../lib/upgrade-survivor-policy.mjs";
 import {
   inspectNpmPackageTarball,
   validatePrepublishPluginRegistryArtifact,
 } from "../../../prepublish-plugin-registry-artifact.mjs";
+import { assert, readJson, write, writeJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
 import {
@@ -75,10 +79,6 @@ function requireEnv(name) {
   return value;
 }
 
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
 function readUpdateJson(file) {
   const raw = fs.readFileSync(file, "utf8");
   const jsonStart = raw.indexOf("{");
@@ -121,21 +121,6 @@ function isPathInsideManagedNpmProjectPackageRoot(params) {
     segments[1] === "node_modules" &&
     packageSegments.every((segment, index) => segments[index + 2] === segment)
   );
-}
-
-function write(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-}
-
-function writeJson(file, value) {
-  write(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
 }
 
 function seedLegacySessionMetadata(stateDir, perAgent) {
@@ -320,10 +305,6 @@ function acceptsIntent(coverage, id) {
   return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
-function hasCoverage(coverage) {
-  return Boolean(coverage);
-}
-
 function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -485,7 +466,7 @@ function assertConfigSurvived() {
     ],
   ]) {
     // Frozen recipes without coverage receipts predate these provider specimens.
-    if (!hasCoverage(coverage) || !acceptsIntent(coverage, `models-${providerId}`)) {
+    if (!coverage || !acceptsIntent(coverage, `models-${providerId}`)) {
       continue;
     }
     const provider = config.models?.providers?.[providerId];
@@ -498,6 +479,27 @@ function assertConfigSurvived() {
         provider.apiKey.id === keyEnv,
       `${providerId} model provider env credential reference changed`,
     );
+  }
+
+  // Frozen recipes without coverage receipts predate this migration specimen.
+  if (coverage && acceptsIntent(coverage, "tool-search")) {
+    const toolSearch = config.tools?.toolSearch;
+    const legacyBaseline =
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline" &&
+      !usesStructuredToolSearchAtBaseline(coverage.baselineVersion);
+    assert(
+      toolSearch?.mode === (legacyBaseline ? "code" : "tools"),
+      "Tool Search mode was not preserved or migrated",
+    );
+    assert(toolSearch.enabled !== false, "Tool Search was disabled during migration");
+    if (legacyBaseline) {
+      assert(toolSearch.codeTimeoutMs === 5000, "Tool Search legacy timeout specimen changed");
+    } else {
+      assert(
+        !Object.hasOwn(toolSearch, "codeTimeoutMs"),
+        "Tool Search legacy timeout was not removed",
+      );
+    }
   }
 
   if (acceptsIntent(coverage, "agents")) {
@@ -519,7 +521,7 @@ function assertConfigSurvived() {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "discord plugin allow entry missing");
     assert(pluginAllow.includes("telegram"), "telegram plugin allow entry missing");
-    if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+    if (coverage && acceptsIntent(coverage, "configured-plugin-installs")) {
       assert(pluginAllow.includes("matrix"), "matrix plugin allow entry missing");
     } else {
       assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
@@ -527,12 +529,12 @@ function assertConfigSurvived() {
     if (scenario === "codex-allowlist-survival") {
       assert(pluginAllow.includes("codex"), "Codex plugin allow entry missing");
     }
-    if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
+    if (coverage && acceptsIntent(coverage, "feishu-channel")) {
       assert(pluginAllow.includes("feishu"), "feishu plugin allow entry missing");
     }
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "acpx-openclaw-tools-bridge")) {
+  if (coverage && acceptsIntent(coverage, "acpx-openclaw-tools-bridge")) {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("acpx"), "ACPX plugin allow entry missing");
     assert(config.plugins?.entries?.acpx?.enabled === true, "ACPX plugin entry changed");
@@ -542,7 +544,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+  if (coverage && acceptsIntent(coverage, "configured-plugin-installs")) {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "configured install discord allow entry missing");
     assert(pluginAllow.includes("telegram"), "configured install telegram allow entry missing");
@@ -593,7 +595,7 @@ function assertConfigSurvived() {
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "whatsapp enabled flag changed");
     const whatsappGroup = whatsapp.groups?.["120363000000000000@g.us"];
-    if (hasCoverage(coverage)) {
+    if (coverage) {
       assert(whatsappGroup?.requireMention === true, "whatsapp group policy changed");
     } else {
       assert(
@@ -612,7 +614,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+  if (coverage && acceptsIntent(coverage, "configured-plugin-installs")) {
     const matrix = config.channels?.matrix;
     assert(matrix?.enabled === true, "matrix enabled flag changed");
     assert(matrix?.homeserver === "https://matrix.example.invalid", "matrix homeserver changed");
@@ -623,7 +625,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
+  if (coverage && acceptsIntent(coverage, "feishu-channel")) {
     const feishu = config.channels?.feishu;
     assert(feishu?.enabled === true, "feishu enabled flag changed");
     assert(feishu?.connectionMode === "webhook", "feishu connection mode changed");
@@ -635,7 +637,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "logging")) {
+  if (coverage && acceptsIntent(coverage, "logging")) {
     assert(
       config.logging?.file === "~/openclaw-upgrade-survivor/gateway.jsonl",
       "logging.file tilde path changed",
@@ -1174,6 +1176,25 @@ function readMigratedSessionStore(stateDir, targetStorePath) {
           store[row.key] =
             typeof row.session_id === "string" ? { ...entry, sessionId: row.session_id } : entry;
         }
+        if (
+          source === "session_nodes" &&
+          db.prepare("PRAGMA user_version").get().user_version >= 24
+        ) {
+          for (const row of db
+            .prepare("SELECT session_key, field, value_json FROM session_entry_snapshots")
+            .all()) {
+            assert(Object.hasOwn(store, row.session_key), "orphaned session snapshot");
+            assert(
+              ["sessionDiffBaseline", "skillsSnapshot", "systemPromptReport"].includes(row.field),
+              "unknown session snapshot field",
+            );
+            assert(
+              !Object.hasOwn(store[row.session_key], row.field),
+              "duplicate inline session snapshot",
+            );
+            store[row.session_key][row.field] = JSON.parse(row.value_json);
+          }
+        }
         return { source, store };
       }
     } finally {
@@ -1473,7 +1494,7 @@ function assertRecoveredPluginInstalls(args) {
 function assertConfiguredPluginInstalls() {
   const coverage = getCoverage();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
-  if (!hasCoverage(coverage) || !acceptsIntent(coverage, "configured-plugin-installs")) {
+  if (!coverage || !acceptsIntent(coverage, "configured-plugin-installs")) {
     return;
   }
   if (stage === "baseline") {
@@ -1666,11 +1687,7 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
 function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
   assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
-  if (
-    ["projects-doctor", "projects-startup-migration", "taskflow-restoration"].includes(
-      getScenario(),
-    )
-  ) {
+  if (["projects-doctor", "projects-startup-migration"].includes(getScenario())) {
     assertStrict.equal(
       result.before?.version,
       "2026.9.4",

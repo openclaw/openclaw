@@ -32,26 +32,28 @@ function classifyLockReason(reason: string | undefined): LockState {
   return isPidDefinitelyDead(pid) ? { kind: "dead", pid } : { kind: "live", pid };
 }
 
-/** One GC pass may conservatively skip these paths; removal still rereads lockState. */
-export function createWorktreeLockPrefilter(): (record: ManagedWorktreeRecord) => Promise<boolean> {
-  const repositories = new Map<string, Promise<Map<string, string>>>();
-  return async (record) => {
+/** One GC pass may skip these paths; removal still rechecks locks and HEAD under its lease. */
+export function createWorktreeGcPrefilter() {
+  type Entry = Awaited<ReturnType<typeof listGitWorktrees>>[number];
+  const repositories = new Map<string, Promise<Map<string, Entry>>>();
+  return async (record: ManagedWorktreeRecord) => {
     const root = path.resolve(record.repoRoot);
     let reasons = repositories.get(root);
     if (!reasons) {
-      reasons = listGitWorktrees(root).then((entries) => {
-        const paths = new Map<string, string>();
-        for (const entry of entries) {
-          if (entry.lockedReason !== undefined) {
-            paths.set(path.resolve(entry.path), entry.lockedReason);
-          }
-        }
-        return paths;
-      });
+      reasons = listGitWorktrees(root).then(
+        (entries) => new Map(entries.map((entry) => [path.resolve(entry.path), entry])),
+      );
       repositories.set(root, reasons);
     }
-    const state = classifyLockReason((await reasons).get(path.resolve(record.path)));
-    return state.kind === "live" || state.kind === "foreign";
+    const entry = (await reasons).get(path.resolve(record.path));
+    const state = classifyLockReason(entry?.lockedReason);
+    if (state.kind === "live" || state.kind === "foreign") {
+      return "worktree has a live or foreign lock";
+    }
+    if (entry?.branch !== undefined && entry.branch !== `refs/heads/${record.branch}`) {
+      return "branch-moved";
+    }
+    return undefined;
   };
 }
 
@@ -78,16 +80,9 @@ export async function lockWorktreeForProcess(record: ManagedWorktreeRecord): Pro
   if (heldByThisProcess(state)) {
     return;
   }
-  // A lock naming a dead OpenClaw pid is restart residue: the owner died (crash or
-  // update restart) without unlocking, so git refuses every later lock forever and
-  // the run would otherwise proceed unprotected. remove()/release() already treat a
-  // dead owner as reclaimable, so reclaim it here instead of failing the acquire.
-  // Accepted tradeoff: the observe-then-unlock window is the same one those two
-  // callers already take, so two processes reclaiming the identical stale lock at
-  // once can both believe they won. Closing it needs one reclaim guard shared by all
-  // three paths -- this acquire plus service.ts release() and remove()
-  // (openclaw#114129); today's behavior instead loses
-  // the lock every time.
+  // Reclaim dead-pid residue, as remove()/release() do. Concurrent reclaimers can
+  // both win this observe-then-unlock race; fixing it requires a guard shared by
+  // all three paths (openclaw#114129).
   if (state.kind !== "dead") {
     throw commandError("git worktree lock", result);
   }

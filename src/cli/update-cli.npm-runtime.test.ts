@@ -1,19 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
-import { VERSION } from "../version.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
 import {
   commandCalls,
-  doctorCommandCall,
   getErrorOutput,
   getLogOutput,
   lastWriteJsonCall,
-  packageInstallCommandCall,
   requireValue,
-  spawnCall,
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import {
@@ -26,14 +22,10 @@ import {
   serviceReadCommand,
   serviceReadRuntime,
   serviceStop,
-  updateNpmInstalledPlugins,
 } from "./update-cli-mocks.test-support.js";
 import {
-  defaultRuntime,
   ExitError,
   fetchNpmPackageTargetStatus,
-  makeOkUpdateResult,
-  replaceConfigFile,
   resolveNpmChannelTag,
   runCommandWithTimeout,
   updateCommand,
@@ -50,91 +42,15 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 describe("update-cli", () => {
   const {
     createCaseDir,
-    mockCurrentProcessFreshDoctor,
     mockFileBackedPathExists,
-    mockNpmGlobalCommands,
-    mockNpmGlobalRoot,
     mockPackageInstallAtCaseDir,
     mockPackageInstallStatus,
     mockServicePackageCommands,
     primeNpmChannelTag,
     primeServiceCommand,
-    runUpdateCliScenario,
-    setupInstalledPackageRoot,
     setupServicePackageAtPrefix,
     tempDirs,
   } = createUpdateCliFixture();
-
-  it("leaves same-version package files intact with --no-restart", async () => {
-    const tempDir = tempDirs.make("openclaw-update-current-");
-    const { nodeModules, pkgRoot } = await setupInstalledPackageRoot(tempDir, VERSION);
-    readPackageVersion.mockResolvedValue(VERSION);
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "latest",
-      version: VERSION,
-    });
-    await writeOpenClawPackageFixture(pkgRoot, VERSION, {
-      inventory: true,
-    });
-    mockFileBackedPathExists();
-    mockNpmGlobalRoot(nodeModules);
-
-    await updateCommand({ yes: true, restart: false });
-
-    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expect(doctorCommandCall()).toBeUndefined();
-    expect(spawnCall()).toBeUndefined();
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-    expect(getLogOutput()).toContain("already-current");
-  });
-
-  it("retries package updates without optional deps when npm global update fails", async () => {
-    const tempDir = tempDirs.make("openclaw-update-optional-");
-    const nodeModules = path.join(tempDir, "lib", "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    mockPackageInstallStatus(pkgRoot);
-    mockCurrentProcessFreshDoctor({ packageRoot: pkgRoot });
-    await writeOpenClawPackageFixture(pkgRoot, "1.0.0", {
-      inventory: true,
-      entrySource: "export {};\n",
-    });
-
-    mockNpmGlobalCommands(nodeModules, async (argv) => {
-      if (
-        argv[0] === "npm" &&
-        argv[1] === "i" &&
-        argv.includes("-g") &&
-        !argv.includes("--omit=optional")
-      ) {
-        return commandResult({ stderr: "node-gyp failed", code: 1 });
-      }
-      if (argv[0] === "npm" && argv[1] === "i") {
-        await writeNpmPackageInstall(argv, pkgRoot);
-      }
-      return undefined;
-    });
-
-    await updateCommand({ yes: true, restart: false });
-
-    const installArgvs = commandCalls()
-      .map(([argv]) => argv)
-      .filter((argv) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
-    const installPrefix = [
-      "npm",
-      "i",
-      "-g",
-      "--allow-scripts=openclaw",
-      "--prefix",
-      expect.stringContaining(".openclaw.update-stage-"),
-      "openclaw@9999.0.0",
-    ];
-    const installFlags = ["--no-fund", "--no-audit", "--loglevel=error", "--min-release-age=0"];
-    expect(installArgvs).toEqual([
-      installPrefix.concat(installFlags),
-      installPrefix.concat("--omit=optional", installFlags),
-    ]);
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-  });
 
   it("uses the owning npm binary for package updates when PATH npm points elsewhere", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
@@ -212,7 +128,7 @@ describe("update-cli", () => {
       expect.objectContaining({ command: installCommand }),
     );
     const installOptions = requiredInstallCall[1] as { timeoutMs?: number };
-    expect(typeof installOptions.timeoutMs).toBe("number");
+    expect(installOptions.timeoutMs).toBeUndefined();
   });
 
   it("prepends portable Git PATH for package updates on Windows", async () => {
@@ -264,69 +180,7 @@ describe("update-cli", () => {
     expect(updateOptions?.env?.NPM_CONFIG_SCRIPT_SHELL).toBeUndefined();
   });
 
-  it.each([
-    {
-      name: "outputs JSON when --json is set",
-      run: async () => {
-        vi.mocked(updateGitCheckout).mockResolvedValue(makeOkUpdateResult());
-        vi.mocked(defaultRuntime.writeJson).mockClear();
-        await updateCommand({ json: true });
-      },
-      assert: () => {
-        requireValue(lastWriteJsonCall(), "update JSON output");
-      },
-    },
-    {
-      name: "exits with error on failure",
-      run: async () => {
-        vi.mocked(updateGitCheckout).mockResolvedValue({
-          status: "error",
-          mode: "git",
-          reason: "rebase-failed",
-          steps: [],
-          durationMs: 100,
-        } satisfies UpdateRunResult);
-        vi.mocked(defaultRuntime.exit).mockClear();
-        await expect(updateCommand({})).rejects.toEqual(new ExitError(1));
-      },
-      assert: () => {
-        expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      },
-    },
-  ] as const)("updateCommand reports outcomes: $name", runUpdateCliScenario);
-
-  it("persists the requested channel only after a successful package update", async () => {
-    await mockPackageInstallAtCaseDir();
-
-    await updateCommand({ channel: "beta", yes: true });
-
-    const installCallIndex = vi
-      .mocked(runCommandWithTimeout)
-      .mock.calls.findIndex(
-        (call) =>
-          Array.isArray(call[0]) &&
-          call[0][0] === "npm" &&
-          call[0][1] === "i" &&
-          call[0][2] === "-g",
-      );
-    expect(installCallIndex).toBeGreaterThanOrEqual(0);
-    expect(replaceConfigFile).toHaveBeenCalledTimes(1);
-    expect(replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: {
-        update: {
-          channel: "beta",
-        },
-      },
-      baseHash: undefined,
-    });
-    expect(
-      vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[installCallIndex] ?? 0,
-    ).toBeLessThan(
-      vi.mocked(replaceConfigFile).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
-    );
-  });
-
-  it.each(["sealed", "unknown", "writable-overridden"] as const)(
+  it.each(["sealed", "writable-overridden"] as const)(
     "preserves split-root package updates when the service definition is %s",
     async (kind) => {
       const oldInstall = await setupServicePackageAtPrefix({
@@ -423,34 +277,9 @@ describe("update-cli", () => {
     },
   );
 
-  it("previews rebinding a managed service to the invoking package root", async () => {
-    const shellRoot = createCaseDir("openclaw-shell-root");
-    const serviceRoot = tempDirs.make("openclaw-service-root-");
-    const serviceNode = path.join(path.dirname(serviceRoot), "bin", "node");
-    await fs.mkdir(path.join(serviceRoot, "dist"), { recursive: true });
-    await writeOpenClawPackageFixture(serviceRoot, "2026.5.18");
-    await writeOpenClawPackageFixture(shellRoot, "2026.5.20");
-    mockPackageInstallStatus(shellRoot);
-    serviceReadCommand.mockResolvedValue({
-      programArguments: [serviceNode, path.join(serviceRoot, "dist", "index.js"), "gateway"],
-    });
-
-    await updateCommand({ dryRun: true });
-
-    expect(serviceReadCommand).toHaveBeenCalledTimes(2);
-    const logs = getLogOutput();
-    expect(logs).toContain(`rebinding the managed Gateway from ${serviceRoot}`);
-    expect(logs).toContain(`to ${shellRoot} after verification`);
-    expect(logs).not.toContain("make sure `openclaw` on PATH");
-    expect(serviceStop).not.toHaveBeenCalled();
-    expect(packageInstallCommandCall()).toBeUndefined();
-  });
-
   it.each([
     { capability: "sealed", restart: true, currentRunner: false, compatible: false },
-    { capability: "unknown", restart: true, currentRunner: false, compatible: false },
     { capability: "writable", restart: false, currentRunner: true, compatible: false },
-    { capability: "sealed", restart: false, currentRunner: true, compatible: false },
     { capability: "writable", restart: true, currentRunner: false, compatible: false },
     { capability: "sealed", restart: true, currentRunner: false, compatible: true },
   ] as const)(
@@ -462,7 +291,18 @@ describe("update-cli", () => {
       const serviceNode = currentRunner ? process.execPath : fixture.serviceNode;
       const replacementNode = path.join(tempDirs.make("replacement-runtime-"), "bin", "node");
       await fs.mkdir(path.dirname(replacementNode), { recursive: true });
-      await fs.copyFile(process.execPath, replacementNode);
+      // Preserve the host runtime's dynamic-library paths when metadata probes execute it.
+      if (process.platform === "win32") {
+        await fs.copyFile(process.execPath, replacementNode);
+      } else {
+        await fs.writeFile(
+          replacementNode,
+          `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`,
+          {
+            mode: 0o755,
+          },
+        );
+      }
       mockPackageInstallStatus(fixture.root);
       primeServiceCommand([serviceNode, fixture.entrypoint, "gateway"]);
       serviceLoaded.mockResolvedValue(true);

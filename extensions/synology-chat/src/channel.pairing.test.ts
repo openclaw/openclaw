@@ -39,7 +39,7 @@ describe("synologyChatPlugin pairing.notifyApproval", () => {
 
   it("rejects a notification without a configured incoming URL", async () => {
     await expect(
-      synologyChatPlugin.pairing.notifyApproval({
+      synologyChatPlugin.pairing.notifyApproval!({
         cfg: { channels: { "synology-chat": { accounts: { beta: { token: "beta-token" } } } } },
         id: "42",
         accountId: "beta",
@@ -51,7 +51,7 @@ describe("synologyChatPlugin pairing.notifyApproval", () => {
   it("rejects a notification when the selected account's send fails", async () => {
     mockSendMessage.mockResolvedValue(false);
     await expect(
-      synologyChatPlugin.pairing.notifyApproval({ cfg: PAIRING_CFG, id: "42", accountId: "beta" }),
+      synologyChatPlugin.pairing.notifyApproval!({ cfg: PAIRING_CFG, id: "42", accountId: "beta" }),
     ).rejects.toThrow("Failed to send message to Synology Chat");
     expect(mockSendMessage).toHaveBeenCalledOnce();
   });

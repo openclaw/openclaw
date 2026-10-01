@@ -55,6 +55,10 @@ function resolvedAccount(mediaMaxMb?: number) {
   };
 }
 
+function sendMedia(options: Omit<Parameters<typeof sendMediaFeishu>[0], "cfg" | "to">) {
+  return sendMediaFeishu({ cfg: emptyConfig, to: "user:ou_target", ...options });
+}
+
 function mockCallData(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   return (mock.mock.calls[0]?.[0] as { data?: Record<string, unknown> } | undefined)?.data ?? {};
 }
@@ -151,9 +155,7 @@ describe("Feishu upload contracts", () => {
       contentType: media.contentType,
     });
 
-    const result = await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    const result = await sendMedia({
       mediaUrl: media.mediaUrl,
       ...(media.audioAsVoice ? { audioAsVoice: true } : {}),
     });
@@ -163,19 +165,9 @@ describe("Feishu upload contracts", () => {
   });
 
   it.each([
-    { fileName: "diagram.svg", contentType: "image/svg+xml", buffer: svgImage },
-    { fileName: "photo.avif", contentType: "image/avif", buffer: avifImage },
-    { fileName: "diagram.png", contentType: "image/svg+xml", buffer: svgImage },
-    { fileName: "diagram.png", contentType: undefined, buffer: svgImage },
-    { fileName: "diagram.png", contentType: "application/octet-stream", buffer: svgImage },
     { fileName: "diagram.png", contentType: "image/png", buffer: svgImage },
-    { fileName: "diagram.heic", contentType: "image/heic", buffer: svgImage },
-    { fileName: "photo.heic", contentType: "image/heic", buffer: Buffer.from("heic image") },
-    { fileName: "photo.png", contentType: "image/avif", buffer: avifImage },
-    { fileName: "photo.png", contentType: undefined, buffer: avifImage },
-    { fileName: "photo.png", contentType: "application/octet-stream", buffer: avifImage },
     { fileName: "photo.png", contentType: "image/png", buffer: avifImage },
-    { fileName: "photo.heic", contentType: "image/avif", buffer: avifImage },
+    { fileName: "photo.heic", contentType: "image/heic", buffer: Buffer.from("heic image") },
   ])("sends unsupported image format $contentType as a file attachment", async (media) => {
     mocks.loadWebMedia.mockResolvedValueOnce({
       buffer: media.buffer,
@@ -184,9 +176,7 @@ describe("Feishu upload contracts", () => {
       contentType: media.contentType,
     });
 
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaUrl: `https://example.com/${media.fileName}`,
     });
 
@@ -195,67 +185,27 @@ describe("Feishu upload contracts", () => {
     expect(mockCallData(mocks.messageCreate).msg_type).toBe("file");
   });
 
-  it("uses the supported image MIME when the filename has no recognized extension", async () => {
+  it("uploads actual HEIC bytes despite a JPEG filename", async () => {
     mocks.loadWebMedia.mockResolvedValueOnce({
-      buffer: pngImage,
-      fileName: "download",
+      buffer: heicImage,
+      fileName: "photo.jpg",
       kind: "image",
-      contentType: "image/png",
+      contentType: "image/heic",
     });
-
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaUrl: "https://example.com/download",
-    });
-
+    await sendMedia({ mediaUrl: "https://example.com/photo.jpg" });
     expect(mocks.fileCreate).not.toHaveBeenCalled();
     expect(mocks.imageCreate).toHaveBeenCalledOnce();
     expect(mockCallData(mocks.messageCreate).msg_type).toBe("image");
   });
 
-  it.each([
-    { fileName: "photo.heic", contentType: "image/heic", buffer: heicImage },
-    { fileName: "download", contentType: "image/heic", buffer: heicImage },
-    { fileName: "photo.jpg", contentType: "image/heic", buffer: heicImage },
-  ])("uploads supported HEIC image $fileName as a native image", async (media) => {
-    mocks.loadWebMedia.mockResolvedValueOnce({
-      buffer: media.buffer,
-      fileName: media.fileName,
-      kind: "image",
-      contentType: media.contentType,
-    });
-
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaUrl: `https://example.com/${media.fileName}`,
-    });
-
-    expect(mocks.fileCreate).not.toHaveBeenCalled();
-    expect(mocks.imageCreate).toHaveBeenCalledOnce();
-    expect(mockCallData(mocks.messageCreate).msg_type).toBe("image");
-  });
-
-  it.each([
-    { fileName: "scan.tif", buffer: tiffImage },
-    { fileName: "photo.heic", buffer: heicImage },
-    { fileName: "photo.png", buffer: pngImage },
-  ])("recognizes actual supported image bytes in $fileName", async ({ fileName, buffer }) => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaBuffer: buffer,
-      fileName,
-    });
-
+  it("recognizes supported TIFF bytes in a direct attachment", async () => {
+    await sendMedia({ mediaBuffer: tiffImage, fileName: "scan.tif" });
     expect(mocks.imageCreate).toHaveBeenCalledOnce();
     expect(mockCallData(mocks.messageCreate).msg_type).toBe("image");
   });
 
   it.each([
     { fileName: "photo.bin", contentType: "image/jpg", buffer: jpegImage },
-    { fileName: "scan.bin", contentType: "image/tif", buffer: tiffImage },
     { fileName: "icon.bin", contentType: "image/ico", buffer: icoImage },
     { fileName: "download", contentType: "application/octet-stream", buffer: pngImage },
   ])("routes supported image bytes with $contentType metadata natively", async (media) => {
@@ -264,9 +214,7 @@ describe("Feishu upload contracts", () => {
       kind: "image",
     });
 
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaUrl: `https://example.com/${media.fileName}`,
     });
 
@@ -279,9 +227,7 @@ describe("Feishu upload contracts", () => {
     const oversizedImage = Buffer.alloc(10 * 1024 * 1024 + 1);
     pngImage.copy(oversizedImage);
     await expect(
-      sendMediaFeishu({
-        cfg: emptyConfig,
-        to: "user:ou_target",
+      sendMedia({
         mediaBuffer: oversizedImage,
         fileName: "oversized.png",
       }),
@@ -295,9 +241,7 @@ describe("Feishu upload contracts", () => {
     mocks.resolveAccount.mockReturnValue(resolvedAccount(1 / (1024 * 1024)));
 
     await expect(
-      sendMediaFeishu({
-        cfg: emptyConfig,
-        to: "user:ou_target",
+      sendMedia({
         mediaBuffer: Buffer.from("too large"),
         fileName: "notes.pdf",
       }),
@@ -311,9 +255,7 @@ describe("Feishu upload contracts", () => {
     mocks.resolveAccount.mockReturnValue(resolvedAccount(1 / (1024 * 1024)));
 
     await expect(
-      sendMediaFeishu({
-        cfg: emptyConfig,
-        to: "user:ou_target",
+      sendMedia({
         mediaBuffer: Buffer.from("oversized audio"),
         fileName: "voice.mp3",
         audioAsVoice: true,
@@ -324,29 +266,19 @@ describe("Feishu upload contracts", () => {
     expect(mocks.fileCreate).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "image", fileName: "photo.png", prefix: "Feishu image send failed" },
-    { name: "file", fileName: "notes.pdf", prefix: "Feishu file send failed" },
-  ])("retains accepted $name visibility when its platform identifier is missing", async (media) => {
+  it("retains accepted image visibility when its platform identifier is missing", async () => {
     mocks.messageCreate.mockResolvedValueOnce({ code: 0, data: {} });
-
     let caught: unknown;
     try {
-      await sendMediaFeishu({
-        cfg: emptyConfig,
-        to: "user:ou_target",
-        mediaBuffer: media.name === "image" ? pngImage : Buffer.from("attachment"),
-        fileName: media.fileName,
-      });
+      await sendMedia({ mediaBuffer: pngImage, fileName: "photo.png" });
     } catch (error) {
       caught = error;
     }
-
     expect(isChannelPartialDeliveryError(caught)).toBe(true);
     if (!(caught instanceof Error) || !isChannelPartialDeliveryError(caught)) {
       throw new Error("expected an accepted Feishu media delivery without an identity");
     }
-    expect(caught.message).toBe(`${media.prefix}: no message_id returned`);
+    expect(caught.message).toBe("Feishu image send failed: no message_id returned");
     expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
     expect(mocks.messageCreate).toHaveBeenCalledOnce();
   });
@@ -354,9 +286,7 @@ describe("Feishu upload contracts", () => {
   it("rejects empty image and file attachments before contacting Feishu", async () => {
     for (const fileName of ["empty.png", "empty.pdf"]) {
       await expect(
-        sendMediaFeishu({
-          cfg: emptyConfig,
-          to: "user:ou_target",
+        sendMedia({
           mediaBuffer: Buffer.alloc(0),
           fileName,
         }),

@@ -106,7 +106,7 @@ function parseDiskSpaceProbe(stdout: string, observedAtMs: number): SessionPlace
 }
 
 export function createWorkerPlacementDiskSpaceMonitor(params: {
-  placements: Pick<WorkerSessionPlacementStore, "get" | "list">;
+  placements: Pick<WorkerSessionPlacementStore, "get" | "readChangeSnapshot" | "readProjection">;
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
   warn: (message: string) => void;
   now?: () => number;
@@ -151,16 +151,14 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     if (!hasExactBinding(candidate, current)) {
       return;
     }
-    const previous = observations.get(placement.sessionId);
-    const previousStatus =
-      previous && hasExactBinding(previous, current) ? previous.snapshot.status : undefined;
+    const previous = read(current);
+    const previousStatus = previous?.status;
     const snapshotChanged =
       !previous ||
-      !hasExactBinding(previous, current) ||
-      previous.snapshot.status !== snapshot.status ||
-      previous.snapshot.availableBytes !== snapshot.availableBytes ||
-      previous.snapshot.totalBytes !== snapshot.totalBytes ||
-      previous.snapshot.observedAtMs !== snapshot.observedAtMs;
+      previous.status !== snapshot.status ||
+      previous.availableBytes !== snapshot.availableBytes ||
+      previous.totalBytes !== snapshot.totalBytes ||
+      previous.observedAtMs !== snapshot.observedAtMs;
     observations.set(placement.sessionId, candidate);
     if (snapshotChanged) {
       observationVersion += 1;
@@ -178,10 +176,14 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   };
 
   const sweep = async (): Promise<void> => {
-    const placements = params.placements.list();
-    const active = placements.filter(
-      (placement): placement is ActivePlacement => placement.state === "active",
+    const identities = await params.placements.readChangeSnapshot();
+    const projection = await params.placements.readProjection(
+      identities.map(({ sessionId }) => sessionId),
+      { current: true },
     );
+    const active = identities
+      .map(({ sessionId }) => projection.placements.get(sessionId))
+      .filter((placement): placement is ActivePlacement => placement?.state === "active");
     for (const [sessionId, observation] of observations) {
       if (!hasExactBinding(observation, params.placements.get(sessionId))) {
         observations.delete(sessionId);

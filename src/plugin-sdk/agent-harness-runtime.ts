@@ -35,7 +35,6 @@ import {
   snapshotStructuredInput,
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
-import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
@@ -413,6 +412,14 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   });
 }
 
+/** Load static MCP metadata without connecting transports or discovering tools. */
+export async function loadAgentHarnessMcpConfig(
+  params: Parameters<typeof import("../agents/bundle-mcp-config.js").loadStaticBundleMcpConfig>[0],
+): Promise<ReturnType<typeof import("../agents/bundle-mcp-config.js").loadStaticBundleMcpConfig>> {
+  const { loadStaticBundleMcpConfig } = await import("../agents/bundle-mcp-config.js");
+  return loadStaticBundleMcpConfig(params);
+}
+
 /** Load Codex bundle MCP thread config without forcing the heavy config module into SDK imports. */
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
@@ -421,6 +428,8 @@ export async function loadCodexBundleMcpThreadConfig(
     await import("../agents/codex-mcp-config.js");
   return load(params);
 }
+
+export { decodeHeaderEnvPlaceholder } from "../agents/bundle-mcp-adapter.js";
 
 /** Lazily load the strict MCP proxy client with core-owned framing, startup, and shutdown. */
 export const mcpStdioRuntime = Object.freeze({
@@ -492,8 +501,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
     >
   >
 > {
-  const shouldLoad = shouldLoadRequesterScopedMcpHarnessRuntime(params);
-  if (!shouldLoad) {
+  if (!shouldLoadRequesterScopedMcpHarnessRuntime(params)) {
     return undefined;
   }
   const { materializeRequesterScopedMcpToolsForHarnessRunCore: materialize } =
@@ -514,6 +522,8 @@ export {
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";
+export { prepareAgentWorkspaceContext } from "../agents/harness/workspace-context.js";
+export { buildAgentWorkspaceInstructionSnapshot } from "../agents/harness/workspace-instructions.js";
 export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
@@ -559,11 +569,7 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
-// Plugin-owned (`ownsCompaction`) compaction safety timeout. Exposed on the
-// agent-harness-runtime surface so plugin harnesses such as Codex bound their
-// own `ContextEngine.compact()` calls with the exact same finite, host-resolved
-// timeout the built-in embedded-agent runner uses — one shared implementation, no
-// copy-pasted watchdog.
+// Plugin-owned compaction uses the embedded runner's host-resolved safety timeout.
 export {
   compactWithSafetyTimeout,
   compactContextEngineWithSafetyTimeout,
@@ -611,13 +617,7 @@ export {
 export type ToolProgressDetailMode = "explain" | "raw";
 
 /** Infer compact display metadata for one tool invocation from its name and arguments. */
-export function inferToolMetaFromArgs(
-  toolName: string,
-  args: unknown,
-  options?: { detailMode?: ToolProgressDetailMode },
-): string | undefined {
-  return inferToolMetaFromArgsCore(toolName, args, options);
-}
+export { inferToolMetaFromArgsCore as inferToolMetaFromArgs } from "../agents/tool-display.js";
 
 /** Inputs used to classify a finished harness turn with little or no visible assistant output. */
 export type AgentHarnessTerminalOutcomeInput = {
@@ -637,9 +637,6 @@ export type AgentHarnessTerminalOutcomeClassification = NonNullable<
  * Classify terminal harness turns that completed without assistant output that
  * should advance fallback. Deliberate silent replies such as NO_REPLY count as
  * intentional output, while whitespace-only text remains fallback-eligible.
- * This is intentionally SDK-level so plugin harness adapters such as Codex
- * preserve the same OpenClaw-owned fallback signals as the built-in OpenClaw path
- * without re-implementing terminal-result policy.
  */
 export function classifyAgentHarnessTerminalOutcome(
   params: AgentHarnessTerminalOutcomeInput,
@@ -647,7 +644,7 @@ export function classifyAgentHarnessTerminalOutcome(
   if (
     !params.turnCompleted ||
     (params.promptError !== undefined && params.promptError !== null) ||
-    hasVisibleAssistantText(params.assistantTexts)
+    params.assistantTexts.some((text) => text.trim().length > 0)
   ) {
     return undefined;
   }
@@ -658,10 +655,6 @@ export function classifyAgentHarnessTerminalOutcome(
     return "reasoning-only";
   }
   return "empty";
-}
-
-function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
-  return assistantTexts.some((text) => text.trim().length > 0);
 }
 
 export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });

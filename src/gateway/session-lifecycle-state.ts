@@ -7,13 +7,11 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import {
-  isMainSessionRecoveryLifecycleEvent,
-  projectMainSessionRecoveryLifecycle,
-} from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import { projectMainSessionRecoveryLifecycle } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -26,6 +24,7 @@ import {
   recordGatewaySessionRunFailure,
   resolveSessionRunError,
 } from "../sessions/session-run-error.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
@@ -50,6 +49,7 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
     stopReason?: unknown;
     error?: unknown;
     errorKind?: unknown;
+    executionStarted?: unknown;
     livenessState?: unknown;
     timeoutPhase?: unknown;
     providerStarted?: unknown;
@@ -73,15 +73,7 @@ type LifecycleSessionShape = Pick<
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  | "updatedAt"
-  | "status"
-  | "lastRunError"
-  | "lastRunId"
-  | "startedAt"
-  | "endedAt"
-  | "runtimeMs"
-  | "lastActivityAt"
-  | "abortedLastRun"
+  | keyof LifecycleSessionShape
   | "restartRecoveryRuns"
   | "restartRecoveryForceSafeTools"
   | "mainRestartRecovery"
@@ -138,24 +130,8 @@ function resolveSettledLifecycleTerminalOutcome(
     : outcome;
 }
 
-function resolveLifecycleStartedAt(
-  existingStartedAt: number | undefined,
-  event: LifecycleEventLike,
-): number | undefined {
-  if (isFiniteTimestamp(event.data?.startedAt)) {
-    return event.data.startedAt;
-  }
-  if (isFiniteTimestamp(existingStartedAt)) {
-    return existingStartedAt;
-  }
-  return isFiniteTimestamp(event.ts) ? event.ts : undefined;
-}
-
-function resolveLifecycleEndedAt(event: LifecycleEventLike): number | undefined {
-  if (isFiniteTimestamp(event.data?.endedAt)) {
-    return event.data.endedAt;
-  }
-  return isFiniteTimestamp(event.ts) ? event.ts : undefined;
+function resolveLifecycleTimestamp(...values: unknown[]): number | undefined {
+  return values.find(isFiniteTimestamp);
 }
 
 function resolveRuntimeMs(params: {
@@ -187,10 +163,14 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   }
 
   const existing = params.session ?? undefined;
+  const startedAt = resolveLifecycleTimestamp(
+    params.event.data?.startedAt,
+    existing?.startedAt,
+    params.event.ts,
+  );
   if (phase === "start") {
     // A start event clears terminal fields from the previous run so UI rows do
     // not show stale runtime/end state while the new run is active.
-    const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
     const updatedAt = startedAt ?? existing?.updatedAt;
     return {
       updatedAt,
@@ -203,8 +183,7 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
     };
   }
 
-  const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
-  const endedAt = resolveLifecycleEndedAt(params.event);
+  const endedAt = resolveLifecycleTimestamp(params.event.data?.endedAt, params.event.ts);
   const updatedAt = endedAt ?? existing?.updatedAt;
   const terminal = resolveSettledLifecycleTerminalOutcome(params.event);
   // Cancellation must preserve recovery even when the bulk shutdown marker failed.
@@ -241,6 +220,11 @@ function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
+  const phase = resolveLifecyclePhase(params.event);
+  // Queued request settlement cannot end the turn that owns this session.
+  if ((phase === "end" || phase === "error") && params.event.data?.executionStarted === false) {
+    return {};
+  }
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
     session: params.entry
       ? {
@@ -266,7 +250,6 @@ function derivePersistedSessionLifecyclePatch(params: {
   if (projection.action === "suppress") {
     return {};
   }
-  const phase = resolveLifecyclePhase(params.event);
   const runId = normalizeLifecycleRunId(params.event.runId);
   const clientRunId = normalizeLifecycleRunId(params.event.clientRunId) ?? runId;
   // Run ownership follows the durable running projection. Terminal settlement
@@ -296,13 +279,6 @@ export function deriveGatewaySessionLifecycleProjectionPatch(params: {
   return Object.hasOwn(patch, "status")
     ? { ...fields, status: status === "interrupted" ? "failed" : status }
     : fields;
-}
-
-export function isRestartRecoveryLifecycleEvent(params: {
-  entry?: Pick<SessionEntry, "restartRecoveryRuns"> | null;
-  event: Pick<LifecycleEventLike, "runId" | "lifecycleGeneration" | "data">;
-}): boolean {
-  return isMainSessionRecoveryLifecycleEvent(params);
 }
 
 /**
@@ -541,6 +517,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           sessionKey: sessionEntry.canonicalKey,
           agentId: sessionEntry.agentId,
           storePath: sessionEntry.storePath,
+          // The SQLite writer already published sharing facts; this adapter only projects run state.
+          facts: { kind: "unchanged" },
         }),
       ...(params.assertCommitAllowed || providerReview
         ? {
@@ -560,18 +538,28 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     const { runId, error, errorKind } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
-    await recordGatewaySessionRunFailure({
+    const receipt = {
       target: {
         agentId: sessionEntry.agentId,
         storePath: sessionEntry.storePath,
         sessionKey: sessionEntry.canonicalKey,
         sessionId: persisted.sessionId,
         expectedLifecycleRevision: persisted.lifecycleRevision,
+        expectedWriterRunId: persisted.activeWriterRunId,
       },
       runId,
       error,
       errorKind,
       assertCommitAllowed: params.assertCommitAllowed,
-    });
+    };
+    // An accepted terminal owns its receipt, independently of an ambient requester turn.
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: receipt.target,
+        assertCommitAllowed: params.assertCommitAllowed,
+        withTranscriptWrite: trackAsyncWork,
+      },
+      () => recordGatewaySessionRunFailure(receipt),
+    );
   }
 }

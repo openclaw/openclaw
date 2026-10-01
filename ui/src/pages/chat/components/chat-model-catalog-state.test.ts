@@ -2,10 +2,10 @@
 
 import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import {
   renderChatModelCatalogRefresh,
   renderChatModelCatalogState,
-  type ChatModelCatalogState,
 } from "./chat-model-catalog-state.ts";
 import { renderChatModelPicker } from "./chat-model-picker.ts";
 

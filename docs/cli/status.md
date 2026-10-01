@@ -47,6 +47,14 @@ Channels without a probe, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
 probes remain `WARN`. A lifecycle `OK` does not mean a live probe ran.
 
+`--deep` also asks the running Gateway whether the Node executable it still holds can be started. A Homebrew upgrade can delete that Cellar path while the LaunchAgent plist still points at a valid symlink and the Gateway port stays reachable. Status then warns:
+
+```text
+Gateway runtime is stale after Node upgrade: child workers are using <path>, which no longer exists. Restart the Gateway.
+```
+
+The check does not restart the Gateway. Run `openclaw gateway restart` after the warning.
+
 `--deep` and `--all` also show delivery queue warnings for dead-lettered messages
 and pressured inbound lanes. These warnings include pending, claimed, and blocked
 message counts even when a channel connection is healthy. See
@@ -145,6 +153,13 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
   backend, or an ACP backend such as `codex (acp/acpx)`. See
   [Agent runtimes](/concepts/agent-runtimes) for the provider/model/runtime
   distinction.
+- The `/status` chat command shows `Endpoint`: the upstream base URL
+  from the same prepared model/auth decision used to select the route. It
+  describes the current selection, not a previous request or billing attribution.
+  The URL is the API base; the transport adds operation paths such as
+  `/responses` when sending requests.
+  Routes without a resolved endpoint display `unknown`. Displayed URLs omit
+  user information, query parameters, and fragments; custom paths are hidden.
 - When the current session snapshot is sparse, the `/status` chat command (see
   [Slash commands](/tools/slash-commands)) can backfill token and cache counters
   from the most recent transcript usage log. Existing nonzero live values still

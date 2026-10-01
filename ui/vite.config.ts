@@ -16,14 +16,17 @@ import {
   type ControlUiAssetManifestEntry,
 } from "../src/gateway/control-ui-asset-manifest.ts";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../src/gateway/control-ui-root-assets.ts";
+import { controlUiBootPreloadsPlugin } from "./config/control-ui-boot-preloads.ts";
 import {
   controlUiCodeSplitting,
+  controlUiIsolatedDesktopRuntimePlugin,
   controlUiLocaleConfigHintsChunkPrefix,
 } from "./config/control-ui-chunking.ts";
 import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
+import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -374,6 +377,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
+    sourcePackageAlias("normalization-core", "uuid"),
     sourcePackageAlias("normalization-core"),
     sourcePackageAlias("session-url-contract", "parse"),
     sourcePackageAlias("session-url-contract", "session-key-normalization"),
@@ -631,16 +635,11 @@ export default function controlUiViteConfig(
     publicDir: path.resolve(here, "public"),
     css: {
       postcss: {
-        plugins: [controlUiHoverGuardPlugin()],
+        plugins: [controlUiHoverGuardPlugin(), controlUiWebAwesomePageRulePlugin()],
       },
     },
     optimizeDeps: {
-      include: [
-        "ipaddr.js",
-        "lit/directives/repeat.js",
-        "markdown-it-task-lists",
-        ...commonJsOptimizeDeps,
-      ],
+      include: ["ipaddr.js", "lit/directives/repeat.js", ...commonJsOptimizeDeps],
     },
     resolve: {
       alias: [
@@ -679,6 +678,7 @@ export default function controlUiViteConfig(
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
+      controlUiIsolatedDesktopRuntimePlugin(),
       {
         name: "control-ui-static-import-preloads",
         generateBundle(_options, bundle) {
@@ -693,6 +693,7 @@ export default function controlUiViteConfig(
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
+      controlUiBootPreloadsPlugin(),
       controlUiBuildOutputPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",

@@ -35,6 +35,7 @@ import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-pro
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import { collectConfiguredStorageProviderIds } from "./storage-provider-manifest.js";
 import { collectConfiguredWorkerProviderIds } from "./worker-provider-config.js";
 import { normalizeWorkerProviderIds } from "./worker-provider-id.js";
 
@@ -119,6 +120,9 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     ...collectConfiguredWorkerProviderIds(activationSourceConfig),
     ...normalizeWorkerProviderIds(params.workerProviderIds ?? []),
   ]);
+  const configuredStorageProviderIds = new Set(
+    collectConfiguredStorageProviderIds(activationSourceConfig),
+  );
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
@@ -186,6 +190,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         env: params.env,
         requiredAgentHarnessRuntimes,
         configuredWorkerProviderIds,
+        configuredStorageProviderIds,
         configuredSpeechProviderIds,
         configuredWebSearchProviderIds,
         configuredModelProviderIds,

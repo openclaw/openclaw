@@ -1,4 +1,3 @@
-// Shared cron CLI formatting, parsing, delivery preview, and warning helpers.
 import {
   MAX_DATE_TIMESTAMP_MS,
   parseStrictNonNegativeInteger,
@@ -19,6 +18,7 @@ import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import { formatExactDuration } from "../../infra/format-time/format-duration-exact.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import { parseOffsetlessIsoDateTimeInTimeZone } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
@@ -59,6 +59,17 @@ export function parseCronIntegerOption(
     throw new CronCliError(`Invalid ${flag} (must be a ${kind} integer).`);
   }
   return parsed;
+}
+
+export function assertCronTimeoutSupported(
+  payloadKind: CronJob["payload"]["kind"],
+): asserts payloadKind is "agentTurn" | "command" {
+  if (payloadKind === "script") {
+    throw new CronCliError("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
+  }
+  if (payloadKind !== "agentTurn" && payloadKind !== "command") {
+    throw new CronCliError(`--timeout-seconds is not supported for ${payloadKind} jobs.`);
+  }
 }
 
 export function parseCronNoOutputTimeoutOption(opts: Record<string, unknown>): number | undefined {
@@ -162,17 +173,15 @@ function enrichCronRunEntriesForDisplay(value: unknown): unknown {
     if (cause) {
       extra.cause = cause;
     }
-    const tsIso = toLocalIsoTime(item.ts);
-    if (tsIso) {
-      extra.tsIso = tsIso;
-    }
-    const runAtIso = toLocalIsoTime(item.runAtMs);
-    if (runAtIso) {
-      extra.runAtIso = runAtIso;
-    }
-    const nextRunAtIso = toLocalIsoTime(item.nextRunAtMs);
-    if (nextRunAtIso) {
-      extra.nextRunAtIso = nextRunAtIso;
+    for (const [source, target] of [
+      ["ts", "tsIso"],
+      ["runAtMs", "runAtIso"],
+      ["nextRunAtMs", "nextRunAtIso"],
+    ] as const) {
+      const iso = toLocalIsoTime(item[source]);
+      if (iso) {
+        extra[target] = iso;
+      }
     }
     return Object.keys(extra).length > 0 ? Object.assign({}, item, extra) : item;
   });
@@ -194,18 +203,15 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
   }
   const obj = value as Record<string, unknown>;
 
-  // Single job object (has 'state' and 'enabled')
   if ("state" in obj && "enabled" in obj) {
     return { ...obj, status: computeStatus(obj) };
   }
 
-  // List response (has 'jobs' array)
   if ("jobs" in obj && Array.isArray(obj.jobs)) {
-    const enrichedJobs = (obj.jobs as CronJob[]).map((job) => {
-      const status = computeStatus(job);
-      return Object.assign({}, job, { status });
-    });
-    return { ...obj, jobs: enrichedJobs };
+    return {
+      ...obj,
+      jobs: obj.jobs.map((job: CronJob) => Object.assign({}, job, { status: computeStatus(job) })),
+    };
   }
 
   return value;
@@ -244,13 +250,14 @@ function formatCronStatusForDisplay(job: CronJob) {
   const streamDisabled =
     job.enabled && job.schedule?.kind === "stream" && state.streamStatus === "disabled";
   const undelivered = status === "ok" && state.lastDeliveryStatus === "not-delivered";
+  const deliveryUnknown = status === "ok" && state.lastDeliveryStatus === "unknown";
   const suppressed =
     undelivered && !streamDisabled && state.deliverySuppressionReason !== undefined;
   // The recorded non-outcome, not completion success, distinguishes silence from failed best-effort delivery.
   const color =
     status === "error"
       ? theme.error
-      : status === "running" || (undelivered && !suppressed)
+      : status === "running" || deliveryUnknown || (undelivered && !suppressed)
         ? theme.warn
         : status === "ok"
           ? theme.success
@@ -265,6 +272,8 @@ function formatCronStatusForDisplay(job: CronJob) {
         : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
   } else if (undelivered) {
     label = suppressed ? "ok (suppressed)" : "ok (not delivered)";
+  } else if (deliveryUnknown) {
+    label = "delivery unknown";
   }
   return { label, color };
 }
@@ -420,19 +429,21 @@ export function parseCronStringList(input: unknown): string[] | undefined {
     : typeof input === "string"
       ? input
       : "";
-  return raw
-    .split(/[,\s]+/u)
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  return raw.split(/[,\s]+/u).filter(Boolean);
 }
 
-/**
- * Parse a one-shot `--at` value into an ISO string (UTC).
- *
- * When `tz` is provided and the input is an offset-less datetime
- * (e.g. `2026-03-23T23:00:00`), the datetime is interpreted in
- * that IANA timezone instead of UTC.
- */
+const INVALID_CRON_TIMEZONE_MESSAGE =
+  "Invalid --tz. Use an IANA timezone such as America/New_York.";
+
+export function parseCronTimezoneOption(value: unknown): string | undefined {
+  const timezone = normalizeOptionalString(value);
+  if (timezone && !resolveTimezone(timezone)) {
+    throw new CronCliError(INVALID_CRON_TIMEZONE_MESSAGE);
+  }
+  return timezone;
+}
+
+// Offset-less datetimes use the supplied IANA timezone instead of UTC.
 export function parseAt(input: string, tz?: string): string | null {
   const raw = input.trim();
   if (!raw) {
@@ -442,8 +453,16 @@ export function parseAt(input: string, tz?: string): string | null {
   // If a timezone is provided and the input looks like an offset-less ISO datetime,
   // resolve it in the given IANA timezone so users get the time they expect.
   if (tz && isOffsetlessIsoDateTime(raw)) {
-    return parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
+    const parsed = parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
+    if (!parsed.ok) {
+      if (parsed.reason === "invalid-timezone") {
+        throw new CronCliError(INVALID_CRON_TIMEZONE_MESSAGE);
+      }
+      return null;
+    }
+    return parsed.iso;
   }
+  parseCronTimezoneOption(tz);
 
   const absolute = parseAbsoluteTimeMs(raw);
   if (absolute !== null) {
@@ -458,18 +477,20 @@ export function parseAt(input: string, tz?: string): string | null {
   return null;
 }
 
-const CRON_ID_PAD = 36;
-const CRON_DECLARATION_PAD = 24;
-const CRON_NAME_PAD = 24;
-const CRON_SCHEDULE_PAD = 32;
-const CRON_NEXT_PAD = 10;
-const CRON_LAST_PAD = 10;
-const CRON_STATUS_PAD = 19;
-const CRON_TARGET_PAD = 9;
-const CRON_DELIVERY_PAD = 64;
-const CRON_AGENT_PAD = 10;
-const CRON_OWNER_PAD = 24;
-const CRON_MODEL_PAD = 20;
+const CRON_COLUMNS = [
+  ["id", "ID", 36],
+  ["declaration", "Declaration", 24],
+  ["name", "Name", 24],
+  ["schedule", "Schedule", 32],
+  ["next", "Next", 10],
+  ["last", "Last", 10],
+  ["status", "Status", 19],
+  ["target", "Target", 9],
+  ["delivery", "Delivery", 64],
+  ["agent", "Agent ID", 10],
+  ["owner", "Owner", 24],
+  ["model", "Model", 20],
+] as const;
 const TRUNCATED_SUFFIX = "...";
 
 const stringifyCell = (value: unknown, fallback = "-") => {
@@ -487,9 +508,7 @@ const formatCell = (value: unknown, width: number) => {
   const truncated =
     visibleWidth(text) <= width
       ? text
-      : width <= TRUNCATED_SUFFIX.length
-        ? truncateToVisibleWidth(text, width)
-        : `${truncateToVisibleWidth(text, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
+      : `${truncateToVisibleWidth(text, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
   const remaining = width - visibleWidth(truncated);
   return remaining > 0 ? `${truncated}${" ".repeat(remaining)}` : truncated;
 };
@@ -573,80 +592,38 @@ export function printCronList(
   }
 
   const rich = isRich();
-  const header = [
-    formatCell("ID", CRON_ID_PAD),
-    formatCell("Declaration", CRON_DECLARATION_PAD),
-    formatCell("Name", CRON_NAME_PAD),
-    formatCell("Schedule", CRON_SCHEDULE_PAD),
-    formatCell("Next", CRON_NEXT_PAD),
-    formatCell("Last", CRON_LAST_PAD),
-    formatCell("Status", CRON_STATUS_PAD),
-    formatCell("Target", CRON_TARGET_PAD),
-    formatCell("Delivery", CRON_DELIVERY_PAD),
-    formatCell("Agent ID", CRON_AGENT_PAD),
-    formatCell("Owner", CRON_OWNER_PAD),
-    formatCell("Model", CRON_MODEL_PAD),
-  ].join(" ");
+  const header = CRON_COLUMNS.map(([, label, width]) => formatCell(label, width)).join(" ");
 
   const lines = [rich ? theme.heading(header) : header];
   const now = Date.now();
 
   for (const job of jobs) {
     const state = job.state ?? {};
-    const idLabel = formatCell(job.id, CRON_ID_PAD);
-    const declarationLabel = formatCell(job.declarationKey, CRON_DECLARATION_PAD);
-    const nameLabel = formatCell(job.displayName ?? job.name, CRON_NAME_PAD);
-    const scheduleLabel = formatCell(
-      formatSchedule(job.schedule, job.trigger !== undefined),
-      CRON_SCHEDULE_PAD,
-    );
-    const nextLabel = formatCell(
-      job.enabled ? formatRelative(state.nextRunAtMs, now) : "-",
-      CRON_NEXT_PAD,
-    );
-    const lastLabel = formatCell(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
     const status = formatCronStatusForDisplay(job);
-    const statusLabel = formatCell(status.label, CRON_STATUS_PAD);
-    const targetLabel = formatCell(job.sessionTarget, CRON_TARGET_PAD);
     const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
-    const deliveryText = deliveryPreview
-      ? `${deliveryPreview.label} (${deliveryPreview.detail})`
-      : "-";
-    const deliveryLabel = formatCell(deliveryText, CRON_DELIVERY_PAD);
     const agentId = job.effectiveAgentId ?? job.agentId;
-    const agentLabel = formatCell(agentId ?? "unresolved", CRON_AGENT_PAD);
-    const ownerLabel = formatCell(job.owner?.sessionKey ?? job.owner?.agentId, CRON_OWNER_PAD);
-    const modelLabel = formatCell(
-      job.payload?.kind === "agentTurn" ? job.payload.model : undefined,
-      CRON_MODEL_PAD,
-    );
-
-    const coloredTarget =
-      job.sessionTarget === "main"
-        ? colorize(rich, theme.accent, targetLabel)
-        : colorize(rich, theme.accentBright, targetLabel);
-    const coloredAgent = agentId
-      ? colorize(rich, theme.info, agentLabel)
-      : colorize(rich, theme.muted, agentLabel);
-
-    const line = [
-      colorize(rich, theme.accent, idLabel),
-      colorize(rich, theme.muted, declarationLabel),
-      colorize(rich, theme.info, nameLabel),
-      colorize(rich, theme.info, scheduleLabel),
-      colorize(rich, theme.muted, nextLabel),
-      colorize(rich, theme.muted, lastLabel),
-      colorize(rich, status.color, statusLabel),
-      coloredTarget,
-      deliveryPreview
-        ? colorize(rich, theme.info, deliveryLabel)
-        : colorize(rich, theme.muted, deliveryLabel),
-      coloredAgent,
-      colorize(rich, job.owner ? theme.info : theme.muted, ownerLabel),
-      job.payload?.kind === "agentTurn" && job.payload.model
-        ? colorize(rich, theme.info, modelLabel)
-        : colorize(rich, theme.muted, modelLabel),
-    ].join(" ");
+    const model = job.payload?.kind === "agentTurn" ? job.payload.model : undefined;
+    const cells = {
+      id: [job.id, theme.accent],
+      declaration: [job.declarationKey, theme.muted],
+      name: [job.displayName ?? job.name, theme.info],
+      schedule: [formatSchedule(job.schedule, job.trigger !== undefined), theme.info],
+      next: [job.enabled ? formatRelative(state.nextRunAtMs, now) : "-", theme.muted],
+      last: [formatRelative(state.lastRunAtMs, now), theme.muted],
+      status: [status.label, status.color],
+      target: [job.sessionTarget, job.sessionTarget === "main" ? theme.accent : theme.accentBright],
+      delivery: [
+        deliveryPreview ? `${deliveryPreview.label} (${deliveryPreview.detail})` : "-",
+        deliveryPreview ? theme.info : theme.muted,
+      ],
+      agent: [agentId ?? "unresolved", agentId ? theme.info : theme.muted],
+      owner: [job.owner?.sessionKey ?? job.owner?.agentId, job.owner ? theme.info : theme.muted],
+      model: [model, model ? theme.info : theme.muted],
+    } satisfies Record<(typeof CRON_COLUMNS)[number][0], [unknown, typeof theme.info]>;
+    const line = CRON_COLUMNS.map(([key, , width]) => {
+      const [value, color] = cells[key];
+      return colorize(rich, color, formatCell(value, width));
+    }).join(" ");
 
     lines.push(line.trimEnd());
   }

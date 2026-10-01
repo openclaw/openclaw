@@ -1,6 +1,14 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  asNullableObjectRecord,
+  asNullableRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readNonEmptyStringPreservingWhitespace,
+} from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
@@ -365,27 +373,21 @@ export async function loadCronStatus(
 }
 
 function addModelId(target: Set<string>, value: unknown) {
-  if (typeof value !== "string") {
-    return;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (trimmed) {
     target.add(trimmed);
   }
 }
 
 function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
-  if (!modelConfig) {
-    return;
-  }
   if (typeof modelConfig === "string") {
     addModelId(target, modelConfig);
     return;
   }
-  if (typeof modelConfig !== "object") {
+  const record = asNullableObjectRecord(modelConfig);
+  if (!record) {
     return;
   }
-  const record = modelConfig as Record<string, unknown>;
   addModelId(target, record.primary);
   addModelId(target, record.model);
   addModelId(target, record.id);
@@ -403,32 +405,20 @@ function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
 export function resolveConfiguredCronModelSuggestions(
   configForm: Record<string, unknown> | null | undefined,
 ): string[] {
-  if (!configForm || typeof configForm !== "object") {
-    return [];
-  }
-  const agents = configForm.agents;
-  if (!agents || typeof agents !== "object") {
+  const agents = asNullableObjectRecord(configForm?.agents);
+  if (!agents) {
     return [];
   }
   const out = new Set<string>();
-  const defaults = (agents as { defaults?: unknown }).defaults;
-  if (defaults && typeof defaults === "object") {
-    const defaultsRecord = defaults as Record<string, unknown>;
-    addModelConfigIds(out, defaultsRecord.model);
-    const defaultsModels = defaultsRecord.models;
-    if (defaultsModels && typeof defaultsModels === "object") {
-      for (const modelId of Object.keys(defaultsModels as Record<string, unknown>)) {
-        addModelId(out, modelId);
-      }
+  const defaults = asNullableObjectRecord(agents.defaults);
+  if (defaults) {
+    addModelConfigIds(out, defaults.model);
+    for (const modelId of Object.keys(asNullableObjectRecord(defaults.models) ?? {})) {
+      addModelId(out, modelId);
     }
   }
-  const entries = (agents as { entries?: unknown }).entries;
-  if (entries && typeof entries === "object" && !Array.isArray(entries)) {
-    for (const entry of Object.values(entries as Record<string, unknown>)) {
-      if (entry && typeof entry === "object") {
-        addModelConfigIds(out, (entry as Record<string, unknown>).model);
-      }
-    }
+  for (const entry of Object.values(asNullableRecord(agents.entries) ?? {})) {
+    addModelConfigIds(out, asNullableObjectRecord(entry)?.model);
   }
   return sortUniqueStrings([...out]);
 }
@@ -552,9 +542,6 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deleteAfterRun: job.deleteAfterRun ?? job.schedule.kind === "at",
     scheduleKind: job.schedule.kind,
     scheduleAt: "",
-    everyAmount: prev.everyAmount,
-    everyUnit: prev.everyUnit,
-    cronExpr: prev.cronExpr,
     cronTz: "",
     scheduleExact: false,
     staggerAmount: "",
@@ -742,15 +729,9 @@ type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
 
 // cron.add responds with either { created, job } or the bare job read view.
 function extractSavedCronJobId(response: unknown): string | null {
-  if (!response || typeof response !== "object") {
-    return null;
-  }
-  const container = "job" in response ? (response as { job?: unknown }).job : response;
-  if (!container || typeof container !== "object") {
-    return null;
-  }
-  const id = (container as { id?: unknown }).id;
-  return typeof id === "string" && id.length > 0 ? id : null;
+  const record = asNullableObjectRecord(response);
+  const container = record && "job" in record ? asNullableObjectRecord(record.job) : record;
+  return readNonEmptyStringPreservingWhitespace(container?.id) ?? null;
 }
 
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
@@ -870,9 +851,6 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     }
     if (payload) {
       job.payload = payload;
-    }
-    if (!job.name) {
-      throw new Error(t("cron.errors.nameRequiredShort"));
     }
     if (editingJob) {
       const editedJobId = editingJob.id;

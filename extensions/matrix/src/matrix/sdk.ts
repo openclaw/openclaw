@@ -556,9 +556,8 @@ export class MatrixClient extends MatrixClientVerification {
   async deleteOwnDevices(deviceIds: string[]): Promise<MatrixOwnDeviceDeleteResult> {
     const uniqueDeviceIds = uniqueStrings(normalizeStringEntries(deviceIds));
     const currentDeviceId = this.client.getDeviceId()?.trim() || null;
-    const protectedDeviceIds = uniqueDeviceIds.filter((deviceId) => deviceId === currentDeviceId);
-    if (protectedDeviceIds.length > 0) {
-      throw new Error(`Refusing to delete the current Matrix device: ${protectedDeviceIds[0]}`);
+    if (currentDeviceId !== null && uniqueDeviceIds.includes(currentDeviceId)) {
+      throw new Error(`Refusing to delete the current Matrix device: ${currentDeviceId}`);
     }
 
     const deleteWithAuth = async (authData?: Record<string, unknown>): Promise<void> => {
@@ -620,7 +619,6 @@ export class MatrixClient extends MatrixClientVerification {
 
   private emitMembershipForRoom(room: Room): void {
     emitMatrixMembershipForRoom({
-      client: this.client,
       emitter: this.emitter,
       room,
       selfUserId: this.client.getUserId() ?? this.selfUserId ?? "",

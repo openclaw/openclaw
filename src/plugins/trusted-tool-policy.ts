@@ -1,4 +1,3 @@
-// Resolves trusted tool policy for plugins from runtime config.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
@@ -77,26 +76,20 @@ function copyTrustedPolicyRegistrations(
   }
 }
 
-function readTrustedPolicyPluginId(registration: TrustedPolicyRegistration): string | undefined {
+function readTrustedPolicyPluginString(
+  registration: TrustedPolicyRegistration,
+  key: "pluginId" | "pluginName",
+): string | undefined {
   try {
-    const pluginId = registration.pluginId;
-    return typeof pluginId === "string" && pluginId.trim() ? pluginId.trim() : undefined;
+    const value = registration[key];
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
   } catch {
     return undefined;
   }
 }
 
 function trustedPolicyDiagnosticPluginId(registration: TrustedPolicyRegistration): string {
-  return readTrustedPolicyPluginId(registration) ?? "unknown-plugin";
-}
-
-function readTrustedPolicyPluginName(registration: TrustedPolicyRegistration): string | undefined {
-  try {
-    const pluginName = registration.pluginName;
-    return typeof pluginName === "string" && pluginName.trim() ? pluginName.trim() : undefined;
-  } catch {
-    return undefined;
-  }
+  return readTrustedPolicyPluginString(registration, "pluginId") ?? "unknown-plugin";
 }
 
 function readTrustedPolicy(registration: TrustedPolicyRegistration):
@@ -180,7 +173,7 @@ export function getTrustedToolPolicyDiagnosticEntries(
       id: readTrustedPolicyId(registration),
       pluginId: trustedPolicyDiagnosticPluginId(registration),
     };
-    const pluginName = readTrustedPolicyPluginName(registration);
+    const pluginName = readTrustedPolicyPluginString(registration, "pluginName");
     if (pluginName) {
       entry.pluginName = pluginName;
     }
@@ -258,16 +251,14 @@ export async function runTrustedToolPolicies(
     toolKind: ctxToolKind,
     toolInputKind: ctxToolInputKind,
   });
-  const buildEvent = (): PluginHookBeforeToolCallEvent => {
-    return {
-      ...eventWithoutDerivedPaths,
-      params: adjustedParams,
-      ...currentEventToolIdentity,
-      ...currentDerivedEvent,
-    };
-  };
+  const buildEvent = (params: Record<string, unknown>): PluginHookBeforeToolCallEvent => ({
+    ...eventWithoutDerivedPaths,
+    params,
+    ...currentEventToolIdentity,
+    ...currentDerivedEvent,
+  });
   for (const registration of policies) {
-    const pluginId = readTrustedPolicyPluginId(registration);
+    const pluginId = readTrustedPolicyPluginString(registration, "pluginId");
     if (!pluginId) {
       return trustedPolicyFailureResult(registration, "policy owner is unreadable");
     }
@@ -277,11 +268,10 @@ export async function runTrustedToolPolicies(
       // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
       getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) => {
         const normalizedNamespace = namespace.trim();
-        const cacheKey = pluginId;
-        if (!sessionExtensionStateCache.has(cacheKey)) {
+        if (!sessionExtensionStateCache.has(pluginId)) {
           const config = ctx.sessionKey ? resolveSessionConfig() : undefined;
           sessionExtensionStateCache.set(
-            cacheKey,
+            pluginId,
             config
               ? getPluginSessionExtensionStateSync({
                   cfg: config,
@@ -292,7 +282,7 @@ export async function runTrustedToolPolicies(
               : undefined,
           );
         }
-        const pluginState = sessionExtensionStateCache.get(cacheKey);
+        const pluginState = sessionExtensionStateCache.get(pluginId);
         if (!normalizedNamespace || !pluginState) {
           return undefined;
         }
@@ -313,7 +303,7 @@ export async function runTrustedToolPolicies(
 
     let decision: Awaited<ReturnType<PluginTrustedToolPolicyRegistration["evaluate"]>>;
     try {
-      decision = await policy.policy.evaluate(buildEvent(), policyCtx);
+      decision = await policy.policy.evaluate(buildEvent(adjustedParams), policyCtx);
     } catch {
       return trustedPolicyFailureResult(registration, "policy evaluation failed");
     }
@@ -341,15 +331,7 @@ export async function runTrustedToolPolicies(
       // approvals are remembered so later trusted policies can still inspect or
       // block the final call.
       if ("params" in decision && isPlainObject(decision.params)) {
-        const normalized = options?.normalizeEvent?.(
-          {
-            ...eventWithoutDerivedPaths,
-            params: decision.params,
-            ...currentEventToolIdentity,
-            ...currentDerivedEvent,
-          },
-          policyCtx,
-        );
+        const normalized = options?.normalizeEvent?.(buildEvent(decision.params), policyCtx);
         adjustedParams = normalized?.params ?? decision.params;
         if (normalized?.event) {
           currentEventToolIdentity = normalizeToolIdentity(normalized.event);

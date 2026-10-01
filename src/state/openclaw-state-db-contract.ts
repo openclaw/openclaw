@@ -4,6 +4,8 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
+// v20 fences possibly delivered cron completions across restart recovery.
+// v19 preserves original channel-owner authorization across recovery.
 // v18 binds shared GitHub publication to its original requesting authority.
 // v17 records one-use prepared worker capacity and node workspace ownership.
 // v16 makes Skill Workshop ownership directory-based instead of row-provenance-based.
@@ -18,13 +20,14 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 18;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 20;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
+  "user_profile_identities",
   "local_workspace_projections",
   "update_runs",
   "session_repository_workspaces",
@@ -41,6 +44,7 @@ export const FIRST_USE_STATE_TABLES = [
   "mcp_oauth_pending_authorizations",
   "node_worker_launch_containers",
   "node_worker_launch_cleanup",
+  "node_worker_launch_process_scopes",
   "node_worker_launches",
   "node_worker_prepared_workspaces",
   "node_worker_turns",
@@ -54,6 +58,8 @@ export const FIRST_USE_STATE_TABLES = [
   "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
+  "idx_user_profile_identities_profile_id",
+  "idx_user_profile_identities_authorization",
   "idx_update_runs_created",
   "idx_update_runs_active",
   "idx_github_repository_publication_shared_request",

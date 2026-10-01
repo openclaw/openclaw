@@ -46,19 +46,15 @@ export function formatBuildChipText(info: ControlUiBuildInfo): string | null {
   return `${branch}${commit}`;
 }
 
-function formatIdentityMenuBuildLabel(info: ControlUiBuildInfo): string | null {
+function formatNonReleaseGitIdentity(info: ControlUiBuildInfo): string | null {
+  if (info.release) {
+    return null;
+  }
   const compactBuild = formatBuildChipText(info);
   if (!compactBuild) {
     return null;
   }
   return info.branch && info.branch !== "main" ? compactBuild : `git@${compactBuild}`;
-}
-
-function formatNonReleaseGitIdentity(info: ControlUiBuildInfo): string | null {
-  if (info.release) {
-    return null;
-  }
-  return formatIdentityMenuBuildLabel(info);
 }
 
 export function formatSidebarBuildSubtitle(info: ControlUiBuildInfo): string | null {
@@ -84,37 +80,30 @@ export function formatSettingsBuildLabel(
   return [version, gitIdentity].filter((value): value is string => Boolean(value)).join(" · ");
 }
 
-function formatBuildCardDetails(info: ControlUiBuildInfo, gatewayVersion: string | null) {
-  const builtAtMs = info.builtAt ? Date.parse(info.builtAt) : Number.NaN;
-  return {
-    summary: info.version ? `v${info.version}` : null,
-    commit: info.commit?.slice(0, 12) ?? null,
-    builtAt: Number.isFinite(builtAtMs)
-      ? `${formatDateTimeMs(builtAtMs, {
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-          timeZone: "UTC",
-        })} UTC`
-      : null,
-    gatewayVersion,
-  };
-}
-
 export function renderSidebarServerDetails(
   info: ControlUiBuildInfo,
   gatewayVersion: string | null,
 ): TemplateResult {
-  const details = formatBuildCardDetails(info, gatewayVersion);
-  const commit = details.commit;
+  const commit = info.commit?.slice(0, 12) ?? null;
+  const builtAtMs = info.builtAt ? Date.parse(info.builtAt) : Number.NaN;
+  const builtAt = Number.isFinite(builtAtMs)
+    ? `${formatDateTimeMs(builtAtMs, {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "UTC",
+      })} UTC`
+    : null;
   const unavailable = t("aboutPage.unavailable");
   const copyLabel = t("aboutPage.copyCommit");
   return html`
     <div class="sidebar-hover-card__server-details">
-      <div class="sidebar-hover-card__summary">${details.summary || unavailable}</div>
+      <div class="sidebar-hover-card__summary">
+        ${info.version ? `v${info.version}` : unavailable}
+      </div>
       <dl class="sidebar-hover-card__metadata">
         <div class="sidebar-hover-card__metadata-row">
           <dt>${t("aboutPage.commit")}</dt>
@@ -141,13 +130,13 @@ export function renderSidebarServerDetails(
         </div>
         <div class="sidebar-hover-card__metadata-row">
           <dt>${t("aboutPage.built")}</dt>
-          <dd>${details.builtAt ?? unavailable}</dd>
+          <dd>${builtAt ?? unavailable}</dd>
         </div>
         <div class="sidebar-hover-card__metadata-row">
           <dt>${t("aboutPage.gateway")}</dt>
           <dd>
             ${
-              details.gatewayVersion
+              gatewayVersion
                 ? html`<span
                       class="sidebar-build-hover-card__gateway-state"
                       aria-hidden="true"
@@ -155,7 +144,7 @@ export function renderSidebarServerDetails(
                     ><span class="sr-only">${t("common.connected")}</span>`
                 : null
             }
-            ${details.gatewayVersion ?? unavailable}
+            ${gatewayVersion ?? unavailable}
           </dd>
         </div>
       </dl>

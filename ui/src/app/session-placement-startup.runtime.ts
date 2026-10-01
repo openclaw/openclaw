@@ -153,13 +153,6 @@ export default function createApplicationPlacementStartupRuntime(
     );
   };
 
-  const refreshAfterFailure = (entry: PlacementStartupEntry) => {
-    if (!isCurrent(entry) || entry.work.kind === "cancelled") {
-      return;
-    }
-    params.sessions.invalidate();
-  };
-
   const pauseEntry = (
     entry: PlacementStartupEntry,
     recovery: SessionPlacementRecovery,
@@ -182,6 +175,7 @@ export default function createApplicationPlacementStartupRuntime(
     let currentRecovery = recovery;
     void advanceSessionPlacementDraft({
       client: entry.scope.client,
+      describe: params.sessions.describe,
       recovery: currentRecovery,
       persistRecovery: entry.persistRecovery,
       cleanupOnCancellation: () => !entry.persistRecovery && entry.work.kind !== "paused",
@@ -254,7 +248,11 @@ export default function createApplicationPlacementStartupRuntime(
           pauseEntry(entry, currentRecovery, formatUiError(error));
         }
       })
-      .finally(() => refreshAfterFailure(entry));
+      .finally(() => {
+        if (isCurrent(entry) && entry.work.kind !== "cancelled") {
+          params.sessions.invalidate();
+        }
+      });
   };
 
   const start = (input: PlacementStartupInput) => {

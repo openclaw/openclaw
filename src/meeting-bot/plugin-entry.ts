@@ -250,149 +250,79 @@ export function createMeetingPluginEntryOptions<
           }),
         );
       }
-      const sendError = (
-        respond: GatewayRequestHandlerOptions["respond"],
-        error: unknown,
-        code: Parameters<typeof errorShape>[0] = ErrorCodes.UNAVAILABLE,
+      const registerGatewayMethod = (
+        method: string,
+        run: (request: GatewayRequestHandlerOptions) => Promise<unknown>,
       ) => {
-        const payload = { error: formatErrorMessage(error) };
-        respond(false, payload, errorShape(code, payload.error, { details: payload }));
+        api.registerGatewayMethod(`${options.gatewayMethodPrefix}.${method}`, async (request) => {
+          const { respond } = request;
+          try {
+            respond(true, await run(request));
+          } catch (error) {
+            const code = options.isInvalidRequest(error)
+              ? ErrorCodes.INVALID_REQUEST
+              : ErrorCodes.UNAVAILABLE;
+            const payload = { error: formatErrorMessage(error) };
+            respond(false, payload, errorShape(code, payload.error, { details: payload }));
+          }
+        });
       };
-      const sendRequestError = (respond: GatewayRequestHandlerOptions["respond"], error: unknown) =>
-        sendError(
-          respond,
-          error,
-          options.isInvalidRequest(error) ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-        );
 
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.join`,
-        async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            const raw = keepTrustedToolContext(asOptionalRecord(params) ?? {}, client);
-            respond(true, await (await ensureRuntime()).join(joinRequest(raw)));
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
+      registerGatewayMethod("join", async ({ params, client }) => {
+        const raw = keepTrustedToolContext(asOptionalRecord(params) ?? {}, client);
+        return await (await ensureRuntime()).join(joinRequest(raw));
+      });
+      registerGatewayMethod("leave", async ({ params, client }) => {
+        const raw = asOptionalRecord(params) ?? {};
+        const agentId = trustedToolAgentId(raw, client);
+        const sessionId = requireString(raw.sessionId, "sessionId");
+        const rt = await ensureRuntime();
+        return agentId && !rt.ownsSession(agentId, sessionId)
+          ? { found: false }
+          : await rt.leave(sessionId);
+      });
+      registerGatewayMethod("status", async ({ params, client }) => {
+        const raw = asOptionalRecord(params) ?? {};
+        const agentId = trustedToolAgentId(raw, client);
+        const rt = await ensureRuntime();
+        return agentId
+          ? await rt.statusForAgent(agentId, normalizeOptionalString(raw.sessionId))
+          : await rt.status(normalizeOptionalString(raw.sessionId));
+      });
+      registerGatewayMethod("transcript", async ({ params, client }) => {
+        const raw = asOptionalRecord(params) ?? {};
+        const sessionId = requireString(raw.sessionId, "sessionId");
+        const sinceIndex = readSinceIndex(raw);
+        const agentId = trustedToolAgentId(raw, client);
+        const rt = await ensureRuntime();
+        return agentId && !rt.ownsSession(agentId, sessionId)
+          ? { found: false }
+          : await rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex });
+      });
+      registerGatewayMethod("speak", async ({ params, client }) => {
+        const raw = asOptionalRecord(params) ?? {};
+        const sessionId = requireString(raw.sessionId, "sessionId");
+        const agentId = trustedToolAgentId(raw, client);
+        const rt = await ensureRuntime();
+        return agentId && !rt.ownsSession(agentId, sessionId)
+          ? { found: false, spoken: false }
+          : await rt.speak(sessionId, normalizeOptionalString(raw.message));
+      });
+      registerGatewayMethod(
+        "setup",
+        async ({ params }) =>
+          await (
+            await ensureRuntime()
+          ).setupStatus({
+            mode: normalizeMode(params?.mode),
+            transport: normalizeTransport(params?.transport),
+          }),
       );
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.leave`,
-        async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            const raw = asOptionalRecord(params) ?? {};
-            const agentId = trustedToolAgentId(raw, client);
-            const sessionId = requireString(raw.sessionId, "sessionId");
-            const rt = await ensureRuntime();
-            respond(
-              true,
-              agentId && !rt.ownsSession(agentId, sessionId)
-                ? { found: false }
-                : await rt.leave(sessionId),
-            );
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
-      );
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.status`,
-        async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            const raw = asOptionalRecord(params) ?? {};
-            const agentId = trustedToolAgentId(raw, client);
-            const rt = await ensureRuntime();
-            respond(
-              true,
-              agentId
-                ? await rt.statusForAgent(agentId, normalizeOptionalString(raw.sessionId))
-                : await rt.status(normalizeOptionalString(raw.sessionId)),
-            );
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
-      );
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.transcript`,
-        async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            const raw = asOptionalRecord(params) ?? {};
-            const sessionId = requireString(raw.sessionId, "sessionId");
-            const sinceIndex = readSinceIndex(raw);
-            const agentId = trustedToolAgentId(raw, client);
-            const rt = await ensureRuntime();
-            respond(
-              true,
-              agentId && !rt.ownsSession(agentId, sessionId)
-                ? { found: false }
-                : await rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex }),
-            );
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
-      );
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.speak`,
-        async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            const raw = asOptionalRecord(params) ?? {};
-            const sessionId = requireString(raw.sessionId, "sessionId");
-            const agentId = trustedToolAgentId(raw, client);
-            const rt = await ensureRuntime();
-            respond(
-              true,
-              agentId && !rt.ownsSession(agentId, sessionId)
-                ? { found: false, spoken: false }
-                : await rt.speak(sessionId, normalizeOptionalString(raw.message)),
-            );
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
-      );
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.setup`,
-        async ({ params, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            respond(
-              true,
-              await (
-                await ensureRuntime()
-              ).setupStatus({
-                mode: normalizeMode(params?.mode),
-                transport: normalizeTransport(params?.transport),
-              }),
-            );
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
-      );
-      for (const [method, run] of [
-        [
-          `${options.gatewayMethodPrefix}.testSpeech`,
-          (rt: Runtime, raw: Record<string, unknown>) =>
-            rt.testSpeech(joinRequest(raw, { allowTimeout: true })),
-        ],
-        [
-          `${options.gatewayMethodPrefix}.testListen`,
-          (rt: Runtime, raw: Record<string, unknown>) =>
-            rt.testListen(joinRequest(raw, { allowTimeout: true })),
-        ],
-      ] as const) {
-        api.registerGatewayMethod(
-          method,
-          async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-            try {
-              const raw = keepTrustedToolContext(asOptionalRecord(params) ?? {}, client);
-              respond(true, await run(await ensureRuntime(), raw));
-            } catch (error) {
-              sendRequestError(respond, error);
-            }
-          },
-        );
+      for (const method of ["testSpeech", "testListen"] as const) {
+        registerGatewayMethod(method, async ({ params, client }) => {
+          const raw = keepTrustedToolContext(asOptionalRecord(params) ?? {}, client);
+          return await (await ensureRuntime())[method](joinRequest(raw, { allowTimeout: true }));
+        });
       }
       api.registerTool(
         (toolContext) => ({

@@ -32,6 +32,7 @@ import type { OpenClawPluginApi } from "../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChannelManager } from "./server-channels.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
@@ -56,6 +57,8 @@ export async function createPluginReloadRecoveryFixture(
       record: ReturnType<typeof createPluginRecord>,
     ) => void;
     abortOnCandidateStart?: boolean;
+    waitForDrain?: boolean;
+    drainSignal?: AbortSignal;
     checkpoint?: Parameters<typeof reloadGatewayPlugins>[1]["checkpoint"];
     prepareAttached?: () => Promise<void>;
     initialStop?: () => Promise<void>;
@@ -211,7 +214,8 @@ export async function createPluginReloadRecoveryFixture(
   assert(metadataOwners === undefined || metadataOwners instanceof Set);
   const metadataOwnerSet: Set<unknown> | undefined = metadataOwners;
   const precedingMetadataOwners = new Set(metadataOwnerSet);
-  const metadata = retainGatewayPluginMetadata();
+  const scheduler = createTestGatewayScheduler();
+  const metadata = retainGatewayPluginMetadata(scheduler);
   const fixtureMetadataOwners = metadataOwnerSet
     ? [...metadataOwnerSet].filter((entry) => !precedingMetadataOwners.has(entry))
     : [];
@@ -223,6 +227,7 @@ export async function createPluginReloadRecoveryFixture(
     createPluginMetadataSnapshotFixture({ plugins: [{ id: "first" }, { id: "sibling" }] });
   metadata.publish(snapshot);
   const runtime = {
+    scheduler,
     requestEntryLifetime: new GatewayRequestEntryLifetime(),
     pluginMetadataSnapshot: snapshot,
     pluginRuntime: registryOwner,
@@ -249,6 +254,7 @@ export async function createPluginReloadRecoveryFixture(
     broadcast: vi.fn(),
   } as unknown as Parameters<typeof reloadGatewayPlugins>[0]["runtime"];
   cleanups.push(async () => {
+    await scheduler.stop();
     await currentServices?.stop().catch(() => {});
     await initial.stop().catch(() => {});
     const retirementFailure = await lifetime.stop().catch((error: unknown) => error);
@@ -295,7 +301,7 @@ export async function createPluginReloadRecoveryFixture(
           loadGatewayPluginBootstrapModule: async () => ({
             prepareGatewayPluginLoad: preparePlugins,
           }),
-          prepareAttachedPluginRuntime: async (candidate) => {
+          prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
             await options.prepareAttached?.();
             return {
               publish: () => {
@@ -306,6 +312,7 @@ export async function createPluginReloadRecoveryFixture(
                   "gateway-bindable",
                   undefined,
                   registryOwner.registry,
+                  trackActivationCleanup,
                 );
                 registryOwner.publish(candidate.pluginRegistry);
               },
@@ -318,9 +325,13 @@ export async function createPluginReloadRecoveryFixture(
           sourceConfig: nextConfig,
           changedPaths,
           checkpoint: options.checkpoint,
-          prepareConfigEffects: options.prepareConfigEffects ?? (() => rollbackConfigEffects),
+          prepareConfigEffects:
+            options.prepareConfigEffects ??
+            (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
           pluginLifecycle: {
             reason: "reload",
+            waitForDrain: options.waitForDrain,
+            drainSignal: options.drainSignal,
             operationId: "service-recovery",
             pluginIds,
           },
@@ -363,6 +374,7 @@ export type RecoveryFixtureFactory = (
 
 export function createRecoveryChannelManager(fixture: Awaited<ReturnType<RecoveryFixtureFactory>>) {
   return createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: fixture.getConfig,
     getPluginRegistry: () => fixture.registryOwner.registry,
     channelLogs: {},

@@ -4,6 +4,7 @@ import path from "node:path";
 import { vi, type Mock } from "vitest";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import { createSubagentPersistenceMock } from "./subagent-test-fixtures.test-helpers.js";
 import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 import { supportedSpawnModelChoice } from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
@@ -241,7 +242,12 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   vi.mocked(persistence.persistSubagentRunsToDiskOrThrow).mockImplementation(
     hoisted.notifyEventWaiters,
   );
-  vi.mocked(persistence.restoreSubagentRunsFromDisk).mockReturnValue(0);
+  vi.mocked(persistence.restoreSubagentRunsFromDisk).mockResolvedValue(0);
+  const persistenceMock = createSubagentPersistenceMock(persistence);
+  persistenceMock.onSubagentRegistryPersisted(hoisted.notifyEventWaiters);
+  vi.mocked(persistence.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
+    persistenceMock.persistSubagentRunsToDiskAsyncOrThrow,
+  );
   // Prepare the async announcement mock before lifecycle assertions start waiting.
   await import("./subagents/announce/subagent-announce.js");
   if (!cachedCreateSessionsSpawnTool) {
@@ -386,11 +392,6 @@ vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => {
       hoisted.state.runSubagentAnnounceFlowOverride(params),
   };
 });
-// Some tools import callGateway via "../../gateway/call.js" (from nested folders). Mock that too.
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
-}));
-
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.configOverride,
   resolveGatewayPort: () => 18789,
@@ -422,18 +423,6 @@ vi.mock("../config/sessions.js", async () => ({
   ) => {
     await mutator(hoisted.sessionStore);
   },
-}));
-
-vi.mock("../tasks/detached-task-runtime.js", () => ({
-  createQueuedTaskRun: vi.fn(() => ({})),
-  createRunningTaskRun: vi.fn(() => ({})),
-  findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
-}));
-
-vi.mock("../tasks/detached-task-runtime.async.js", () => ({
-  completeTaskRunByRunIdAsync: vi.fn(async () => []),
-  failTaskRunByRunIdAsync: vi.fn(async () => []),
-  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
 }));
 
 // Same module, different specifier (used by tools under src/agents/tools/*).

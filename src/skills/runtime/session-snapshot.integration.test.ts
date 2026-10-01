@@ -13,20 +13,28 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
+  afterEach(async () => {
+    try {
+      // Reclamation workers retain the original shared database until lease cleanup settles.
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      await closeStateDatabaseForTest();
+      cleanup();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   }),
 );
-afterEach(() => vi.unstubAllEnvs());
 
 async function fixture() {
   const root = temps.make("openclaw-async-skills-");
@@ -314,16 +322,21 @@ describe("asynchronous runtime skill preparation", () => {
   it("hydrates runtime paths without rewriting saved fields and reuses the complete snapshot", async () => {
     const params = await fixture();
     const { snapshot } = await resolveReusableWorkspaceSkillSnapshot(params);
-    const { resolvedSkills, ...saved } = snapshot;
+    const { resolvedSkills, discoverySkills, ...saved } = snapshot;
     saved.prompt = "Saved prompt bytes";
     const before = JSON.stringify(saved);
     Object.freeze(saved);
     const hydrated = (
       await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: saved })
     ).snapshot;
-    const { resolvedSkills: hydratedSkills, ...persisted } = hydrated;
+    const {
+      resolvedSkills: hydratedSkills,
+      discoverySkills: hydratedDiscovery,
+      ...persisted
+    } = hydrated;
     expect(JSON.stringify(persisted)).toBe(before);
     expect(hydratedSkills).toBe(resolvedSkills);
+    expect(hydratedDiscovery).toBe(discoverySkills);
     expect(hydrated.skills).toBe(saved.skills);
     expect(
       (await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: hydrated }))

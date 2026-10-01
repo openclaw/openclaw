@@ -15,7 +15,7 @@ import { prepareConfigFileWrite } from "./backup-rotation.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import {
   captureConfigFileWritePathProof,
-  createGuardedConfigFileSystem,
+  createConfigFileWriteGuard,
   rollbackConfigFileWriteIfUnchanged,
 } from "./io.write-safety.js";
 
@@ -146,13 +146,15 @@ function fixture() {
 }
 
 async function prepare(f: ReturnType<typeof fixture>, io: typeof fs = fs) {
-  const guarded = createGuardedConfigFileSystem(f.target, io, f.assertCurrent, f.options);
+  const guarded = createConfigFileWriteGuard(f.target, io, f.assertCurrent, f.options);
   const prepared = await prepareConfigFileWrite({
     configPath: f.target,
     previousRaw: original,
     content,
     fsModule: guarded.fileSystem,
     assertCurrent: guarded.assertCurrent,
+    assertBeforeMutation: guarded.assertBeforeMutation,
+    onDestinationState: guarded.onDestinationState,
     destinationHardlinks: "reject",
     durable: true,
   });

@@ -360,82 +360,6 @@ async function downloadAndSaveTelegramFile(params: {
   });
 }
 
-async function resolveStickerMedia(params: {
-  msg: TelegramMediaContext["message"];
-  ctx: TelegramMediaContext;
-  maxBytes: number;
-  token: string;
-  transport?: TelegramTransport;
-  apiRoot?: string;
-  trustedLocalFileRoots?: readonly string[];
-  dangerouslyAllowPrivateNetwork?: boolean;
-  abortSignal?: AbortSignal;
-}): Promise<(TelegramResolvedMedia & { path: string }) | null | undefined> {
-  const { msg, ctx, maxBytes, token, transport, abortSignal } = params;
-  if (!msg.sticker) {
-    return undefined;
-  }
-  const sticker = msg.sticker;
-  // Skip animated (TGS) and video (WEBM) stickers - only static WEBP supported
-  if (sticker.is_animated || sticker.is_video) {
-    logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
-    return null;
-  }
-  if (!sticker.file_id) {
-    return null;
-  }
-
-  const file = await resolveTelegramFileWithRetry(ctx, abortSignal);
-  if (!file.file_path) {
-    throw new Error("Telegram getFile returned no file_path for sticker");
-  }
-  const saved = await downloadAndSaveTelegramFile({
-    filePath: file.file_path,
-    token,
-    transport,
-    maxBytes,
-    apiRoot: params.apiRoot,
-    trustedLocalFileRoots: params.trustedLocalFileRoots,
-    dangerouslyAllowPrivateNetwork: params.dangerouslyAllowPrivateNetwork,
-    abortSignal,
-  });
-
-  // Check sticker cache for existing description
-  const cached = sticker.file_unique_id ? await getCachedSticker(sticker.file_unique_id) : null;
-  const fileId = sticker.file_id ?? cached?.fileId;
-  const emoji = sticker.emoji ?? cached?.emoji;
-  const setName = sticker.set_name ?? cached?.setName;
-  if (cached) {
-    logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
-    if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
-      // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
-      await cacheSticker({
-        ...cached,
-        fileId,
-        emoji,
-        setName,
-      });
-    }
-  }
-
-  return {
-    id: saved.id,
-    path: saved.path,
-    size: saved.size,
-    contentType: saved.contentType,
-    kind: "sticker",
-    fileUniqueId: sticker.file_unique_id,
-    savedAt: Date.now(),
-    stickerMetadata: {
-      emoji,
-      setName,
-      fileId,
-      fileUniqueId: sticker.file_unique_id,
-      ...(cached ? { cachedDescription: cached.description } : {}),
-    },
-  };
-}
-
 export async function resolveMedia(params: {
   ctx: TelegramMediaContext;
   maxBytes: number;
@@ -446,69 +370,61 @@ export async function resolveMedia(params: {
   dangerouslyAllowPrivateNetwork?: boolean;
   abortSignal?: AbortSignal;
 }): Promise<(TelegramResolvedMedia & { path: string; fileName?: string }) | null> {
-  const {
-    ctx,
-    maxBytes,
-    token,
-    transport,
-    apiRoot,
-    trustedLocalFileRoots,
-    dangerouslyAllowPrivateNetwork,
-    abortSignal,
-  } = params;
+  const { ctx, ...downloadOptions } = params;
   const msg = ctx.message;
-  const stickerResolved = await resolveStickerMedia({
-    msg,
-    ctx,
-    maxBytes,
-    token,
-    transport,
-    apiRoot,
-    trustedLocalFileRoots,
-    dangerouslyAllowPrivateNetwork,
-    abortSignal,
-  });
-  if (stickerResolved !== undefined) {
-    return stickerResolved;
-  }
-
-  const metadata = resolveMediaMetadata(msg);
-  const m = metadata.fileRef;
-  if (!m?.file_id) {
+  const sticker = msg.sticker;
+  if (sticker?.is_animated || sticker?.is_video) {
+    logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
     return null;
   }
-
-  const file = await resolveTelegramFileWithRetry(ctx, abortSignal);
+  const metadata = sticker
+    ? { fileRef: sticker, fileName: undefined, mimeType: undefined }
+    : resolveMediaMetadata(msg);
+  if (!metadata.fileRef?.file_id) {
+    return null;
+  }
+  const file = await resolveTelegramFileWithRetry(ctx, params.abortSignal);
   if (!file.file_path) {
-    throw new Error("Telegram getFile returned no file_path");
+    throw new Error(`Telegram getFile returned no file_path${sticker ? " for sticker" : ""}`);
   }
   const saved = await downloadAndSaveTelegramFile({
+    ...downloadOptions,
     filePath: file.file_path,
-    token,
-    transport,
-    maxBytes,
     telegramFileName: metadata.fileName,
     mimeType: metadata.mimeType,
-    apiRoot,
-    trustedLocalFileRoots,
-    dangerouslyAllowPrivateNetwork,
-    abortSignal,
   });
-  const nativeKind = resolveTelegramPrimaryMedia(msg)?.kind ?? "document";
-  const kind =
-    nativeKind === "sticker"
-      ? nativeKind
-      : saved.contentType?.startsWith("audio/")
-        ? "audio"
-        : nativeKind;
+  let stickerMetadata: TelegramResolvedMedia["stickerMetadata"];
+  if (sticker) {
+    const cached = sticker.file_unique_id ? await getCachedSticker(sticker.file_unique_id) : null;
+    const fileId = sticker.file_id ?? cached?.fileId;
+    const emoji = sticker.emoji ?? cached?.emoji;
+    const setName = sticker.set_name ?? cached?.setName;
+    if (cached) {
+      logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
+      if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
+        // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
+        await cacheSticker({ ...cached, fileId, emoji, setName });
+      }
+    }
+    stickerMetadata = {
+      emoji,
+      setName,
+      fileId,
+      fileUniqueId: sticker.file_unique_id,
+      ...(cached ? { cachedDescription: cached.description } : {}),
+    };
+  }
+  const nativeKind = sticker ? "sticker" : (resolveTelegramPrimaryMedia(msg)?.kind ?? "document");
   return {
     id: saved.id,
     path: saved.path,
     size: saved.size,
     contentType: saved.contentType,
     ...(metadata.fileName ? { fileName: metadata.fileName } : {}),
-    kind,
-    fileUniqueId: m.file_unique_id,
+    kind:
+      nativeKind !== "sticker" && saved.contentType?.startsWith("audio/") ? "audio" : nativeKind,
+    fileUniqueId: metadata.fileRef.file_unique_id,
     savedAt: Date.now(),
+    ...(stickerMetadata ? { stickerMetadata } : {}),
   };
 }

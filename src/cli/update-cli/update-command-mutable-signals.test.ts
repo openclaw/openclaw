@@ -13,11 +13,12 @@ import {
 } from "../../../test/helpers/managed-handoff-isolation.js";
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../../infra/state-database-coordinator.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { getUpdateRun, type createUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { mutableCompensationFixtureSource } from "./update-command-mutable-signals-compensation.test-support.js";
 
 const sourceImportArgs = resolveRuntimeWorkerUrl(
   updateExecutorNativeEntrypoints.executor,
@@ -31,6 +32,12 @@ afterEach(() => lifetime.cleanup());
 it.skipIf(process.platform === "win32").for([
   { signal: "SIGINT", mode: "fresh" },
   { signal: "SIGTERM", mode: "fresh" },
+  { signal: "SIGINT", mode: "queued-progress" },
+  { signal: "SIGINT", mode: "refused-progress" },
+  { signal: "SIGINT", mode: "uncertain-progress" },
+  { signal: "SIGINT", mode: "accepted-compensation" },
+  { signal: "SIGINT", mode: "uncertain-compensation" },
+  { signal: "SIGINT", mode: "sealed-compensation" },
   { signal: "SIGINT", mode: "inherited" },
   { signal: "SIGINT", mode: "handoff" },
   { signal: "SIGINT", mode: "pending" },
@@ -47,6 +54,8 @@ it.skipIf(process.platform === "win32").for([
     lifetime.run(async () => {
       try {
         const root = dirs.make("update-owned-signal-");
+        const stateDir = mode.endsWith("-compensation") ? path.join(root, ".openclaw") : root;
+        const configPath = path.join(stateDir, "openclaw.json");
         const control = path.join(root, "control");
         fs.mkdirSync(control, { mode: 0o700 });
         const binding = createManagedHandoffTestBinding(control);
@@ -59,7 +68,12 @@ it.skipIf(process.platform === "win32").for([
     import { createRequire, syncBuiltinESMExports } from 'node:module';
     import path from 'node:path';
     import { fileURLToPath } from 'node:url';
+    import { Worker } from 'node:worker_threads';
+    import { deserialize } from 'node:v8';
     const root = ${JSON.stringify(root)};
+    const stateDir = ${JSON.stringify(stateDir)};
+    const configPath = ${JSON.stringify(configPath)};
+    const mode = ${JSON.stringify(mode)};
     const sqlite = createRequire(import.meta.url)('node:sqlite');
     const NativeDatabase = sqlite.DatabaseSync;
     const GuardedDatabase = new Proxy(NativeDatabase, { construct(target, args, newTarget) {
@@ -74,8 +88,7 @@ it.skipIf(process.platform === "win32").for([
     }});
     sqlite.DatabaseSync = GuardedDatabase;
     syncBuiltinESMExports();
-    const { withStateDatabaseCoordinatorRuntimeDirectory } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.coordinator).href)});
-    await withStateDatabaseCoordinatorRuntimeDirectory(${JSON.stringify(control)}, async () => {
+    ${mutableCompensationFixtureSource()}
     const { resolveManagedUpdateLeaseDatabasePath, createManagedHandoffLeaseStore } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.handoffLease).href)});
     const databasePath = resolveManagedUpdateLeaseDatabasePath();
     assert.equal(databasePath, ${JSON.stringify(binding.databasePath)}, 'private handoff binding missing before admission');
@@ -84,10 +97,13 @@ it.skipIf(process.platform === "win32").for([
     const { closeOpenClawStateDatabaseForTest } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)});
     const { admitUpdateCommandRun, createUpdateRunProgress, withUpdatePreviewSignals } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)});
     const { withUpdateCommandExecutor, captureUpdateCommandExecutorAuthority } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)});
-    const mode = ${JSON.stringify(mode)};
+    const { recordUpdateRunStepAsync } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.candidateStepWriter).href)});
+    const { createUpdateCommandExecutionGuards } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executionGuards).href)});
+    const { registerSignalExitBarrier } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.signalExitBarrier).href)});
     const opts = {};
     if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
     const run = await admitUpdateCommandRun({opts, root});
+    const currentOptions = {...opts, run};
     let executorDatabasePath;
     const enter = async (executor) => {
       run.executorFence = await executor.enter(root);
@@ -96,12 +112,12 @@ it.skipIf(process.platform === "win32").for([
       const current = createManagedHandoffLeaseStore().read(root);
       assert.equal(current.kind, 'current');
     };
-    await withUpdatePreviewSignals({...opts, run}, async () => {
+    const operate = async () => {
       const sibling = createUpdateRun({trigger:'cli'});
       const hold = async () => {
         recordUpdateRunPhase(run.runId, 'validating');
         if (mode === 'handoff') process.env.OPENCLAW_UPDATE_RUN_HANDOFF = '1';
-        if (mode === 'activating') recordUpdateRunPhase(run.runId, 'activating');
+        if (mode === 'activating' || compensationFixture) recordUpdateRunPhase(run.runId, 'activating');
         if (mode === 'completed') finishUpdateRun(run.runId, {status:'skipped',reason:'already-current'});
         if (mode === 'pending' || mode === 'missing') {
           const from = {root,nodePath:process.execPath,version:'1.0.0',buildId:null};
@@ -121,26 +137,96 @@ it.skipIf(process.platform === "win32").for([
           fs.mkdirSync(root + '/state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0');
           fs.renameSync(root + '/state/openclaw.sqlite',root + '/state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0/displaced');
         }
-        process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
         process.channel.ref();
+        if (compensationFixture) {
+          await compensationFixture({run,currentOptions,ready:()=>process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath})});
+          return;
+        }
+        if (['queued-progress', 'refused-progress', 'uncertain-progress'].includes(mode)) {
+          const guards = createUpdateCommandExecutionGuards(currentOptions, root);
+          await recordUpdateRunStepAsync(run.runId, {step:'warm-worker',status:'completed'}, guards.captureWriteOptions());
+          const locked = new NativeDatabase(root + '/state/openclaw.sqlite');
+          locked.exec('BEGIN IMMEDIATE');
+          const receiptAbort = new AbortController();
+          let receiptWorker;
+          process.once('message', () => {
+            if (mode === 'uncertain-progress') {
+              // Exercise the broker's real failure/retirement path after native dispatch.
+              // Missing outcome evidence stays unknown even after this worker exits.
+              receiptWorker.emit('error', new Error('fixture SQLite worker transport failure'));
+            } else if (mode === 'refused-progress') {
+              receiptAbort.abort(new Error('fixture-step-refused'));
+            }
+            locked.exec('ROLLBACK');
+            locked.close();
+          });
+          const post = Worker.prototype.postMessage;
+          Worker.prototype.postMessage = function(request, ...args) {
+            const result = Reflect.apply(post, this, [request, ...args]);
+            if (request.type === 'execute' && deserialize(request.input).type === 'updateRuns.recordStep') {
+              Worker.prototype.postMessage = post;
+              receiptWorker = this;
+              process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
+            }
+            return result;
+          };
+          process.once('SIGINT', () => {
+            void Promise.resolve().then(() => recordUpdateRunStepAsync(
+              run.runId, {step:'late-progress',status:'in_progress'}, guards.captureWriteOptions(),
+            )).then(
+              () => process.send({lateBlocked:false}),
+              () => process.send({lateBlocked:true}),
+            );
+          });
+          let observed;
+          const checked = new Promise(resolve => {observed=resolve;});
+          const releaseObservation = registerSignalExitBarrier(async () => {await checked;});
+          try {
+            try {
+              await recordUpdateRunStepAsync(run.runId, {step:'queued-progress',status:'in_progress'}, {
+                ...guards.captureWriteOptions(), signal: receiptAbort.signal,
+              });
+            } catch (error) {
+              await new Promise((resolve,reject) => process.send({receiptFailure:error.code ?? error.message}, sendError => sendError ? reject(sendError) : resolve()));
+              throw error;
+            }
+            let forwardBlocked = false;
+            try {
+              guards.assertCurrent();
+              fs.writeFileSync(root + '/unexpected-canary-child', 'launched');
+            } catch {
+              forwardBlocked = true;
+            }
+            await new Promise((resolve,reject) => process.send({forwardBlocked}, error => error ? reject(error) : resolve()));
+          } finally {
+            observed();
+            releaseObservation();
+          }
+          return;
+        }
+        process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
         await new Promise(() => {});
       };
       if (mode === 'lost') {
         await withUpdateCommandExecutor(run.runId, async (executor) => {await enter(executor);});
-        await hold();
+        await withUpdatePreviewSignals(currentOptions, hold);
       } else if (mode === 'no-owner') {
-        await hold();
+        await withUpdatePreviewSignals(currentOptions, hold);
       } else {
-        await withUpdateCommandExecutor(run.runId, async (executor) => {await enter(executor);await hold();});
+        await withUpdateCommandExecutor(run.runId, async (executor) => {
+          await enter(executor);
+          await withUpdatePreviewSignals(currentOptions, hold);
+        });
       }
-    });
-    });
+    };
+    await operate();
   `,
         );
         const child = spawn(
-          process.execPath,
+          resolveTestNodeExecPath(),
           [
-            ...(process.versions.bun ? [] : resolveVitestNodeArgs()),
+            ...resolveVitestNodeArgs(),
+            ...(mode.endsWith("-compensation") ? ["--experimental-test-module-mocks"] : []),
             ...sourceImportArgs,
             binding.nodeOption,
             script,
@@ -155,8 +241,11 @@ it.skipIf(process.platform === "win32").for([
               TMPDIR: root,
               TMP: root,
               TEMP: root,
-              OPENCLAW_STATE_DIR: root,
-              OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+              OPENCLAW_STATE_DIR: stateDir,
+              OPENCLAW_CONFIG_PATH: configPath,
+              ...(mode.endsWith("-compensation")
+                ? { OPENCLAW_HOME: undefined, OPENCLAW_PROFILE: undefined }
+                : {}),
               OPENCLAW_SUPERVISOR_MODE: "external",
               OPENCLAW_UPDATE_RUN_ID: undefined,
               OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
@@ -169,6 +258,13 @@ it.skipIf(process.platform === "win32").for([
         child.stderr?.on("data", (chunk) => {
           stderr += chunk;
         });
+        // The fixture is removed before Vitest renders failures; retain diagnostics without
+        // inviting its stack parser to source-map the already-retired generated script.
+        const childDiagnostics = () =>
+          stderr
+            .split("\n")
+            .filter((line) => !line.includes(script))
+            .join("\n");
         let spawnError: Error | undefined;
         child.once("error", (error) => {
           spawnError = error;
@@ -198,7 +294,7 @@ it.skipIf(process.platform === "win32").for([
                 },
             ),
             closed.then(() => {
-              throw new Error(`Update process exited before ready: ${stderr}`, {
+              throw new Error(`Update process exited before ready: ${childDiagnostics()}`, {
                 cause: spawnError,
               });
             }),
@@ -218,7 +314,60 @@ it.skipIf(process.platform === "win32").for([
           if (mode !== "no-owner") {
             expect(message.executorDatabasePath).toBe(binding.databasePath);
           }
+          const receiptMode =
+            mode === "queued-progress" ||
+            mode === "refused-progress" ||
+            mode === "uncertain-progress";
+          const compensationMode = mode.endsWith("-compensation");
+          const interrupted = receiptMode || compensationMode ? once(child, "message") : undefined;
           expect(child.kill(signal)).toBe(true);
+          if (interrupted && compensationMode) {
+            const [observed] = await Promise.race([
+              interrupted,
+              closed.then(() => {
+                throw new Error(
+                  `Update exited before observing compensation: ${childDiagnostics()}`,
+                );
+              }),
+            ]);
+            expect(observed).toEqual(
+              mode === "sealed-compensation"
+                ? { compensationRefused: true }
+                : { compensationReceipt: true },
+            );
+            expect(fs.existsSync(path.join(root, "compensation-native-stop"))).toBe(false);
+            if (mode !== "sealed-compensation") {
+              child.send("release");
+            }
+          } else if (interrupted) {
+            const [observed] = await Promise.race([
+              interrupted,
+              closed.then(() => {
+                throw new Error(
+                  `Update exited before its pending writer drained: ${childDiagnostics()}`,
+                );
+              }),
+            ]);
+            expect(observed).toEqual({ lateBlocked: true });
+            const forward = once(child, "message");
+            child.send("release");
+            const [continuation] = await Promise.race([
+              forward,
+              closed.then(() => {
+                throw new Error(
+                  `Update exited before checking forward authority: ${childDiagnostics()}`,
+                );
+              }),
+            ]);
+            expect(continuation).toEqual(
+              mode === "uncertain-progress"
+                ? { receiptFailure: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" }
+                : mode === "refused-progress"
+                  ? { receiptFailure: "fixture-step-refused" }
+                  : { forwardBlocked: true },
+            );
+            expect(fs.existsSync(path.join(root, "unexpected-canary-child"))).toBe(false);
+          }
           const [code, exitSignal] = await closed;
           expect(code ?? (exitSignal === "SIGINT" ? 130 : 143)).toBe(
             signal === "SIGINT" ? 130 : 143,
@@ -253,21 +402,67 @@ it.skipIf(process.platform === "win32").for([
                     "displaced",
                   ),
                 }
-              : { env: { OPENCLAW_STATE_DIR: root } };
-          const readRun = (runId: string) =>
-            withStateDatabaseCoordinatorRuntimeDirectory(control, () =>
-              getUpdateRun(runId, options),
-            );
+              : { env: { OPENCLAW_STATE_DIR: stateDir } };
+          const readRun = (runId: string) => getUpdateRun(runId, options);
           const actual = readRun(message.runId);
-          if (mode === "fresh") {
+          if (compensationMode) {
+            const admitted = mode !== "sealed-compensation";
+            const completed = mode === "accepted-compensation";
+            expect(fs.existsSync(path.join(root, "compensation-signal-snapshot"))).toBe(true);
+            expect(fs.existsSync(path.join(root, "compensation-rollback-entered"))).toBe(admitted);
+            expect(fs.existsSync(path.join(root, "compensation-phase-dispatched"))).toBe(admitted);
+            expect(fs.existsSync(path.join(root, "compensation-native-stop"))).toBe(completed);
+            expect(fs.existsSync(path.join(root, "compensation-package-rollback"))).toBe(completed);
+            if (mode === "uncertain-compensation") {
+              expect(fs.existsSync(path.join(root, "compensation-uncertainty-observed"))).toBe(
+                true,
+              );
+              expect(actual).toMatchObject({
+                status: "running",
+                phase: "activating",
+                reason: null,
+                finishedAtMs: null,
+              });
+              expect(stderr).toContain(
+                "Update interruption could not be recorded; history remains pending.",
+              );
+              expect(stderr).toContain("Update signal cleanup did not complete.");
+            }
+          } else if (mode === "uncertain-progress") {
+            expect(actual).toMatchObject({
+              status: "running",
+              phase: "validating",
+              reason: null,
+              finishedAtMs: null,
+            });
+            expect(stderr).toContain(
+              "Update interruption could not be recorded; history remains pending.",
+            );
+            expect(stderr).toContain("Update signal cleanup did not complete.");
+          } else if (
+            mode === "fresh" ||
+            mode === "queued-progress" ||
+            mode === "refused-progress"
+          ) {
             expect(actual).toMatchObject({
               status: "failed",
               phase: "finished",
               reason: "interrupted",
             });
             expect(actual?.steps.some((step) => step.status === "in_progress")).toBe(false);
+            if (mode === "queued-progress") {
+              expect(actual?.steps).toContainEqual(
+                expect.objectContaining({ step: "queued-progress" }),
+              );
+            } else if (mode === "refused-progress") {
+              expect(actual?.steps.some((step) => step.step === "queued-progress")).toBe(false);
+              expect(stderr).not.toContain("Update signal cleanup did not complete.");
+            }
           } else {
             expect(actual).toEqual(message.expected);
+          }
+          if (receiptMode) {
+            expect(actual?.steps.some((step) => step.step === "late-progress")).toBe(false);
           }
           expect(readRun(message.sibling.runId)).toEqual(message.sibling);
           if (mode === "missing") {

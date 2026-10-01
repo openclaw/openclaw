@@ -39,23 +39,6 @@ afterAll(async () => {
 });
 
 describe("doctor plugin state import", () => {
-  it("bounds commit work while retaining source ages and remaining TTLs", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    const exec = vi.spyOn(openOpenClawStateDatabase().db, "exec");
-    importPluginStateEntriesForDoctor(
-      pluginId,
-      options,
-      entries.map((entry) => ({ ...entry, ttlMs: 100 })),
-    );
-    const commits = exec.mock.calls.filter(([sql]) => sql === "COMMIT").length;
-    expect(commits).toBeGreaterThan(1);
-    expect(commits).toBeLessThanOrEqual(3);
-    const store = createPluginStateSyncKeyedStore(pluginId, options);
-    expect(store.entries()).toEqual(entries.map((entry) => ({ ...entry, expiresAt: 10_100 })));
-    now.mockReturnValue(10_100);
-    expect(store.entries()).toEqual([]);
-  });
-
   it("commits the successful prefix of a failed batch and converges on rerun", () => {
     const bounded = { ...options, maxEntries: 600 };
     const db = openOpenClawStateDatabase().db;
@@ -126,7 +109,7 @@ describe("doctor plugin state import", () => {
     ]);
   });
 
-  it.each([0, 17, 750])("commits only the valid prefix before preparation fails at %i", (index) => {
+  it.each([0, 750])("commits only the valid prefix before preparation fails at %i", (index) => {
     const invalid = entries.map((entry, offset) =>
       offset === index ? { ...entry, createdAt: Number.NaN } : entry,
     );

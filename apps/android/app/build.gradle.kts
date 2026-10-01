@@ -1,12 +1,42 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
 import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.PathSensitivity
+import org.gradle.process.ExecOperations
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Properties
 import java.util.zip.ZipFile
+import javax.inject.Inject
+
+@CacheableTask
+abstract class GenerateNativeI18n
+  @Inject
+  constructor(
+    private val execOperations: ExecOperations,
+  ) : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sourceFiles: ConfigurableFileCollection
+
+    @get:Internal
+    abstract val repositoryDirectory: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val kotlinDirectory: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val resourceDirectory: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+      execOperations.exec {
+        workingDir(repositoryDirectory.get().asFile)
+        commandLine("node", "scripts/android-app-i18n.ts", "generate")
+      }
+    }
+  }
 
 abstract class ExtractCloudflareSodium : DefaultTask() {
   @get:InputFile
@@ -56,20 +86,18 @@ abstract class ExtractCloudflareSodium : DefaultTask() {
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
-val openClawMobileCutterInstruction =
-  "Run scripts/mobile-release-version.ts --prepare, capture the iOS release plan, then run --finalize."
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
-      error("Missing Android version properties. $openClawMobileCutterInstruction")
+      error("Missing Android version properties. Run `pnpm android:version:sync`.")
     }
     openClawAndroidVersionFile.inputStream().use(::load)
   }
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
-  openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
-    ?: error("Missing $name in Config/Version.properties. $openClawMobileCutterInstruction")
+  (providers.gradleProperty(name).orNull ?: openClawAndroidVersionProperties.getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }
+    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
 
 val openClawAndroidVersionName = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_NAME")
 val openClawAndroidVersionCode =
@@ -212,8 +240,47 @@ val extractCloudflareSodiumTest =
     entries.set(mapOf("runtimes/$runtime/native/$upstreamFilename" to filename))
     outputDirectory.set(layout.buildDirectory.dir("generated/cloudflare-sodium/test-$runtime"))
   }
+val generateNativeI18n =
+  tasks.register<GenerateNativeI18n>("generateNativeI18n") {
+    val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
+    repositoryDirectory.set(repositoryRoot)
+    sourceFiles.from(
+      listOf(
+        "scripts/android-app-i18n.ts",
+        "scripts/native-i18n-locales.ts",
+        "scripts/lib/direct-run.mjs",
+        "packages/normalization-core/src/expect.ts",
+        "apps/.i18n/native-source.json",
+        "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+      ).map(repositoryRoot::resolve),
+      fileTree(repositoryRoot.resolve("apps/android")) {
+        include(
+          "app/src/main/res/values/strings.xml",
+          "app/src/main/res/values/assistant.xml",
+          "app/src/thirdParty/res/values/accessibility_strings.xml",
+          "wear/src/main/res/values/strings.xml",
+        )
+      },
+      fileTree(repositoryRoot.resolve("apps/.i18n/native")) { include("*.json") },
+      listOf(
+        "apps/android/app/src/main/java",
+        "apps/android/app/src/play/java",
+        "apps/android/app/src/thirdParty/java",
+        "apps/android/wear/src/main/java",
+      ).map { relativePath ->
+        fileTree(repositoryRoot.resolve(relativePath)) {
+          include("**/*.kt")
+          exclude("**/NativeStringResources.kt")
+        }
+      },
+    )
+    kotlinDirectory.set(layout.projectDirectory.dir("build/generated/native-i18n/kotlin"))
+    resourceDirectory.set(layout.projectDirectory.dir("build/generated/native-i18n/res"))
+  }
 androidComponents.onVariants { variant ->
   variant.sources.jniLibs?.addGeneratedSourceDirectory(extractCloudflareSodium, ExtractCloudflareSodium::outputDirectory)
+  variant.sources.kotlin?.addGeneratedSourceDirectory(generateNativeI18n, GenerateNativeI18n::kotlinDirectory)
+  variant.sources.res?.addGeneratedSourceDirectory(generateNativeI18n, GenerateNativeI18n::resourceDirectory)
 }
 
 ksp {
@@ -249,7 +316,6 @@ android {
 
   defaultConfig {
     applicationId = openClawAndroidApplicationId
-    resValue("string", "application_id", openClawAndroidApplicationId)
     minSdk = 31
     targetSdk = 36
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -291,7 +357,6 @@ android {
     debug {
       applicationIdSuffix = ".debug"
       versionNameSuffix = "-debug"
-      resValue("string", "application_id", "$openClawAndroidApplicationId.debug")
       isMinifyEnabled = false
     }
   }
@@ -307,7 +372,6 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
-    resValues = true
   }
 
   androidResources {
@@ -503,6 +567,8 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
+  // This platform fixture is loaded by Robolectric, not by JUnit's unsandboxed test discovery.
+  exclude("**/ControlUiAuthWebViewShadow.class")
   if (sodiumTestHost != null) {
     dependsOn(extractCloudflareSodiumTest)
     val nativeDirectory = extractCloudflareSodiumTest.flatMap { it.outputDirectory }

@@ -200,6 +200,9 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       model: asProviderRuntimeModel(overrides.model) ?? model,
       resolvedTransport: overrides.resolvedTransport ?? transport,
       providerRuntimeHandle: providerRuntimeHandleForPlugins,
+      auth: auth.selectedAuthMode
+        ? { mode: auth.selectedAuthMode, authFlow: auth.selectedAuthFlow }
+        : undefined,
     });
   let memoizedTranscriptPolicy: ReturnType<typeof resolveTranscriptRuntimePolicy> | undefined;
   let memoizedTransportExtraParams: ReturnType<typeof resolveTransportExtraParams> | undefined;
@@ -281,13 +284,9 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       resolveExtraParams: resolveTransportExtraParams,
     },
     observability: {
+      ...resolvedRef,
       resolvedRef: `${params.provider}/${params.modelId}`,
-      provider: params.provider,
-      modelId: params.modelId,
-      ...(modelApi ? { modelApi } : {}),
-      ...(params.harnessId ? { harnessId: params.harnessId } : {}),
       ...(auth.forwardedAuthProfileId ? { authProfileId: auth.forwardedAuthProfileId } : {}),
-      ...(transport ? { transport } : {}),
     },
   };
 }

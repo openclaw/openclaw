@@ -90,12 +90,7 @@ function sanitizeBoundedId(value: string | undefined, policy: BoundedIdPolicy): 
 
 function findHeader(headers: Record<string, string>, target: string): string | undefined {
   const normalizedTarget = target.toLowerCase();
-  for (const [name, value] of Object.entries(headers)) {
-    if (name.toLowerCase() === normalizedTarget) {
-      return value;
-    }
-  }
-  return undefined;
+  return Object.entries(headers).find(([name]) => name.toLowerCase() === normalizedTarget)?.[1];
 }
 
 function setHeaderDefault(
@@ -132,7 +127,9 @@ function withClawRouterHeaders(
   return next;
 }
 
-function createClawRouterStreamWrapper(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+export function wrapClawRouterProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
   const underlying = ctx.streamFn;
   if (!underlying) {
     return undefined;
@@ -156,10 +153,4 @@ function createClawRouterStreamWrapper(ctx: ProviderWrapStreamFnContext): Stream
       options,
     );
   };
-}
-
-export function wrapClawRouterProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-): StreamFn | undefined {
-  return createClawRouterStreamWrapper(ctx);
 }

@@ -100,7 +100,7 @@ vi.mock("./runtime-plan/resolve-auth.js", () => ({
   }),
 }));
 vi.mock("./cli-runner.runtime.js", () => ({ runCliAgent: isolatedCompletionMocks.runCliAgent }));
-vi.mock("../infra/private-temp-workspace.js", () => ({
+vi.mock("@openclaw/fs-safe/temp", () => ({
   withTempWorkspace: async (_options: unknown, run: (value: { dir: string }) => unknown) =>
     await run({ dir: "/tmp/isolated" }),
 }));

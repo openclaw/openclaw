@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
@@ -11,10 +12,15 @@ import {
 import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 
-export { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
-
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
+
+export const TIME_LABELS: Record<ActivityTimeFilter, string> = {
+  "24h": "activityFeed.time24h",
+  "7d": "activityFeed.time7d",
+  "30d": "activityFeed.time30d",
+  all: "activityFeed.timeAll",
+};
 
 export type SessionActivityFilters = {
   personId: string | null;
@@ -40,15 +46,6 @@ type SessionActivityProjection = {
 
 const DEFAULT_ACTIVITY_TIME_FILTER: ActivityTimeFilter = "7d";
 
-function isActivityTimeFilter(value: string | null): value is ActivityTimeFilter {
-  return value === "24h" || value === "7d" || value === "30d" || value === "all";
-}
-
-function normalized(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 export function parseSessionActivityFilters(
   search: string,
   pathPersonId?: string | null,
@@ -56,9 +53,9 @@ export function parseSessionActivityFilters(
   const params = new URLSearchParams(search);
   const rawTime = params.get("time");
   return {
-    personId: pathPersonId ?? normalized(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
+    personId: pathPersonId ?? normalizeOptionalString(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
     query: params.get("q")?.trim() ?? "",
-    time: isActivityTimeFilter(rawTime) ? rawTime : DEFAULT_ACTIVITY_TIME_FILTER,
+    time: ACTIVITY_TIME_FILTERS.find((time) => time === rawTime) ?? DEFAULT_ACTIVITY_TIME_FILTER,
   };
 }
 
@@ -120,13 +117,13 @@ function compareSessionActivity(a: GatewaySessionRow, b: GatewaySessionRow): num
 
 export function sessionActivityOwner(row: GatewaySessionRow): PresenceViewer {
   const actor = row.owner?.actor ?? row.createdActor;
-  const agentId = normalized(row.agentId);
+  const agentId = normalizeOptionalString(row.agentId);
   const { resourceBasePath } = readAvatarGatewayContext();
   return {
-    id: normalized(actor?.id) ?? agentId ?? "system",
-    name: normalized(actor?.label) ?? agentId,
+    id: normalizeOptionalString(actor?.id) ?? agentId ?? "system",
+    name: normalizeOptionalString(actor?.label) ?? agentId,
     avatarUrl: actor
-      ? normalized(actor.avatarUrl)
+      ? normalizeOptionalString(actor.avatarUrl)
       : agentId
         ? buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)
         : undefined,
@@ -142,8 +139,7 @@ function dayKey(timestamp: number): string {
 }
 
 function dayStart(timestamp: number): number {
-  const date = new Date(timestamp);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return new Date(timestamp).setHours(0, 0, 0, 0);
 }
 
 export function projectSessionActivity(

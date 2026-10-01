@@ -16,7 +16,7 @@ import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
 import {
   collectCategorizedChildRootRows,
   collectSidebarSessionRowsByKey,
-  someSidebarSessionInTree,
+  findSidebarSessionInTree,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
 import {
@@ -105,6 +105,7 @@ export function projectSidebarAgentSessionRows({
       : host.sessionData,
     selectedAgentId: selected,
     statusFilter: host.sessionsStatusFilter,
+    now: Date.now(),
     deletionState: (key, agentId) =>
       host.sessionDataContext?.sessions.deletionState(
         key,
@@ -269,7 +270,7 @@ export function projectSidebarAgentSessionRows({
     selectedFallback &&
     !isSubagentSessionKey(selectedFallback.key) &&
     (!grouped || visibleRowsByKey.has(selectedFallback.key)) &&
-    !someSidebarSessionInTree(projected, (row) => row.key === selectedFallback.key)
+    !findSidebarSessionInTree(projected, (row) => row.key === selectedFallback.key)
   ) {
     projected.unshift(navigationState.toSidebarSession(selectedFallback));
   }
@@ -307,6 +308,7 @@ export function projectSidebarHomeSession({
         : host.sessionData,
     selectedAgentId: agentId,
     statusFilter: host.sessionsStatusFilter,
+    now: Date.now(),
     deletionState: (key, owner) => host.sessionDataContext?.sessions.deletionState(key, owner),
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });

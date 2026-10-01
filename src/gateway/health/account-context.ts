@@ -9,20 +9,10 @@ import {
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { asBoolean } from "../../utils/boolean.js";
 
 const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
-
-const redactIMessageProbeErrorMessage = (message: string): string => {
-  const trimmed = message.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replaceAll(
-    /\/Users\/[^/\s]+\/Library\/Messages\/chat\.db/g,
-    "~/Library/Messages/chat.db",
-  );
-};
 
 export function buildNonSensitiveProbeFailure(
   channelId: string,
@@ -38,7 +28,9 @@ export function buildNonSensitiveProbeFailure(
 
   // Preserve the actionable Full Disk Access failure while stripping the local
   // username path before health leaves the gateway.
-  const error = redactIMessageProbeErrorMessage(record.error);
+  const error = record.error
+    .trim()
+    .replaceAll(/\/Users\/[^/\s]+\/Library\/Messages\/chat\.db/g, "~/Library/Messages/chat.db");
   if (
     !/\bimsg\b/i.test(error) ||
     !error.includes("~/Library/Messages/chat.db") ||
@@ -47,61 +39,6 @@ export function buildNonSensitiveProbeFailure(
     return undefined;
   }
   return { ok: false, error: PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR };
-}
-
-function readBooleanField(value: unknown, key: string): boolean | undefined {
-  const record = asNullableRecord(value);
-  if (!record) {
-    return undefined;
-  }
-  return typeof record[key] === "boolean" ? record[key] : undefined;
-}
-
-const hasAccountValue = (account: unknown): boolean => account !== null && account !== undefined;
-
-function resolveProbeAccountEnabled(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-  account: unknown;
-  diagnostics: string[];
-}): boolean {
-  const fallback = readBooleanField(params.account, "enabled") ?? true;
-  try {
-    return resolveChannelAccountEnabled({
-      plugin: params.plugin,
-      account: params.account,
-      cfg: params.cfg,
-    });
-  } catch (error) {
-    params.diagnostics.push(
-      `${params.plugin.id}:${params.accountId}: failed to evaluate enabled state (${formatErrorMessage(error)}).`,
-    );
-    return fallback;
-  }
-}
-
-async function resolveProbeAccountConfigured(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-  account: unknown;
-  diagnostics: string[];
-}): Promise<boolean> {
-  const fallback = readBooleanField(params.account, "configured") ?? true;
-  try {
-    return await resolveChannelAccountConfigured({
-      plugin: params.plugin,
-      account: params.account,
-      cfg: params.cfg,
-      readAccountConfiguredField: true,
-    });
-  } catch (error) {
-    params.diagnostics.push(
-      `${params.plugin.id}:${params.accountId}: failed to evaluate configured state (${formatErrorMessage(error)}).`,
-    );
-    return fallback;
-  }
 }
 
 export async function resolveHealthAccountContext(params: {
@@ -125,8 +62,9 @@ export async function resolveHealthAccountContext(params: {
     );
   }
 
-  const inspectedEnabled = readBooleanField(inspectedAccount, "enabled");
-  const inspectedConfigured = readBooleanField(inspectedAccount, "configured");
+  const inspected = asNullableRecord(inspectedAccount);
+  const inspectedEnabled = asBoolean(inspected?.enabled);
+  const inspectedConfigured = asBoolean(inspected?.configured);
   let account: unknown;
   if (inspectedEnabled !== false && !hasConfiguredUnavailableCredentialStatus(inspectedAccount)) {
     try {
@@ -138,7 +76,7 @@ export async function resolveHealthAccountContext(params: {
     }
   }
 
-  if (!hasAccountValue(account)) {
+  if (account === null || account === undefined) {
     return {
       probeAccount: undefined,
       inspectedAccount,
@@ -148,20 +86,27 @@ export async function resolveHealthAccountContext(params: {
     };
   }
 
-  const enabled = resolveProbeAccountEnabled({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    account,
-    diagnostics,
-  });
-  const configured = await resolveProbeAccountConfigured({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    account,
-    diagnostics,
-  });
+  let enabled = asBoolean(asNullableRecord(account)?.enabled) ?? true;
+  try {
+    enabled = resolveChannelAccountEnabled({ plugin: params.plugin, account, cfg: params.cfg });
+  } catch (error) {
+    diagnostics.push(
+      `${params.plugin.id}:${params.accountId}: failed to evaluate enabled state (${formatErrorMessage(error)}).`,
+    );
+  }
+  let configured = asBoolean(asNullableRecord(account)?.configured) ?? true;
+  try {
+    configured = await resolveChannelAccountConfigured({
+      plugin: params.plugin,
+      account,
+      cfg: params.cfg,
+      readAccountConfiguredField: true,
+    });
+  } catch (error) {
+    diagnostics.push(
+      `${params.plugin.id}:${params.accountId}: failed to evaluate configured state (${formatErrorMessage(error)}).`,
+    );
+  }
 
   return {
     probeAccount: account,

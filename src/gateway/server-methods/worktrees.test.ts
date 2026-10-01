@@ -5,7 +5,11 @@ import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WorktreesGcResultSchema } from "../../../packages/gateway-protocol/src/schema/worktrees.js";
+import {
+  WorktreeRecordSchema,
+  WorktreesGcResultSchema,
+  WorktreesListResultSchema,
+} from "../../../packages/gateway-protocol/src/schema/worktrees.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { updateRegistryWorktree } from "../../agents/worktrees/registry.js";
@@ -78,11 +82,12 @@ const emptyConfigContext = { getRuntimeConfig: () => ({}) };
 describe("worktrees gateway methods", () => {
   const initializeGcRepository = useManagedWorktreeTestRepository();
   it("routes every operation through the managed worktree service", async () => {
+    const deferred = { ...record, gcProtection: "branch-moved" };
     const service = {
-      list: vi.fn(async () => [record]),
-      create: vi.fn(async () => record),
+      list: vi.fn(async () => [deferred]),
+      create: vi.fn(async () => deferred),
       remove: vi.fn(async () => ({ removed: true, snapshotRef: "refs/snapshot" })),
-      restore: vi.fn(async () => ({ ...record, snapshotRef: "refs/snapshot" })),
+      restore: vi.fn(async () => ({ ...deferred, snapshotRef: "refs/snapshot" })),
       gc: vi.fn(async () => ({
         removed: [record.id],
         orphansDeleted: 1,
@@ -99,11 +104,8 @@ describe("worktrees gateway methods", () => {
     };
     const handlers = createWorktreesHandlers(service as never);
 
-    expect(await call(handlers, "worktrees.list", {})).toEqual([
-      true,
-      { worktrees: [record] },
-      undefined,
-    ]);
+    const listed = await call(handlers, "worktrees.list", {});
+    expect(listed).toEqual([true, { worktrees: [record] }, undefined]);
     expect(
       await call(
         handlers,
@@ -126,6 +128,8 @@ describe("worktrees gateway methods", () => {
       "worktree restore response",
     );
     expect(expectDefined(restoreResult[0], "worktree restore success flag")).toBe(true);
+    expect(Value.Check(WorktreeRecordSchema, restoreResult[1])).toBe(true);
+    expect(Value.Check(WorktreesListResultSchema, listed?.[1])).toBe(true);
     const gcResponse = await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext });
     expect(gcResponse).toEqual([
       true,
@@ -135,6 +139,7 @@ describe("worktrees gateway methods", () => {
     expect(Value.Check(WorktreesGcResultSchema, gcResponse?.[1])).toBe(true);
     expect(service.gc).toHaveBeenCalledWith({
       limits: { maxCount: 100 },
+      retryDeferred: true,
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
     });
@@ -182,7 +187,9 @@ describe("worktrees gateway methods", () => {
       includeRepositoryStatus: true,
     });
 
-    // Write scope cannot probe arbitrary host paths for branch names.
+    // Write scope cannot probe arbitrary host paths for branch names; the
+    // denial uses the shared structured missing-scope contract so clients can
+    // tell an authorization failure apart from a repository inspection failure.
     const denied = await call(
       handlers,
       "worktrees.branches",
@@ -190,7 +197,15 @@ describe("worktrees gateway methods", () => {
       { client: writeClient, context: emptyConfigContext },
     );
     expect(denied?.[0]).toBe(false);
-    expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
+    expect(denied?.[2]).toMatchObject({
+      code: "FORBIDDEN",
+      message: "missing scope: operator.admin",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.admin",
+        requiredScopes: ["operator.admin"],
+      },
+    });
   });
 
   it("allows write-scoped branch listing for a subdirectory inside an agent workspace", async () => {
@@ -270,7 +285,14 @@ describe("worktrees gateway methods", () => {
         { client: writeClient, context: emptyConfigContext },
       );
       expect(denied?.[0]).toBe(false);
-      expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
+      expect(denied?.[2]).toMatchObject({
+        code: "FORBIDDEN",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
     } finally {
       await removeProjectRegistry(project);
     }
@@ -298,6 +320,7 @@ describe("worktrees gateway methods", () => {
     expect(response?.[0]).toBe(true);
     expect(service.gc).toHaveBeenCalledWith({
       limits: { maxCount: 100 },
+      retryDeferred: true,
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
     });

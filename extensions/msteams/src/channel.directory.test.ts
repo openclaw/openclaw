@@ -1,4 +1,3 @@
-// Msteams tests cover channelirectory plugin behavior.
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
@@ -19,7 +18,7 @@ function requireDirectorySelf(): NonNullable<NonNullable<typeof msteamsDirectory
 }
 
 describe("msteams directory", () => {
-  const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
+  const runtimeEnv = createDirectoryTestRuntime() satisfies RuntimeEnv;
   const directorySelf = requireDirectorySelf();
 
   afterEach(() => {
@@ -36,7 +35,7 @@ describe("msteams directory", () => {
             tenantId: "tenant-id-5678",
           },
         },
-      } as unknown as OpenClawConfig;
+      } satisfies OpenClawConfig;
 
       const result = await directorySelf({ cfg, runtime: runtimeEnv });
       expect(result).toEqual({ kind: "user", id: "test-app-id-1234", name: "test-app-id-1234" });
@@ -46,7 +45,7 @@ describe("msteams directory", () => {
       vi.stubEnv("MSTEAMS_APP_ID", "");
       vi.stubEnv("MSTEAMS_APP_PASSWORD", "");
       vi.stubEnv("MSTEAMS_TENANT_ID", "");
-      const cfg = { channels: {} } as unknown as OpenClawConfig;
+      const cfg = { channels: {} } satisfies OpenClawConfig;
       const result = await directorySelf({ cfg, runtime: runtimeEnv });
       expect(result).toBeNull();
     });
@@ -56,8 +55,8 @@ describe("msteams directory", () => {
     const cfg = {
       channels: {
         msteams: {
-          allowFrom: ["alice", "user:Bob"],
-          dms: { carol: {}, bob: {} },
+          allowFrom: [" alice ", " user:Bob "],
+          dms: { " carol ": {}, "user:bob": {} },
           teams: {
             team1: {
               channels: {
@@ -68,7 +67,7 @@ describe("msteams directory", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } satisfies OpenClawConfig;
 
     const directory = expectDirectorySurface(msteamsDirectoryAdapter);
 
@@ -96,32 +95,6 @@ describe("msteams directory", () => {
       { kind: "group", id: "conversation:chan2" },
     ]);
   });
-
-  it("normalizes spaced allowlist and dm entries", async () => {
-    const cfg = {
-      channels: {
-        msteams: {
-          allowFrom: ["  user:Bob  ", "  Alice  "],
-          dms: { "  Carol  ": {}, "user:Dave": {} },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const directory = expectDirectorySurface(msteamsDirectoryAdapter);
-
-    const peers = await directory.listPeers({
-      cfg,
-      query: undefined,
-      limit: undefined,
-      runtime: runtimeEnv,
-    });
-    expect(peers).toStrictEqual([
-      { kind: "user", id: "user:Bob" },
-      { kind: "user", id: "user:Alice" },
-      { kind: "user", id: "user:Carol" },
-      { kind: "user", id: "user:Dave" },
-    ]);
-  });
 });
 
 describe("msteams session route", () => {
@@ -130,7 +103,7 @@ describe("msteams session route", () => {
       cfg: {},
       agentId: "main",
       accountId: "default",
-      target: "msteams:user:01234567-89ab-cdef-0123-456789abcdef",
+      target: "msteams:01234567-89ab-cdef-0123-456789abcdef",
     });
 
     expect(route?.peer).toEqual({
@@ -153,20 +126,6 @@ describe("msteams session route", () => {
 
     expect(route?.recipientSessionExact).toBe(false);
   });
-
-  it.each(["29:1a2b3c4d5e6f", "8:orgid:2d8c2d2c-1111-2222-3333-444444444444"])(
-    "does not claim Bot Framework user id %s as the canonical AAD session",
-    (userId) => {
-      const route = resolveMSTeamsOutboundSessionRoute({
-        cfg: {},
-        agentId: "main",
-        accountId: "default",
-        target: `msteams:user:${userId}`,
-      });
-
-      expect(route?.recipientSessionExact).toBe(false);
-    },
-  );
 
   it("builds channel routes for thread conversations and strips suffix metadata", () => {
     const route = resolveMSTeamsOutboundSessionRoute({

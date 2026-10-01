@@ -7,13 +7,14 @@ const mocks = vi.hoisted(() => ({
   releaseLease: vi.fn(),
   loadSessionEntry: vi.fn(),
   resolveAgentDir: vi.fn(),
-  resolveAgentIdFromSessionKey: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
 }));
 
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   acquireSessionMcpRuntime: mocks.acquireSessionMcpRuntime,
+}));
+vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
   releaseSessionMcpRuntime: async (lease: { releaseLease: () => void }) => lease.releaseLease(),
 }));
 vi.mock("../agents/agent-scope.js", () => ({
@@ -23,9 +24,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 vi.mock("../agents/mcp-ui-resource.js", () => ({
   fetchMcpAppView: mocks.fetchMcpAppView,
   getMcpAppViewLease: mocks.getMcpAppViewLease,
-}));
-vi.mock("../routing/session-key.js", () => ({
-  resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
 }));
 vi.mock("./session-transcript-readers.js", () => ({
   visitSessionMessagesAsync: mocks.visitSessionMessagesAsync,
@@ -44,7 +42,6 @@ beforeEach(() => {
   for (const mock of Object.values(mocks)) {
     mock.mockReset();
   }
-  mocks.resolveAgentIdFromSessionKey.mockReturnValue("main");
   mocks.resolveAgentDir.mockReturnValue("/tmp/agent");
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace");
   mocks.loadSessionEntry.mockReturnValue({

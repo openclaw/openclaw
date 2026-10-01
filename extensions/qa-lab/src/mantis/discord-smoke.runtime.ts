@@ -5,8 +5,9 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
-import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+import { isTruthyOptIn } from "../mantis-options.runtime.js";
 
 export type MantisDiscordSmokeOptions = {
   channelId?: string;
@@ -67,20 +68,10 @@ type MantisDiscordSmokeSummary = {
     reportPath: string;
     summaryPath: string;
   };
-  bot?: {
-    id: string;
-    username?: string;
-  };
-  channel?: {
-    id: string;
-    name?: string;
-    type?: number;
-  };
+  bot?: DiscordUser;
+  channel?: Pick<DiscordChannel, "id" | "name" | "type">;
   finishedAt: string;
-  guild?: {
-    id: string;
-    name?: string;
-  };
+  guild?: DiscordGuild;
   message?: {
     id: string;
     posted: boolean;
@@ -110,13 +101,6 @@ function assertDiscordSnowflake(value: string, label: string) {
   }
 }
 
-async function readTokenFile(filePath: string) {
-  return readSecretFileSync(filePath, "Mantis Discord token", {
-    maxBytes: MANTIS_DISCORD_TOKEN_FILE_MAX_BYTES,
-    rejectHardlinks: false,
-  });
-}
-
 async function resolveMantisDiscordToken(opts: MantisDiscordSmokeOptions) {
   const env = opts.env ?? process.env;
   const tokenEnv = trimToValue(opts.tokenEnv) ?? DEFAULT_MANTIS_TOKEN_ENV;
@@ -131,7 +115,13 @@ async function resolveMantisDiscordToken(opts: MantisDiscordSmokeOptions) {
   }
   const tokenFile = trimToValue(opts.tokenFile) ?? trimToValue(env[tokenFileEnv]);
   if (tokenFile) {
-    return { source: "file" as const, token: await readTokenFile(tokenFile) };
+    return {
+      source: "file" as const,
+      token: readSecretFileSync(tokenFile, "Mantis Discord token", {
+        maxBytes: MANTIS_DISCORD_TOKEN_FILE_MAX_BYTES,
+        rejectHardlinks: false,
+      }),
+    };
   }
   throw new Error(
     `Missing Mantis Discord bot token. Set ${tokenEnv}, ${tokenFileEnv}, or pass --token-file.`,
@@ -266,10 +256,12 @@ function renderMantisDiscordSmokeReport(summary: MantisDiscordSmokeSummary) {
   return `${lines.join("\n")}\n`;
 }
 
-function addSensitiveValue(values: Set<string>, value: string | undefined) {
-  const resolved = trimToValue(value);
-  if (resolved && resolved !== "<redacted>") {
-    values.add(resolved);
+function addSensitiveValues(values: Set<string>, ...candidates: (string | undefined)[]) {
+  for (const value of candidates) {
+    const resolved = trimToValue(value);
+    if (resolved && resolved !== "<redacted>") {
+      values.add(resolved);
+    }
   }
 }
 
@@ -385,24 +377,21 @@ export async function runMantisDiscordSmoke(
       label: DEFAULT_CHANNEL_ID_ENV,
       value: opts.channelId,
     });
-    addSensitiveValue(sensitiveValues, guildId);
-    addSensitiveValue(sensitiveValues, channelId);
+    addSensitiveValues(sensitiveValues, guildId, channelId);
     const bot = await callDiscordApi<DiscordUser>({
       apiCalls,
       label: "current-user",
       path: "/users/@me",
       token,
     });
-    addSensitiveValue(sensitiveValues, bot.id);
-    addSensitiveValue(sensitiveValues, bot.username);
+    addSensitiveValues(sensitiveValues, bot.id, bot.username);
     const guild = await callDiscordApi<DiscordGuild>({
       apiCalls,
       label: "guild",
       path: `/guilds/${guildId}`,
       token,
     });
-    addSensitiveValue(sensitiveValues, guild.id);
-    addSensitiveValue(sensitiveValues, guild.name);
+    addSensitiveValues(sensitiveValues, guild.id, guild.name);
     const guildChannels = await callDiscordApi<DiscordChannel[]>({
       apiCalls,
       label: "guild-channels",
@@ -410,9 +399,12 @@ export async function runMantisDiscordSmoke(
       token,
     });
     for (const guildChannel of guildChannels) {
-      addSensitiveValue(sensitiveValues, guildChannel.id);
-      addSensitiveValue(sensitiveValues, guildChannel.guild_id);
-      addSensitiveValue(sensitiveValues, guildChannel.name);
+      addSensitiveValues(
+        sensitiveValues,
+        guildChannel.id,
+        guildChannel.guild_id,
+        guildChannel.name,
+      );
     }
     const channel = await callDiscordApi<DiscordChannel>({
       apiCalls,
@@ -420,9 +412,7 @@ export async function runMantisDiscordSmoke(
       path: `/channels/${channelId}`,
       token,
     });
-    addSensitiveValue(sensitiveValues, channel.id);
-    addSensitiveValue(sensitiveValues, channel.guild_id);
-    addSensitiveValue(sensitiveValues, channel.name);
+    addSensitiveValues(sensitiveValues, channel.id, channel.guild_id, channel.name);
     assertMantisDiscordChannelInGuild({
       channel,
       guildChannels,
@@ -447,7 +437,7 @@ export async function runMantisDiscordSmoke(
         path: `/channels/${channelId}/messages`,
         token,
       });
-      addSensitiveValue(sensitiveValues, message.id);
+      addSensitiveValues(sensitiveValues, message.id);
       await callDiscordApi<void>({
         apiCalls,
         label: "add-reaction",

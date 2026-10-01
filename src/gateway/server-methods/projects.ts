@@ -34,7 +34,6 @@ import {
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { readCurrentUserProfileAliases } from "../../state/user-profile-list.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -43,7 +42,10 @@ import {
 } from "../github-public-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { searchRemoteProjects } from "../project-github-search.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
@@ -53,7 +55,7 @@ import { assertValidParams } from "./validation.js";
 
 type ProjectWorktreeService = Pick<
   ManagedWorktreeService,
-  "listRegistryRecords" | "resolveRepositoryIdentity"
+  "listRegistryRecords" | "resolveRepositoryIdentities"
 >;
 
 type ProjectCandidate = {
@@ -255,18 +257,16 @@ async function listObservedProjects(
     });
   }
 
-  // Admit the same newest-first distinct paths before overlapping Git work. Keep facts
-  // request-local: session/registry revisions cannot detect external Git metadata edits.
+  // Admit newest-first paths before canonicalizing the shared discovery pass's key.
   diagnostics?.mark("identityProbes");
   const probePaths = [
     ...new Set(
       rawCandidates.map((raw) => (raw.kind === "worktree" ? raw.repoRoot : raw.checkoutPath)),
     ),
-  ].slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES);
-  const { results } = await runTasksWithConcurrency({
-    tasks: probePaths.map((checkoutPath) => () => service.resolveRepositoryIdentity(checkoutPath)),
-    limit: 4,
-  });
+  ]
+    .slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES)
+    .toSorted();
+  const results = probePaths.length ? await service.resolveRepositoryIdentities(probePaths) : [];
   const identities = new Map(
     probePaths.map((checkoutPath, index) => [checkoutPath, results[index]]),
   );
@@ -379,12 +379,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
                 await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { projection: "list" })
               ).store;
             } else {
-              const projection = getSessionRowProjection(context);
-              if (!projection) {
-                throw new Error(
-                  "Session projection is unavailable before Gateway startup completes",
-                );
-              }
+              const projection = requireSessionRowProjection(context);
               do {
                 await projection.ensureMaterialized();
               } while (projection.needsMaterialization);
@@ -429,8 +424,9 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         const profileId = client?.authenticatedUserProfile?.profileId;
         const recentProfileIds = profileId ? readCurrentUserProfileAliases(profileId) : undefined;
         const recents = recentProfileIds
-          ? listProjectRecents(store, recentProfileIds, registryProjects)
+          ? await listProjectRecents(store, recentProfileIds, registryProjects)
           : undefined;
+        assertCurrent();
         diagnostics?.mark("response");
         if (canWrite()) {
           respond(
@@ -449,19 +445,8 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         respond(
           true,
           {
-            projects: projects.map((project) =>
-              project.agentId
-                ? {
-                    id: project.id,
-                    displayName: project.displayName,
-                    source: project.source,
-                    agentId: project.agentId,
-                  }
-                : {
-                    id: project.id,
-                    displayName: project.displayName,
-                    source: project.source,
-                  },
+            projects: projects.map(({ id, displayName, source, agentId }) =>
+              agentId ? { id, displayName, source, agentId } : { id, displayName, source },
             ),
             ...(recents ? { recents: recents.filter((recent) => recent.kind === "project") } : {}),
           },

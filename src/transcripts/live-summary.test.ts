@@ -13,18 +13,26 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { createTranscriptsStore } from "./capture-operations.js";
-import { activeSessions, startTranscripts } from "./capture.js";
+import { activeSessions, prepareTranscriptCaptureDisable } from "./capture-startup.js";
+import { startTranscripts } from "./capture.js";
 import { clearTranscriptCapturesForTest } from "./capture.test-support.js";
 import { getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import type { TranscriptStartRequest } from "./provider-types.js";
 import { TranscriptsStore } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
 
-const { complete, select } = vi.hoisted(() => ({ complete: vi.fn(), select: vi.fn() }));
-vi.mock("./summary-model.runtime.js", () => ({
-  runIsolatedCompletion: complete,
-  resolveSimpleCompletionSelectionForAgent: select,
+const { complete, select, loadRuntime } = vi.hoisted(() => ({
+  complete: vi.fn(),
+  select: vi.fn(),
+  loadRuntime: vi.fn(),
 }));
+vi.mock("./summary-model.runtime.js", () => {
+  loadRuntime();
+  return {
+    runIsolatedCompletion: complete,
+    resolveSimpleCompletionSelectionForAgent: select,
+  };
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fiveMinutes = 5 * 60_000;
 const pendingCompletions = new Set<() => void>();
@@ -120,6 +128,44 @@ async function saved(fixture: Awaited<ReturnType<typeof capture>>) {
 }
 
 describe("live meeting summaries", () => {
+  it.each(["restart-drain", "capture-policy"] as const)(
+    "persists final speech without loading inference after %s closes admission",
+    async (reason) => {
+      const fixture = await capture();
+      await fixture.source.onUtterance({ text: "Accepted speech before shutdown" });
+      const runtimeLoadsBeforeShutdown = loadRuntime.mock.calls.length;
+      const policy =
+        reason === "capture-policy"
+          ? prepareTranscriptCaptureDisable(fixture.ctx.stateDir)
+          : undefined;
+      if (reason !== "capture-policy") {
+        gatewayWorkAdmission.markGatewayRestartDraining();
+      }
+      try {
+        if (policy) {
+          await policy.drain();
+        } else {
+          const tool = createTranscriptsTool(fixture.ctx);
+          await withPluginRuntimeRegistryScope(fixture.registry, () =>
+            tool.execute("shutdown", { action: "stop", sessionId: "meeting" }),
+          );
+        }
+        expect(loadRuntime).toHaveBeenCalledTimes(runtimeLoadsBeforeShutdown);
+        expect(complete).not.toHaveBeenCalled();
+        expect(fixture.stop).toHaveBeenCalledOnce();
+        expect(await saved(fixture)).toMatchObject({
+          source: "heuristic",
+          transcript: ["Accepted speech before shutdown"],
+        });
+        expect((await fixture.store.readSession("meeting"))?.stoppedAt).toBeTruthy();
+        expect(activeSessions.size).toBe(0);
+      } finally {
+        policy?.resume();
+        gatewayWorkAdmission.resetGatewayWorkAdmission();
+      }
+    },
+  );
+
   it("does not regenerate final notes when a stale local owner observes a durable stop", async () => {
     const fixture = await capture();
     await fixture.source.onUtterance({ text: "Saved speech" });

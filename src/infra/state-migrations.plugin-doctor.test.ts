@@ -237,6 +237,8 @@ describe("plugin Doctor migrations", () => {
           pluginId,
           id: migration.id,
         })),
+        // Replay certification needs a consumer; model the session owner's settlement hook.
+        beforeCompletion: async () => {},
       };
 
       const first = await runPostSessionPluginDoctorStateRepairs(params);
@@ -275,4 +277,50 @@ describe("plugin Doctor migrations", () => {
       expect(fs.readFileSync(markers[0], "utf8")).toBe("committed");
     },
   );
+
+  it("runs default-phase detectors only when completion certification has a consumer", async () => {
+    const root = await tempDirs.make("openclaw-plugin-doctor-certification-");
+    const env = {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_STATE_DIR: root,
+    };
+    const detected: string[] = [];
+    controls.entries = (["default", "after-session-repair"] as const).map((phase) => ({
+      pluginId: "owner",
+      channelIds: [],
+      trustedForDurableStores: false,
+      migration: {
+        id: `${phase}-action`,
+        label: `${phase} action`,
+        ...(phase === "after-session-repair" ? { phase } : {}),
+        detectLegacyState: () => {
+          detected.push(phase);
+          return null;
+        },
+        migrateLegacyState: () => ({ changes: [], warnings: [] }),
+      },
+    }));
+    const params = { config: {}, env, maintenanceAuthority: { assertCurrent() {} } };
+
+    // Nothing deferred and no retained sources: the fresh-install shape.
+    const uncertified = await runPostSessionPluginDoctorStateRepairs(params);
+
+    expect(detected).toEqual(["after-session-repair"]);
+    expect(uncertified).toEqual({
+      changes: [],
+      completedPluginIds: undefined,
+      requiredPluginIds: ["owner"],
+      warnings: [],
+    });
+
+    const certified = await runPostSessionPluginDoctorStateRepairs({
+      ...params,
+      beforeCompletion: async () => {},
+    });
+
+    expect(detected).toEqual(["after-session-repair", "after-session-repair", "default"]);
+    expect(certified.completedPluginIds).toEqual(["owner"]);
+  });
 });

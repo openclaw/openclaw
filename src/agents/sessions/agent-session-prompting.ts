@@ -9,7 +9,11 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
-import { resolvePendingRuntimeContextReplay } from "../internal-runtime-context.js";
+import { buildCurrentInboundSteeringPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import {
+  resolvePendingRuntimeContextReplay,
+  type CurrentInboundPromptContext,
+} from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { AgentSessionBase } from "./agent-session-base.js";
@@ -62,10 +66,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     this.promptPreparation = undefined;
     super.dispose();
   }
-
-  // =========================================================================
-  // Prompting
-  // =========================================================================
 
   private async runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
     if (this.logicalPromptActive) {
@@ -151,13 +151,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     return this.agent.hasQueuedMessages() ? "continue" : "settled";
   }
 
-  private createUserContent(
-    text: string,
-    images?: ImageContent[],
-  ): Array<TextContent | ImageContent> {
-    return [{ type: "text", text }, ...(images ?? [])];
-  }
-
   private createUserMessage(
     text: string,
     images?: ImageContent[],
@@ -166,7 +159,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
     const message = {
       role: "user",
-      content: this.createUserContent(text, images),
+      content: [{ type: "text", text }, ...(images ?? [])],
       timestamp: Date.now(),
       ...(imageFactIndexes ? { __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes } } : {}),
     } satisfies PersistedUserTurnMessage;
@@ -192,7 +185,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const preparedCompactionBudget = takePromptCompactionRequestBudget(options);
     const expandPromptTemplates = options?.expandPromptTemplates ?? true;
     const preflightResult = options?.preflightResult;
-    let messages: AgentMessage[] | undefined;
+    let messages: AgentMessage[];
 
     try {
       // Handle extension commands first (execute immediately, even during streaming)
@@ -200,7 +193,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       if (expandPromptTemplates && text.startsWith("/")) {
         const handled = await this.tryExecuteExtensionCommand(text);
         if (handled) {
-          // Extension command executed, no prompt to send
           preflightResult?.(true);
           return;
         }
@@ -225,14 +217,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         }
       }
 
-      // Expand skill commands (/skill:name args) and prompt templates (/template args)
-      let expandedText = currentText;
-      if (expandPromptTemplates) {
-        expandedText = this.expandSkillCommand(expandedText);
-        expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-      }
+      const expandedText = expandPromptTemplates ? this.expandPrompt(currentText) : currentText;
 
-      // If streaming, queue via steer() or followUp() based on option
       if (this.isStreaming || this.logicalPromptActive) {
         if (!options?.streamingBehavior) {
           throw new Error(
@@ -248,7 +234,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         return;
       }
 
-      // Validate model
       if (!this.model) {
         throw new Error(formatNoModelSelectedMessage());
       }
@@ -326,14 +311,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       messages.push(...pendingContextMessages);
       this.pendingNextTurnMessages = [];
 
-      // Emit before_agent_start extension event
       const result = await this.currentExtensionRunner.emitBeforeAgentStart(
         expandedText,
         currentImages,
         this.baseSystemPrompt,
         this.baseSystemPromptOptions,
       );
-      // Add all custom messages from extensions
       if (result?.messages) {
         for (const msg of result.messages) {
           messages.push({
@@ -346,22 +329,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
           });
         }
       }
-      // Apply extension-modified system prompt, or reset to base
-      if (result?.systemPrompt !== undefined) {
-        this.systemPromptOverride = result.systemPrompt;
-        this.agent.state.systemPrompt = result.systemPrompt;
-      } else {
-        // Ensure we're using the base prompt (in case previous turn had modifications)
-        this.systemPromptOverride = undefined;
-        this.agent.state.systemPrompt = this.baseSystemPrompt;
-      }
+      this.systemPromptOverride = result?.systemPrompt;
+      this.agent.state.systemPrompt =
+        this.systemPromptOverride !== undefined ? this.systemPromptOverride : this.baseSystemPrompt;
     } catch (error) {
       preflightResult?.(false);
       throw error;
-    }
-
-    if (!messages) {
-      return;
     }
 
     preflightResult?.(true);
@@ -372,7 +345,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * Try to execute an extension command. Returns true if command was found and executed.
    */
   private async tryExecuteExtensionCommand(text: string): Promise<boolean> {
-    // Parse command name and args
     const spaceIndex = text.indexOf(" ");
     const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
     const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
@@ -382,21 +354,18 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       return false;
     }
 
-    // Get command context from extension runner (includes session control methods)
     const ctx = this.currentExtensionRunner.createCommandContext();
 
     try {
       await command.handler(args, ctx);
-      return true;
     } catch (err) {
-      // Emit error via extension runner
       this.currentExtensionRunner.emitError({
         extensionPath: `command:${commandName}`,
         event: "command",
         error: err instanceof Error ? err.message : String(err),
       });
-      return true;
     }
+    return true;
   }
 
   /**
@@ -424,14 +393,17 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
       return args ? `${skillBlock}\n\n${args}` : skillBlock;
     } catch (err) {
-      // Emit error like extension commands do
       this.currentExtensionRunner.emitError({
         extensionPath: skill.filePath,
         event: "skill_expansion",
         error: err instanceof Error ? err.message : String(err),
       });
-      return text; // Return original on error
+      return text;
     }
+  }
+
+  private expandPrompt(text: string): string {
+    return expandPromptTemplate(this.expandSkillCommand(text), [...this.promptTemplates]);
   }
 
   /**
@@ -441,6 +413,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * Expands skill commands and prompt templates. Errors on extension commands.
    * @param images Optional image attachments to include with the message
    * @param userTurnTranscriptRecorder Prepared channel fields for transcript-only persistence
+   * @param currentInboundContext This turn's runtime facts, separate from its command and transcript
    * @throws Error if text is an extension command
    */
   async steer(
@@ -451,15 +424,15 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
     canInject?: () => boolean,
+    currentInboundContext?: CurrentInboundPromptContext,
   ): Promise<void> {
-    // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
     }
 
-    // Expand skill commands and prompt templates
-    let expandedText = this.expandSkillCommand(text);
-    expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+    const expandedText = this.expandPrompt(text);
+    // Expand commands before adding this turn's model-only context.
+    const steeringPrompt = buildCurrentInboundSteeringPrompt(expandedText, currentInboundContext);
 
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
     // Transcript preparation may outlive the captured attempt. Recheck its owner
@@ -468,7 +441,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       throw new Error("active session is finalizing");
     }
     await this.queueSteer(
-      expandedText,
+      steeringPrompt,
       images,
       preparedMessage && userTurnTranscriptRecorder
         ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
@@ -487,21 +460,14 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @throws Error if text is an extension command
    */
   async followUp(text: string, images?: ImageContent[]): Promise<void> {
-    // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
     }
 
-    // Expand skill commands and prompt templates
-    let expandedText = this.expandSkillCommand(text);
-    expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-
-    await this.queueFollowUp(expandedText, images);
+    await this.queueFollowUp(this.expandPrompt(text), images);
   }
 
-  /**
-   * Internal: Queue a steering message (already expanded, no extension command check).
-   */
+  /** Queue pre-expanded steering input without an extension-command check. */
   private async queueSteer(
     text: string,
     images?: ImageContent[],
@@ -526,18 +492,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     );
   }
 
-  /**
-   * Internal: Queue a follow-up message (already expanded, no extension command check).
-   */
+  /** Queue pre-expanded follow-up input without an extension-command check. */
   private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
     const message = this.createUserMessage(text, images);
     this.trackQueuedUserMessage(message, "followUp", text);
     this.agent.followUp(message);
   }
 
-  /**
-   * Throw an error if the text is an extension command.
-   */
   private throwIfExtensionCommand(text: string): void {
     const spaceIndex = text.indexOf(" ");
     const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
@@ -610,7 +571,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     content: string | (TextContent | ImageContent)[],
     options?: { deliverAs?: "steer" | "followUp" },
   ): Promise<void> {
-    // Normalize content to text string + optional images
     let text: string;
     let images: ImageContent[] | undefined;
 
@@ -632,7 +592,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
     }
 
-    // Use prompt() with expandPromptTemplates: false to skip command handling and template expansion
     await this.prompt(text, {
       expandPromptTemplates: false,
       streamingBehavior: options?.deliverAs,

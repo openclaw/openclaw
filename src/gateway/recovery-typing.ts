@@ -1,4 +1,5 @@
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { resolveTypingIntervalMs } from "../auto-reply/reply/typing.js";
 import type { ChannelHeartbeatAdapter } from "../channels/plugins/types.adapters.js";
 import { createTypingCallbacks, type TypingCallbacks } from "../channels/typing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -76,6 +77,7 @@ export function createRecoveryTypingManager(options: {
           }
         };
         callbacks = createTypingCallbacks({
+          keepaliveIntervalMs: resolveTypingIntervalMs(cfg.agents?.defaults?.typingIntervalSeconds),
           start: async () => {
             const currentConfig = options.getConfig();
             if (!current(currentConfig) || !typingEnabled(currentConfig)) {

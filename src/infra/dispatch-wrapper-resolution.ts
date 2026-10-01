@@ -1,4 +1,3 @@
-// Unwraps dispatch wrappers that delegate to real commands.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -363,11 +362,7 @@ function unwrapArchInvocation(argv: string[]): string[] | null {
   });
 }
 
-function supportsArchDispatchWrapper(platform: NodeJS.Platform = process.platform): boolean {
-  return platform === "darwin";
-}
-
-function supportsXcrunDispatchWrapper(platform: NodeJS.Platform = process.platform): boolean {
+function supportsDarwinDispatchWrapper(platform: NodeJS.Platform = process.platform): boolean {
   return platform === "darwin";
 }
 
@@ -396,8 +391,8 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   {
     name: "arch",
     unwrap: (argv, platform) =>
-      supportsArchDispatchWrapper(platform) ? unwrapArchInvocation(argv) : null,
-    transparentUsage: (_argv, platform) => supportsArchDispatchWrapper(platform),
+      supportsDarwinDispatchWrapper(platform) ? unwrapArchInvocation(argv) : null,
+    transparentUsage: (_argv, platform) => supportsDarwinDispatchWrapper(platform),
   },
   {
     name: "caffeinate",
@@ -478,8 +473,8 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
     name: "xcrun",
     changesExecutableLookup: true,
     unwrap: (argv, platform) =>
-      supportsXcrunDispatchWrapper(platform) ? unwrapXcrunInvocation(argv) : null,
-    transparentUsage: (_argv, platform) => supportsXcrunDispatchWrapper(platform),
+      supportsDarwinDispatchWrapper(platform) ? unwrapXcrunInvocation(argv) : null,
+    transparentUsage: (_argv, platform) => supportsDarwinDispatchWrapper(platform),
   },
   { name: "xvfb-run" },
 ];
@@ -487,9 +482,6 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
 const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(
   DISPATCH_WRAPPER_SPECS.map((spec) => [spec.name, spec] as const),
 );
-function normalizeDispatchWrapperName(token: string): string {
-  return normalizeExecutableToken(token);
-}
 
 type DispatchWrapperUnwrapResult =
   | { kind: "not-wrapper" }
@@ -507,21 +499,8 @@ type DispatchWrapperTrustPlan = {
 
 export type DispatchWrapperInvocation = { wrapper: string; sourceArgv: string[] };
 
-function blockDispatchWrapper(wrapper: string): DispatchWrapperUnwrapResult {
-  return { kind: "blocked", wrapper };
-}
-
-function unwrapDispatchWrapper(
-  wrapper: string,
-  unwrapped: string[] | null,
-): DispatchWrapperUnwrapResult {
-  return unwrapped
-    ? { kind: "unwrapped", wrapper, argv: unwrapped }
-    : blockDispatchWrapper(wrapper);
-}
-
 export function isDispatchWrapperExecutable(token: string): boolean {
-  return DISPATCH_WRAPPER_SPEC_BY_NAME.has(normalizeDispatchWrapperName(token));
+  return DISPATCH_WRAPPER_SPEC_BY_NAME.has(normalizeExecutableToken(token));
 }
 
 export function unwrapKnownDispatchWrapperInvocation(
@@ -532,14 +511,13 @@ export function unwrapKnownDispatchWrapperInvocation(
   if (!token0) {
     return { kind: "not-wrapper" };
   }
-  const wrapper = normalizeDispatchWrapperName(token0);
+  const wrapper = normalizeExecutableToken(token0);
   const spec = DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper);
   if (!spec) {
     return { kind: "not-wrapper" };
   }
-  return spec.unwrap
-    ? unwrapDispatchWrapper(wrapper, spec.unwrap(argv, platform))
-    : blockDispatchWrapper(wrapper);
+  const unwrapped = spec.unwrap?.(argv, platform);
+  return unwrapped ? { kind: "unwrapped", wrapper, argv: unwrapped } : { kind: "blocked", wrapper };
 }
 
 export function unwrapDispatchWrappersForResolution(

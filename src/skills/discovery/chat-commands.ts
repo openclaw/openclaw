@@ -1,4 +1,3 @@
-// Skill chat command discovery loads chat commands contributed by active skills.
 import fs from "node:fs";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -68,7 +67,6 @@ function resolveWorkspaceSkillCommandOptions(params: WorkspaceSkillCommandParams
     eligibility,
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     librarySelections: params.sessionEntry?.skillLibrarySelections,
-    reservedNames: listReservedChatSlashCommandNames(),
   };
 }
 
@@ -91,18 +89,28 @@ export function listSkillCommandsForWorkspace(
 ): SkillCommandSpec[] {
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     ...resolveWorkspaceSkillCommandOptions(params),
+    reservedNames: listReservedChatSlashCommandNames(),
     gatewayOnly: hasRemoteWorkspace(params.workspaceDir),
   });
 }
 
 export async function prepareSkillCommandsForWorkspace(
   params: WorkspaceSkillCommandParams,
+  assertCurrent?: () => void,
 ): Promise<SkillCommandSpec[]> {
+  assertCurrent?.();
   await prepareRemoteSkillConnections();
-  return prepareWorkspaceSkillCommandSpecs(
+  assertCurrent?.();
+  const commands = await prepareWorkspaceSkillCommandSpecs(
     params.workspaceDir,
-    resolveWorkspaceSkillCommandOptions(params),
+    {
+      ...resolveWorkspaceSkillCommandOptions(params),
+      reservedNames: listReservedChatSlashCommandNames(),
+    },
+    assertCurrent,
   );
+  assertCurrent?.();
+  return commands;
 }
 
 /** Resolve Gateway-bundled commands with the active Harness eligibility checks. */
@@ -112,6 +120,7 @@ export async function prepareBundledSkillCommandForWorkspace(
   await prepareRemoteSkillConnections();
   const commands = await prepareWorkspaceSkillCommandSpecs(params.workspaceDir, {
     ...resolveWorkspaceSkillCommandOptions(params),
+    reservedNames: listReservedChatSlashCommandNames(),
     bundledSkillName: params.skillName,
   });
   return commands.find(
@@ -123,18 +132,16 @@ export async function prepareBundledSkillCommandForWorkspace(
 
 function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
   const seen = new Set<string>();
-  const out: SkillCommandSpec[] = [];
-  for (const cmd of commands) {
+  return commands.filter((cmd) => {
     const key = normalizeOptionalLowercaseString(cmd.skillName);
     if (key && seen.has(key)) {
-      continue;
+      return false;
     }
     if (key) {
       seen.add(key);
     }
-    out.push(cmd);
-  }
-  return out;
+    return true;
+  });
 }
 
 type AgentSkillCommandParams = {
@@ -181,33 +188,23 @@ function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, al
   }
 
   for (const { agentId, workspaceDir, skillFilter, gatewayOnly } of workspaceAgents) {
-    const nodeSkills = resolveNodeExecEligibility({
-      cfg: params.cfg,
-      agentId,
-      ...(hasSingleAgentContext
-        ? {
-            sessionEntry: params.sessionEntry,
-            sessionKey: params.sessionKey,
-            execOverrides: params.execOverrides,
-          }
-        : {}),
-    });
     yield {
       workspaceDir,
       options: {
+        ...resolveWorkspaceSkillCommandOptions({
+          cfg: params.cfg,
+          agentId,
+          workspaceDir,
+          skillFilter,
+          ...(hasSingleAgentContext
+            ? {
+                sessionEntry: params.sessionEntry,
+                sessionKey: params.sessionKey,
+                execOverrides: params.execOverrides,
+              }
+            : {}),
+        }),
         gatewayOnly,
-        config: params.cfg,
-        agentId,
-        skillFilter,
-        librarySelections: hasSingleAgentContext
-          ? params.sessionEntry?.skillLibrarySelections
-          : undefined,
-        eligibility: {
-          nodeSkills,
-          remote: getRemoteSkillEligibility({
-            advertiseExecNode: nodeSkills.canExec,
-          }),
-        },
       },
     };
   }

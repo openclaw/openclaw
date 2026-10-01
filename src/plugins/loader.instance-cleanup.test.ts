@@ -5,20 +5,86 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { collectErrorGraphCandidates } from "../infra/errors.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  clearPluginRegistryLoadCache,
+  loadOpenClawPlugins,
+} from "./loader.js";
 import {
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  retirePluginCache,
+  withPluginCache,
+  type PluginCache,
+} from "./plugin-cache.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createInspectionFixture } from "./registry-inspection.test-helpers.js";
+import { hasRetainedPluginRuntimeCloseError } from "./runtime-close-error.js";
 import {
   clearActivePluginRegistry,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "./runtime.js";
+
+it.each(["settled", "rejected", "pending"] as const)(
+  "reports %s inspection disposal without confusing failure with retained custody",
+  async (outcome) => {
+    const fixture = createInspectionFixture();
+    const inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+    const instance = getPluginInstance(inspection.registry.plugins[0]!);
+    if (!instance) {
+      throw new Error("Missing inspection instance");
+    }
+    const finished = createDeferredCore();
+    const failure =
+      outcome === "pending"
+        ? new PluginInstanceDrainTimeoutError("fixture drain pending", finished.promise, {})
+        : new Error("fixture instance disposal failed");
+    const dispose = vi.fn(() => {
+      if (outcome === "settled") {
+        throw failure;
+      }
+    });
+    instance.lifecycle.onDispose(dispose);
+    const observedDispose = outcome === "settled" ? undefined : vi.spyOn(instance, "dispose");
+    if (outcome === "rejected") {
+      observedDispose?.mockRejectedValue(failure);
+    } else if (outcome === "pending") {
+      observedDispose?.mockResolvedValue({ errors: [failure] });
+    }
+    try {
+      const release = inspection.release();
+      const error: unknown = await release.catch((reason: unknown) => reason);
+      expect(
+        collectErrorGraphCandidates(error, (candidate) => [
+          candidate.cause,
+          ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+        ]),
+      ).toContain(failure);
+      expect(hasRetainedPluginRuntimeCloseError(error)).toBe(outcome !== "settled");
+      expect(inspection.release()).toBe(release);
+      expect(instance.acceptingCalls).toBe(false);
+      expect(fixture.connection().database.isOpen).toBe(false);
+      if (outcome === "settled") {
+        expect(dispose).toHaveBeenCalledOnce();
+        expect(fixture.connection().instanceDisposals).toBe(1);
+      }
+    } finally {
+      observedDispose?.mockRestore();
+      await instance.dispose();
+      finished.resolve();
+      await fixture.cleanup(inspection);
+      resetPluginLoaderTestStateForTest();
+    }
+  },
+);
 
 it.each([true, false])(
   "keeps workflow admission through registration and retirement (activate: %s)",
@@ -222,6 +288,66 @@ it.each([false, true])(
     }
   },
 );
+
+it("keeps a module-scope resource open for the republished instance after the old one retires", async () => {
+  useNoBundledPlugins();
+  const id = "module-resource-republish";
+  // Canonical external-plugin pattern: open a resource at import, close it in onDispose.
+  const plugin = writePlugin({
+    id,
+    body: `const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(":memory:");
+      module.exports = { id: ${JSON.stringify(id)}, register(api) {
+        api.lifecycle.onDispose(() => { if (db.isOpen) db.close(); });
+        api.registerTool({ name: "resource_probe", description: "Query the module database",
+          parameters: { type: "object", properties: {} },
+          async execute() {
+            return { content: [{ type: "text", text: String(db.prepare("select 7 as v").get().v) }] };
+          }
+        });
+      } };`,
+  });
+  writeFileSync(
+    path.join(plugin.dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id,
+      configSchema: { type: "object", properties: {} },
+      contracts: { tools: ["resource_probe"] },
+    }),
+  );
+  // A republish loads the unchanged plugin through a fresh inventory, then retires the old one.
+  const load = (cache: PluginCache) =>
+    withPluginCache(cache, () =>
+      loadOpenClawPlugins({
+        config: {
+          plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
+        },
+        activate: false,
+        cache: false,
+      }),
+    );
+  const previousCache = createPluginCache();
+  const nextCache = createPluginCache();
+  const previous = load(previousCache);
+  const next = load(nextCache);
+  try {
+    const tool = next.tools[0]?.factory({});
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Expected the registered resource probe");
+    }
+    await disposePluginRegistryInstances(previous);
+    await retirePluginCache(previousCache);
+    await expect(tool.execute("after-republish", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "7" }],
+    });
+  } finally {
+    await disposePluginRegistryInstances(previous);
+    await disposePluginRegistryInstances(next);
+    await retirePluginCache(previousCache);
+    await retirePluginCache(nextCache);
+    resetPluginLoaderTestStateForTest();
+  }
+});
 
 it("preserves body and unexpected registry retirement failures with async disposal", async () => {
   const operationError = new Error("operation failed");

@@ -13,7 +13,7 @@ import {
   transformConfigWithPendingPluginInstalls,
   stripPendingPluginInstallRecords,
 } from "../plugins/install-record-commit.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { createGatewayEnvSecretRef } from "../secrets/ref-contract.js";
 import {
   captureSetupInferenceFileUndo,
   type SetupInferenceConfigTarget,
@@ -21,11 +21,7 @@ import {
 } from "../system-agent/setup-inference-transition.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
-import {
-  getSecurityConfirmMessage,
-  getSecurityNoteMessage,
-  getSecurityNoteTitle,
-} from "./setup.security-note.js";
+import { getSecurityNoteMessage, getSecurityNoteTitle } from "./setup.security-note.js";
 import type { QuickstartGatewayDefaults } from "./setup.types.js";
 
 type QuickstartGatewayOptionOverrides = Pick<
@@ -247,7 +243,7 @@ export async function requireRiskAcknowledgement(params: {
   await params.prompter.note(getSecurityNoteMessage(), getSecurityNoteTitle());
 
   const ok = await params.prompter.confirm({
-    message: getSecurityConfirmMessage(),
+    message: t("wizard.security.confirm"),
     initialValue: true,
     layout: "vertical",
   });
@@ -355,13 +351,7 @@ export function resolveQuickstartGatewayDefaults(
     tailscaleMode: overrides.tailscale ?? tailscaleMode,
     token:
       overrides.gatewayTokenRefEnv !== undefined
-        ? {
-            source: "env",
-            provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
-              preferFirstProviderForSource: true,
-            }),
-            id: overrides.gatewayTokenRefEnv.trim(),
-          }
+        ? createGatewayEnvSecretRef(baseConfig, overrides.gatewayTokenRefEnv.trim())
         : (overrides.gatewayToken ?? baseConfig.gateway?.auth?.token),
     password: overrides.gatewayPassword ?? baseConfig.gateway?.auth?.password,
     customBindHost: baseConfig.gateway?.customBindHost,

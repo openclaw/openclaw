@@ -174,16 +174,11 @@ function resolveAccountScopedWriteTarget(
   const channels = (parsed.channels ??= {}) as Record<string, unknown>;
   const channel = (channels[channelId] ??= {}) as Record<string, unknown>;
   const normalizedAccountId = normalizeAccountId(accountId);
-  if (isBlockedObjectKey(normalizedAccountId)) {
-    return {
-      target: channel,
-      pathPrefix: `channels.${channelId}`,
-      writeTarget: { kind: "channel", scope: { channelId } } as const satisfies ConfigWriteTarget,
-    };
-  }
-  const hasAccounts = Boolean(channel.accounts && typeof channel.accounts === "object");
-  const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
-  if (!useAccount) {
+  if (
+    isBlockedObjectKey(normalizedAccountId) ||
+    (normalizedAccountId === DEFAULT_ACCOUNT_ID &&
+      !(channel.accounts && typeof channel.accounts === "object"))
+  ) {
     return {
       target: channel,
       pathPrefix: `channels.${channelId}`,
@@ -240,10 +235,6 @@ function ensureNestedObject(
 function setNestedValue(root: Record<string, unknown>, path: string[], value: unknown) {
   const leaf = path.at(-1);
   if (leaf === undefined) {
-    return;
-  }
-  if (path.length === 1) {
-    root[leaf] = value;
     return;
   }
   const parent = ensureNestedObject(root, path.slice(0, -1));
@@ -309,23 +300,18 @@ function applyAccountScopedAllowlistConfigEdit(params: {
 
   let changed = false;
   let next = existing;
-  const configHasEntry = existingNormalized.some((value) => shouldMatch(value));
+  const configHasEntry = existingNormalized.some(shouldMatch);
   if (params.action === "add") {
     if (!configHasEntry) {
       next = [...existing, params.entry.trim()];
       changed = true;
     }
   } else {
-    const keep: string[] = [];
-    for (const entry of existing) {
+    next = existing.filter((entry) => {
       const normalized = params.normalize([entry]);
-      if (normalized.some((value) => shouldMatch(value))) {
-        changed = true;
-        continue;
-      }
-      keep.push(entry);
-    }
-    next = keep;
+      return !normalized.some(shouldMatch);
+    });
+    changed = next.length !== existing.length;
   }
 
   if (changed) {

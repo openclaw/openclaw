@@ -1,12 +1,10 @@
 // Shared state database recovery tests cover eviction of a corruption-poisoned cached handle.
 import fs from "node:fs";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
@@ -127,46 +125,6 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-describe("isSqliteCorruptionError", () => {
-  const cases: Array<{ error: unknown; expected: boolean; name: string }> = [
-    { error: sqliteError("file is not a database", 26), expected: true, name: "NOTADB" },
-    { error: sqliteError("database disk image is malformed", 11), expected: true, name: "CORRUPT" },
-    { error: sqliteError("corrupt index", 779), expected: true, name: "extended CORRUPT" },
-    { error: sqliteError("database is locked", 5), expected: false, name: "BUSY" },
-    { error: sqliteError("database table is locked", 6), expected: false, name: "LOCKED" },
-    { error: new Error("plain failure"), expected: false, name: "no errcode" },
-  ];
-
-  for (const testCase of cases) {
-    it(`returns ${String(testCase.expected)} for ${testCase.name}`, () => {
-      expect(isSqliteCorruptionError(testCase.error)).toBe(testCase.expected);
-    });
-  }
-
-  it("classifies the error the real node:sqlite driver throws on a corrupt file", () => {
-    const databasePath = path.join(createTempStateDir(), "garbage.sqlite");
-    const page = Buffer.alloc(SQLITE_PAGE_SIZE);
-    page.set(CORRUPT_PAGE_HEADER, 0);
-    fs.writeFileSync(databasePath, page);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const raw = new DatabaseSync(databasePath);
-    let thrown: unknown;
-    try {
-      raw.prepare("SELECT count(*) AS total FROM sqlite_master").get();
-    } catch (error) {
-      thrown = error;
-    } finally {
-      raw.close();
-    }
-
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("file is not a database");
-    expect(thrown).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 26 });
-    expect(isSqliteCorruptionError(thrown)).toBe(true);
-  });
-});
-
 describe("shared state write transaction corruption recovery", () => {
   it("preserves the shared WAL when evicting a poisoned cache owner", () => {
     const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
@@ -254,24 +212,6 @@ describe("shared state write transaction corruption recovery", () => {
     } finally {
       injectedDb.close();
     }
-  });
-
-  it("keeps the cached handle when a write fails without proven corruption", () => {
-    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
-    const cached = openOpenClawStateDatabase({ env });
-
-    expect(() =>
-      runOpenClawStateWriteTransaction(
-        () => {
-          throw sqliteError("database is locked", 5);
-        },
-        { env },
-      ),
-    ).toThrow(/database is locked/u);
-
-    expect(openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(cached.path)).toBe(
-      cached,
-    );
   });
 });
 

@@ -18,12 +18,15 @@ export type CronRunExecutionParams = Pick<
   | "runSessionKey"
   | "usesDetachedRunSession"
   | "workspaceDir"
+  | "cwd"
   | "executionRoot"
   | "timeoutMs"
   | "runTimeoutOverrideMs"
   | "suppressExecNotifyOnExit"
   | "resolvedDelivery"
   | "deliveryRequested"
+  | "deliverySystemPrompt"
+  | "messageToolFormatPrompt"
   | "sourceDelivery"
   | "skillsSnapshot"
   | "agentPayload"
@@ -38,7 +41,13 @@ export type CronRunExecutionParams = Pick<
 > &
   Pick<
     RunCronAgentTurnParams,
-    "cfg" | "job" | "lane" | "onLaneWait" | "executionIdentity" | "admissionSource"
+    | "cfg"
+    | "job"
+    | "lane"
+    | "onLaneWait"
+    | "executionIdentity"
+    | "admissionSource"
+    | "deliveryAttemptFence"
   > & {
     runId: string;
     agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];

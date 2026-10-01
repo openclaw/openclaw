@@ -33,7 +33,6 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-// Imessage provider module implements model/runtime integration.
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
@@ -43,7 +42,14 @@ import {
   getRuntimeConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createNonExitingRuntime,
+  danger,
+  logVerbose,
+  shouldLogVerbose,
+  sleepWithAbort,
+  warn,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -121,7 +127,6 @@ import {
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
-import { resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
@@ -203,18 +208,6 @@ function formatIMessageInboundMediaBody(params: {
     body: params.messageText,
     notice: `[imessage ${params.unavailableCount > 1 ? `${params.unavailableCount} attachments` : "attachment"} unavailable]`,
   });
-}
-
-// Local chat.db path to read MAX(ROWID) from for the startup since_rowid. Only
-// available when the gateway can read the DB directly (no remote bridge). On a
-// remote `cliPath`, returns undefined and the startup window relies on imsg's
-// own self-fence (see watch.subscribe comment).
-function resolveIMessageWatchSourceDbPath(params: {
-  cliPath: string;
-  dbPath?: string;
-  remoteHost?: string;
-}): string | undefined {
-  return resolveIMessageChatDbLookupPath(params);
 }
 
 const warnIfImsgUpgradeNeeded = (() => {
@@ -312,29 +305,8 @@ function describeIMessageWatchSubscribeStartupFailure(params: {
   );
 }
 
-async function waitForWatchSubscribeRetryDelay(params: {
-  ms: number;
-  abortSignal?: AbortSignal;
-}): Promise<void> {
-  if (params.ms <= 0) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      params.abortSignal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, params.ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      params.abortSignal?.removeEventListener("abort", onAbort);
-      resolve();
-    };
-    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
-  const runtime = resolveRuntime(opts);
+  const runtime = opts.runtime ?? createNonExitingRuntime();
   const cfg = opts.config ?? getRuntimeConfig();
   const readConfig = createRuntimeConfigReader(cfg);
   const accountInfo = resolveIMessageAccount({
@@ -414,6 +386,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     cliPath,
     remoteHost: imessageCfg.remoteHost,
   });
+  const sendTyping = (target: string, isTyping: boolean, client?: IMessageRpcClient) =>
+    sendIMessageTyping(target, isTyping, {
+      cfg,
+      accountId: accountInfo.accountId,
+      cliPath,
+      dbPath,
+      remoteHost,
+      ...(client ? { client } : {}),
+    });
+  const logTypingError = (action: "start" | "stop", target: string, error: unknown) =>
+    logTypingFailure({ log: logVerbose, channel: "imessage", action, target, error });
   let staleBacklogSuppressed = 0;
   const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
 
@@ -432,7 +415,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // appears). Without it (remote) the replay is uncapped and every row uses the
   // live fence, so recovery still delivers recently-missed messages and still
   // suppresses old backlog, just with the narrower live window.
-  const watchSourceDbPath = resolveIMessageWatchSourceDbPath({ cliPath, dbPath, remoteHost });
+  const watchSourceDbPath = resolveIMessageChatDbLookupPath({ cliPath, dbPath, remoteHost });
   const recoveryBoundaryRowid = watchSourceDbPath
     ? await resolveIMessageStartupRowidWatermark(watchSourceDbPath)
     : null;
@@ -559,18 +542,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               await abandon();
               return;
             }
-            if (entries.length === 1) {
-              await handleMessageNow(
-                expectDefined(entries[0], "single iMessage dispatch entry").message,
-                admissionLifecycle,
-              );
-              await settle();
-              return;
-            }
-
-            const messages = entries.map((entry) => entry.message);
-            const combined = combineIMessagePayloads(messages);
-            if (shouldLogVerbose()) {
+            const combined =
+              entries.length === 1
+                ? expectDefined(entries[0], "single iMessage dispatch entry").message
+                : combineIMessagePayloads(entries.map((entry) => entry.message));
+            if (entries.length > 1 && shouldLogVerbose()) {
               const text = combined.text ?? "";
               const preview = sliceUtf16Safe(text, 0, 50);
               const ellipsis = text.length > 50 ? "..." : "";
@@ -617,24 +593,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   function resolveLiveCatchupCursor(
     message: IMessagePayload,
   ): { lastSeenMs: number; lastSeenRowid: number } | null {
-    const coalescedCursor = (
-      message as {
-        coalescedCatchupCursor?: { lastSeenMs?: unknown; lastSeenRowid?: unknown };
-      }
-    ).coalescedCatchupCursor;
-    const rowid =
-      typeof coalescedCursor?.lastSeenRowid === "number" &&
-      Number.isFinite(coalescedCursor.lastSeenRowid)
-        ? coalescedCursor.lastSeenRowid
-        : typeof message.id === "number" && Number.isFinite(message.id)
-          ? message.id
-          : null;
+    const rowid = typeof message.id === "number" && Number.isFinite(message.id) ? message.id : null;
     const dateMs =
-      typeof coalescedCursor?.lastSeenMs === "number" && Number.isFinite(coalescedCursor.lastSeenMs)
-        ? coalescedCursor.lastSeenMs
-        : typeof message.created_at === "string"
-          ? Date.parse(message.created_at)
-          : Number.NaN;
+      typeof message.created_at === "string" ? Date.parse(message.created_at) : Number.NaN;
     if (rowid === null || !Number.isFinite(dateMs)) {
       return null;
     }
@@ -947,22 +908,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       // path. Use a short-lived client so a slow typing RPC cannot block the
       // monitor client's watch stream. Stop is sequenced after start so fast
       // command replies cannot leave a late true after typing:false.
-      const earlyDirectTypingStarted = sendIMessageTyping(earlyDirectTypingTarget, true, {
-        cfg,
-        accountId: accountInfo.accountId,
-        cliPath,
-        dbPath,
-        remoteHost,
-      }).then(
+      const earlyDirectTypingStarted = sendTyping(earlyDirectTypingTarget, true).then(
         () => true,
         (err: unknown) => {
-          logTypingFailure({
-            log: (msg) => logVerbose(msg),
-            channel: "imessage",
-            action: "start",
-            target: earlyDirectTypingTarget,
-            error: err,
-          });
+          logTypingError("start", earlyDirectTypingTarget, err);
           return false;
         },
       );
@@ -977,22 +926,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             if (!started) {
               return;
             }
-            await sendIMessageTyping(earlyDirectTypingTarget, false, {
-              cfg,
-              accountId: accountInfo.accountId,
-              cliPath,
-              dbPath,
-              remoteHost,
-            });
+            await sendTyping(earlyDirectTypingTarget, false);
           })
           .catch((err: unknown) => {
-            logTypingFailure({
-              log: (msg) => logVerbose(msg),
-              channel: "imessage",
-              action: "stop",
-              target: earlyDirectTypingTarget,
-              error: err,
-            });
+            logTypingError("stop", earlyDirectTypingTarget, err);
           });
       };
     }
@@ -1105,48 +1042,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         supportsTyping && typingTarget
           ? {
               start: async () => {
-                await sendIMessageTyping(typingTarget, true, {
-                  cfg,
-                  accountId: accountInfo.accountId,
-                  client: getActiveClient(),
-                  cliPath,
-                  dbPath,
-                  remoteHost,
-                });
+                await sendTyping(typingTarget, true, getActiveClient());
               },
               stop: async () => {
-                await sendIMessageTyping(typingTarget, false, {
-                  cfg,
-                  accountId: accountInfo.accountId,
-                  client: getActiveClient(),
-                  cliPath,
-                  dbPath,
-                  remoteHost,
-                });
+                await sendTyping(typingTarget, false, getActiveClient());
               },
               // Keep the native typing bubble alive through long tool chains.
               // The dispatcher idle path below still owns teardown on final,
               // error, abort, or monitor shutdown.
               keepaliveIntervalMs: IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS,
               maxDurationMs: IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS,
-              onStartError: (err) => {
-                logTypingFailure({
-                  log: (msg) => logVerbose(msg),
-                  channel: "imessage",
-                  action: "start",
-                  target: typingTarget,
-                  error: err,
-                });
-              },
-              onStopError: (err) => {
-                logTypingFailure({
-                  log: (msg) => logVerbose(msg),
-                  channel: "imessage",
-                  action: "stop",
-                  target: typingTarget,
-                  error: err,
-                });
-              },
+              onStartError: (err) => logTypingError("start", typingTarget, err),
+              onStopError: (err) => logTypingError("stop", typingTarget, err),
             }
           : undefined,
     });
@@ -1193,6 +1100,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     };
     let directTypingController: IMessageTypingController | undefined;
+    const startDirectToolTyping = async () => {
+      await directTypingController?.startTypingLoop();
+      return false;
+    };
     const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
@@ -1210,18 +1121,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           // Keep the channel-owned progress lane present even when private-API
           // typing is unavailable. Fast-mode notices are then consumed here
           // instead of falling back to a durable iMessage bubble.
-          onToolResult: async () => {
-            await directTypingController?.startTypingLoop();
-            return false;
-          },
-          ...(supportsTyping
-            ? {
-                onToolStart: async () => {
-                  await directTypingController?.startTypingLoop();
-                  return false;
-                },
-              }
-            : {}),
+          onToolResult: startDirectToolTyping,
+          ...(supportsTyping ? { onToolStart: startDirectToolTyping } : {}),
         } as const)
       : {};
     const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);
@@ -1518,15 +1419,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-  const requireWatchClient = (
-    watchClient: IMessageRpcClient | null | undefined,
-  ): IMessageRpcClient => {
-    if (!watchClient) {
-      throw new Error("imessage monitor client not initialized");
-    }
-    return watchClient;
-  };
-
   for (let attempt = 1; attempt <= WATCH_SUBSCRIBE_MAX_ATTEMPTS; attempt++) {
     if (abort?.aborted) {
       return;
@@ -1535,7 +1427,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     let attemptDetachAbortHandler = () => {};
     let keepAttemptClient = false;
     try {
-      attemptClient = requireWatchClient(await createWatchClient());
+      attemptClient = await createWatchClient();
       let attemptSubscriptionId: number | null = null;
       attemptDetachAbortHandler = attachIMessageMonitorAbortHandler({
         abortSignal: abort,
@@ -1572,6 +1464,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       const retriable = isRetriableWatchSubscribeStartupError(err);
       const shouldRetry = attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && retriable;
+      const failureParams = {
+        accountId: accountInfo.accountId,
+        attempt,
+        maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
+        cliPath,
+        dbPath,
+        remoteHost,
+        includeAttachments,
+        probeTimeoutMs,
+        watchSinceRowid,
+        error: err,
+      };
       if (!shouldRetry) {
         opts.statusSink?.({
           connected: false,
@@ -1581,18 +1485,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         });
         runtime.error?.(
           danger(
-            `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure({
-              accountId: accountInfo.accountId,
-              attempt,
-              maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
-              cliPath,
-              dbPath,
-              remoteHost,
-              includeAttachments,
-              probeTimeoutMs,
-              watchSinceRowid,
-              error: err,
-            })}`,
+            `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure(failureParams)}`,
           ),
         );
         throw err;
@@ -1605,16 +1498,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime.log?.(
         warn(
           describeIMessageWatchSubscribeStartupFailure({
-            accountId: accountInfo.accountId,
-            attempt,
-            maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
-            cliPath,
-            dbPath,
-            remoteHost,
-            includeAttachments,
-            probeTimeoutMs,
-            watchSinceRowid,
-            error: err,
+            ...failureParams,
             retryDelayMs: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
           }),
         ),
@@ -1625,9 +1509,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       attemptDetachAbortHandler = () => {};
       await attemptClient?.stop();
       attemptClient = undefined;
-      await waitForWatchSubscribeRetryDelay({
-        ms: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
-        abortSignal: abort,
+      await sleepWithAbort(WATCH_SUBSCRIBE_RETRY_DELAY_MS, abort).catch((error: unknown) => {
+        if (!abort?.aborted) {
+          throw error;
+        }
       });
       if (abort?.aborted) {
         return;

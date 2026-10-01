@@ -42,38 +42,60 @@ Outputs `dist/OpenClaw.app`. Packaging requires a real signing identity by
 default and fails if none is available. Ad-hoc signing is an explicit opt-in;
 it does not preserve TCC permissions. See [macOS signing](/platforms/mac/signing).
 
-Packaging builds the JavaScript runtime and Control UI, then provisions a
-private Node worker from the canonical package artifact for every requested
-`BUILD_ARCHS` architecture. The root worker tarball uses the repository-pinned
-pnpm packer; Corepack-only setups are supported. Packaging verifies native
-capabilities and worker readiness in temporary state before and after signing,
-then replaces the previous app. `scripts/restart-mac.sh` uses
-the same path; `SKIP_TSC=1` does not bypass the runtime build. Existing
-content-checked build caches still avoid unnecessary declaration work.
+Packaging builds the JavaScript runtime and Control UI, then stages the full
+canonical package with production dependencies under
+`Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
+package's `files` filter, including its CLI, Gateway, Control UI, npm, and
+optional `sqlite-vec`; on-demand plugins excluded from that package remain
+excluded. The root tarball uses the repository-pinned pnpm packer; Corepack-only
+setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
+build-time Node and npm, then stages Bun and SQLite. No Node executable or
+npm/corepack/npx shims ship in the app.
 
-Worker pruning follows module imports, runtime launch descriptors, and named
-worker entrypoints transitively. Helpers launched by another retained worker
-remain packaged with their imports and runtime dependencies.
+The OpenClaw Bun fork is pinned in `scripts/lib/openclaw-bun-macos.json` and
+downloaded by `scripts/stage-openclaw-bun-macos.sh`. Archives are cached under
+`apps/macos/.build/openclaw-bun/<tag>/`, checked against pinned SHA-256 hashes,
+and verified against the fork revision. `scripts/build-mac-sqlite.sh` builds
+the pinned amalgamation in `scripts/lib/sqlite-macos.json`, cached under
+`apps/macos/.build/sqlite/<version>/`. The resulting signed library supports
+SQLite extensions without relying on Apple's system SQLite or Homebrew.
+
+Packaging verifies the Bun revision, CLI version, Gateway help, SQLite and
+`sqlite-vec` loading, native capabilities, and worker readiness in temporary
+state before and after signing, then replaces the previous app. It also rejects
+any Node executable in the app. `scripts/restart-mac.sh` uses the same path;
+`SKIP_TSC=1` does not bypass the runtime build. Existing content-checked build
+caches still avoid unnecessary declaration work.
 
 The private worker preserves the app's saved desktop-sharing preference and
 profile selection. Packaging checks startup with sharing enabled, disabled,
 and unspecified, including named-profile launches, before and after signing.
 
 Set `OPENCLAW_NODE_VERSION=<version>` when packaging to select a supported Node
-version for every private worker. If unset or empty, the CLI installer's default
-applies. Packaging installs and verifies the complete worker with that runtime.
+version for the temporary package installation. If unset or empty, the CLI
+installer's default applies. This build-time override does not change the
+bundled Bun pin.
 
-Each worker keeps native binaries that support its architecture and omits
-incompatible macOS, Linux, and Windows prebuilds. This prevents unused Intel-only
-dependencies from triggering macOS compatibility warnings in Apple silicon
-builds. Compatible universal binaries, JavaScript, WASM, and other resources
-remain intact.
+The runtime shares one JavaScript package across requested `BUILD_ARCHS`
+architectures. Universal builds combine Bun and SQLite into universal binaries
+and retain the separate arm64 and x64 Darwin native packages. Staging installs
+each CPU's optional dependencies separately, merges matching shared files, and
+combines distinct Mach-O slices at shared paths. Other shared-file conflicts
+fail packaging. Single-architecture
+builds retain only their compatible native payloads. Linux and Windows prebuilds
+are removed; compatible JavaScript, WASM, and other resources remain intact.
+Universal staging on Apple silicon requires Rosetta for x64 dependency install
+hooks, which execute native code using a temporary x64 Node driver.
 
-Universal builds require both arm64 and x86_64 runtimes to execute during
-validation. Building x86_64 on Apple Silicon requires Rosetta; a missing
-architecture or nonportable native dependency fails packaging. Node downloads
-and package installation need network access. The larger app includes its
-complete private runtime; it does not update an independently managed Gateway.
+Packaging executes verification for each runnable architecture. Verifying
+x86_64 on Apple silicon requires Rosetta; without it, packaging reports that
+architecture's execution checks as skipped. Missing binary architectures or
+nonportable native dependencies fail packaging. Downloads and package
+installation need network access on the build host. A packaged app needs no
+runtime download during onboarding: it seeds that payload into the profile's
+state directory and hosts the Gateway with Bun. The stage script writes the
+package's `openclaw-install-owner.json` marker so Gateway updates remain owned
+by the app.
 
 Packaging builds the MLX voice helper with Swift Build (`--build-system swiftbuild`)
 and copies its SwiftPM resource bundles into `Contents/Resources`. The native
@@ -104,9 +126,17 @@ immediately with "Abort trap 6", see [Troubleshooting](#troubleshooting).
 
 ## 3. Install the CLI and Gateway
 
-The packaged app embeds the canonical `scripts/install-cli.sh` installer. On a
-fresh profile, choose **This Mac** during onboarding; the app installs the
-matching user-space CLI and runtime before starting the Gateway wizard.
+On a fresh profile in a packaged app, choose **This Mac** during onboarding.
+The app prepares its bundled Bun runtime, starts the Gateway as its child,
+and creates the profile's terminal CLI shim. It does not invoke
+`scripts/install-cli.sh`, install Node, or ask for an install channel.
+Unbundled DEBUG builds retain the installer and channel chooser.
+
+Runtime copies live at `<state>/runtime/<runtimeBuildId>/`. App-hosted children
+and app-managed Bun LaunchAgents use concrete build paths; only the terminal
+shim uses `runtime/current`. Post-update setup reseeds the payload and refreshes
+app-owned Bun service pins before verifying health and collecting old builds.
+See [Gateway on macOS](/platforms/mac/bundled-gateway).
 
 For manual development recovery, install the matching CLI yourself. Read the
 version from the app: choose **About OpenClaw** in the menu bar, or run
@@ -132,6 +162,13 @@ windows, and WebKit starts helper processes. A temporary `HOME`, `TMPDIR`, or
 named app profile alone is not a sandbox: fixed preferences domains and
 Keychain access can still reach macOS services outside those directories.
 
+The native test bundle links `OpenClawWebKitTestSupport`, which suppresses WebKit
+Screen Time observation for every `WKWebView` in the test process. WebKit removes
+its KVO observer on the main thread during deallocation while ScreenTime delivers
+configuration on a private queue. Tearing down a windowed HTTP(S) web view right
+after its first commit can hit this race and abort the process with
+`NSInternalInconsistencyException`. Product builds keep Screen Time.
+
 The `macos-swift` GitHub CI job builds the tests with the runner's normal
 SwiftPM caches, then runs the built suite through `scripts/test-macos-native.mts`.
 Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
@@ -140,7 +177,7 @@ bundle loads. Tools honoring `TMPDIR` use that launcher-owned directory;
 Foundation uses Darwin's per-user temp directory, owned and discarded by the
 disposable OS worker. The full suite explicitly selects the default profile, preserving
 its local Gateway lifecycle contracts. AppState lifecycle tests and the interactive
-XCTest chat fixture run separately with a unique named profile; no test is run twice. The child environment excludes
+chat fixture run separately with a unique named profile; no test is run twice. The child environment excludes
 inherited app settings and credentials while retaining toolchain and runtime
 loader paths. Before Swift starts, the launcher creates an empty-password test
 Keychain under its private `HOME/Library/Keychains`, unlocks it, disables automatic
@@ -172,7 +209,8 @@ CPU count, capped at 12. It runs three disjoint partitions sequentially with cov
 instrumentation: the default-profile suite, rendered Quick Chat in a fresh default-profile
 process, and named-profile fixtures. The rendered partition preserves catalog, disclosure,
 and shortcut order without sharing process-wide executor changes from other tests.
-It starts an AppKit-owned run loop before exercising native menus. Historical targets
+Both interactive fixtures use Swift Testing and start an AppKit-owned run loop before
+exercising native menus, so XCTest does not have to regain its outer wait loop afterward. Historical targets
 with the launcher keep their original default- and named-profile partitions.
 Local `scripts/prepush-ci.sh` runs Swift lint/format checks and a release
 build, but does not run native tests. For native changes it exits nonzero with a
@@ -200,6 +238,15 @@ launcher's root. Never change `OPENCLAW_PROFILE` inside a test: `AppProfile`
 and `AppDefaults` freeze their identity for the process. Tests needing another
 singleton identity require a fresh process. The cooperative helper does not
 isolate unrelated tests or the process from the host.
+
+Swift Testing runs suites concurrently in one process, so never replace the
+global executor (for example `withMainSerialExecutor` or
+`uncheckedUseMainSerialExecutor` from ConcurrencyExtras). Its hook moves every
+other suite's global jobs, actor work, and timer wakeups onto the main thread;
+one non-yielding loop there starves the timeout that would cancel it, and the
+job hangs until CI cancels it. To assert that a late reply changed nothing,
+await the task that settles that reply, as provider wizard and manual-key
+actions return it.
 
 ## Troubleshooting
 

@@ -8,10 +8,11 @@ import {
 } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { registerSessionStateWatch } from "./session-state-events.js";
+import { settleSessionUpstreamLink } from "./session-upstream-links-runtime.js";
 import {
   deleteSessionUpstreamLink,
   listWatchedSessionUpstreamLinks,
-  updateSessionUpstreamLinkMarker,
+  readSessionUpstreamLink,
   upsertSessionUpstreamLink,
 } from "./session-upstream-links.js";
 
@@ -117,7 +118,29 @@ describe("session upstream links", () => {
       hostSql.restore();
     }
 
-    updateSessionUpstreamLinkMarker(watched, "main", { offset: 9 }, { ...database, now: 200 });
+    const expected = readSessionUpstreamLink(watched, "main", database);
+    if (!expected) {
+      throw new Error("Expected watched link");
+    }
+    const markerSql = observeMainThreadSql();
+    try {
+      const results = await Promise.all([
+        settleSessionUpstreamLink(
+          expected,
+          { kind: "activity", marker: { offset: 9 }, now: 200 },
+          { ...database, assertCurrent: () => {} },
+        ),
+        settleSessionUpstreamLink(
+          expected,
+          { kind: "activity", marker: { offset: 10 }, now: 200 },
+          { ...database, assertCurrent: () => {} },
+        ),
+      ]);
+      expect(results).toEqual([true, false]);
+      markerSql.expectIdle();
+    } finally {
+      markerSql.restore();
+    }
     expect((await listWatchedSessionUpstreamLinks(database)).get("claude")?.[0]).toEqual(
       expect.objectContaining({ marker: { offset: 9 }, lastScannedAt: 200, updatedAt: 200 }),
     );
@@ -155,7 +178,15 @@ describe("session upstream links", () => {
       { watcherSessionKey: "agent:main:main", targetSessionKey: sessionKey },
       database,
     );
-    updateSessionUpstreamLinkMarker(sessionKey, "main", { offset: 4 }, database);
+    const expected = readSessionUpstreamLink(sessionKey, "main", database);
+    if (!expected) {
+      throw new Error("Expected watched link");
+    }
+    await settleSessionUpstreamLink(
+      expected,
+      { kind: "activity", marker: { offset: 4 }, now: 200 },
+      { ...database, assertCurrent: () => {} },
+    );
 
     // Same source (thread/host/kind unchanged): scan progress must survive.
     upsertSessionUpstreamLink(

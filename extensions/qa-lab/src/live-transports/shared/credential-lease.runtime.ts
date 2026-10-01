@@ -391,18 +391,8 @@ function computeAcquireBackoffMs(params: {
 }
 
 function assertConvexOk(payload: unknown, actionLabel: string) {
-  if (payload === undefined) {
+  if (payload === undefined || convexOkSchema.safeParse(payload).success) {
     return;
-  }
-  if (convexOkSchema.safeParse(payload).success) {
-    return;
-  }
-  const brokerError = toBrokerError({
-    payload,
-    fallback: `Convex credential ${actionLabel} failed.`,
-  });
-  if (brokerError) {
-    throw brokerError;
   }
   throw new Error(`Convex credential ${actionLabel} failed with an invalid response payload.`);
 }
@@ -632,16 +622,8 @@ export function startQaCredentialLeaseHeartbeat(
     clearTimeoutImpl?: typeof clearTimeout;
   },
 ): QaCredentialLeaseHeartbeat {
-  if (lease.source !== "convex") {
-    return {
-      getFailure: () => null,
-      async stop() {},
-      throwIfFailed() {},
-      whenFailed: new Promise<Error>(() => {}),
-    };
-  }
   const intervalMs = opts?.intervalMs ?? lease.heartbeatIntervalMs;
-  if (!Number.isFinite(intervalMs) || intervalMs < 1) {
+  if (lease.source !== "convex" || !Number.isFinite(intervalMs) || intervalMs < 1) {
     return {
       getFailure: () => null,
       async stop() {},

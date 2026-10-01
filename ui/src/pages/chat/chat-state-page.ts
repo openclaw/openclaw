@@ -4,12 +4,14 @@ import {
   type CommandClientPresentationAction,
 } from "../../app/command-client-presentation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
 import {
   autoPromptNotificationsOnSend,
   hasActiveNotificationPromptGesture,
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
+import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
@@ -21,6 +23,7 @@ import {
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
+import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
@@ -32,7 +35,6 @@ import {
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
@@ -43,7 +45,7 @@ import {
   openSessionWorkspacePreview,
   clearSessionWorkspacePreviews,
 } from "./components/chat-session-workspace-state.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -101,6 +103,7 @@ function cancelPendingQueuedChatInput(state: ChatPageHost, id: string): boolean 
     sessionKey: view.sessionKey,
     agentId: view.agentId,
     runId: input.runId,
+    ...(isIncognitoComposerScope(state, view) ? {} : { discardPendingInput: true }),
   }).then(async (result) => {
     if (!current()) {
       return;
@@ -122,15 +125,11 @@ type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
 };
 
-function clearImageLightbox(state: ChatPageHost) {
+export function invalidateImageLightbox(state: ChatPageHost) {
+  state.imageLightboxRequestVersion += 1;
   const item = state.imageLightbox;
   state.imageLightbox = null;
   item?.release?.();
-}
-
-export function invalidateImageLightbox(state: ChatPageHost) {
-  state.imageLightboxRequestVersion += 1;
-  clearImageLightbox(state);
   return state.imageLightboxRequestVersion;
 }
 
@@ -195,6 +194,11 @@ export function createPageState(
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
   const state = {
+    uploadConfig: context.config,
+    captureComposerRecoveryReload: () => {
+      const options = createGatewayControlUiReloadOptions(context.gateway);
+      return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
+    },
     sessions: context.sessions,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
@@ -333,11 +337,10 @@ export function createPageState(
         new CustomEvent(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true, composed: true }),
       ),
     sessionWorkspaceState: undefined,
-    backgroundTasksState: undefined,
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;
 
-  state.resetToolStream = () => resetToolStream(state as never);
+  state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {
@@ -378,10 +381,10 @@ export function createPageState(
     ) {
       autoPromptNotificationsOnSend(context);
     }
-    return handleSendChat(state, messageOverride, options as never, submissionAction);
+    return handleSendChat(state, messageOverride, options, submissionAction);
   };
   state.handleAbortChat = async (options) => {
-    await handleAbortChat(state, options as never);
+    await handleAbortChat(state, options);
     renderLifecycle.invalidate();
   };
   state.removeQueuedMessage = (id) => {
@@ -490,15 +493,6 @@ export function createPageState(
           (includesResource(previous, "browser") && !includesResource(normalized, "browser"))))
     ) {
       normalized.resourceAutoOpenDismissed = true;
-    }
-    if (
-      state.sidebarLayout.columns
-        .flatMap((column) => column.panels)
-        .find((panel) => panel.slot === "tasks")?.taskId !==
-      normalized.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "tasks")
-        ?.taskId
-    ) {
-      resetTaskDetail(state);
     }
     const presentation =
       options?.dashboardPresentation === "personal"

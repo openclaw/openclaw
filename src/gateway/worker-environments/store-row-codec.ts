@@ -5,11 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type {
-  WorkerDesktopEndpoint,
-  WorkerProfile,
-  WorkerSshEndpoint,
-} from "../../plugins/capability-provider.types.js";
+import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/capability-provider.types.js";
 import type {
   DB as StateDatabase,
   WorkerEnvironmentCredentials,
@@ -38,9 +34,6 @@ import type {
   WorkerEnvironmentPrunePage,
 } from "./store-worker-contract.js";
 import { readTerminalWorkerEnvironmentPrunePage } from "./terminal-environment-retention.js";
-type Ssh = WorkerSshEndpoint;
-type WorkerEnvironmentProfileSnapshot = WorkerProfile;
-
 type WorkerDb = Pick<
   StateDatabase,
   | "device_pair_setup_completions"
@@ -62,7 +55,7 @@ function teardownTerminalStateFrom(
   }
   throw new Error("Worker environment teardown terminal state is invalid");
 }
-function endpointFrom(row: Row, fallbackPorts: readonly number[]): Ssh | null {
+function endpointFrom(row: Row, fallbackPorts: readonly number[]): WorkerSshEndpoint | null {
   const {
     ssh_host: host,
     ssh_port: port,
@@ -80,15 +73,8 @@ function endpointFrom(row: Row, fallbackPorts: readonly number[]): Ssh | null {
     user,
     hostKey,
     // SAFETY: normalizeWorkerSshEndpoint validates this value with isValidSecretRef.
-    keyRef: JSON.parse(encoded) as Ssh["keyRef"],
+    keyRef: JSON.parse(encoded) as WorkerSshEndpoint["keyRef"],
   });
-}
-function desktopFrom(row: Row): WorkerDesktopEndpoint | null {
-  if (row.desktop_json === null) {
-    return null;
-  }
-  // SAFETY: normalizeWorkerDesktopEndpoint validates every decoded endpoint field.
-  return normalizeWorkerDesktopEndpoint(JSON.parse(row.desktop_json) as WorkerDesktopEndpoint);
 }
 function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | null {
   const {
@@ -119,7 +105,7 @@ export function decodeWorkerEnvironmentRow(
     providerId: row.provider_id,
     profileId: row.profile_id,
     // SAFETY: this store writes profile_snapshot_json from its typed profile snapshot.
-    profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerEnvironmentProfileSnapshot,
+    profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerProfile,
     preparation: readWorkerEnvironmentPreparation(row),
     provisionOperationId: row.provision_operation_id,
     nodeSetupId: row.node_setup_id,
@@ -127,7 +113,10 @@ export function decodeWorkerEnvironmentRow(
     sharedHost: row.shared_host === null ? null : row.shared_host === 1,
     leaseId: row.lease_id,
     sshEndpoint: endpointFrom(row, fallbackPorts),
-    desktop: desktopFrom(row),
+    desktop:
+      row.desktop_json === null
+        ? null
+        : normalizeWorkerDesktopEndpoint(JSON.parse(row.desktop_json)),
     bootstrapReceipt: bootstrapReceiptFrom(row),
     ownerEpoch: row.owner_epoch,
     teardownTerminalState: teardownTerminalStateFrom(row.teardown_terminal_state),

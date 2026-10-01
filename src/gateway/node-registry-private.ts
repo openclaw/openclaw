@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   isPrivateNodeInvokeCommand,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+  NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+  NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
@@ -32,8 +36,6 @@ import {
   isNodeWorkerSupervisorProofCurrent,
   resolveNodeRunnerInventoryIssue,
   resolveNodeWorkerSupervisorProof,
-  sameBundleStatusObservation,
-  sameNodeWorkerHostDeclaration,
   type NodeRunnerInventoryRecord,
   type NodeRunnerRegistrySession,
   type NodeRunnerStateChange,
@@ -173,13 +175,7 @@ function updateWorkerRunnerInventory(
     clientId: node.clientId,
     clientMode: "node",
     protocolFeatures: [...params.declaration.protocolFeatures],
-    ...(workerHost
-      ? {
-          workerHost: workerHost.enabled
-            ? { ...workerHost, capacity: { ...workerHost.capacity } }
-            : { enabled: false },
-        }
-      : {}),
+    ...(workerHost ? { workerHost: structuredClone(workerHost) } : {}),
   };
   const statusCleared =
     next.workerHost?.enabled !== true ||
@@ -191,7 +187,7 @@ function updateWorkerRunnerInventory(
     !previous ||
     previous.pairingGeneration !== next.pairingGeneration ||
     !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
-    !sameNodeWorkerHostDeclaration(previous.workerHost, next.workerHost) ||
+    !isDeepStrictEqual(previous.workerHost, next.workerHost) ||
     statusCleared;
   if (changed) {
     state.runnerInventoryByConn.set(node.connId, next);
@@ -421,132 +417,149 @@ export function registerNodeRegistryPrivateRuntime(
   nodeRegistry: object,
   context: NodeRegistryPrivateContext,
 ): void {
-  const state = {} as NodeRegistryPrivateState;
-  state.context = context;
-  state.runnerInventoryByConn = new Map();
-  state.bundleStatusByConn = new Map();
-  state.runnerState = createNodeRunnerStatePublisher(context.getNode, state.runnerInventoryByConn);
-  state.generationBoundInvokes = new WeakMap();
-  state.workerSupervisorTransport = {
-    getCurrentNode: async (nodeId) => {
-      const node = await context.getCurrentConnected(nodeId);
-      return node ? resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn) : undefined;
-    },
-    listCurrentNodes: async () => {
-      const current = await context.listCurrentConnected();
-      return current.flatMap((node) => {
-        const proof = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
-        return proof ? [proof] : [];
-      });
-    },
-    hasCurrentRunner: state.runnerState.hasCurrent,
-    isConnected: (nodeId) => {
-      const node = context.getNode(nodeId);
-      return Boolean(node && node.client.invalidated !== true);
-    },
-    getIssue: (nodeId) => {
-      const node = context.getNode(nodeId);
-      return node ? resolveNodeRunnerInventoryIssue(node, state.runnerInventoryByConn) : undefined;
-    },
-    getBundleStatus: (nodeId) => {
-      const node = context.getNode(nodeId);
-      const observation = node ? state.bundleStatusByConn.get(node.connId) : undefined;
-      return observation ? structuredClone(observation) : undefined;
-    },
-    acceptBundleStatus: (node, observation) => {
-      if (
-        !isNodeWorkerSupervisorProofCurrent(
+  const runnerInventoryByConn = new Map<string, NodeRunnerInventoryRecord>();
+  const runnerState = createNodeRunnerStatePublisher(context.getNode, runnerInventoryByConn);
+  const state: NodeRegistryPrivateState = {
+    context,
+    runnerInventoryByConn,
+    bundleStatusByConn: new Map(),
+    runnerState,
+    generationBoundInvokes: new WeakMap(),
+    workerSupervisorTransport: {
+      getCurrentNode: async (nodeId) => {
+        const node = await context.getCurrentConnected(nodeId);
+        return node
+          ? resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn)
+          : undefined;
+      },
+      listCurrentNodes: async () => {
+        const current = await context.listCurrentConnected();
+        return current.flatMap((node) => {
+          const proof = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
+          return proof ? [proof] : [];
+        });
+      },
+      hasCurrentRunner: runnerState.hasCurrent,
+      isConnected: (nodeId) => {
+        const node = context.getNode(nodeId);
+        return Boolean(node && node.client.invalidated !== true);
+      },
+      getIssue: (nodeId) => {
+        const node = context.getNode(nodeId);
+        return node
+          ? resolveNodeRunnerInventoryIssue(node, state.runnerInventoryByConn)
+          : undefined;
+      },
+      getBundleStatus: (nodeId) => {
+        const node = context.getNode(nodeId);
+        const observation = node ? state.bundleStatusByConn.get(node.connId) : undefined;
+        return observation ? structuredClone(observation) : undefined;
+      },
+      acceptBundleStatus: (node, observation) => {
+        if (
+          !isNodeWorkerSupervisorProofCurrent(
+            context.getNode(node.nodeId),
+            state.runnerInventoryByConn,
+            node,
+          )
+        ) {
+          return false;
+        }
+        const currentNode = state.context.getNode(node.nodeId);
+        const currentProof = currentNode
+          ? resolveNodeWorkerSupervisorProof(currentNode, state.runnerInventoryByConn)
+          : undefined;
+        if (
+          currentProof?.workerHost.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION ||
+          currentProof.workerHost.bundleStatus !== NODE_WORKER_BUNDLE_STATUS_VERSION
+        ) {
+          return false;
+        }
+        const previous = state.bundleStatusByConn.get(node.connId);
+        if (observation) {
+          state.bundleStatusByConn.set(node.connId, structuredClone(observation));
+        } else {
+          state.bundleStatusByConn.delete(node.connId);
+        }
+        if (!isDeepStrictEqual(previous, observation)) {
+          state.runnerState.reconcile(node.nodeId, true);
+        }
+        return true;
+      },
+      isCurrent: (
+        node,
+        requireLaunchEligibility = false,
+        requiredCommands = [],
+        requireCapturedExecPolicy = false,
+      ) =>
+        isNodeWorkerSupervisorProofCurrent(
           context.getNode(node.nodeId),
           state.runnerInventoryByConn,
           node,
-        )
-      ) {
-        return false;
-      }
-      const currentNode = state.context.getNode(node.nodeId);
-      const currentProof = currentNode
-        ? resolveNodeWorkerSupervisorProof(currentNode, state.runnerInventoryByConn)
-        : undefined;
-      if (
-        currentProof?.workerHost.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION ||
-        currentProof.workerHost.bundleStatus !== NODE_WORKER_BUNDLE_STATUS_VERSION
-      ) {
-        return false;
-      }
-      const previous = state.bundleStatusByConn.get(node.connId);
-      if (observation) {
-        state.bundleStatusByConn.set(node.connId, structuredClone(observation));
-      } else {
-        state.bundleStatusByConn.delete(node.connId);
-      }
-      if (!sameBundleStatusObservation(previous, observation)) {
-        state.runnerState.reconcile(node.nodeId, true);
-      }
-      return true;
-    },
-    isCurrent: (
-      node,
-      requireLaunchEligibility = false,
-      requiredCommands = [],
-      requireCapturedExecPolicy = false,
-    ) =>
-      isNodeWorkerSupervisorProofCurrent(
-        context.getNode(node.nodeId),
-        state.runnerInventoryByConn,
-        node,
-        {
-          launchEligibility: requireLaunchEligibility,
-          commands: requiredCommands,
-          capturedExecPolicy: requireCapturedExecPolicy,
-        },
-      ),
-    invoke: async (params) => {
-      if (!NODE_WORKER_PRIVATE_COMMANDS.includes(params.command)) {
-        return {
-          ok: false,
-          error: { code: "INVALID_REQUEST", message: "private node command is not allowed" },
-        };
-      }
-      const isProofCurrent = () =>
-        params.isDispatchAuthorized() &&
-        isNodeWorkerSupervisorProofCurrent(
-          context.getNode(params.node.nodeId),
-          state.runnerInventoryByConn,
-          params.node,
           {
-            environmentSession:
-              params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
-              params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
-            preparedWorkspace: params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
-            capturedExecPolicy: params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+            launchEligibility: requireLaunchEligibility,
+            commands: requiredCommands,
+            capturedExecPolicy: requireCapturedExecPolicy,
           },
+        ),
+      invoke: async (params) => {
+        if (!NODE_WORKER_PRIVATE_COMMANDS.includes(params.command)) {
+          return {
+            ok: false,
+            error: { code: "INVALID_REQUEST", message: "private node command is not allowed" },
+          };
+        }
+        const isProofCurrent = () =>
+          params.isDispatchAuthorized() &&
+          isNodeWorkerSupervisorProofCurrent(
+            context.getNode(params.node.nodeId),
+            state.runnerInventoryByConn,
+            params.node,
+            {
+              environmentSession:
+                params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
+                params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+              preparedWorkspace: params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+              capturedExecPolicy: params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+              workspaceQuiescence:
+                params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND &&
+                isRecord(params.params) &&
+                (params.params.quiescence !== undefined ||
+                  params.params.nativeProcessOwner === true),
+              statusWait:
+                params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND &&
+                typeof params.params === "object" &&
+                params.params !== null &&
+                "waitMs" in params.params,
+            },
+          );
+        if (!isProofCurrent()) {
+          return {
+            ok: false,
+            error: {
+              code: "PRIVATE_DIALECT_UNAVAILABLE",
+              message: "node worker supervisor dialect is unavailable",
+            },
+          };
+        }
+        return await invokeNodeRegistryCore(
+          state,
+          {
+            nodeId: params.node.nodeId,
+            expectedConnId: params.node.connId,
+            expectedPairingGeneration: params.node.pairingGeneration,
+            command: params.command,
+            ...(params.params !== undefined ? { params: params.params } : {}),
+            ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+            ...(params.signal ? { signal: params.signal } : {}),
+            ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+            isDispatchAuthorized: isProofCurrent,
+            ...(params.onDispatchReady ? { onDispatchReady: params.onDispatchReady } : {}),
+          },
+          true,
+          isProofCurrent,
         );
-      if (!isProofCurrent()) {
-        return {
-          ok: false,
-          error: {
-            code: "PRIVATE_DIALECT_UNAVAILABLE",
-            message: "node worker supervisor dialect is unavailable",
-          },
-        };
-      }
-      return await invokeNodeRegistryCore(
-        state,
-        {
-          nodeId: params.node.nodeId,
-          expectedConnId: params.node.connId,
-          expectedPairingGeneration: params.node.pairingGeneration,
-          command: params.command,
-          ...(params.params !== undefined ? { params: params.params } : {}),
-          ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-          ...(params.signal ? { signal: params.signal } : {}),
-          ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-          isDispatchAuthorized: isProofCurrent,
-          ...(params.onDispatchReady ? { onDispatchReady: params.onDispatchReady } : {}),
-        },
-        true,
-        isProofCurrent,
-      );
+      },
     },
   };
   NODE_REGISTRY_PRIVATE_STATES.set(nodeRegistry, state);

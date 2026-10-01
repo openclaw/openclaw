@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isWithinDir } from "@openclaw/fs-safe/path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -42,7 +44,6 @@ import {
 } from "./deferred-plugin-session-sources.js";
 import { readFirstLineSync } from "./first-line-read.js";
 import { expandHomePrefix } from "./home-dir.js";
-import { isWithinDir } from "./path-safety.js";
 import { importLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
 import {
   existsDir,
@@ -245,10 +246,7 @@ export function normalizeSessionEntry(
   }
   const normalized = { ...shaped };
   if (typeof normalized.sessionId === "string") {
-    normalized.updatedAt =
-      typeof normalized.updatedAt === "number" && Number.isFinite(normalized.updatedAt)
-        ? normalized.updatedAt
-        : Date.now();
+    normalized.updatedAt = asFiniteNumber(normalized.updatedAt) ?? Date.now();
   }
   if (typeof normalized.groupChannel !== "string" && typeof room === "string") {
     normalized.groupChannel = room;
@@ -315,31 +313,15 @@ export function canonicalizeSessionStore(params: {
     if (!isCanonical) {
       legacyKeys.push(key);
     }
-    const existing = canonical[canonicalKey];
-    if (!existing) {
-      canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: resolveUpdatedAt(entry) });
-      continue;
-    }
-
     const existingMeta = meta.get(canonicalKey);
     const incomingUpdated = resolveUpdatedAt(entry);
-    const existingUpdated = existingMeta?.updatedAt ?? resolveUpdatedAt(existing);
-    if (incomingUpdated > existingUpdated) {
+    if (
+      !existingMeta ||
+      incomingUpdated > existingMeta.updatedAt ||
+      (incomingUpdated === existingMeta.updatedAt && isCanonical && !existingMeta.isCanonical)
+    ) {
       canonical[canonicalKey] = entry;
       meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
-      continue;
-    }
-    if (incomingUpdated < existingUpdated) {
-      continue;
-    }
-    if (existingMeta?.isCanonical && !isCanonical) {
-      continue;
-    }
-    if (!existingMeta?.isCanonical && isCanonical) {
-      canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
-      continue;
     }
   }
 
@@ -434,9 +416,8 @@ export function resolveStaleLegacySessionFile(params: {
   if (!migrationFileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
     return undefined;
   }
-  const readFirstLine = () => readFirstLineSync(targetSessionFile);
   try {
-    const firstLine = readFirstLine();
+    const firstLine = readFirstLineSync(targetSessionFile);
     const header = firstLine ? (JSON.parse(firstLine) as unknown) : undefined;
     if (!header || typeof header !== "object" || Array.isArray(header)) {
       return undefined;
@@ -634,18 +615,9 @@ export async function migrateOrphanedSessionKeys(params: {
     storeAliasCandidates.set(storePath, aliasCandidates);
     storeMap.set(storePath, (storeMap.get(storePath) ?? new Set<string>()).add(ownerId));
   };
-  // Configured ownership includes normal agents plus ACP runtime/default hints.
-  for (const configuredAgentId of listConfiguredSessionStoreAgentIds(params.cfg)) {
-    const id = normalizeAgentId(configuredAgentId);
-    const p = storeConfig
-      ? resolveStorePathFromTemplate(storeConfig, id, env)
-      : path.join(stateDir, "agents", id, "sessions", "sessions.json");
-    addToStoreMap(p, id);
-  }
-  // Plugins can route core sessions to agents that are not declared in
-  // agents.list. A templated path proves ownership for those stores too.
-  for (const pluginAgentId of pluginAgentIds) {
-    const id = normalizeAgentId(pluginAgentId);
+  // Plugin-owned agents can be absent from config; retain configured-owner order.
+  for (const agentId of [...listConfiguredSessionStoreAgentIds(params.cfg), ...pluginAgentIds]) {
+    const id = normalizeAgentId(agentId);
     const p = storeConfig
       ? resolveStorePathFromTemplate(storeConfig, id, env)
       : path.join(stateDir, "agents", id, "sessions", "sessions.json");
@@ -1126,10 +1098,7 @@ function resolveStorePathFromTemplate(
 ): string {
   const expand = (s: string) =>
     s.startsWith("~") ? expandHomePrefix(s, { env: env ?? process.env, homedir: os.homedir }) : s;
-  if (template.includes("{agentId}")) {
-    return path.resolve(expand(template.replaceAll("{agentId}", agentId)));
-  }
-  return path.resolve(expand(template));
+  return path.resolve(expand(template.replaceAll("{agentId}", agentId)));
 }
 
 export function mergeSessionStoreAliasPlans(

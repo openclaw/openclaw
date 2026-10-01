@@ -1,11 +1,9 @@
-// Policy plugin ingress evidence.
 import {
   asNonArrayRecord,
   isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { configuredChannels } from "./policy-state-core.js";
 import { ocPathSegment } from "./policy-state-helpers.js";
 import { IMPLICIT_DEFAULT_ACCOUNT_FIELDS } from "./policy-state-tool-posture.js";
 import { RESERVED_CHANNEL_CONFIG_KEYS } from "./policy-state-types.js";
@@ -25,7 +23,7 @@ const ALLOWLIST_DEFAULT_INGRESS_GROUP_POLICY_CHANNELS = new Set([
 const OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS = new Set(["feishu", "qa-channel"]);
 
 export function scanPolicyIngress(cfg: Record<string, unknown>): readonly PolicyIngressEvidence[] {
-  const channels = configuredChannels(cfg);
+  const channels = asNonArrayRecord(cfg.channels);
   const channelDefaults = asNonArrayRecord(channels.defaults);
   const inheritedChannelDefaults = pickSupportedIngressDefaults(channelDefaults);
   const channelDefaultsSource = "oc://openclaw.config/channels/defaults";
@@ -152,18 +150,9 @@ function pushChannelIngress(entries: PolicyIngressEvidence[], params: ChannelIng
   const localDmPolicy = channelDmPolicy(params.config);
   const inheritedDmPolicy = channelDmPolicy(params.inheritedConfig);
   const fallbackDmPolicy = channelDmPolicy(params.fallbackConfig ?? {});
-  const effectiveDmPolicy =
-    localDmPolicy.disabledByEnabled === true
-      ? localDmPolicy
-      : localDmPolicy.value !== undefined
-        ? localDmPolicy
-        : inheritedDmPolicy.disabledByEnabled === true
-          ? inheritedDmPolicy
-          : inheritedDmPolicy.value !== undefined
-            ? inheritedDmPolicy
-            : fallbackDmPolicy.disabledByEnabled === true || fallbackDmPolicy.value !== undefined
-              ? fallbackDmPolicy
-              : undefined;
+  const effectiveDmPolicy = [localDmPolicy, inheritedDmPolicy, fallbackDmPolicy].find(
+    (policy) => policy.value !== undefined,
+  );
   const dmPolicySource =
     effectiveDmPolicy?.sourceSuffix === undefined
       ? `${params.fallbackSourceBase}/dmPolicy`
@@ -269,8 +258,12 @@ function pushChannelRequireMentionIngress(
       fallbackRequireMention !== undefined,
   });
 
-  const containers = nestedIngressContainers(params);
-  for (const { containerKey, container, sourceBase } of containers) {
+  for (const containerKey of ["groups", "guilds", "channels", "rooms", "teams"] as const) {
+    const effective = effectiveNestedIngressContainer(params, containerKey);
+    if (effective === undefined) {
+      continue;
+    }
+    const { container, sourceBase } = effective;
     for (const [groupId, groupConfig] of Object.entries(container)) {
       if (!isRecord(groupConfig)) {
         continue;
@@ -328,25 +321,6 @@ function channelWildcardRequireMention(
   return undefined;
 }
 
-function nestedIngressContainers(params: ChannelIngressParams): readonly {
-  readonly containerKey: string;
-  readonly container: Record<string, unknown>;
-  readonly sourceBase: string;
-}[] {
-  const containers: {
-    readonly containerKey: string;
-    readonly container: Record<string, unknown>;
-    readonly sourceBase: string;
-  }[] = [];
-  for (const key of ["groups", "guilds", "channels", "rooms", "teams"] as const) {
-    const effective = effectiveNestedIngressContainer(params, key);
-    if (effective !== undefined) {
-      containers.push({ containerKey: key, ...effective });
-    }
-  }
-  return containers;
-}
-
 function effectiveNestedIngressContainer(
   params: ChannelIngressParams,
   key: "groups" | "guilds" | "channels" | "rooms" | "teams",
@@ -385,8 +359,8 @@ function pushNestedRequireMentionIngress(
       channel: params.channel,
       ...(params.accountId === undefined ? {} : { accountId: params.accountId }),
       groupId,
-      value: requireMention ?? true,
-      explicit: requireMention !== undefined,
+      value: requireMention,
+      explicit: true,
     });
   }
   for (const nestedKey of ["channels", "topics"] as const) {
@@ -412,11 +386,10 @@ function pushNestedRequireMentionIngress(
 function channelDmPolicy(config: Record<string, unknown>): {
   readonly value?: string;
   readonly sourceSuffix?: string;
-  readonly disabledByEnabled?: boolean;
 } {
   const dm = asNonArrayRecord(config.dm);
   if (dm.enabled === false) {
-    return { value: "disabled", sourceSuffix: "dm/enabled", disabledByEnabled: true };
+    return { value: "disabled", sourceSuffix: "dm/enabled" };
   }
   const direct = readString(config.dmPolicy);
   if (direct !== undefined) {

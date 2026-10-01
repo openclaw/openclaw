@@ -7,10 +7,10 @@ import {
   bindContextEngineCompaction,
   inheritRuntimeCompactionDelegate,
 } from "../../../context-engine/compaction-watchdog.js";
-import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import type { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import {
   resolveCompactionSuccessorTranscript,
+  type ContextEngine,
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
@@ -41,7 +41,6 @@ import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-type ContextEngine = Awaited<ReturnType<typeof resolveContextEngine>>;
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 type CompactionResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
@@ -66,36 +65,15 @@ export type EmbeddedRunCompactionRecoveryInput = {
     tokenBudget?: number | null;
     degradedReason?: string | null;
   }) => ReturnType<typeof buildContextEngineRuntimeSettings>;
-  onCompactionHookMessages: (payload: {
-    phase: "before" | "after";
-    messages: string[];
-  }) => Promise<void>;
-  runOwnsCompactionBeforeHook: (reason: string) => Promise<void>;
-  runOwnsCompactionAfterHook: (
-    reason: string,
-    result: CompactionResult,
-    previousSessionId?: string,
-  ) => Promise<void>;
-  adoptCompactionTranscript: (
-    result: CompactionResult,
-    onAccepted?: () => void,
-  ) => Promise<string | undefined>;
   getActiveSession: () => {
     id: string;
     file: string;
     target?: ContextEngineSessionTarget;
   };
-  assertRecoveryActive: () => void;
-  prepareRecoveryOwner: ReturnType<
-    typeof createEmbeddedRunCompactionRuntime
-  >["prepareRecoveryOwner"];
-  prepareRecoverySession: ReturnType<
-    typeof createEmbeddedRunCompactionRuntime
-  >["prepareRecoverySession"];
   prepareCompactedTranscriptRetry: (assertActive: () => void) => Promise<void>;
   armPostCompactionGuard: () => void;
   usageAccumulator: UsageAccumulator;
-};
+} & ReturnType<typeof createEmbeddedRunCompactionRuntime>;
 
 /** Preserve one prepared owner snapshot throughout context and timeout recovery. */
 export async function compactEmbeddedRunForRecovery(
@@ -559,7 +537,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
   };
   const runOwnsCompactionAfterHook = async (
     reason: string,
-    compactResult: Awaited<ReturnType<ContextEngine["compact"]>>,
+    compactResult: CompactionResult,
     previousSessionId?: string,
   ) => {
     assertRecoveryActive();

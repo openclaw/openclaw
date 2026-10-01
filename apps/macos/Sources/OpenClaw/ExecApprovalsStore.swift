@@ -230,17 +230,13 @@ enum ExecApprovalsStore {
             }
             agents.removeValue(forKey: "default")
         }
-        if !agents.isEmpty {
-            var normalizedAgents: [String: ExecApprovalsAgent] = [:]
-            normalizedAgents.reserveCapacity(agents.count)
-            for (key, var agent) in agents {
-                if let allowlist = agent.allowlist {
-                    let normalized = self.normalizeAllowlistEntries(allowlist)
-                    agent.allowlist = normalized.isEmpty ? nil : normalized
-                }
-                normalizedAgents[key] = agent
+        agents = agents.mapValues { entry in
+            var agent = entry
+            if let allowlist = agent.allowlist {
+                let normalized = self.normalizeAllowlistEntries(allowlist)
+                agent.allowlist = normalized.isEmpty ? nil : normalized
             }
-            agents = normalizedAgents
+            return agent
         }
         return ExecApprovalsFile(
             version: 1,
@@ -272,9 +268,6 @@ enum ExecApprovalsStore {
     {
         var file = self.normalizeIncoming(
             record?.document ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
-        if file.socket == nil {
-            file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
-        }
         let existingSocketPath = file.socket?.path
         let resolvedSocketPath = self.resolvedPersistedSocketPath(
             existing: existingSocketPath,
@@ -481,14 +474,7 @@ extension ExecApprovalsStore {
                 throw self.executionAuthorizationChangedError()
             }
             return
-        case let .explicitOnce(security, policySnapshot):
-            guard ExecSecurity.narrower(security, current.agent.security) != .deny,
-                  policySnapshot.isCurrent(ExecApprovalPolicySnapshot(resolved: current))
-            else {
-                throw self.executionAuthorizationChangedError()
-            }
-            return
-        case let .explicitAlways(security, policySnapshot, _):
+        case let .explicitOnce(security, policySnapshot), let .explicitAlways(security, policySnapshot, _):
             guard ExecSecurity.narrower(security, current.agent.security) != .deny,
                   policySnapshot.isCurrent(ExecApprovalPolicySnapshot(resolved: current))
             else {
@@ -674,70 +660,29 @@ extension ExecApprovalsStore {
         return trimmed.isEmpty ? self.defaultAgentId : trimmed
     }
 
-    private static func normalizedPattern(_ pattern: String?) -> String? {
-        switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
-        case let .valid(normalized):
-            normalized.lowercased()
-        case .invalid:
-            nil
-        }
-    }
-
     private static func migrateLegacyPattern(_ entry: ExecAllowlistEntry) -> ExecAllowlistEntry {
+        var migrated = entry
         let trimmedPattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedResolved = entry.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let normalizedResolved = trimmedResolved.isEmpty ? nil : trimmedResolved
+        migrated.lastResolvedPath = trimmedResolved.isEmpty ? nil : trimmedResolved
 
         if !ExecApprovalHelpers.patternHasPathSelector(trimmedPattern),
            !trimmedResolved.isEmpty,
-           case let .valid(migratedPattern) = ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved)
+           case let .valid(pattern) = ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved)
         {
-            return ExecAllowlistEntry(
-                id: entry.id,
-                pattern: migratedPattern,
-                source: entry.source,
-                commandText: entry.commandText,
-                argPattern: entry.argPattern,
-                lastUsedAt: entry.lastUsedAt,
-                lastUsedCommand: entry.lastUsedCommand,
-                lastResolvedPath: normalizedResolved)
-        }
-
-        switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
-        case let .valid(pattern):
-            return ExecAllowlistEntry(
-                id: entry.id,
-                pattern: pattern,
-                source: entry.source,
-                commandText: entry.commandText,
-                argPattern: entry.argPattern,
-                lastUsedAt: entry.lastUsedAt,
-                lastUsedCommand: entry.lastUsedCommand,
-                lastResolvedPath: normalizedResolved)
-        case .invalid:
-            switch ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved) {
-            case let .valid(migratedPattern):
-                return ExecAllowlistEntry(
-                    id: entry.id,
-                    pattern: migratedPattern,
-                    source: entry.source,
-                    commandText: entry.commandText,
-                    argPattern: entry.argPattern,
-                    lastUsedAt: entry.lastUsedAt,
-                    lastUsedCommand: entry.lastUsedCommand,
-                    lastResolvedPath: normalizedResolved)
+            migrated.pattern = pattern
+        } else {
+            switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
+            case let .valid(pattern):
+                migrated.pattern = pattern
             case .invalid:
-                return ExecAllowlistEntry(
-                    id: entry.id,
-                    pattern: trimmedPattern,
-                    source: entry.source,
-                    commandText: entry.commandText,
-                    argPattern: entry.argPattern,
-                    lastUsedAt: entry.lastUsedAt,
-                    lastUsedCommand: entry.lastUsedCommand,
-                    lastResolvedPath: normalizedResolved)
+                switch ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved) {
+                case let .valid(pattern): migrated.pattern = pattern
+                case .invalid: migrated.pattern = trimmedPattern
+                }
             }
         }
+        return migrated
     }
 
     private static func normalizeAllowlistEntries(_ entries: [ExecAllowlistEntry]) -> [ExecAllowlistEntry] {
@@ -749,26 +694,13 @@ extension ExecApprovalsStore {
             // Command text can contain secrets; it is accepted only for legacy decode.
             migrated.commandText = nil
             // Regex whitespace and Unicode normalization are semantic policy bytes.
-            let normalizedArgPattern = self.normalizeArgPattern(migrated.argPattern)
+            migrated.argPattern = self.normalizeArgPattern(migrated.argPattern)
             let trimmedPattern = migrated.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trimmedResolvedPath = migrated.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let normalizedResolvedPath = trimmedResolvedPath.isEmpty ? nil : trimmedResolvedPath
-
-            switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
-            case let .valid(pattern):
-                normalized.append(
-                    ExecAllowlistEntry(
-                        id: migrated.id,
-                        pattern: pattern,
-                        source: migrated.source,
-                        commandText: migrated.commandText,
-                        argPattern: normalizedArgPattern,
-                        lastUsedAt: migrated.lastUsedAt,
-                        lastUsedCommand: migrated.lastUsedCommand,
-                        lastResolvedPath: normalizedResolvedPath))
-            case .invalid:
+            guard case let .valid(pattern) = ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) else {
                 continue
             }
+            migrated.pattern = pattern
+            normalized.append(migrated)
         }
 
         return normalized
@@ -781,25 +713,11 @@ extension ExecApprovalsStore {
         let currentAllowlist = self.normalizeAllowlistEntries(current.allowlist ?? [])
         let legacyAllowlist = self.normalizeAllowlistEntries(legacy.allowlist ?? [])
         var seen = Set<ExecAllowlistEntryMatchKey>()
-        var allowlist: [ExecAllowlistEntry] = []
-        func append(_ entry: ExecAllowlistEntry) {
-            guard let patternKey = normalizedPattern(entry.pattern) else {
-                return
-            }
+        let allowlist = (currentAllowlist + legacyAllowlist).filter { entry in
             let key = ExecAllowlistEntryMatchKey(
-                pattern: patternKey,
+                pattern: entry.pattern.lowercased(),
                 argPattern: entry.argPattern)
-            guard !seen.contains(key) else {
-                return
-            }
-            seen.insert(key)
-            allowlist.append(entry)
-        }
-        for entry in currentAllowlist {
-            append(entry)
-        }
-        for entry in legacyAllowlist {
-            append(entry)
+            return seen.insert(key).inserted
         }
 
         return ExecApprovalsAgent(

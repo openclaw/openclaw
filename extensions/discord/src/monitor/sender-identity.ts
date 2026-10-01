@@ -28,8 +28,7 @@ type DiscordMemberLike = {
 };
 
 export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): string | null {
-  const candidate = message.webhookId ?? message.webhook_id;
-  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+  return normalizeOptionalString(message.webhookId ?? message.webhook_id) ?? null;
 }
 
 export function resolveDiscordSenderIdentity(params: {

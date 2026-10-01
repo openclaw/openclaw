@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   createDispatchEnvironmentFixtures,
   REQUEST,
@@ -17,7 +17,7 @@ import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
-function createActiveAbandonmentFixture(database: OpenClawStateDatabase) {
+async function createActiveAbandonmentFixture(database: OpenClawStateDatabase) {
   const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   const { environmentId } = createDispatchEnvironmentFixtures();
   seedAttachedPlacementEnvironment(database, {
@@ -25,7 +25,7 @@ function createActiveAbandonmentFixture(database: OpenClawStateDatabase) {
     sessionId: REQUEST.sessionId,
     ownerEpoch: 2,
   });
-  const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
+  const active = await seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
   if (active.state !== "active") {
     throw new Error("active placement fixture was not active");
   }
@@ -42,13 +42,13 @@ describe("forced worker environment abandonment", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
   it("drains nested operations before recording result loss and releasing the claim", async () => {
-    const { store, environmentId } = createActiveAbandonmentFixture(database);
-    const claim = store.claimTurn({
+    const { store, environmentId } = await createActiveAbandonmentFixture(database);
+    const claim = await store.claimTurn({
       ...REQUEST,
       claimId: "forced-claim",
       runId: "forced-run",
@@ -56,9 +56,9 @@ describe("forced worker environment abandonment", () => {
     });
     store.markWorkspaceResultPending(claim);
     const binding = claim;
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "forced-send",
@@ -80,7 +80,7 @@ describe("forced worker environment abandonment", () => {
       turnClaim: { claimId: claim.claimId },
     });
     expect(
-      store.completeWorkerSessionToolOperation({
+      await store.completeWorkerSessionToolOperation({
         sourceSessionId: claim.sessionId,
         sourceClaimId: claim.claimId,
         toolCallId: "forced-send",
@@ -99,7 +99,7 @@ describe("forced worker environment abandonment", () => {
   });
 
   it("releases a pending reclaim claim when its workspace is already gone", async () => {
-    const { store, environmentId, active } = createActiveAbandonmentFixture(database);
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
     store.startDrain({
       sessionId: active.sessionId,
       environmentId,
@@ -112,7 +112,7 @@ describe("forced worker environment abandonment", () => {
       runId: "reclaim-forced-missing-workspace",
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
-    store.recordStagedWorkspaceResult(
+    await store.recordStagedWorkspaceResult(
       claim,
       "refs/openclaw/worker-results/reclaim-forced-missing-workspace",
     );
@@ -132,14 +132,14 @@ describe("forced worker environment abandonment", () => {
   });
 
   it("deletes a stale journal without replaying it into the current workspace", async () => {
-    const { store, environmentId, active } = createActiveAbandonmentFixture(database);
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       placementGeneration: active.generation,
     };
-    store.beginWorkspaceReconciliation(owner, {
+    await store.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "b".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -174,19 +174,19 @@ describe("forced worker environment abandonment", () => {
     });
 
     expect(resolveWorkspace).not.toHaveBeenCalled();
-    expect(store.listWorkspaceReconciliationOwners()).toEqual([]);
+    expect(await store.listWorkspaceReconciliationOwners()).toEqual([]);
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
   });
 
   it("retains a current journal when its best-effort rollback fails", async () => {
-    const { store, environmentId, active } = createActiveAbandonmentFixture(database);
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       placementGeneration: active.generation,
     };
-    store.beginWorkspaceReconciliation(owner, {
+    await store.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "c".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -213,7 +213,7 @@ describe("forced worker environment abandonment", () => {
     }
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
-    expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(await store.listWorkspaceReconciliationOwners()).toEqual([owner]);
     expect(resolveWorkspace).toHaveBeenCalledTimes(2);
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "workspace temporarily unavailable" }),
@@ -221,14 +221,14 @@ describe("forced worker environment abandonment", () => {
   });
 
   it("retains a current journal when loading it fails", async () => {
-    const { store, environmentId, active } = createActiveAbandonmentFixture(database);
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       placementGeneration: active.generation,
     };
-    store.beginWorkspaceReconciliation(owner, {
+    await store.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "d".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -240,7 +240,7 @@ describe("forced worker environment abandonment", () => {
       basePack: Buffer.alloc(0),
     });
     const onCleanupError = vi.fn();
-    vi.spyOn(store, "loadWorkspaceReconciliation").mockImplementation(() => {
+    vi.spyOn(store, "loadWorkspaceReconciliation").mockImplementation(async () => {
       throw new Error("journal temporarily unreadable");
     });
 
@@ -255,7 +255,7 @@ describe("forced worker environment abandonment", () => {
     }
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
-    expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(await store.listWorkspaceReconciliationOwners()).toEqual([owner]);
     expect(resolveWorkspace).not.toHaveBeenCalled();
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "journal temporarily unreadable" }),

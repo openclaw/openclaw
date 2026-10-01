@@ -87,12 +87,8 @@ function buildLegacyDeliveryIndex(
   return candidates;
 }
 
-const reefMessageIds = createMonotonicUlidFactory();
-
 /** Reserves a protocol-valid id before recipient-visible Reef delivery starts. */
-export function prepareReefMessageId(): string {
-  return reefMessageIds();
-}
+export const prepareReefMessageId = createMonotonicUlidFactory();
 
 /** Local policy or trust rejection that is safe to retire without retrying. */
 class ReefOutboundRejectedError extends Error {
@@ -440,11 +436,7 @@ export class ReefMessageFlow {
       }
       throw error;
     }
-    if (!result.body) {
-      await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
-      return;
-    }
-    if ((await this.options.delivered.status(envelope.id)) === "delivered") {
+    if (!result.body || (await this.options.delivered.status(envelope.id)) === "delivered") {
       await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
       return;
     }
@@ -486,15 +478,11 @@ export class ReefMessageFlow {
     return this.options.config.handle;
   }
 
-  private requireGuardConfig() {
-    if (!this.options.config.guard) {
+  private guardPolicyVersion(): string {
+    const guard = this.options.config.guard;
+    if (!guard) {
       throw new Error("Reef guard is not configured");
     }
-    return this.options.config.guard;
-  }
-
-  private guardPolicyVersion(): string {
-    const guard = this.requireGuardConfig();
     return effectiveGuardPolicyVersion(guard.policyVersion, guard.rules);
   }
 }

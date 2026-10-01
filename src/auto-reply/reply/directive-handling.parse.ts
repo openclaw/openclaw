@@ -1,4 +1,3 @@
-// Parses inline reply directives into typed execution and routing options.
 import { extractModelDirective } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.shared.js";
 import {
@@ -14,16 +13,17 @@ import {
 import { extractQueueDirective } from "./queue/directive.js";
 
 const REPLY_DIRECTIVE_COMMANDS = {
-  think: true,
-  verbose: true,
-  trace: true,
-  fast: true,
-  reasoning: true,
-  elevated: true,
-  exec: true,
-  model: true,
-  queue: true,
+  think: "hasThinkDirective",
+  verbose: "hasVerboseDirective",
+  trace: "hasTraceDirective",
+  fast: "hasFastDirective",
+  reasoning: "hasReasoningDirective",
+  elevated: "hasElevatedDirective",
+  exec: "hasExecDirective",
+  model: "hasModelDirective",
+  queue: "hasQueueDirective",
 } as const;
+const SESSION_DIRECTIVE_ENTRIES = Object.entries(REPLY_DIRECTIVE_COMMANDS);
 
 /** Canonical command-registry keys that share the session-directive execution pipeline. */
 type ReplyDirectiveCommand = keyof typeof REPLY_DIRECTIVE_COMMANDS;
@@ -188,3 +188,11 @@ export function parseInlineSessionDirectives(
 
 /** Parsed inline directives removed from a user message before agent execution. */
 export type InlineDirectives = ReturnType<typeof parseInlineSessionDirectives>;
+
+/** Status is an inline shortcut, not a session-setting directive. */
+export function hasSessionDirectives(
+  directives: InlineDirectives,
+  except?: ReplyDirectiveCommand,
+): boolean {
+  return SESSION_DIRECTIVE_ENTRIES.some(([name, flag]) => name !== except && directives[flag]);
+}

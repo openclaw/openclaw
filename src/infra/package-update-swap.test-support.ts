@@ -36,8 +36,12 @@ export async function createPackageSwapFixture(base: string) {
   return { params, packageRoot, globalRoot, launcher };
 }
 
-export async function createRetainedPackageSwap(base: string) {
+export async function createRetainedPackageSwap(
+  base: string,
+  prepare?: (fixture: Awaited<ReturnType<typeof createPackageSwapFixture>>) => Promise<void>,
+) {
   const fixture = await createPackageSwapFixture(base);
+  await prepare?.(fixture);
   let transaction: PackageUpdateTransaction | undefined;
   const result = await swapStagedPackageInstall({
     ...fixture.params,

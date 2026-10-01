@@ -7,14 +7,10 @@ import type { CoreConfig } from "../../types.js";
 import { getMatrixMonitorTaskSignal } from "../monitor/task-runner.js";
 import type { MatrixClient } from "../sdk.js";
 import { awaitMatrixStartupWithAbort, throwIfMatrixStartupAborted } from "../startup-abort.js";
-import { resolveMatrixAuth, resolveMatrixAuthContext } from "./config.js";
+import { resolveMatrixAuth } from "./config.js";
 import type { MatrixAuth } from "./types.js";
 
-const loadMatrixCreateClientDeps = createLazyRuntimeModule(() =>
-  import("./create-client.js").then((runtime) => ({
-    createMatrixClient: runtime.createMatrixClient,
-  })),
-);
+const loadMatrixCreateClientDeps = createLazyRuntimeModule(() => import("./create-client.js"));
 const MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS = 5_000;
 
 export type MatrixClientLeaseRole = "monitor" | "transient";
@@ -207,16 +203,7 @@ async function resolveSharedMatrixAuth(params: SharedMatrixClientParams): Promis
       "Matrix shared client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
     );
   }
-  const authContext = resolveMatrixAuthContext({
-    cfg: params.cfg,
-    env: params.env,
-    accountId: params.accountId,
-  });
-  return await resolveMatrixAuth({
-    cfg: authContext.cfg,
-    env: authContext.env,
-    accountId: authContext.accountId,
-  });
+  return resolveMatrixAuth({ cfg: params.cfg, env: params.env, accountId: params.accountId });
 }
 
 async function resolveOpenSharedMatrixClientState(

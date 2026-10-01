@@ -21,15 +21,12 @@ import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
+  type PublicationSessionIdentity,
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import type { GitHubPublicationRequester } from "./github-publication-requester.js";
-import {
-  readSharedGitHubPublicationSession,
-  type SharedGitHubPublicationSession,
-  type SharedGitHubPublicationSelector,
-} from "./github-publication-shared-read.js";
+import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import {
   deferGitHubPublicationRequests as deferRequests,
   digestGitHubPublicationRequest as digestRequest,
@@ -40,7 +37,6 @@ import {
   listGitHubPublicationsForClaim,
   projectGitHubPublicationResult as publicationResult,
   readGitHubPublicationRequest,
-  readSharedGitHubPublicationRequest,
 } from "./github-publication-store.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { projectWorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
@@ -87,36 +83,43 @@ export function exactClaimForPlacement(
 }
 
 export function createSharedGitHubPublicationReadMethods(
-  readReceipt: (
-    ...args: Parameters<typeof readSharedGitHubPublicationRequest>
-  ) => Parameters<typeof publicationResult>[0] | undefined,
+  kind: Parameters<typeof readSharedGitHubPublication>[0],
 ) {
-  const readShared = (
-    session: SharedGitHubPublicationSession,
-    selector: SharedGitHubPublicationSelector,
-  ) =>
-    readReceipt(
-      session,
-      selector,
-      readSharedGitHubPublicationSession(
-        session,
-        loadGatewaySessionEntryReadOnly(session.sessionKey, { agentId: session.agentId }),
-      ),
-    );
   return {
-    sharedStatus(
-      session: SharedGitHubPublicationSession,
+    async sharedStatus(
+      session: PublicationSessionIdentity,
       requestId: string,
-    ): SessionGitHubStatusResult | undefined {
-      const row = readShared(session, { requestId });
+    ): Promise<SessionGitHubStatusResult | undefined> {
+      const row = await readSharedGitHubPublication(kind, session, { requestId });
       return row ? { result: publicationResult(row), confirmation: null } : undefined;
     },
 
-    latestShared(
-      session: SharedGitHubPublicationSession,
+    async latestShared(
+      session: PublicationSessionIdentity,
       idempotencyKey?: string,
-    ): SessionGitHubStatusResult | null {
-      const row = readShared(session, { idempotencyKey });
+      isSuperseded?: (
+        snapshot: Pick<
+          PublicationRow,
+          "repository" | "branch" | "source_head_commit" | "workspace_tree"
+        >,
+      ) => Promise<boolean>,
+    ): Promise<SessionGitHubStatusResult | null> {
+      const row = await readSharedGitHubPublication(kind, session, { idempotencyKey });
+      // Discovery offers recovery for current work, not a failure whose accepted
+      // snapshot has since been published. Exact-key and by-id history stay intact.
+      if (
+        row?.status === "failed" &&
+        idempotencyKey === undefined &&
+        isSuperseded &&
+        (await isSuperseded({
+          repository: row.repository,
+          branch: row.branch,
+          source_head_commit: row.source_head_commit,
+          workspace_tree: row.workspace_tree,
+        }))
+      ) {
+        return null;
+      }
       return row ? { result: publicationResult(row), confirmation: null } : null;
     },
   };
@@ -524,7 +527,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       ];
     },
 
-    ...createSharedGitHubPublicationReadMethods(readSharedGitHubPublicationRequest),
+    ...createSharedGitHubPublicationReadMethods("worktree"),
 
     read(requestId: string): SessionGitHubPublicationResult | undefined {
       const row = readById(requestId);

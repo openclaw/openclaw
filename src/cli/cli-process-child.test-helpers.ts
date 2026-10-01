@@ -5,7 +5,7 @@ import { once } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { onTestFinished } from "vitest";
+import { onTestFinished, type TestContext } from "vitest";
 import {
   collectNodeDiagnosticReport,
   NODE_DIAGNOSTIC_REPORT_GRACE_MS as REPORT_GRACE_MS,
@@ -196,6 +196,8 @@ export async function runCliProcessChild(params: {
   input?: string;
   interact?: (child: ChildProcessWithoutNullStreams) => Promise<void> | void;
   onStdout?: (stdout: string) => void;
+  /** Concurrent callers bind diagnostic cleanup to their own test context. */
+  onTestFinished?: TestContext["onTestFinished"];
   timeoutMs?: number;
   maxBuffer?: number;
 }): Promise<CliProcessChildResult> {
@@ -205,7 +207,7 @@ export async function runCliProcessChild(params: {
   const reports = supportsDiagnostics ? createFixtureLifetime() : undefined;
   let unjoinedWork = false;
   if (reports) {
-    onTestFinished(async () => {
+    (params.onTestFinished ?? onTestFinished)(async () => {
       if (!unjoinedWork) {
         await reports.cleanup();
       }

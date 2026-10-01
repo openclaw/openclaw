@@ -4,6 +4,15 @@ live_docker_stage_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$live_docker_stage_dir/frozen-target-compat.sh"
 unset live_docker_stage_dir
 
+openclaw_live_stage_workspace() {
+  local dest_dir="${1:?destination directory required}"
+  openclaw_live_stage_source_tree "$dest_dir"
+  openclaw_live_stage_node_modules "$dest_dir"
+  openclaw_live_link_runtime_tree "$dest_dir"
+  openclaw_live_stage_state_dir "$dest_dir/.openclaw-state"
+  openclaw_live_prepare_staged_config
+}
+
 openclaw_live_stage_mounted_auth() {
   if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" = "1" ]; then
     return 0
@@ -321,6 +330,7 @@ openclaw_live_stage_node_modules() {
     mkdir -p "$staged_modules"
     cp -aRs "$source_modules/." "$staged_modules"
   done
+  # Vite needs a writable config-artifact directory; /app/node_modules is root-owned.
   rm -rf "$target_dir/.vite-temp"
   mkdir -p "$target_dir/.vite-temp"
 }

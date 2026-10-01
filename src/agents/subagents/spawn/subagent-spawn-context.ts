@@ -9,7 +9,7 @@ import {
   ensureContextEnginesInitialized,
   forkSessionEntryFromParent,
   resolveContextEngine,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetInWorker,
 } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentContextMode } from "./subagent-spawn.types.js";
 
@@ -43,15 +43,17 @@ export async function prepareSubagentSessionContext(params: {
   if (params.contextMode === "isolated") {
     return { status: "ok", mode: "isolated" };
   }
-  const childTarget = resolveGatewaySessionStoreTarget({
+  const childTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg: params.cfg,
     key: params.childSessionKey,
     agentId: params.targetAgentId,
+    assertActive: params.assertActive,
   });
-  const parentTarget = resolveGatewaySessionStoreTarget({
+  const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg: params.cfg,
     key: params.requesterInternalKey,
     agentId: params.requesterAgentId,
+    assertActive: params.assertActive,
   });
 
   try {
@@ -61,9 +63,10 @@ export async function prepareSubagentSessionContext(params: {
       );
     }
 
+    params.assertActive?.();
     const forkedResult = await forkSessionEntryFromParent({
       commitGuard: params.assertActive,
-      storePath: childTarget.storePath,
+      storePath: childTarget.readSource?.path ?? childTarget.storePath,
       parentSessionKey: parentTarget.canonicalKey,
       parentStoreKeys: parentTarget.storeKeys,
       sessionKey: childTarget.canonicalKey,
@@ -136,8 +139,9 @@ export async function prepareContextEngineSubagentSpawn(params: {
       }
     })());
   try {
-    ensureContextEnginesInitialized();
-    engine = await resolveContextEngine(params.cfg);
+    engine = await resolveContextEngine(params.cfg, {
+      initialize: ensureContextEnginesInitialized,
+    });
     // Resolution may outlive the caller. Returned preparation must still reach
     // the pipeline rollback owner before its next authority check.
     params.assertActive?.();

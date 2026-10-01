@@ -294,6 +294,8 @@ describe("runCodexAppServerAttempt", () => {
         ).toMatchObject({
           __openclaw: { turnTainted: true },
         });
+      } else {
+        expect(finalMessages).toEqual(checkpoint);
       }
     },
   );

@@ -102,24 +102,20 @@ export function normalizeManifestCliCommands(
     return undefined;
   }
   const seen = new Set<string>();
-  const commands: PluginManifestCliCommand[] = [];
-  for (const entry of value) {
-    if (
-      !isRecord(entry) ||
-      typeof entry.name !== "string" ||
-      typeof entry.description !== "string"
-    ) {
-      continue;
-    }
-    const name = normalizeCommandDescriptorName(entry.name);
-    const description = sanitizeCommandDescriptorDescription(entry.description);
-    if (!name || !description || typeof entry.hasSubcommands !== "boolean" || seen.has(name)) {
-      continue;
-    }
-    seen.add(name);
-    commands.push({ name, description, hasSubcommands: entry.hasSubcommands });
-  }
-  return commands;
+  return (
+    normalizeManifestObjectList(value, (entry) => {
+      if (typeof entry.name !== "string" || typeof entry.description !== "string") {
+        return undefined;
+      }
+      const name = normalizeCommandDescriptorName(entry.name);
+      const description = sanitizeCommandDescriptorDescription(entry.description);
+      if (!name || !description || typeof entry.hasSubcommands !== "boolean" || seen.has(name)) {
+        return undefined;
+      }
+      seen.add(name);
+      return { name, description, hasSubcommands: entry.hasSubcommands };
+    }) ?? []
+  );
 }
 
 function normalizeManifestSetupProviders(
@@ -375,6 +371,7 @@ export function normalizeProviderAuthChoices(
     const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
     const icon = normalizeSetupPresentationHttpsUrl(entry.icon);
     const website = normalizeSetupPresentationHttpsUrl(entry.website);
+    const docsUrl = normalizeSetupPresentationHttpsUrl(entry.docsUrl);
     const assistantPriority =
       typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
         ? entry.assistantPriority
@@ -415,6 +412,7 @@ export function normalizeProviderAuthChoices(
       ...(choiceHint ? { choiceHint } : {}),
       ...(icon ? { icon } : {}),
       ...(website ? { website } : {}),
+      ...(docsUrl ? { docsUrl } : {}),
       ...(assistantPriority !== undefined ? { assistantPriority } : {}),
       ...(assistantVisibility ? { assistantVisibility } : {}),
       ...(deprecatedChoiceIds.length > 0 ? { deprecatedChoiceIds } : {}),

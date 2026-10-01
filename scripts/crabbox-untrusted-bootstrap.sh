@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-node_version="24.19.0"
-pnpm_spec="pnpm@12.4.2+sha512.08adc6613180275c7c9edada39dcf08c9c61ad4e7eaf330a4f3461f102b0f907423454d117f98e72d47fef0616070644d7bffc973a6a57f5090a6d7c368b07c9"
+node_version="24.21.0"
+pnpm_spec="pnpm@12.5.1+sha512.e3f305bc784a2bc89f5ad3b6138889470fae8d2af5f36b61216ec91c2c3d64089775f9de38aac331044ea40f245cb0d5666392dfdf65824e1907ef6a2c62de5f"
 # Keep exact formerly trusted pins so older contributor heads remain verifiable.
 historical_pnpm_specs=(
+  "pnpm@12.5.0+sha512.9cdbaa34ffacae1768635ac0d23e94db6201c7d59bf3da236b23d67c8f6b794d1dab323bcd5bcc51b55c8cafbf6f19a24e4aa61d6ab7772aa3b5cc85e325dc4d"
+  "pnpm@12.4.2+sha512.08adc6613180275c7c9edada39dcf08c9c61ad4e7eaf330a4f3461f102b0f907423454d117f98e72d47fef0616070644d7bffc973a6a57f5090a6d7c368b07c9"
   "pnpm@12.4.0+sha512.37536c26ed40ab4134b6511e09f6b27f3ebb45687468f2406ca3805279a4e5ca158c1931350ad9774d6ab2108d71b3dbaeb39943159294375e4d053e8e05685c"
   "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457"
   "pnpm@12.1.0+sha512.d9b8276d97f6ec86e49815877f91ee9f63cee61f2063b304e43b6dab8fa07ce8a9afd46d2facd39f921e6a9d06b3c75a81349c7b888c2d22886bae0229901037"
@@ -43,11 +45,11 @@ fi
 case "$(/usr/bin/uname -m)" in
   x86_64)
     node_arch="x64"
-    node_sha256="14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
+    node_sha256="fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6"
     ;;
   aarch64 | arm64)
     node_arch="arm64"
-    node_sha256="01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc"
+    node_sha256="6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2"
     ;;
   *)
     echo "unsupported architecture: $(/usr/bin/uname -m)" >&2
@@ -130,6 +132,18 @@ pnpm_version="${pnpm_spec#pnpm@}"
 pnpm_version="${pnpm_version%%+*}"
 pnpm_native_sha512=""
 case "$pnpm_version:$node_arch" in
+  12.5.1:x64)
+    pnpm_native_sha512="dcf914058a39cf8760b659d3348163ed01a9703500baa5f3f561958a03c309e71c127846891916980e75d364e66091edc093f72df984f9917d3c6796867f29f5"
+    ;;
+  12.5.1:arm64)
+    pnpm_native_sha512="ea16cc596dbf790a356f9c2f40f7bf9dd2c75531fcf116afe8df9f7c3e3f87a22e14c8d60a06ac15862c16fd06aefa6a444031dd2c26652be58bed0d157a9bc4"
+    ;;
+  12.5.0:x64)
+    pnpm_native_sha512="f27d1f5ed98258cab9e7c003d59796f5d2261bc4f0418eb0b3a8ec61ca1157edae04170b10727995f797bc18fdf749e87f04bb5d98a1a990efcb52c192729605"
+    ;;
+  12.5.0:arm64)
+    pnpm_native_sha512="9f3b25522cbb2c01647b79e22ca752687714745788852288d35d35bb740a5aee90e13ffbe605304d4c5c30f573dacbd452672d5c0740bfa727a64c9fbcad92ae"
+    ;;
   12.4.2:x64)
     pnpm_native_sha512="fe96edd145536bc34c0e1cce58b4117d9e86f5138a5e524f66dc7ce3906ac967dcee10ab5978532c177bd323b6cbcf84f8858dde81ccd6cfc9b0840d1a4d72be"
     ;;

@@ -1,4 +1,3 @@
-// Fetch timeout helpers wrap fetch calls with timeout and abort behavior.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -115,9 +114,6 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   refresh: () => void;
 } {
   const { timeoutMs, signal: parentSignal } = params;
-  if (!timeoutMs && !parentSignal) {
-    return { signal: undefined, cleanup: () => {}, refresh: () => {} };
-  }
   if (!timeoutMs) {
     return { signal: parentSignal, cleanup: () => {}, refresh: () => {} };
   }
@@ -163,16 +159,6 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   };
 }
 
-/**
- * Fetch wrapper that adds timeout support via AbortController.
- *
- * @param url - The URL to fetch
- * @param init - RequestInit options (headers, method, body, etc.)
- * @param timeoutMs - Timeout in milliseconds
- * @param fetchFn - The fetch implementation to use (defaults to global fetch)
- * @returns The fetch Response
- * @throws AbortError if the request times out
- */
 export async function fetchWithTimeout(
   url: string,
   init: RequestInit,

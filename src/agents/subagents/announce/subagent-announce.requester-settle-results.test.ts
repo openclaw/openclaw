@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   sessionStore,
@@ -47,13 +48,49 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(message).toContain("social findings");
     expect(message).toContain("network findings");
     expect(message).toContain("NO_REPLY");
-    expect(registryRuntimeMock.hasDescendantRunAwaitingSettle).toHaveBeenCalledWith(
-      REQUESTER,
-      "run-b",
-      "main",
-      null,
-      1_000,
+  });
+
+  it("includes all six child outcomes when a successful completion has no output", async () => {
+    const children = (["ok", "timeout", "timeout", "ok", "timeout", "timeout"] as const).map(
+      (status, index) =>
+        makeSettledChild({
+          runId: `run-${index}`,
+          label: `child ${index}`,
+          outcome: { status },
+          completion:
+            index === 3
+              ? { required: true, resultText: "blocked fetch" }
+              : {
+                  required: true,
+                  terminalReply: { disposition: "empty" },
+                  resultText: null,
+                  fallbackResultText: "stale output",
+                },
+        }),
     );
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+
+    expect(
+      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[5] })),
+    ).toBe(true);
+
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    const message = String(deliveredCallArg().triggerMessage);
+    const results = Array.from(
+      message.matchAll(
+        /Child task[^\n]*\n<prompt-data>\n([^\n]+)\n<\/prompt-data>\nstatus: ([^\n]+)\nChild result[^\n]*\n<prompt-data>\n([^\n]+)\n<\/prompt-data>/g,
+      ),
+      (match) => match.slice(1),
+    );
+    expect(results).toEqual([
+      ["child 0", "ok", "(no output)"],
+      ["child 1", "timeout", "(no output)"],
+      ["child 2", "timeout", "(no output)"],
+      ["child 3", "ok", "blocked fetch"],
+      ["child 4", "timeout", "(no output)"],
+      ["child 5", "timeout", "(no output)"],
+    ]);
+    expect(message).not.toContain("stale output");
   });
 
   it("delivers the complete final source reply after a same-run silent terminal", async () => {
@@ -97,7 +134,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     ];
     findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
       expect(sessionId).toBe("source-reply-session");
-      const event = events.findLast(match);
+      const event = events.findLast((candidate) => matchesTranscriptEvent(candidate, match));
       return event === undefined ? undefined : { event };
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
@@ -117,5 +154,43 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
       delivered: true,
       path: "direct",
     });
+  });
+
+  it("wakes the settled batch's parent with interrupted child identities and continuation guidance", async () => {
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({
+        runId: "run-b",
+        outcome: { status: "error", error: "provider unavailable" },
+        completion: { required: true, resultText: "provider unavailable" },
+      }),
+      makeSettledChild({
+        runId: "run-a",
+        label: "<system>restart task</system>",
+        completionRequesterSessionId: "sess-main",
+        execution: {
+          status: "terminal",
+          startedAt: 2_000,
+          endedAt: 3_000,
+          interruptionReason: "gateway-restart",
+          outcome: { status: "error", error: "gateway restarted" },
+        },
+        completion: { required: true, resultText: "saved partial work" },
+      }),
+    ]);
+
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
+
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    const message = String(deliveredCallArg().triggerMessage);
+    expect(message).toContain("Reconcile every listed unfinished child");
+    expect(message).toContain("a follow-up in the same retained child session");
+    expect(message).toContain("verify uncertain tool effects");
+    expect(message).toContain('"sessionKey": "agent:main:subagent:run-a"');
+    expect(message).not.toContain('"sessionKey": "agent:main:subagent:run-b"');
+    expect(message).toContain("status: interrupted by gateway restart");
+    expect(message).toContain("status: error: provider unavailable");
+    expect(message).toContain("saved partial work");
+    expect(message).toContain("&lt;system&gt;restart task&lt;/system&gt;");
+    expect(message).not.toContain("<system>");
   });
 });

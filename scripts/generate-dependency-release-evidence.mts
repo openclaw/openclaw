@@ -2,16 +2,11 @@
 
 // Generates release dependency evidence artifacts and summaries.
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import type { runDependencyVulnerabilityGate } from "./dependency-vulnerability-gate.mts";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
-import {
-  getReleaseDependencyRiskLockfiles,
-  resolveReleaseDependencyRiskAcceptance,
-} from "./lib/release-dependency-risk-acceptance.mts";
 import { REPORT_CLI_PARSE_OPTIONS } from "./lib/report-cli-helpers.mts";
 import type { generateNpmPackageLocksReport } from "./npm-package-locks-report.mts";
 
@@ -22,7 +17,7 @@ export const DEPENDENCY_EVIDENCE_REPORTS = [
   {
     name: "Dependency advisory vulnerability gate",
     command: "pnpm deps:vuln:gate",
-    policy: "hard-blocking",
+    policy: "malware-blocking",
     json: "dependency-vulnerability-gate.json",
     markdown: "dependency-vulnerability-gate.md",
   },
@@ -260,8 +255,9 @@ export async function collectDependencyEvidenceSummaryCounts(evidenceDir: string
       ),
     ]);
   return {
-    vulnerabilityBlockers: vulnerability.blockers.length,
+    malwareBlockers: vulnerability.blockers.length,
     vulnerabilityFindings: vulnerability.findings.length,
+    advisories: vulnerability.findings.filter((finding) => !finding.malware),
     vulnerabilityCoverage: vulnerability.coverage,
     upstreamOnlyVulnerabilityFindings: vulnerability.findings.filter(
       (finding) => finding.source === "github-repository",
@@ -293,7 +289,8 @@ function renderVulnerabilityEvidenceSummary(counts: EvidenceSummaryCounts) {
     `- Upstream source: \`${upstream.source}\``,
     `- Upstream package versions mapped: ${upstream.mappedPackageVersions}/${upstream.packageVersions}`,
     `- Upstream repositories checked: ${upstream.checkedRepositories}/${upstream.repositories}`,
-    `- Advisory vulnerability hard blockers: ${counts.vulnerabilityBlockers}`,
+    `- Known malware findings (release-blocking): ${counts.malwareBlockers}`,
+    `- Non-blocking advisory findings: ${counts.advisories.length}`,
     `- Advisory vulnerability total findings: ${counts.vulnerabilityFindings}`,
     `- Upstream-only vulnerability findings: ${counts.upstreamOnlyVulnerabilityFindings}`,
     `- Upstream coverage issues: ${upstream.issues.length}`,
@@ -306,6 +303,29 @@ function renderVulnerabilityEvidenceSummary(counts: EvidenceSummaryCounts) {
     "",
     "Coverage is limited to these advisory sources; zero findings do not prove that dependencies are unaffected.",
     "",
+  ];
+}
+
+function renderNonBlockingAdvisories(heading: string, { advisories }: EvidenceSummaryCounts) {
+  if (advisories.length === 0) {
+    return [];
+  }
+  return [
+    "",
+    heading,
+    "",
+    "Advisories never block or delay a release. Record them in the release handoff and queue the dependency bump on `main` after publication. Only known malware blocks.",
+    "",
+    ...advisories
+      .slice(0, 25)
+      .map(
+        (finding) =>
+          `- ${finding.severity.toUpperCase()} \`${finding.packageName}\` (${finding.lockfile}; ${finding.graph}) ` +
+          `id=${finding.id} source=${finding.source}${finding.url ? ` ${finding.url}` : ""}`,
+      ),
+    ...(advisories.length > 25
+      ? [`- ${advisories.length - 25} more; see dependency-vulnerability-gate.md.`]
+      : []),
   ];
 }
 
@@ -345,6 +365,7 @@ export function renderDependencyEvidenceSummary({
     "- `dependency-ownership-surface-report.md`",
     "- `dependency-changes-report.md`",
     "- `npm-package-locks.md`",
+    ...renderNonBlockingAdvisories("## Non-blocking advisory findings", counts),
   ].join("\n")}\n`;
 }
 
@@ -370,76 +391,37 @@ export function renderDependencyEvidenceStepSummary({
     `- npm package-lock mirrors: ${counts.npmLockPackages}`,
     `- Lockless packages (bundleRuntimeDependencies=false): ${counts.npmLocklessPackages}`,
     `- Partial npm package-lock mirrors (workspace omissions): ${counts.npmPartialLockPackages}`,
+    ...renderNonBlockingAdvisories("#### Non-blocking advisory findings", counts),
   ].join("\n")}\n`;
 }
 
-async function runEvidenceReports(
+function runEvidenceReports(
   rootDir: string,
   outputDir: string,
   baseRef: string,
   execFileSyncImpl: ExecFileSyncLike,
-  packageVersion: string,
 ) {
-  let riskAcceptance: ReturnType<typeof resolveReleaseDependencyRiskAcceptance> = null;
-  const riskLockfiles = getReleaseDependencyRiskLockfiles(packageVersion);
   const toolingRoot = path.resolve(import.meta.dirname, "..");
   // Report implementations belong to this tooling checkout; --root selects only the source data.
   // Release branches can keep frozen product bytes while trusted release tooling is repaired.
   for (const report of DEPENDENCY_EVIDENCE_REPORTS) {
-    try {
-      runCommand(
-        "pnpm",
-        [
-          report.command.slice("pnpm ".length),
-          "--",
-          "--root",
-          rootDir,
-          ...(report.json === "dependency-changes-report.json" ? ["--base-ref", baseRef] : []),
-          "--json",
-          reportPath(outputDir, report.json),
-          "--markdown",
-          reportPath(outputDir, report.markdown),
-        ],
-        toolingRoot,
-        execFileSyncImpl,
-      );
-    } catch (error) {
-      if (
-        report.json !== "dependency-vulnerability-gate.json" ||
-        !(error instanceof Error) ||
-        !("status" in error) ||
-        error.status !== 1 ||
-        !riskLockfiles
-      ) {
-        throw error;
-      }
-      const vulnerability = await readJson<
-        Awaited<ReturnType<typeof runDependencyVulnerabilityGate>>
-      >(reportPath(outputDir, report.json));
-      const lockfileSha256 = Object.fromEntries(
-        await Promise.all(
-          riskLockfiles.map(async (file) => [
-            file,
-            createHash("sha256")
-              .update(await readFile(path.join(rootDir, file)))
-              .digest("hex"),
-          ]),
-        ),
-      );
-      riskAcceptance = resolveReleaseDependencyRiskAcceptance({
-        packageVersion,
-        lockfileSha256,
-        blockers: vulnerability.blockers,
-      });
-      if (!riskAcceptance) {
-        throw error;
-      }
-      console.warn(
-        `WARNING: ${packageVersion} dependency risks accepted by maintainer; scan findings remain unresolved.`,
-      );
-    }
+    runCommand(
+      "pnpm",
+      [
+        report.command.slice("pnpm ".length),
+        "--",
+        "--root",
+        rootDir,
+        ...(report.json === "dependency-changes-report.json" ? ["--base-ref", baseRef] : []),
+        "--json",
+        reportPath(outputDir, report.json),
+        "--markdown",
+        reportPath(outputDir, report.markdown),
+      ],
+      toolingRoot,
+      execFileSyncImpl,
+    );
   }
-  return riskAcceptance;
 }
 
 /**
@@ -472,7 +454,7 @@ export async function generateDependencyReleaseEvidence({
   const outputDir = path.resolve(requestedOutputDir);
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(outputDir, { recursive: true });
-  // Publish the artifact location before a blocking report exits so CI can retain its evidence.
+  // Publish the artifact location before a malware finding fails the gate so CI retains its evidence.
   if (githubOutput) {
     await appendFile(githubOutput, `dir=${outputDir}\n`, "utf8");
   }
@@ -487,28 +469,19 @@ export async function generateDependencyReleaseEvidence({
   const dependencyChangeBaseRef =
     baseRef ?? resolvePreviousReleaseTag({ rootDir, execFileSyncImpl });
 
-  const riskAcceptance = await runEvidenceReports(
-    rootDir,
-    outputDir,
-    dependencyChangeBaseRef,
-    execFileSyncImpl,
-    packageVersion,
-  );
+  runEvidenceReports(rootDir, outputDir, dependencyChangeBaseRef, execFileSyncImpl);
 
-  const manifest = {
-    ...createDependencyEvidenceManifest({
-      generatedAt: now.toISOString(),
-      releaseTag,
-      releaseRef,
-      releaseSha,
-      npmDistTag,
-      packageVersion,
-      workflowRunId,
-      workflowRunAttempt,
-      dependencyChangeBaseRef,
-    }),
-    ...(riskAcceptance ? { riskAcceptance } : {}),
-  };
+  const manifest = createDependencyEvidenceManifest({
+    generatedAt: now.toISOString(),
+    releaseTag,
+    releaseRef,
+    releaseSha,
+    npmDistTag,
+    packageVersion,
+    workflowRunId,
+    workflowRunAttempt,
+    dependencyChangeBaseRef,
+  });
   await writeFile(
     reportPath(outputDir, "dependency-evidence-manifest.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
@@ -523,10 +496,7 @@ export async function generateDependencyReleaseEvidence({
       releaseSha,
       baseRef: dependencyChangeBaseRef,
       counts,
-    }) +
-      (riskAcceptance
-        ? `\n## Operator-accepted dependency risk\n\nThe maintainer accepted ${riskAcceptance.blockers.length} recorded advisory finding(s) for ${packageVersion} with unchanged dependencies. They remain unresolved, not a clean security scan. Exact graph hashes and findings are retained in dependency-evidence-manifest.json.\n`
-        : ""),
+    }),
     "utf8",
   );
 
@@ -537,10 +507,7 @@ export async function generateDependencyReleaseEvidence({
         evidenceArtifactName: `openclaw-release-dependency-evidence-${releaseRef}`,
         baseRef: dependencyChangeBaseRef,
         counts,
-      }) +
-        (riskAcceptance
-          ? `\nWARNING: ${riskAcceptance.blockers.length} dependency advisory finding(s) remain unresolved and were explicitly accepted for ${packageVersion}. See the dependency evidence manifest.\n`
-          : ""),
+      }),
       "utf8",
     );
   }

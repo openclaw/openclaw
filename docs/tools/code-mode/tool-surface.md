@@ -120,6 +120,11 @@ and namespace calls including MCP — are auto-drained inside the same
 `exec`/`wait` call while they resolve within the deadline, so a compact code
 block that awaits several tools runs to completion in one model turn instead of
 forcing one model tool call per await.
+A bridged shell `exec` without `yieldMs` or `background: true` waits for the
+remaining call budget (`tools.codeMode.timeoutMs`, default 10 s) minus a resume
+margin before backgrounding, so commands that finish within that window return
+inline in the same turn. Late sequential calls background sooner and still
+return their process handle so the guest can resume inline.
 
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
@@ -236,8 +241,8 @@ enforcement remains unchanged. The finalized projection is carried through
 bridge calls and continuation resume; consumers do not reconstruct it from the
 catalog.
 
-The catalog omits code-mode control tools (`exec`, `wait`, `tool_search_code`,
-`tool_search`, `tool_describe`, `tool_call`) and direct-only tools. Controls
+The catalog omits code-mode control tools (`exec`, `wait`, `tool_search`,
+`tool_describe`, `tool_call`) and direct-only tools. Controls
 must not recurse through the catalog; direct-only tools remain model-visible
 because their structured results cannot cross the JSON guest bridge.
 
@@ -256,8 +261,8 @@ is active.
 
 When Code Mode engages through forced `true` or `"auto"` activation:
 
-- OpenClaw does not expose `tool_search_code`, `tool_search`, `tool_describe`,
-  or `tool_call` as model-visible tools.
+- OpenClaw does not expose `tool_search`, `tool_describe`, or `tool_call` as
+  model-visible tools.
 - The same cataloging idea moves inside the guest runtime.
 - The guest runtime receives bare async globals plus callable search/describe
   handles for native tools, plus on-demand MCP search handles.
@@ -266,7 +271,7 @@ When Code Mode engages through forced `true` or `"auto"` activation:
 - Nested calls dispatch through the same OpenClaw executor path that Tool
   Search uses.
 
-See [Tool Search](/tools/tool-search) for the OpenClaw compact catalog bridge
+See [Tool Search](/tools/tool-search) for the OpenClaw structured catalog surface
 that code mode supersedes for active runs.
 
 ## Tool names and collisions

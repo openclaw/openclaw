@@ -1,13 +1,15 @@
 import { spawnSync } from "node:child_process";
-import * as childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   releaseSnapshotTempDirectory,
@@ -24,8 +26,7 @@ import {
   reclaimAbandonedSqliteSnapshots,
   reclaimAbandonedSqliteSnapshotsAsync,
 } from "./sqlite-snapshot-staging.js";
-
-vi.mock("node:child_process", { spy: true });
+import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -55,51 +56,64 @@ beforeAll(async () => {
 });
 
 it("shares one token process across concurrent and nested async snapshot lifetimes", async () => {
-  const cache = tempDirs.make("sqlite-staging-async-owner-");
-  const started = performance.now();
-  const children = vi.spyOn(childProcess, "spawn");
-  const nativeOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
-    throw new Error("snapshot token opened on the host");
-  });
-  const directories: string[] = [];
-  try {
-    directories.push(
-      ...(await Promise.all(
-        Array.from({ length: 3 }, () =>
-          createSqliteSnapshotStagingDirectory(cache, false, undefined, true),
-        ),
-      )),
-    );
-    await expect(
-      createSqliteSnapshotStagingDirectory(path.join(cache, "missing"), false, undefined, true),
-    ).rejects.toThrow();
-    expect(directories.every((directory) => fs.existsSync(directory))).toBe(true);
-    const nested = await createSqliteSnapshotStagingDirectory(
-      directories[0],
-      false,
-      undefined,
-      true,
-    );
-    directories.push(nested);
-    const sessions = children.mock.calls.filter(
-      ([, args]) => Array.isArray(args) && args.includes("session"),
-    );
-    expect(sessions).toHaveLength(1);
-    console.info("async snapshot token owner", {
-      directories: directories.length,
-      tokenProcesses: sessions.length,
-      elapsedMs: Math.round(performance.now() - started),
-    });
-  } finally {
-    try {
-      for (const directory of directories.toReversed()) {
-        expect(await removeTempDirectoryAsync(directory)).toBe(true);
-      }
-    } finally {
-      nativeOpen.mockRestore();
+  const root = tempDirs.make("sqlite-staging-async-owner-");
+  const cache = path.join(root, "cache");
+  const processRecord = path.join(root, "token-processes");
+  fs.mkdirSync(cache);
+  // The token child now launches inside its native owner, beyond the host's spawn binding.
+  const preloadPath = path.join(root, "token-preload.cjs");
+  const preload = `
+    const { appendFileSync } = require("node:fs");
+    const { isMainThread } = require("node:worker_threads");
+    if (isMainThread && process.argv[2] === ${JSON.stringify(SQLITE_READONLY_CHILD_ARG)} && process.argv[3] === "session") {
+      appendFileSync(${JSON.stringify(processRecord)}, String(process.pid) + String.fromCharCode(10));
     }
-  }
-  expect(fs.readdirSync(cache)).toEqual([]);
+  `;
+  fs.writeFileSync(preloadPath, preload);
+  await withEnvAsync(sqliteWorkerPreloadEnv(preloadPath), async () => {
+    const nativeOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
+      throw new Error("snapshot token opened on the host");
+    });
+    const directories: string[] = [];
+    const allocations = Array.from({ length: 3 }, async () => {
+      const directory = await createSqliteSnapshotStagingDirectory(cache, false, undefined, true);
+      directories.push(directory);
+      return directory;
+    });
+    let tokenPid: number;
+    try {
+      await Promise.all(allocations);
+      await expect(
+        createSqliteSnapshotStagingDirectory(path.join(cache, "missing"), false, undefined, true),
+      ).rejects.toThrow("snapshot staging root");
+      const nested = await createSqliteSnapshotStagingDirectory(
+        directories[0],
+        false,
+        undefined,
+        true,
+      );
+      directories.push(nested);
+      expect(new Set(directories).size).toBe(4);
+      expect(directories.every((directory) => fs.existsSync(directory))).toBe(true);
+      const processes = fs.readFileSync(processRecord, "utf8").trim().split("\n");
+      expect(processes).toHaveLength(1);
+      tokenPid = Number(processes[0]);
+      expect(tokenPid).toBeGreaterThan(0);
+      expect(isPidAlive(tokenPid)).toBe(true);
+    } finally {
+      try {
+        // A rejected allocation must not discard successful siblings' cleanup custody.
+        await Promise.allSettled(allocations);
+        for (const directory of directories.toReversed()) {
+          expect.soft(await removeTempDirectoryAsync(directory), directory).toBe(true);
+        }
+      } finally {
+        nativeOpen.mockRestore();
+      }
+    }
+    expect(fs.readdirSync(cache)).toEqual([]);
+    expect(isPidAlive(tokenPid)).toBe(false);
+  });
 });
 
 function createFixture() {

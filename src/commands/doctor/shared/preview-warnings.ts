@@ -53,21 +53,6 @@ function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
   });
 }
 
-function hasToolsBySenderKey(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some(hasToolsBySenderKey);
-  }
-  if (!hasRecord(value)) {
-    return false;
-  }
-  if (hasRecord(value.toolsBySender)) {
-    return true;
-  }
-  return Object.entries(value).some(
-    ([key, nested]) => key !== "toolsBySender" && hasToolsBySenderKey(nested),
-  );
-}
-
 function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
   const globalExec = cfg.tools?.exec;
   if (
@@ -279,9 +264,7 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
   if (configuredEntries.length === 0) {
     return [];
   }
-  const alsoAllow = Array.isArray(tools?.alsoAllow)
-    ? tools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
-    : params.inheritedAlsoAllow;
+  const alsoAllow = readPreviewStringList(tools?.alsoAllow) ?? params.inheritedAlsoAllow;
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
   return collectProfileConfiguredSectionWarnings({
     configuredEntries,
@@ -421,9 +404,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
 function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
-  const globalAlsoAllow = Array.isArray(globalTools?.alsoAllow)
-    ? globalTools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
+  const globalAlsoAllow = readPreviewStringList(globalTools?.alsoAllow);
   const globalProfile = typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
   const globalConfiguredEntries = collectConfiguredToolSectionGrantEntries({
     tools: globalTools,
@@ -662,13 +643,6 @@ export async function collectDoctorPreviewNotes(params: {
       const { sanitizeForLog } = await import("../../../../packages/terminal-core/src/ansi.js");
       warnings.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
     }
-  }
-
-  if (hasToolsBySenderKey(params.cfg)) {
-    const { collectLegacyToolsBySenderWarnings, scanLegacyToolsBySenderKeys } =
-      await import("./legacy-tools-by-sender.js");
-    const toolsBySenderHits = scanLegacyToolsBySenderKeys(params.cfg);
-    appendScanWarnings(toolsBySenderHits, collectLegacyToolsBySenderWarnings);
   }
 
   if (hasConfiguredSafeBins(params.cfg)) {

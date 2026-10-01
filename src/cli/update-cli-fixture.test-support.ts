@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
@@ -16,7 +17,6 @@ import {
   gatewayCommandCall,
   getLogOutput,
   requireValue,
-  type UpdateCliScenario,
 } from "./update-cli-assertions.test-support.js";
 import { registerUpdateCliLifecycle } from "./update-cli-lifecycle.test-support.js";
 import {
@@ -64,9 +64,9 @@ import {
 import {
   createCurrentProcessFreshDoctorFixture,
   createUpdateCliPackageFixtures,
+  writeGitUpdateResultFixture,
   writeJsonFixture,
   writeNpmPackageInstall,
-  writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
@@ -77,6 +77,15 @@ export function createUpdateCliFixture() {
   // because macOS os.tmpdir() is a /var -> /private/var symlink.
   const fixtureRoot = fsSync.realpathSync(
     fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-tests-")),
+  );
+  const checkoutRoot = path.join(fixtureRoot, "checkout");
+  fsSync.mkdirSync(checkoutRoot);
+  for (const directory of [".git", "src", "extensions"]) {
+    fsSync.mkdirSync(path.join(checkoutRoot, directory));
+  }
+  fsSync.writeFileSync(
+    path.join(checkoutRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version: VERSION }),
   );
   const globalNpmConfig = path.join(fixtureRoot, "global-npmrc");
   fsSync.writeFileSync(globalNpmConfig, "");
@@ -152,6 +161,11 @@ export function createUpdateCliFixture() {
       createCaseDir(prefix),
       version,
     );
+    // A real global npm prefix always owns its launcher directory, even when
+    // this scenario has no launcher entries to publish.
+    await fs.mkdir(path.join(path.dirname(path.dirname(nodeModules)), "bin"), {
+      recursive: true,
+    });
     mockNpmGlobalCommands(nodeModules, async (argv) => {
       if (argv[0] === "npm" && argv[1] === "i") {
         await writeNpmPackageInstall(argv, pkgRoot);
@@ -168,6 +182,7 @@ export function createUpdateCliFixture() {
   const primeServiceCommand = (
     programArguments: Array<string | undefined>,
     environment?: NodeJS.ProcessEnv,
+    sourcePath?: string,
   ): void => {
     const managedDefinition = {
       programArguments,
@@ -176,6 +191,7 @@ export function createUpdateCliFixture() {
     serviceReadCommand.mockResolvedValue({
       ...managedDefinition,
       managedDefinition,
+      ...(sourcePath ? { sourcePath } : {}),
     });
   };
 
@@ -206,7 +222,11 @@ export function createUpdateCliFixture() {
 
   const mockOwnedGitService = (root = process.cwd()) => {
     const serviceEntrypoint = path.join(root, "dist", "index.js");
-    primeServiceCommand(["node", serviceEntrypoint, "gateway", "run"]);
+    primeServiceCommand(
+      ["node", serviceEntrypoint, "gateway", "run"],
+      undefined,
+      process.platform === "win32" ? resolveGatewayTaskScriptPath(process.env) : undefined,
+    );
     pathExists.mockImplementation(
       async (candidate: string) =>
         candidate === path.join(root, "package.json") || candidate === serviceEntrypoint,
@@ -223,12 +243,6 @@ export function createUpdateCliFixture() {
     resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
       nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
     );
-  };
-
-  const runUpdateCliScenario = async (testCase: UpdateCliScenario) => {
-    vi.clearAllMocks();
-    await testCase.run();
-    testCase.assert();
   };
 
   const runRestartFallbackScenario = async (params: { daemonInstall: "ok" | "fail" }) => {
@@ -416,7 +430,6 @@ export function createUpdateCliFixture() {
     mockRunningManagedGateway,
     mockStoppedManagedGitGateway,
     mockNpmGlobalRoot,
-    mockPackageReplacementFailure,
     mockGatewayInstallFailure,
   } = createUpdateCliPackageFixtures({
     runCommandWithTimeout,
@@ -455,11 +468,9 @@ export function createUpdateCliFixture() {
   const setupManagedGitRootRefresh = async (reinspect = false) => {
     const { root, entrypoints } = setupUpdatedRootRefresh();
     const updatedEntrypoint = requireValue(entrypoints[0], "updated entrypoint");
-    await writeOpenClawPackageFixture(root, VERSION, { entryPath: updatedEntrypoint });
     mockOwnedGitService();
     mockGitUpdateAfterMutation(
-      makeOkUpdateResult({
-        mode: "git",
+      await writeGitUpdateResultFixture({
         root,
         before: { sha: "old-managed-sha", version: "2026.4.26" },
         after: { sha: "new-managed-sha", version: VERSION },
@@ -580,7 +591,6 @@ export function createUpdateCliFixture() {
     mockPackageGatewayLifecycle,
     mockPackageInstallAtCaseDir,
     mockPackageInstallStatus,
-    mockPackageReplacementFailure,
     mockPostDoctorSnapshot,
     mockRunningManagedGateway,
     mockServicePackageCommands,
@@ -593,7 +603,6 @@ export function createUpdateCliFixture() {
     runPostCoreCommand,
     runPostCoreUpdate,
     runRestartFallbackScenario,
-    runUpdateCliScenario,
     runWithGatewayServiceEnv,
     setStdoutTty,
     setTty,

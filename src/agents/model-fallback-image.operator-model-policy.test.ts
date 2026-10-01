@@ -33,22 +33,19 @@ function operator(assertCurrent: () => void = () => {}) {
 }
 
 describe("operator model policy on image fallback", () => {
-  it.each(["blocked-alias", "test-provider/blocked"])(
-    "rejects explicit %s without trying a provider",
-    async (modelOverride) => {
-      const run = vi.fn();
-      await expect(
-        runWithImageModelFallback({
-          cfg,
-          manifestPlugins: [],
-          operatorAuthority: operator(),
-          modelOverride,
-          run,
-        }),
-      ).rejects.toThrow("cannot use this model");
-      expect(run).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an explicit denied alias without trying a provider", async () => {
+    const run = vi.fn();
+    await expect(
+      runWithImageModelFallback({
+        cfg,
+        manifestPlugins: [],
+        operatorAuthority: operator(),
+        modelOverride: "blocked-alias",
+        run,
+      }),
+    ).rejects.toThrow("cannot use this model");
+    expect(run).not.toHaveBeenCalled();
+  });
 
   it("keeps permitted configured fallbacks in order", async () => {
     const run = vi

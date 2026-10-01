@@ -43,6 +43,7 @@ describe("loadPluginManifestRegistry provider metadata", () => {
         externalAuthProviders: ["acme-ai"],
         usageProviders: ["acme-ai"],
         workerProviders: [" static-ssh ", ""],
+        storageProviders: [" archive-objects ", ""],
       },
       configSchema: { type: "object" },
     });
@@ -58,6 +59,7 @@ describe("loadPluginManifestRegistry provider metadata", () => {
       externalAuthProviders: ["acme-ai"],
       usageProviders: ["acme-ai"],
       workerProviders: ["static-ssh"],
+      storageProviders: ["archive-objects"],
     });
   });
 
@@ -134,6 +136,7 @@ describe("loadPluginManifestRegistry provider metadata", () => {
           modelTarget: "utility",
           platforms: ["darwin", "not-a-platform"],
           website: "https://platform.openai.com/api-keys",
+          docsUrl: "HTTPS://DOCS.EXAMPLE.COM/authentication",
           assistantPriority: 10,
           assistantVisibility: "detected-only",
           appGuidedSecret: true,
@@ -206,6 +209,7 @@ describe("loadPluginManifestRegistry provider metadata", () => {
         modelTarget: "utility",
         platforms: ["darwin"],
         website: "https://platform.openai.com/api-keys",
+        docsUrl: "https://docs.example.com/authentication",
         assistantPriority: 10,
         assistantVisibility: "detected-only",
         appGuidedSecret: true,
@@ -253,12 +257,14 @@ describe("loadPluginManifestRegistry provider metadata", () => {
           choiceId: "unsafe-api-key",
           icon: "http://example.com/icon.svg",
           website: "javascript:alert(1)",
+          docsUrl: "javascript:alert(1)",
         },
         {
           provider: "oversized",
           method: "api-key",
           choiceId: "oversized-api-key",
           icon: `https://example.com/${"a".repeat(2048)}`,
+          docsUrl: `https://example.com/${"a".repeat(2048)}`,
         },
       ],
       configSchema: { type: "object" },

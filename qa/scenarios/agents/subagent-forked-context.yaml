@@ -75,7 +75,15 @@ flow:
             expr: "forkDebugRequests.find((request) => spawnRequest?.plannedToolCallId && request.toolOutputCallId === spawnRequest.plannedToolCallId && String(request.prompt ?? '').includes(parentPrompt))"
         - set: acceptedChild
           value:
-            expr: "acceptedRequest ? JSON.parse(acceptedRequest.toolOutput) : null"
+            expr: |-
+              (() => {
+                if (!acceptedRequest) { return null; }
+                const receipt = JSON.parse(acceptedRequest.toolOutput);
+                if (spawnRequest.plannedWireToolName !== 'tool_call') { return receipt; }
+                return receipt?.tool?.name === spawnRequest.plannedToolName
+                  ? extractQaToolPayload(receipt.result)
+                  : null;
+              })()
         - assert:
             expr: "!env.mock || (acceptedChild?.status === 'accepted' && acceptedChild.context === 'fork' && typeof acceptedChild.childSessionKey === 'string')"
             message: expected a successful fork receipt tied to the parent's sessions_spawn call
@@ -109,7 +117,21 @@ flow:
             message: expected the accepted child provider request to contain inherited parent user history separately from its code-free task
         - set: parentCompletionRequest
           value:
-            expr: "forkDebugRequests.find((request) => (request.plannedToolName === 'message' ? request.plannedToolArgs?.message === `${config.childResultPrefix} ${config.contextNeedle}` : !request.plannedToolName) && (String(request.prompt ?? '').includes(`sourceSession=${acceptedChild?.childSessionKey} `) || String(request.allInputText ?? '').includes(`session_key: ${acceptedChild?.childSessionKey}\n`)))"
+            expr: |-
+              (async () => {
+                const expected = `${config.childResultPrefix} ${config.contextNeedle}`;
+                // Settled batches omit child IDs from model text. Bind their result
+                // through the native accepted run and the child's own transcript.
+                const nativeRun = env.mock && env.runtimeId === 'openclaw'
+                  ? (await readNativeQaSubagentRuns(env, sessionKey)).find((run) => run.runId === acceptedChild?.runId && run.childSessionKey === acceptedChild?.childSessionKey && run.requesterSessionKey === sessionKey && run.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'delivered')
+                  : undefined;
+                const childFinal = nativeRun ? (await readSessionTranscriptSummary(env, nativeRun.childSessionKey)).finalText : undefined;
+                return forkDebugRequests.find((request) =>
+                  (request.plannedToolName === 'message' ? request.plannedToolArgs?.message === expected : !request.plannedToolName) &&
+                  (String(request.prompt ?? '').includes(`sourceSession=${acceptedChild?.childSessionKey} `) ||
+                   String(request.allInputText ?? '').includes(`session_key: ${acceptedChild?.childSessionKey}\n`) ||
+                   (nativeRun && childFinal === expected && typeof spawnRequest.sessionId === 'string' && request.sessionId === spawnRequest.sessionId && request.cursor > inheritedChildRequest.request.cursor && String(request.prompt ?? '').includes('Child completion results:') && String(request.prompt ?? '').includes(expected))));
+              })()
         - assert:
             expr: "!env.mock || Boolean(parentCompletionRequest)"
             message:
@@ -131,7 +153,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "(async () => { const summary = await readSessionTranscriptSummary(env, sessionKey); const recorded = parentCompletionRequest.plannedToolName ? summary.successfulToolCallEvents?.some((event) => event.name === deliveryWireTool && event.toolCallId === deliveryTranscriptId) : summary.finalText === `${config.childResultPrefix} ${config.contextNeedle}`; return recorded ? true : undefined; })()"
+                      expr: "(async () => { const summary = await readSessionTranscriptSummary(env, sessionKey, { includeCodeModeControl: true }); const recorded = parentCompletionRequest.plannedToolName ? summary.successfulToolCallEvents?.some((event) => event.name === deliveryWireTool && event.toolCallId === deliveryTranscriptId) : summary.finalText === `${config.childResultPrefix} ${config.contextNeedle}`; return recorded ? true : undefined; })()"
                   - expr: liveTurnTimeoutMs(env, 10000)
                   - 100
       detailsExpr: "({ reply: outbound.text, childSessionKey: acceptedChild?.childSessionKey ?? null, childRequestCursor: inheritedChildRequest?.request.cursor ?? null, parentCompletionCursor: parentCompletionRequest?.cursor ?? null, inheritedParentHistory: Boolean(inheritedChildRequest), parentResultRecorded: env.mock ? parentResultRecorded : null })"

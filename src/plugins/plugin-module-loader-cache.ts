@@ -3,7 +3,9 @@ import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import type { NodePath } from "@babel/traverse";
+import type { CallExpression, Program, Statement } from "@babel/types";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
@@ -107,33 +109,15 @@ function resolveAutomaticJitiTsconfig(loaderFilename: string): string | undefine
   }
 }
 
-type BabelImportCallPath = {
-  node: {
-    callee: { type: string; name?: string };
-    arguments: unknown[];
-  };
-  scope: { getBinding(name: string): unknown };
-  replaceWith(node: unknown): void;
-};
-
-type BabelProgramPath = {
-  scope: { generateUidIdentifier(name: string): { name: string } };
-  traverse(visitor: { CallExpression(call: BabelImportCallPath): void }): void;
-  unshiftContainer(name: "body", nodes: unknown): void;
-};
-
 function createBunJitiImportCachePlugin(babel: {
-  types: {
-    callExpression(callee: unknown, args: unknown[]): unknown;
-    identifier(name: string): unknown;
-  };
-  template: { statements: { ast(source: string): unknown } };
+  types: Pick<typeof import("@babel/types"), "callExpression" | "identifier">;
+  template: { statements: { ast(source: string): Statement[] } };
 }) {
   return {
     visitor: {
       Program: {
-        exit(program: BabelProgramPath) {
-          const calls: BabelImportCallPath[] = [];
+        exit(program: NodePath<Program>) {
+          const calls: NodePath<CallExpression>[] = [];
           program.traverse({
             CallExpression(call) {
               if (

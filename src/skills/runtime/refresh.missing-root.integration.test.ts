@@ -1,755 +1,268 @@
-import assert from "node:assert/strict";
-import { AsyncLocalStorage } from "node:async_hooks";
-import nativeFs from "node:fs";
 import fs from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
-import os from "node:os";
 import path from "node:path";
-import chokidar from "chokidar";
-import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveSkillsWatcherUsePolling } from "./refresh-watch-path.js";
-import { shouldUseNativeSkillsWatcher } from "./refresh-watch-transport.js";
-import {
-  observeContentWatchers,
-  type ObservedSkillsWatcher,
-} from "./refresh.native.test-support.js";
+import type { WatchSubscription } from "@openclaw/fs-safe/watch";
+import { beforeEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
+import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { getSkillsResourceVersion, getSkillsSourceVersion } from "./refresh-state.js";
+import { toWatchRoot } from "./refresh-watch-path.js";
+import { pathWatchers } from "./refresh-watch-registry.js";
+import { useSkillsWatcherFixture } from "./refresh.watcher.test-support.js";
 
+const subscriptions: WatchSubscription[] = [];
+const starts: Promise<void>[] = [];
+vi.mock("@openclaw/fs-safe/watch", async () => {
+  const { createRequire } = await import("node:module");
+  // /root and /watch must share fs-safe's private Root registry.
+  const actual = createRequire(import.meta.url)(
+    "@openclaw/fs-safe/watch",
+  ) as typeof import("@openclaw/fs-safe/watch");
+  const watch: typeof actual.watch = (root, options) => {
+    const subscription = actual.watch(root, {
+      ...options,
+      mode: "poll",
+      pollIntervalMs: 2_147_483_647,
+    });
+    const setScopes = subscription.setScopes.bind(subscription);
+    subscription.setScopes = (scopes) => {
+      const scoped = setScopes(scopes);
+      starts.push(scoped);
+      return scoped;
+    };
+    subscriptions.push(subscription);
+    starts.push(subscription.ready);
+    return subscription;
+  };
+  return { ...actual, watch };
+});
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
   resolvePluginSkillRootsFromMetadata: () => [],
 }));
-
-it.each(["initial", "closed", "disabled", "evicted"] as const)(
-  "reads repaired skills immediately after %s watcher acquisition",
-  async (lifecycle) => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "skills-acquire-")));
-    const workspaceDir = path.join(root, "workspace");
-    const skillDir = path.join(workspaceDir, "skills", "acquire-proof");
-    const skillFile = path.join(skillDir, "SKILL.md");
-    const { ensureSkillsWatcher, closeSkillsWatchers } = await import("./refresh.js");
-    const { getSkillsSnapshotVersion } = await import("./refresh-state.js");
-    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
-    const options = { config: {}, agentId: "main" };
-    try {
-      await fs.mkdir(skillDir, { recursive: true });
-      if (lifecycle !== "initial") {
-        ensureSkillsWatcher({ workspaceDir, ...options });
-        if (lifecycle === "closed") {
-          await closeSkillsWatchers();
-        } else if (lifecycle === "disabled") {
-          ensureSkillsWatcher({
-            workspaceDir,
-            ...options,
-            config: { skills: { load: { watch: false } } },
-          });
-        } else {
-          const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61 * 60_000);
-          try {
-            ensureSkillsWatcher({ workspaceDir: path.join(root, "other"), ...options });
-          } finally {
-            clock.mockRestore();
-          }
-        }
-      }
-      // Cache the invalid file after teardown, so teardown invalidation cannot
-      // accidentally prove freshness on reacquisition.
-      nativeFs.writeFileSync(skillFile, "not valid skill frontmatter\n");
-      const readSkill = () =>
-        loadWorkspaceSkills(workspaceDir, options).find(
-          (entry) => entry.skill.name === "acquire-proof",
-        );
-      expect(readSkill()).toBeUndefined();
-      nativeFs.writeFileSync(
-        skillFile,
-        "---\nname: acquire-proof\ndescription: Repaired before acquisition\n---\n",
-      );
-      expect(readSkill()).toBeUndefined();
-      // No await: the first synchronous consumer must not need a ready/change event.
-      ensureSkillsWatcher({ workspaceDir, ...options });
-      expect(readSkill()?.skill.description).toBe("Repaired before acquisition");
-      const version = getSkillsSnapshotVersion(workspaceDir);
-      ensureSkillsWatcher({ workspaceDir, ...options });
-      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
-    } finally {
-      await closeSkillsWatchers();
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  },
-);
-
-it.each(["create", "edit"] as const)(
-  "refreshes cached skills after %s during initial watcher registration",
-  async (operation) => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "skills-scan-proof-")));
-    const workspaceDir = path.join(root, "workspace");
-    const skillDir = path.join(workspaceDir, "skills", "scan-proof");
-    const skillFile = path.join(skillDir, "SKILL.md");
-    const contents = (description: string) =>
-      `---\nname: scan-proof\ndescription: ${description}\n---\n`;
-    const { ensureSkillsWatcher, closeSkillsWatchers } = await import("./refresh.js");
-    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
-    const options = { config: {}, agentId: "main" };
-    try {
-      await fs.mkdir(path.dirname(skillDir), { recursive: true });
-      if (operation === "edit") {
-        await fs.mkdir(skillDir, { recursive: true });
-        await fs.writeFile(skillFile, contents("Before registration"));
-      }
-      ensureSkillsWatcher({ workspaceDir, ...options });
-      const cached = loadWorkspaceSkills(workspaceDir, options);
-      expect(cached.find((entry) => entry.skill.name === "scan-proof")?.skill.description).toBe(
-        operation === "edit" ? "Before registration" : undefined,
-      );
-      // Keep the write in this turn, before native watcher registration, so
-      // refresh cannot depend on receiving a subsequent file-change event.
-      nativeFs.mkdirSync(skillDir, { recursive: true });
-      nativeFs.writeFileSync(skillFile, contents("After registration"));
-      await expect
-        .poll(
-          () =>
-            loadWorkspaceSkills(workspaceDir, options).find(
-              (entry) => entry.skill.name === "scan-proof",
-            )?.skill.description,
-          { timeout: 3_000 },
-        )
-        .toBe("After registration");
-    } finally {
-      await closeSkillsWatchers();
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  },
-);
-
-it("refreshes skills created beneath an initially missing project skills root", async () => {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "skills-root-proof-")));
-  const workspaceDir = path.join(root, "workspace");
-  await fs.mkdir(path.join(workspaceDir, "skills", "existing"), { recursive: true });
-  const registeredPaths = new Set<string>();
-  const turnContext = new AsyncLocalStorage<string>();
-  const pendingInputContext = new AsyncLocalStorage<string>();
-  const inheritedContexts: Array<{ turn?: string; pendingInput?: string }> = [];
-  const usePolling = resolveSkillsWatcherUsePolling();
-  const observeRegistration = (watched: nativeFs.PathLike, polling: boolean) => {
-    inheritedContexts.push({
-      turn: turnContext.getStore(),
-      pendingInput: pendingInputContext.getStore(),
-    });
-    if (polling === usePolling) {
-      registeredPaths.add(path.resolve(String(watched)));
-    }
-  };
-  const originalWatch = nativeFs.watch;
-  const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
-    observeRegistration(args[0], false);
-    return originalWatch(...args);
-  });
-  const originalWatchFile = nativeFs.watchFile;
-  const watchFileObserver = vi.spyOn(nativeFs, "watchFile").mockImplementation((...args) => {
-    observeRegistration(args[0], true);
-    return originalWatchFile(...args);
-  });
-  syncBuiltinESMExports();
-  const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
-    await import("./refresh.js");
-  const changes: string[] = [];
-  let readyEvents = 0;
-  const unregister = registerSkillsChangeListener((event) => {
-    if (event.workspaceDir !== workspaceDir) {
-      return;
-    }
-    if (event.reason === "watch") {
-      if (event.changedPath) {
-        changes.push(path.resolve(event.changedPath));
-      } else {
-        readyEvents += 1;
-      }
-    }
-  });
-  try {
-    turnContext.run("active turn", () => {
-      pendingInputContext.run("accepted input", () => {
-        ensureSkillsWatcher({ workspaceDir });
-        expect(turnContext.getStore()).toBe("active turn");
-        expect(pendingInputContext.getStore()).toBe("accepted input");
-      });
-    });
-    const existingSkill = path.join(workspaceDir, "skills", "existing", "SKILL.md");
-    // This control covers writes after registration; the cases above cover
-    // cached discovery while the initial scan is still pending. Wait for the
-    // public ready invalidations because Bun cannot observe Chokidar's already-
-    // bound node:fs export through the spy below.
-    await vi.waitFor(() => {
-      expect(readyEvents).toBe(1);
-    });
-    // Bun does not project spy replacements onto already-bound node:fs named exports.
-    if (!process.versions.bun) {
-      await vi.waitFor(() => {
-        expect(registeredPaths.has(workspaceDir)).toBe(true);
-        expect(registeredPaths.has(path.dirname(existingSkill))).toBe(true);
-      });
-    }
-    await fs.writeFile(existingSkill, "existing skill");
-    await vi.waitFor(() => expect(changes).toContain(existingSkill), { timeout: 3_000 });
-    const newSkill = path.join(workspaceDir, ".agents", "skills", "new", "SKILL.md");
-    await fs.mkdir(path.dirname(newSkill), { recursive: true });
-    await fs.writeFile(newSkill, "new skill");
-    await vi.waitFor(
-      () => {
-        expect(
-          changes.some((changed) => changed.startsWith(path.join(workspaceDir, ".agents"))),
-        ).toBe(true);
+const fixture = useSkillsWatcherFixture();
+const refresh = await import("./refresh.js");
+const planning: Promise<unknown>[] = [];
+const samples: Promise<unknown>[] = [];
+beforeEach(async () => {
+  subscriptions.length = starts.length = planning.length = samples.length = 0;
+  const settling = await import("./refresh-file-stability.js");
+  const createScheduler = settling.createSkillFileScheduler;
+  vi.spyOn(settling, "createSkillFileScheduler").mockImplementation((options) =>
+    createScheduler({
+      ...options,
+      sample(changedPath) {
+        const sample = options.sample(changedPath);
+        samples.push(sample);
+        return sample;
       },
-      { timeout: 3_000 },
-    );
-    if (!process.versions.bun) {
-      expect(inheritedContexts.length).toBeGreaterThan(0);
-      for (const context of inheritedContexts) {
-        expect(context).toEqual({ turn: undefined, pendingInput: undefined });
-      }
-    }
-  } finally {
-    unregister();
-    await closeSkillsWatchers();
-    watchObserver.mockRestore();
-    watchFileObserver.mockRestore();
-    syncBuiltinESMExports();
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
-
-describe("shared missing skill ancestors", () => {
-  let captureFailure: ((stage: "before test teardown" | "afterEach fallback") => void) | undefined;
-  const roots = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async ({ task }) => {
-      // afterEach may follow the body's cleanup; retain any earlier snapshot.
-      if (task.result?.state === "fail") {
-        captureFailure?.("afterEach fallback");
-      }
-      captureFailure = undefined;
-      const { closeSkillsWatchers } = await import("./refresh.js");
-      await closeSkillsWatchers(true);
-      vi.restoreAllMocks();
-      syncBuiltinESMExports();
-      cleanup();
     }),
   );
-
-  it.each(["higher", "intermediate"] as const)(
-    "preserves settled root discovery after moving its %s ancestor and retains sibling subscriptions",
-    async (ancestor) => {
-      let phase = "create fixture root";
-      let failureSnapshot: string | undefined;
-      const observed: ObservedSkillsWatcher[] = [];
-      const watcherErrors: unknown[] = [];
-      let controlledLoss:
-        | { sourceRoot: string; generationStart: number; phase: string }
-        | undefined;
-      const contentErrors: Array<{
-        error: unknown;
-        observation: ObservedSkillsWatcher;
-        loss: typeof controlledLoss;
-        phase: string;
-      }> = [];
-      observeContentWatchers(observed, watcherErrors, undefined, (error, observation) => {
-        contentErrors.push({ error, observation, loss: controlledLoss, phase });
-      });
-      const nativeAncestor = shouldUseNativeSkillsWatcher(resolveSkillsWatcherUsePolling());
-      const nativeHandles: Array<{ closed: boolean }> = [];
-      const originalNativeWatch = nativeFs.watch;
-      const nativeWatch = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
-        const watcher = originalNativeWatch(...args);
-        const observation = { closed: false };
-        nativeHandles.push(observation);
-        watcher.once("close", () => {
-          observation.closed = true;
-        });
-        watcher.on("error", (error) => {
-          observation.closed = true;
-          watcherErrors.push(error);
-        });
-        return watcher;
-      });
-      syncBuiltinESMExports();
-      const pendingTimers = new Map<
-        Parameters<typeof clearTimeout>[0],
-        {
-          settled: Promise<void>;
-          finish: () => void;
-          delayMs: number | undefined;
-          createdAt: number;
-          stack: string | undefined;
-        }
-      >();
-      captureFailure = (captureStage) => {
-        failureSnapshot ??= JSON.stringify({
-          captureStage,
-          ancestor,
-          phase,
-          pendingTimers: Array.from(pendingTimers.values(), ({ delayMs, createdAt, stack }) => ({
-            delayMs,
-            ageMs: Math.round(performance.now() - createdAt),
-            stack,
-          })),
-          watchers: observed.map(({ watcher, ready, paths }) => ({
-            paths,
-            ready,
-            closed: watcher.closed,
-          })),
-          watcherErrors: watcherErrors.map((error) =>
-            error instanceof Error ? error.stack : String(error),
-          ),
-          contentErrors: contentErrors.map(({ observation, loss, phase: errorPhase }) => ({
-            loss,
-            phase: errorPhase,
-            closed: observation.watcher.closed,
-          })),
-          nativeHandles,
-        });
-      };
-      onTestFailed(() => {
-        console.error(`[skills ancestor failure] ${failureSnapshot}`);
-      });
-      const root = await fs.realpath(roots.make("skills-shared-ancestor-"));
-      const source = (name: string) => {
-        const sourceRoot = path.join(root, name, "nested", "skills");
-        return {
-          workspaceDir: path.join(root, `workspace-${name}`),
-          sourceRoot,
-          config: { skills: { load: { extraDirs: [sourceRoot] } } },
-        };
-      };
-      const first = source("left");
-      const second = source("right");
-      for (const current of [first, second]) {
-        phase = `create workspace: ${current.workspaceDir}`;
-        await fs.mkdir(path.join(current.workspaceDir, "skills"), { recursive: true });
-      }
-      phase = "import refresh owner";
-      const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
-        await import("./refresh.js");
-      phase = "import skill loader";
-      const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
-      const originalWatch = chokidar.watch;
-      const watch = vi.spyOn(chokidar, "watch").mockImplementation((...args) => {
-        const watcher = originalWatch(...args);
-        const observation = { watcher, ready: false, paths: args[0] };
-        observed.push(observation);
-        // Attach before returning: promotion can create more watchers during ready.
-        watcher.once("ready", () => {
-          observation.ready = true;
-        });
-        watcher.on("error", (error) => watcherErrors.push(error));
-        return watcher;
-      });
-      const originalSetTimeout = globalThis.setTimeout;
-      const originalClearTimeout = globalThis.clearTimeout;
-      vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-        const { promise: settled, resolve: finish } = createDeferredCore();
-        const timer = originalSetTimeout(() => {
-          pendingTimers.delete(timer);
-          try {
-            callback.apply(timer, args);
-          } finally {
-            finish();
-          }
-        }, delay);
-        pendingTimers.set(timer, {
-          settled,
-          finish,
-          delayMs: delay,
-          createdAt: performance.now(),
-          stack: new Error("Watcher fixture timer created").stack,
-        });
-        return timer;
-      });
-      vi.spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
-        originalClearTimeout(timer);
-        pendingTimers.get(timer)?.finish();
-        pendingTimers.delete(timer);
-      });
-      // Root loss must retire the failed generation; no unrelated error is allowed.
-      const verifyWatcherErrors = () => {
-        expect(watcherErrors).toHaveLength(contentErrors.length);
-        for (const [
-          index,
-          { error, observation, loss, phase: errorPhase },
-        ] of contentErrors.entries()) {
-          expect(watcherErrors[index]).toBe(error);
-          assert.ok(loss, errorPhase);
-          assert.ok(error instanceof Error && "code" in error && "path" in error);
-          expect(error.code).toBe("ENOENT");
-          assert.ok(typeof error.path === "string");
-          expect(path.resolve(error.path)).toBe(loss.sourceRoot);
-          expect(observation.watcher.closed).toBe(true);
-        }
-      };
-      const hasRecoveredLoss = () => {
-        const loss = controlledLoss;
-        return (
-          !loss ||
-          observed
-            .slice(loss.generationStart)
-            .some(
-              ({ paths, ready, watcher }) =>
-                ready &&
-                !watcher.closed &&
-                [paths].flat().some((watched) => path.resolve(watched) === loss.sourceRoot),
-            )
-        );
-      };
-      const settleWatchers = async (stage: string) => {
-        for (;;) {
-          // Native registration is synchronous; its ready/reconciliation callbacks
-          // are microtasks. Finish those before inspecting recursive scan readiness.
-          await Promise.resolve();
-          phase = `${stage}: wait for watcher readiness`;
-          await vi.waitFor(() => {
-            verifyWatcherErrors();
-            expect(observed.every(({ watcher, ready }) => ready || watcher.closed)).toBe(true);
-            expect(hasRecoveredLoss()).toBe(true);
-          });
-          const generationCount = observed.length;
-          // Drain actual debounce/stability work, including timers chained by its
-          // continuations. Keep native time and watchers; do not sleep past a guess.
-          phase = `${stage}: drain pending timers`;
-          await Promise.all(Array.from(pendingTimers.values(), ({ settled }) => settled));
-          phase = `${stage}: wait for immediate continuations`;
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          phase = `${stage}: check settled generation`;
-          verifyWatcherErrors();
-          if (
-            pendingTimers.size === 0 &&
-            observed.length === generationCount &&
-            observed.every(({ watcher, ready }) => ready || watcher.closed) &&
-            hasRecoveredLoss()
-          ) {
-            return;
-          }
-        }
-      };
-      phase = "acquire watchers";
-      for (const current of [first, second]) {
-        ensureSkillsWatcher(current);
-      }
-      await settleWatchers("initial acquisition");
-      if (nativeAncestor) {
-        expect(
-          nativeWatch.mock.calls.filter(([watched]) => path.resolve(String(watched)) === root),
-        ).toHaveLength(1);
-      } else {
-        expect(
-          watch.mock.calls.filter(([watched]) => watched === root.replaceAll("\\", "/")),
-        ).toHaveLength(1);
-      }
-      const changes: string[] = [];
-      const unregister = registerSkillsChangeListener((event) => {
-        if (event.workspaceDir) {
-          changes.push(event.workspaceDir);
-        }
-      });
-      const readSkills = (current: typeof first) =>
-        loadWorkspaceSkills(current.workspaceDir, {
-          config: current.config,
-          bundledSkillsDir: "",
-          managedSkillsDir: path.join(root, "unused"),
-        });
-      const read = (current: typeof first) => readSkills(current).map((entry) => entry.skill.name);
-      const writeSkill = async (current: typeof first, name: string) => {
-        const directory = path.join(current.sourceRoot, name);
-        phase = `create skill directory: ${name}`;
-        await fs.mkdir(directory, { recursive: true });
-        phase = `write skill: ${name}`;
-        await fs.writeFile(
-          path.join(directory, "SKILL.md"),
-          `---\nname: ${name}\ndescription: Shared ancestor proof\n---\n`,
-        );
-      };
-      try {
-        phase = "prime empty discovery";
-        expect(read(first)).toEqual([]);
-        expect(read(second)).toEqual([]);
-        const unrelatedFile = path.join(root, "unrelated.sqlite-wal");
-        const lstat = vi.spyOn(fs, "lstat");
-        syncBuiltinESMExports();
-        try {
-          phase = "write unrelated file";
-          await fs.writeFile(unrelatedFile, "unrelated");
-          await writeSkill(first, "first-proof");
-          phase = "discover first skill";
-          await expect.poll(() => read(first), { timeout: 3_000 }).toContain("first-proof");
-          await settleWatchers("first discovery");
-          if (nativeAncestor) {
-            expect(lstat.mock.calls.filter(([file]) => file === unrelatedFile)).toEqual([]);
-          }
-        } finally {
-          lstat.mockRestore();
-          syncBuiltinESMExports();
-        }
-        expect(changes).not.toContain(second.workspaceDir);
-        phase = "wait for root promotion";
-        await vi.waitFor(() => {
-          expect(
-            observed.some(
-              ({ paths, ready, watcher }) =>
-                [paths].flat().some((watched) => path.resolve(watched) === first.sourceRoot) &&
-                ready &&
-                !watcher.closed,
-            ),
-          ).toBe(true);
-        });
-        await settleWatchers("promoted root");
-        // Prime after promoted root/companion scans and queued refreshes settle:
-        // late initial reconciliation must not mask a missed ancestor move.
-        expect(read(first)).toContain("first-proof");
-        const movedAncestor =
-          ancestor === "higher" ? path.join(root, "left") : path.join(root, "left", "nested");
-        controlledLoss = {
-          sourceRoot: first.sourceRoot,
-          generationStart: observed.length,
-          phase: "remove or move watched ancestor",
-        };
-        if (process.platform === "win32") {
-          // Windows cannot rename an ancestor with live descendant directory watches.
-          phase = "remove watched ancestor";
-          await fs.rm(movedAncestor, { recursive: true });
-        } else {
-          phase = "rename watched ancestor";
-          await fs.rename(movedAncestor, `${movedAncestor}-away`);
-        }
-        phase = "discover removed ancestor";
-        await expect.poll(() => read(first), { timeout: 3_000 }).toEqual([]);
-        await writeSkill(first, "returned-proof");
-        phase = "discover returned skill";
-        await expect.poll(() => read(first), { timeout: 3_000 }).toEqual(["returned-proof"]);
-        await settleWatchers("recreated root");
-        controlledLoss = undefined;
-        expect(read(first)).toEqual(["returned-proof"]);
-        // Windows uses the delete/recreate segment above: live descendant
-        // directory handles prohibit this same-turn ancestor rename there.
-        if (nativeAncestor && process.platform !== "win32") {
-          phase = "replace ancestor at the same path before native delivery";
-          nativeFs.renameSync(movedAncestor, `${movedAncestor}-replaced`);
-          const replacementSkill = path.join(first.sourceRoot, "replacement-proof");
-          nativeFs.mkdirSync(replacementSkill, { recursive: true });
-          nativeFs.writeFileSync(
-            path.join(replacementSkill, "SKILL.md"),
-            "---\nname: replacement-proof\ndescription: Replaced ancestor\n---\n",
-          );
-          await expect.poll(() => read(first), { timeout: 3_000 }).toEqual(["replacement-proof"]);
-          await settleWatchers("same-path replacement");
-        }
-        if (nativeAncestor) {
-          // A one-time cache invalidation is insufficient: subsequent writes must
-          // reach a content watcher registered on the replacement directory.
-          await writeSkill(first, "replacement-later-proof");
-          await expect
-            .poll(() => read(first), { timeout: 3_000 })
-            .toContain("replacement-later-proof");
-          await settleWatchers("replacement skill creation");
-          expect(
-            readSkills(first).find((entry) => entry.skill.name === "replacement-later-proof")?.skill
-              .description,
-          ).toBe("Shared ancestor proof");
-          phase = "edit discovered replacement skill";
-          await fs.writeFile(
-            path.join(first.sourceRoot, "replacement-later-proof", "SKILL.md"),
-            "---\nname: replacement-later-proof\ndescription: Edited replacement skill\n---\n",
-          );
-          await expect
-            .poll(
-              () =>
-                readSkills(first).find((entry) => entry.skill.name === "replacement-later-proof")
-                  ?.skill.description,
-              { timeout: 3_000 },
-            )
-            .toBe("Edited replacement skill");
-        }
-        // Retiring one logical workspace must not retire the shared missing-root observer.
-        phase = "retire first workspace";
-        ensureSkillsWatcher({
-          workspaceDir: first.workspaceDir,
-          config: { skills: { load: { watch: false } } },
-        });
-        await writeSkill(second, "remaining-proof");
-        phase = "discover sibling skill";
-        await expect.poll(() => read(second), { timeout: 3_000 }).toContain("remaining-proof");
-        const skillFile = path.join(second.sourceRoot, "remaining-proof", "SKILL.md");
-        const renamedSkillFile = path.join(second.sourceRoot, "remaining-proof", "SKILL.saved");
-        phase = "rename sibling skill away";
-        await fs.rename(skillFile, renamedSkillFile);
-        phase = "discover renamed sibling skill absence";
-        await expect.poll(() => read(second), { timeout: 3_000 }).toEqual([]);
-        phase = "restore sibling skill filename";
-        await fs.rename(renamedSkillFile, skillFile);
-        phase = "discover restored sibling skill";
-        await expect.poll(() => read(second), { timeout: 3_000 }).toContain("remaining-proof");
-        phase = "remove sibling ancestor";
-        controlledLoss = {
-          sourceRoot: second.sourceRoot,
-          generationStart: observed.length,
-          phase,
-        };
-        await fs.rm(path.join(root, "right"), { recursive: true });
-        phase = "discover removed sibling ancestor";
-        await expect.poll(() => read(second), { timeout: 3_000 }).toEqual([]);
-        await writeSkill(second, "recreated-proof");
-        phase = "discover recreated sibling skill";
-        await expect.poll(() => read(second), { timeout: 3_000 }).toContain("recreated-proof");
-        await settleWatchers("recreated sibling root");
-        controlledLoss = undefined;
-      } catch (error) {
-        try {
-          captureFailure?.("before test teardown");
-        } catch {
-          // Diagnostic failure must not replace the original operation error.
-        }
-        throw error;
-      } finally {
-        unregister();
-        await closeSkillsWatchers(true);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        if (nativeAncestor) {
-          expect(nativeHandles.every(({ closed }) => closed)).toBe(true);
-        }
-      }
-      verifyWatcherErrors();
-    },
-  );
-
-  it.runIf(process.platform !== "win32").each([
-    {
-      name: "does not promote missing roots through newly created ancestor symlinks",
-      replaceAncestor: false,
-    },
-    {
-      name: "rediscovers ordinary roots after a watched ancestor is replaced by a symlink",
-      replaceAncestor: true,
-    },
-  ])("$name", async ({ replaceAncestor }) => {
-    const root = await fs.realpath(roots.make("skills-ancestor-symlink-"));
-    const outside = await fs.realpath(roots.make("skills-ancestor-outside-"));
-    const workspaceDir = path.join(root, "workspace");
-    await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
-    const link = path.join(root, "missing");
-    const sourceRoot = path.join(link, "nested", "skills");
-    if (replaceAncestor) {
-      await fs.mkdir(link);
-    }
-    await fs.mkdir(path.join(outside, "nested", "skills", "outside-proof"), { recursive: true });
-    const config = { skills: { load: { extraDirs: [sourceRoot] } } };
-    const observed: ObservedSkillsWatcher[] = [];
-    const watcherErrors: unknown[] = [];
-    observeContentWatchers(observed, watcherErrors);
-    const pollingRawPaths: string[] = [];
-    let pollingRawDeliveries = 0;
-    const unwatchedDuringPollingRaw: string[] = [];
-    const originalUnwatchFile = nativeFs.unwatchFile;
-    vi.spyOn(nativeFs, "unwatchFile").mockImplementation((...args) => {
-      const unwatched = path.resolve(String(args[0]));
-      if (pollingRawPaths.includes(unwatched)) {
-        unwatchedDuringPollingRaw.push(unwatched);
-      }
-      return originalUnwatchFile(...args);
-    });
-    const originalWatch = chokidar.watch;
-    const watch = vi.spyOn(chokidar, "watch").mockImplementation((...args) => {
-      const watcher = originalWatch(...args);
-      const observation = { watcher, ready: false, paths: args[0] };
-      observed.push(observation);
-      watcher.once("ready", () => {
-        observation.ready = true;
-      });
-      watcher.on("error", (error) => watcherErrors.push(error));
-      if (resolveSkillsWatcherUsePolling()) {
-        const originalEmit = watcher.emit.bind(watcher);
-        vi.spyOn(watcher, "emit").mockImplementation((...emitArgs) => {
-          if (emitArgs[0] !== "raw") {
-            return originalEmit(...emitArgs);
-          }
-          pollingRawPaths.push(path.resolve(String(emitArgs[2])));
-          pollingRawDeliveries += 1;
-          try {
-            return originalEmit(...emitArgs);
-          } finally {
-            pollingRawPaths.pop();
-          }
-        });
-      }
-      return watcher;
-    });
-    const nativeWatch = vi.spyOn(nativeFs, "watch");
-    syncBuiltinESMExports();
-    const { ensureSkillsWatcher } = await import("./refresh.js");
-    const { getSkillsSourceVersion } = await import("./refresh-state.js");
-    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
-    const read = () =>
-      loadWorkspaceSkills(workspaceDir, {
-        config,
-        bundledSkillsDir: "",
-        managedSkillsDir: path.join(root, "unused"),
-      }).map((entry) => entry.skill.name);
-    ensureSkillsWatcher({ workspaceDir, config });
-    expect(read()).toEqual([]);
-    await vi.waitFor(() => {
-      expect(observed.length).toBeGreaterThan(0);
-      expect(observed.every(({ ready, watcher }) => ready || watcher.closed)).toBe(true);
-      expect(watcherErrors).toEqual([]);
-    });
-    // Ready handlers reconcile synchronously before this readiness check returns.
-    // Unchanged empty inventory suppresses public events, but discovery still invalidates.
-    const sourceVersion = getSkillsSourceVersion(workspaceDir);
-    const chokidarAdmissionStart = replaceAncestor ? watch.mock.calls.length : 0;
-    const nativeAdmissionStart = replaceAncestor ? nativeWatch.mock.calls.length : 0;
-    if (replaceAncestor) {
-      // Finish replacement in this turn so delivery cannot rely on observing
-      // the intermediate absence before the same path becomes a symlink.
-      nativeFs.renameSync(link, `${link}-away`);
-      nativeFs.symlinkSync(outside, link, "dir");
-    } else {
-      await fs.symlink(outside, link, "dir");
-    }
-    await expect
-      .poll(() => getSkillsSourceVersion(workspaceDir), { timeout: 3_000 })
-      .toBeGreaterThan(sourceVersion);
-    expect(
-      watch.mock.calls
-        .slice(chokidarAdmissionStart)
-        .some(
-          ([watched]) =>
-            typeof watched === "string" && (watched === link || watched.startsWith(`${link}/`)),
-        ),
-    ).toBe(false);
-    if (shouldUseNativeSkillsWatcher(resolveSkillsWatcherUsePolling())) {
-      expect(
-        nativeWatch.mock.calls.some(([watched]) => watched === (replaceAncestor ? link : root)),
-      ).toBe(true);
-      expect(
-        nativeWatch.mock.calls
-          .slice(nativeAdmissionStart)
-          .some(
-            ([watched]) =>
-              typeof watched === "string" && (watched === link || watched.startsWith(`${link}/`)),
-          ),
-      ).toBe(false);
-    }
-    await fs.unlink(link);
-    const skillDir = path.join(sourceRoot, "ordinary-proof");
-    await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDir, "SKILL.md"),
-      "---\nname: ordinary-proof\ndescription: Ordinary replacement\n---\n",
-    );
-    await expect.poll(read, { timeout: 3_000 }).toContain("ordinary-proof");
-    if (resolveSkillsWatcherUsePolling()) {
-      // watchFile still reads its listener container after synchronous raw delivery.
-      expect(pollingRawDeliveries).toBeGreaterThan(0);
-      expect(unwatchedDuringPollingRaw).toEqual([]);
-    }
+  const owner = await import("./refresh-observation-source.js");
+  const scope = owner.skillsObservationScope;
+  vi.spyOn(owner, "skillsObservationScope").mockImplementation((...args) => {
+    const work = scope(...args);
+    planning.push(work);
+    return work;
   });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
 });
+
+async function ready() {
+  // A completed admission can discover another trusted target or widen an entry scope.
+  let joined = -1;
+  while (joined !== starts.length + planning.length) {
+    joined = starts.length + planning.length;
+    await Promise.resolve();
+    await Promise.all(
+      [...pathWatchers.values()].flatMap((state) => (state.authority ? [state.authority] : [])),
+    );
+    await Promise.all(planning);
+    await Promise.all(starts);
+  }
+}
+
+async function advance(elapsed: number) {
+  await vi.advanceTimersByTimeAsync(elapsed);
+  await Promise.all(samples.splice(0));
+}
+
+async function reconcile() {
+  const results = await Promise.allSettled(
+    subscriptions
+      .filter((subscription) => subscription.health().state === "ready")
+      .map((subscription) => subscription.reconcile()),
+  );
+  for (const result of results) {
+    if (result.status === "rejected") {
+      expect(result.reason).toMatchObject({ name: "AbortError" });
+    }
+  }
+  await ready();
+  for (const elapsed of [0, 100, 100, 50, 250]) {
+    await advance(elapsed);
+  }
+}
+
+const linkType = process.platform === "win32" ? "junction" : "dir";
+const read = (config?: OpenClawConfig) =>
+  loadWorkspaceSkills(fixture.workspaceDir, { workspaceOnly: true, config }).map(
+    (entry) => entry.skill.description,
+  );
+const ensure = (config?: OpenClawConfig) => {
+  refresh.ensureSkillsWatcher({
+    workspaceDir: fixture.workspaceDir,
+    config,
+    sourcePlan: resolveWorkspaceSkillSourcePlan(fixture.workspaceDir, {
+      workspaceOnly: true,
+      config,
+    }),
+  });
+  return ready();
+};
+
+it("discovers a newly created root and keeps observing edits and deletion", async () => {
+  const root = path.join(fixture.workspaceDir, "skills");
+  const write = (description: string) =>
+    writeSkill({ dir: path.join(root, "guide"), name: "guide", description });
+  await fs.rm(root, { recursive: true });
+  await ensure();
+  expect(read()).toEqual([]);
+  await write("Created");
+  await reconcile();
+  expect(read()).toEqual(["Created"]);
+  const version = getSkillsSourceVersion(fixture.workspaceDir);
+  await write("Edited");
+  await reconcile();
+  expect(getSkillsSourceVersion(fixture.workspaceDir)).toBeGreaterThan(version);
+  expect(read()).toEqual(["Edited"]);
+  await fs.rm(root, { recursive: true });
+  await reconcile();
+  expect(read()).toEqual([]);
+});
+
+it("refreshes supporting resources without invalidating discovery, including atomic saves", async () => {
+  const dir = path.join(fixture.workspaceDir, "skills", "guide");
+  await writeSkill({ dir, name: "guide", description: "Stable discovery" });
+  await ensure();
+  expect(read()).toEqual(["Stable discovery"]);
+  const file = path.join(dir, "README.md");
+  const sourceVersion = getSkillsSourceVersion(fixture.workspaceDir);
+  const changed = vi.fn();
+  refresh.registerSkillsChangeListener(changed);
+  for (const operation of ["create", "replace", "delete"] as const) {
+    const before = getSkillsResourceVersion(fixture.workspaceDir);
+    if (operation === "create") {
+      await fs.writeFile(file, "created");
+    } else if (operation === "replace") {
+      const temporary = path.join(fixture.root, "replacement");
+      await fs.writeFile(temporary, "replacement");
+      await fs.rename(temporary, file);
+    } else {
+      await fs.unlink(file);
+    }
+    await reconcile();
+    expect(getSkillsResourceVersion(fixture.workspaceDir)).toBeGreaterThan(before);
+    expect(getSkillsSourceVersion(fixture.workspaceDir)).toBe(sourceVersion);
+    expect(changed).not.toHaveBeenCalled();
+  }
+  await fs.mkdir(file);
+  await reconcile();
+  expect(getSkillsSourceVersion(fixture.workspaceDir)).toBeGreaterThan(sourceVersion);
+});
+
+it("observes admitted symlink targets and removes them from cached discovery on unlink", async () => {
+  const target = await fixture.createFixtureDirectory("outside");
+  const dir = path.join(target, "guide");
+  await writeSkill({ dir, name: "guide", description: "Linked instructions" });
+  const link = path.join(fixture.workspaceDir, "skills", "linked");
+  await fs.symlink(target, link, linkType);
+  await ensure();
+  expect(read()).toEqual([]);
+  const config = { skills: { load: { allowSymlinkTargets: [target] } } };
+  await ensure(config);
+  expect(read(config)).toEqual(["Linked instructions"]);
+  await writeSkill({ dir, name: "guide", description: "Edited target" });
+  await reconcile();
+  expect(read(config)).toEqual(["Edited target"]);
+  const observation = pathWatchers.get(toWatchRoot(target));
+  expect(observation).toBeDefined();
+  await fs.unlink(link);
+  await reconcile();
+  expect(read(config)).toEqual([]);
+  await ensure(config);
+  expect(observation?.closed).toBe(true);
+});
+
+it("settles an atomic SKILL.md replacement until the writer stops changing it", async () => {
+  const dir = path.join(fixture.workspaceDir, "skills", "guide");
+  await writeSkill({ dir, name: "guide", description: "Original" });
+  await ensure();
+  expect(read()).toEqual(["Original"]);
+  const changed = vi.fn();
+  refresh.registerSkillsChangeListener(changed);
+  await fs.unlink(path.join(dir, "SKILL.md"));
+  await writeSkill({ dir, name: "guide", description: "Still writing" });
+  await Promise.all(subscriptions.map((subscription) => subscription.reconcile()));
+  await advance(0);
+  await advance(100);
+  await advance(100);
+  expect(changed).not.toHaveBeenCalled();
+  await writeSkill({ dir, name: "guide", description: "Finished" });
+  await Promise.all(subscriptions.map((subscription) => subscription.reconcile()));
+  // The in-flight window samples again in 50 ms, then restarts its 250 ms settling.
+  await advance(50);
+  for (const elapsed of [100, 100, 50]) {
+    await advance(elapsed);
+  }
+  expect(changed).not.toHaveBeenCalled();
+  await advance(250);
+  expect(read()).toEqual(["Finished"]);
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it.each(["directory", "blocking file"] as const)(
+  "replans a %s replaced between source planning and the first scan",
+  async (kind) => {
+    const root = path.join(fixture.workspaceDir, "skills");
+    const target = await fixture.createFixtureDirectory("startup-target");
+    const config = { skills: { load: { allowSymlinkTargets: [target] } } };
+    if (kind === "blocking file") {
+      await fs.rmdir(root);
+      await fs.writeFile(root, "blocked");
+    }
+    const owner = await import("./refresh-observation-source.js");
+    const plan = vi.mocked(owner.skillsObservationScope).getMockImplementation()!;
+    let replaced = false;
+    vi.mocked(owner.skillsObservationScope).mockImplementation((...args) => {
+      const work = plan(...args).then(async (scope) => {
+        if (path.resolve(args[1].path) === root && !replaced) {
+          replaced = true;
+          await fs.rm(root, { recursive: true });
+          if (kind === "directory") {
+            await fs.symlink(target, root, linkType);
+          }
+          await writeSkill({
+            dir: path.join(root, "guide"),
+            name: "guide",
+            description: "At startup",
+          });
+        }
+        return scope;
+      });
+      planning.push(work);
+      return work;
+    });
+    await ensure(config);
+    expect(replaced).toBe(true);
+    expect(read(config)).toEqual(["At startup"]);
+    await writeSkill({
+      dir: path.join(root, "guide"),
+      name: "guide",
+      description: "After startup",
+    });
+    await reconcile();
+    expect(read(config)).toEqual(["After startup"]);
+  },
+);

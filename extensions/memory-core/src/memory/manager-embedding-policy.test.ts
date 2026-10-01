@@ -446,6 +446,8 @@ describe("memory embedding policy", () => {
       // Zhipu embedding-3 caps `input` at 64 items under its generic 1214 code.
       'openai-compatible embeddings failed: HTTP 400: {"error":{"code":"1214","message":"input array max 64"}}',
       "input array max 64",
+      // Zhipu embedding-3 rejects batches over 64 items with a Chinese message (#136261).
+      'HTTP 400: {"error":{"code":"1214","message":"input数组最大不得超过64条"}}',
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
     }
@@ -455,6 +457,7 @@ describe("memory embedding policy", () => {
       "embeddings max input length is unknown",
       "Embeddings API input limit exceeded",
       'HTTP 400: {"code":"InvalidParameter","param":"input","message":"input must be a string"}',
+      // A batch-size complaint without an explicit numeric cap is not splittable.
       "batch size is invalid",
       "batch size is invalid, it should not be larger than unknown; request id 12345",
       "batch size is invalid, it should not be smaller than 20",

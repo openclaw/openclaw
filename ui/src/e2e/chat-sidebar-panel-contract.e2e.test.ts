@@ -11,6 +11,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -49,7 +50,6 @@ const offeredSlotLabels = [
   "Browser",
   "Files",
   "Side chat",
-  "Tasks",
   "Desktop",
   "Discussion",
 ] as const;
@@ -57,8 +57,6 @@ const offeredSlotLabels = [
 type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
 
 const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
-  // Tasks: no background tasks, nothing to inspect.
-  "Tasks",
   // Discussion: no external URL, nothing to open.
   "Discussion",
 ]);
@@ -77,7 +75,6 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
       "sessions.companion.state",
       "sessions.diff",
       "sessions.files.list",
-      "tasks.list",
       "terminal.open",
     ],
     methodResponses: {
@@ -97,7 +94,6 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
         root: "/tmp/plain-workspace",
         sessionKey: "main",
       },
-      "tasks.list": { tasks: [] },
       "terminal.open": {
         agentId: "main",
         confined: false,
@@ -205,24 +201,6 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
         gitCheckout: true,
         root: "/tmp/checkout",
         sessionKey: "main",
-      },
-      "tasks.list": {
-        tasks: [
-          {
-            agentId: "main",
-            createdAt: Date.now() - 2_000,
-            id: "task-sidebar-invariant",
-            kind: "subagent",
-            ownerKey: "main",
-            progressSummary: "Checking every offered panel",
-            runtime: "subagent",
-            startedAt: Date.now() - 1_000,
-            status: "running",
-            taskId: "task-sidebar-invariant",
-            title: "Verify cold-open behavior",
-            updatedAt: Date.now(),
-          },
-        ],
       },
       "terminal.open": {
         agentId: "main",
@@ -368,7 +346,12 @@ async function readSlotColdOpenOutcome(
     ).toEqual(offeredSlotLabels);
     const held =
       label === "Discussion"
-        ? await holdModuleResponse(page, /\/assets\/session-discussion-panel-[^/]+\.js$/u)
+        ? await holdModuleResponse(
+            page,
+            controlUiE2eBuiltModuleRequest(
+              "ui/src/pages/chat/components/session-discussion-panel.ts",
+            ),
+          )
         : null;
     try {
       await choices.filter({ hasText: label }).click();
@@ -457,7 +440,11 @@ suite.define(() => {
 
       const initialRequests = await gateway.getRequests("browser.request");
       expect(initialRequests.map((request) => request.params)).toEqual([
-        { method: "GET", path: "/tabs" },
+        {
+          method: "GET",
+          path: "/tabs",
+          tabScope: { sessionKey: "agent:main:main", referencedTabs: [] },
+        },
       ]);
 
       await openChatSidePanelType(page, "Files");
@@ -518,6 +505,7 @@ suite.define(() => {
           body: { targetId: "blacksmith-tab", type: "png" },
           method: "POST",
           path: "/screenshot",
+          tabScope: { sessionKey: "agent:main:main" },
         });
 
       await browser.locator(".bp-shot").waitFor();
@@ -619,7 +607,7 @@ suite.define(() => {
       const inventoryCount = (await gateway.getRequests("environments.status")).length;
       const observeCount = (await gateway.getRequests("desktop.observe")).length;
 
-      await clickSidebarTab(page, "Chat");
+      await clickSidebarTab(page, "OpenClaw");
       await canvas.waitFor({ state: "hidden" });
       await page.clock.fastForward(20_000);
       expect(await rfb.events()).toEqual(["authenticated:1"]);
@@ -636,7 +624,7 @@ suite.define(() => {
       await page.clock.fastForward(30_001);
       expect(await rfb.events()).toEqual(["authenticated:1"]);
       expect(await canvas.isVisible()).toBe(true);
-      await clickSidebarTab(page, "Chat");
+      await clickSidebarTab(page, "OpenClaw");
       await canvas.waitFor({ state: "hidden" });
       await page.clock.fastForward(30_001);
       await expect.poll(rfb.events).toEqual(["authenticated:1", "closed:1"]);
@@ -652,7 +640,7 @@ suite.define(() => {
       await desktop.getByRole("button", { name: "Disconnect", exact: true }).click();
       await expect.poll(rfb.events).toContain("closed:2");
       await desktop.getByRole("button", { name: "Reconnect", exact: true }).waitFor();
-      await clickSidebarTab(page, "Chat");
+      await clickSidebarTab(page, "OpenClaw");
       await clickSidebarTab(page, "Desktop");
       await desktop.getByRole("button", { name: "Reconnect", exact: true }).waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(observeCount + 1);
@@ -696,7 +684,7 @@ suite.define(() => {
         { down: true, keysym: 0xff51 },
       ];
       await expect.poll(rfb.keyEvents).toEqual([...capsLock, ...pressed]);
-      await clickSidebarTab(page, "Chat");
+      await clickSidebarTab(page, "OpenClaw");
       await canvas.waitFor({ state: "hidden" });
       const released = [
         ...capsLock,
@@ -718,7 +706,7 @@ suite.define(() => {
       await page.mouse.down();
       await page
         .locator(".side-panel__header .tabstrip-tab")
-        .filter({ hasText: "Chat" })
+        .filter({ hasText: "OpenClaw" })
         .press("Enter");
       await expect.poll(rfb.events).toContain("closed:2");
       expect(await canvas.count()).toBe(0);

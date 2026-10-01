@@ -1,4 +1,3 @@
-// Fal helper module supports http config behavior.
 import type { AuthProfileStore, OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -15,13 +14,8 @@ type FalAuthenticatedRequest = {
   authStore?: AuthProfileStore;
 };
 
-function resolveFalConfiguredBaseUrl(cfg?: OpenClawConfig): string | undefined {
-  return normalizeOptionalString(cfg?.models?.providers?.fal?.baseUrl);
-}
-
 export async function resolveFalHttpRequestConfig(params: {
   req: FalAuthenticatedRequest;
-  baseUrl?: string;
   capability: ProviderRequestCapability;
 }): Promise<ReturnType<typeof resolveProviderHttpRequestConfig>> {
   const auth = await resolveApiKeyForProvider({
@@ -35,8 +29,9 @@ export async function resolveFalHttpRequestConfig(params: {
   }
 
   return resolveProviderHttpRequestConfig({
-    baseUrl: params.baseUrl ?? resolveFalConfiguredBaseUrl(params.req.cfg),
+    baseUrl: normalizeOptionalString(params.req.cfg?.models?.providers?.fal?.baseUrl),
     defaultBaseUrl: DEFAULT_FAL_BASE_URL,
+    // Configured relay URLs retain the same strict SSRF policy as public fal endpoints.
     allowPrivateNetwork: false,
     defaultHeaders: {
       Authorization: `Key ${auth.apiKey}`,

@@ -58,16 +58,11 @@ async function promptSlackAllowFrom(params: {
     parseId: prompt.parseId,
     invalidWithoutTokenNote: prompt.invalidWithoutCredentialNote,
     resolveEntries: async ({ token, entries }) =>
-      (
-        await resolveSlackUserAllowlist({
-          token,
-          entries,
-        })
-      ).map((entry) => ({
-        input: entry.input,
-        resolved: entry.resolved,
-        id: entry.id ?? null,
-      })),
+      await resolveBasicAllowFromEntries({
+        token,
+        entries,
+        resolveEntries: resolveSlackUserAllowlist,
+      }),
   });
   return patchChannelConfigForAccount({
     cfg: params.cfg,
@@ -106,11 +101,7 @@ async function resolveSlackGroupAllowlist(params: {
         token: auth,
         entries: params.entries,
         buildWithoutToken: (input) => ({ input, resolved: false, id: undefined }),
-        resolveEntries: async ({ token, entries }) =>
-          await resolveSlackChannelAllowlist({
-            token,
-            entries,
-          }),
+        resolveEntries: resolveSlackChannelAllowlist,
       });
       const resolvedKeys = resolved
         .filter((entry) => entry.resolved && entry.id)

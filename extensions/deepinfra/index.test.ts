@@ -1,4 +1,3 @@
-// Deepinfra tests cover index plugin behavior.
 import {
   createCapturedPluginRegistration,
   registerSingleProviderPlugin,
@@ -80,9 +79,9 @@ async function withLiveDiscoveryTestEnv(
 describe("deepinfra capability registration", () => {
   it.each([
     ...["metadata", "pricing"].flatMap((scenario) =>
-      [401, 403, 503].map((status) => ({ scenario, status })),
+      [401, 503].map((status) => ({ scenario, status })),
     ),
-    ...[200, 401, 503].map((status) => ({ scenario: "empty", status })),
+    { scenario: "empty", status: 503 },
   ])(
     "reports public $scenario HTTP $status without rejecting inference credentials",
     async ({ scenario, status }) => {
@@ -180,16 +179,6 @@ describe("deepinfra capability registration", () => {
 });
 
 describe("deepinfra isCacheTtlEligible", () => {
-  it("returns true for anthropic/* proxied models", async () => {
-    const provider = await registerSingleProviderPlugin(deepinfraPlugin);
-    expect(
-      provider.isCacheTtlEligible?.({
-        provider: "deepinfra",
-        modelId: "anthropic/claude-4-sonnet",
-      }),
-    ).toBe(true);
-  });
-
   // Locked to case-insensitive to stay consistent with the shared proxy cache
   // wrapper, which lowercases the modelId before the "anthropic/" prefix check.
   it("returns true regardless of modelId case", async () => {

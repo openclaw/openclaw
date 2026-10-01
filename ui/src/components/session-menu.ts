@@ -61,6 +61,7 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) forkDisabled = false;
   @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
+  @property({ attribute: false }) snoozeAllowed = false;
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
@@ -167,7 +168,7 @@ class SessionMenu extends OpenClawLightDomElement {
         data-new-tab-action
         data-shortcut="g"
         aria-keyshortcuts="G"
-        ?disabled=${this.disabled || !pullRequestUrl}
+        ?disabled=${this.disabled}
       >
         <span slot="icon" class="session-menu__icon" aria-hidden="true"
           >${icons.gitPullRequest}</span

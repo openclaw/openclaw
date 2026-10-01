@@ -5,6 +5,7 @@ import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-run
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -22,7 +23,6 @@ import {
   unlinkIfExists,
 } from "./media.runtime.js";
 import { isGovSlackClient } from "./slack-client-kind.js";
-import { logVerbose } from "./thread.runtime.js";
 export type { SlackMediaResult } from "./media-types.js";
 
 function isSlackHostname(hostname: string, govSlack: boolean): boolean {
@@ -197,9 +197,7 @@ function resolveSlackMediaMimetype(
 }
 
 function looksLikeHtmlBuffer(buffer: Buffer): boolean {
-  const head = normalizeLowercaseStringOrEmpty(
-    buffer.subarray(0, 512).toString("utf-8").replace(/^\s+/, ""),
-  );
+  const head = normalizeLowercaseStringOrEmpty(buffer.subarray(0, 512).toString("utf-8"));
   return head.startsWith("<!doctype html") || head.startsWith("<html");
 }
 
@@ -286,9 +284,8 @@ async function downloadSlackMediaFile(
     }
   }
 
-  const effectiveMime = resolveSlackMediaMimetype(params.file, saved.contentType);
+  const contentType = resolveSlackMediaMimetype(params.file, saved.contentType);
   const label = saved.fileName ?? params.file.name;
-  const contentType = effectiveMime ?? saved.contentType;
   return {
     path: saved.path,
     ...(contentType ? { contentType } : {}),
@@ -306,11 +303,7 @@ function resolveForwardedAttachmentImageUrl(
     return null;
   }
   try {
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== "https:" || !isSlackHostname(parsed.hostname, govSlack)) {
-      return null;
-    }
-    return parsed.toString();
+    return assertSlackFileUrl(rawUrl, govSlack).href;
   } catch {
     return null;
   }

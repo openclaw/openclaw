@@ -427,15 +427,3 @@ function inputRichBlocksToPlainTextAtDepth(
 export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
   return inputRichBlocksToPlainTextAtDepth(blocks, 0);
 }
-
-export function boldRichText(text: string): RichText {
-  return { type: "bold", text };
-}
-
-export function italicRichText(text: string): RichText {
-  return { type: "italic", text };
-}
-
-export function paragraphBlock(text: RichText): InputRichBlockParagraph {
-  return { type: "paragraph", text };
-}

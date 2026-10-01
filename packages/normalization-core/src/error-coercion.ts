@@ -90,19 +90,7 @@ function formatStatusAndCode(value: unknown): string | undefined {
 }
 
 function stringifyUnknown(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (value === undefined) {
-    return "undefined";
-  }
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
     return String(value);
   }
   try {
@@ -277,13 +265,7 @@ export function extractErrorCode(err: unknown): string | undefined {
     return undefined;
   }
   const code = readProperty(err, "code");
-  if (typeof code === "string") {
-    return code;
-  }
-  if (typeof code === "number") {
-    return String(code);
-  }
-  return undefined;
+  return typeof code === "string" || typeof code === "number" ? String(code) : undefined;
 }
 
 export function readErrorName(err: unknown): string {

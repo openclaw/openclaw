@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { AssistantMessageEvent, Model } from "@openclaw/llm-core";
+import type {
+  AssistantMessageEvent,
+  Model,
+  TextContent as TextBlock,
+  ThinkingContent as ThinkingBlock,
+  ToolCall,
+} from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
@@ -28,21 +35,21 @@ import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
   createDsmlRecoverer,
+  type DeepSeekDsmlRecoveredPart,
   type RecoveredDeepSeekDsmlToolCall,
 } from "./openai-completions-dsml.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
-  createModelStreamCooperativeScheduler,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
   readOpenAICompletionsReasoningBatch,
-  throwIfModelStreamAborted,
   type MutableAssistantOutput,
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAICompletionsTextSource,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
+import { iterateModelStream, throwIfModelStreamAborted } from "./transport-stream-shared.js";
 
 type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
   // Some compatible providers attach usage per choice instead of per chunk.
@@ -80,17 +87,13 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
   const extra = (tc.extra_content as Record<string, unknown> | undefined)?.google as
     | Record<string, unknown>
     | undefined;
-  const fromExtra = extra?.thought_signature;
-  if (typeof fromExtra === "string" && fromExtra.length > 0) {
-    return fromExtra;
-  }
-  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
-    ?.thought_signature;
-  if (typeof fromFunction === "string" && fromFunction.length > 0) {
-    return fromFunction;
-  }
-  const fromToolCall = tc.thought_signature;
-  return typeof fromToolCall === "string" && fromToolCall.length > 0 ? fromToolCall : undefined;
+  return (
+    readNonEmptyStringPreservingWhitespace(extra?.thought_signature) ??
+    readNonEmptyStringPreservingWhitespace(
+      (tc.function as { thought_signature?: unknown } | undefined)?.thought_signature,
+    ) ??
+    readNonEmptyStringPreservingWhitespace(tc.thought_signature)
+  );
 }
 
 export async function processCompletionsStream(
@@ -112,16 +115,7 @@ export async function processCompletionsStream(
   if (options?.strictReasoningTags) {
     reasoningTagTextPartitioner.markStrict();
   }
-  type ToolCallBlock = {
-    type: "toolCall";
-    id: string;
-    name: string;
-    arguments: Record<string, unknown>;
-    partialArgs: string;
-    thoughtSignature?: string;
-  };
-  type TextBlock = { type: "text"; text: string; textSignature?: string };
-  type ThinkingBlock = { type: "thinking"; thinking: string; thinkingSignature?: string };
+  type ToolCallBlock = ToolCall & { partialArgs: string };
   let currentBlock: TextBlock | ThinkingBlock | ToolCallBlock | null = null;
   let directTextBlock: TextBlock | null = null;
   let directThinkingBlock: ThinkingBlock | null = null;
@@ -147,14 +141,13 @@ export async function processCompletionsStream(
     directMode && currentBlock && currentBlock.type !== "toolCall"
       ? (contentBlockIndices.get(currentBlock) ?? output.content.length - 1)
       : output.content.length - 1;
-  const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   let chunkPushedEvent = false;
   const pushStreamEvent = (event: AssistantMessageEvent) => {
     chunkPushedEvent = true;
     stream.push(event);
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
-    const nextBytes = measureUtf8Bytes(next.text);
+    const nextBytes = Buffer.byteLength(next.text, "utf8");
     if (pendingPostToolCallBytes + nextBytes > MAX_POST_TOOL_CALL_BUFFER_BYTES) {
       throw new Error("Exceeded post-tool-call delta buffer limit");
     }
@@ -163,17 +156,12 @@ export async function processCompletionsStream(
     if (
       !previous ||
       previous.kind !== next.kind ||
-      (previous.kind === "text" && next.kind === "text" && previous.source !== next.source)
+      (previous.kind === "text" && next.kind === "text" && previous.source !== next.source) ||
+      (previous.kind === "thinking" &&
+        next.kind === "thinking" &&
+        previous.signature !== next.signature)
     ) {
       pendingPostToolCallDeltas.push(next);
-      return;
-    }
-    if (next.kind === "thinking" && previous.kind === "thinking") {
-      if (previous.signature !== next.signature) {
-        pendingPostToolCallDeltas.push(next);
-        return;
-      }
-      previous.text += next.text;
       return;
     }
     previous.text += next.text;
@@ -334,59 +322,20 @@ export async function processCompletionsStream(
       partial: output,
     });
   };
+  const appendRecoveredParts = (recoveredParts: readonly DeepSeekDsmlRecoveredPart[]) => {
+    for (const recoveredPart of recoveredParts) {
+      if (recoveredPart.kind === "toolCall") {
+        appendRecoveredToolCall(recoveredPart);
+        continue;
+      }
+      const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
+      for (const part of parts) {
+        appendVisibleTextDelta(part);
+      }
+    }
+  };
   const appendFilteredVisibleTextDelta = (text: string) => {
-    const recoveredParts = deepSeekToolCallRecoverer?.push(text) ?? [
-      { kind: "text" as const, text },
-    ];
-    for (const recoveredPart of recoveredParts) {
-      if (recoveredPart.kind === "toolCall") {
-        appendRecoveredToolCall(recoveredPart);
-        continue;
-      }
-      const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
-      for (const part of parts) {
-        appendVisibleTextDelta(part);
-      }
-    }
-  };
-  const flushDeepSeekToolCallRecovererAtEnd = () => {
-    const recoveredParts = deepSeekToolCallRecoverer?.flush();
-    if (!recoveredParts) {
-      return;
-    }
-    for (const recoveredPart of recoveredParts) {
-      if (recoveredPart.kind === "toolCall") {
-        appendRecoveredToolCall(recoveredPart);
-        continue;
-      }
-      const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
-      for (const part of parts) {
-        appendVisibleTextDelta(part);
-      }
-    }
-  };
-  const flushDeepSeekTextFilterAtEnd = () => {
-    const parts = deepSeekTextFilter?.flush();
-    if (!parts) {
-      return;
-    }
-    for (const part of parts) {
-      appendVisibleTextDelta(part);
-    }
-  };
-  const appendRoutedContentDelta = (delta: CompletionsReasoningDelta) => {
-    if (delta.kind === "text") {
-      appendFilteredVisibleTextDelta(delta.text);
-      return;
-    }
-    if (!emitReasoning) {
-      return;
-    }
-    if (currentBlock?.type === "toolCall" && !directMode) {
-      queuePostToolCallDelta(delta);
-    } else {
-      appendThinkingDelta(delta);
-    }
+    appendRecoveredParts(deepSeekToolCallRecoverer?.push(text) ?? [{ kind: "text", text }]);
   };
   const appendPartitionedVisibleDelta = (delta: { kind: "text" | "thinking"; text: string }) => {
     if (delta.kind === "text") {
@@ -446,9 +395,6 @@ export async function processCompletionsStream(
       sealTextBeforeReasoning();
     }
   };
-  const cooperativeScheduler = directMode
-    ? undefined
-    : createModelStreamCooperativeScheduler(options?.signal);
   const guardedStream = withFirstStreamEventTimeout(responseStream as AsyncIterable<unknown>, {
     provider: model.provider,
     api: model.api,
@@ -459,13 +405,11 @@ export async function processCompletionsStream(
     onTimeout: options?.onFirstEventTimeout,
     hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
   });
-  for await (const rawChunk of guardedStream) {
+  const events = directMode ? guardedStream : iterateModelStream(guardedStream, options?.signal);
+  for await (const rawChunk of events) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
     if (!rawChunk || typeof rawChunk !== "object") {
-      if (cooperativeScheduler) {
-        await cooperativeScheduler.afterEvent();
-      }
       continue;
     }
     // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
@@ -488,9 +432,6 @@ export async function processCompletionsStream(
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (!choice) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
-      if (cooperativeScheduler) {
-        await cooperativeScheduler.afterEvent();
-      }
       continue;
     }
     const choiceUsage = choice.usage;
@@ -513,9 +454,6 @@ export async function processCompletionsStream(
     const rawChoiceDelta = choice.delta ?? choice.message;
     if (!rawChoiceDelta) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
-      if (cooperativeScheduler) {
-        await cooperativeScheduler.afterEvent();
-      }
       continue;
     }
     for (const normalizedDelta of normalizeToolCallDeltas(rawChoiceDelta, choice.finish_reason)) {
@@ -550,7 +488,13 @@ export async function processCompletionsStream(
         } else {
           const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
           beginReasoning(hasLaterVisibleText);
-          appendRoutedContentDelta(contentDelta);
+          if (emitReasoning) {
+            if (currentBlock?.type === "toolCall" && !directMode) {
+              queuePostToolCallDelta(contentDelta);
+            } else {
+              appendThinkingDelta(contentDelta);
+            }
+          }
         }
       }
       if (!hasReasoningThinking) {
@@ -653,9 +597,6 @@ export async function processCompletionsStream(
     }
     flushPendingPostToolCallDeltas();
     emitReasoningUsageActivity(hasReasoningUsageActivity);
-    if (cooperativeScheduler) {
-      await cooperativeScheduler.afterEvent();
-    }
   }
   // The SDK can end an aborted SSE iterator normally; cancellation must win
   // before buffered terminal markers can promote provisional tool calls.
@@ -664,8 +605,10 @@ export async function processCompletionsStream(
     throw new Error("Stream ended without finish_reason");
   }
   flushReasoningTagTextPartitioner();
-  flushDeepSeekToolCallRecovererAtEnd();
-  flushDeepSeekTextFilterAtEnd();
+  appendRecoveredParts(deepSeekToolCallRecoverer?.flush() ?? []);
+  for (const part of deepSeekTextFilter?.flush() ?? []) {
+    appendVisibleTextDelta(part);
+  }
   currentBlock = null;
   flushPendingPostToolCallDeltas();
   // Only an explicit stop or observed SSE terminal may authorize silent tool calls.

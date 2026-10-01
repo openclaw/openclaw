@@ -8,10 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.Json
 import java.util.concurrent.atomic.AtomicReference
 
 internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
@@ -33,25 +30,7 @@ class CameraHandler(
   suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult =
     try {
       val devices = camera.listDevices()
-      val payload =
-        buildJsonObject {
-          put(
-            "devices",
-            buildJsonArray {
-              devices.forEach { device ->
-                add(
-                  buildJsonObject {
-                    put("id", JsonPrimitive(device.id))
-                    put("name", JsonPrimitive(device.name))
-                    put("position", JsonPrimitive(device.position))
-                    put("deviceType", JsonPrimitive(device.deviceType))
-                  },
-                )
-              }
-            },
-          )
-        }.toString()
-      GatewaySession.InvokeResult.ok(payload)
+      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("devices" to devices)))
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
@@ -61,13 +40,7 @@ class CameraHandler(
 
   suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
     val logFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
-
-    fun camLog(msg: String) {
-      if (!BuildConfig.DEBUG) return
-      val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
-      logFile?.appendText("[$ts] $msg\n")
-      android.util.Log.w("openclaw", "camera.snap: $msg")
-    }
+    val camLog = cameraLogger(logFile, "camera.snap")
     try {
       logFile?.writeText("") // clear
       camLog("starting, params=$paramsJson")
@@ -75,7 +48,7 @@ class CameraHandler(
         try {
           camLog("calling camera.snap()")
           val r = camera.snap(paramsJson)
-          camLog("success, payload size=${r.payloadJson.length}")
+          camLog("success, payload size=${r.length}")
           r
         } catch (err: CancellationException) {
           throw err
@@ -86,7 +59,7 @@ class CameraHandler(
           return GatewaySession.InvokeResult.error(code = code, message = message)
         }
       camLog("returning result")
-      return GatewaySession.InvokeResult.ok(res.payloadJson)
+      return GatewaySession.InvokeResult.ok(res)
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
@@ -99,20 +72,11 @@ class CameraHandler(
   /** Handles camera.clip and keeps external audio capture paused while camera audio is active. */
   suspend fun handleClip(paramsJson: String?): GatewaySession.InvokeResult {
     val clipLogFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
-
-    fun clipLog(msg: String) {
-      if (!BuildConfig.DEBUG) return
-      val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
-      clipLogFile?.appendText("[CLIP $ts] $msg\n")
-      android.util.Log.w("openclaw", "camera.clip: $msg")
-    }
-    val includeAudio = parseIncludeAudio(paramsJson) ?: true
+    val clipLog = cameraLogger(clipLogFile, "camera.clip", "CLIP ")
+    val includeAudio = parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio") ?: true
     val ownsAudioCapture = includeAudio && setCameraAudioCaptureActive(true)
     if (includeAudio && !ownsAudioCapture) {
-      return GatewaySession.InvokeResult.error(
-        code = "MIC_BUSY",
-        message = "MIC_BUSY: another audio capture is active",
-      )
+      return nodeInvokeError("MIC_BUSY", "another audio capture is active")
     }
     val ownedClipFile = AtomicReference<java.io.File?>()
     try {
@@ -138,10 +102,9 @@ class CameraHandler(
       val rawBytes = filePayload.file.length()
       if (!isCameraClipWithinPayloadLimit(rawBytes)) {
         clipLog("payload too large: bytes=$rawBytes max=$CAMERA_CLIP_MAX_RAW_BYTES")
-        return GatewaySession.InvokeResult.error(
-          code = "PAYLOAD_TOO_LARGE",
-          message =
-            "PAYLOAD_TOO_LARGE: camera clip is $rawBytes bytes; max is $CAMERA_CLIP_MAX_RAW_BYTES bytes. Reduce durationMs and retry.",
+        return nodeInvokeError(
+          "PAYLOAD_TOO_LARGE",
+          "camera clip is $rawBytes bytes; max is $CAMERA_CLIP_MAX_RAW_BYTES bytes. Reduce durationMs and retry.",
         )
       }
 
@@ -172,5 +135,16 @@ class CameraHandler(
     }
   }
 
-  private fun parseIncludeAudio(paramsJson: String?): Boolean? = parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio")
+  private fun cameraLogger(
+    file: java.io.File?,
+    command: String,
+    prefix: String = "",
+  ): (String) -> Unit =
+    { message ->
+      if (BuildConfig.DEBUG) {
+        val time = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
+        file?.appendText("[$prefix$time] $message\n")
+        android.util.Log.w("openclaw", "$command: $message")
+      }
+    }
 }

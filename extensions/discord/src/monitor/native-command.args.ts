@@ -2,15 +2,15 @@ import type {
   ChatCommandDefinition,
   CommandArgDefinition,
   CommandArgValues,
+  CommandArgs,
   NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import type { CommandInteraction } from "../internal/discord.js";
-import type { DiscordCommandArgs } from "./native-command.types.js";
 
 export function readDiscordCommandArgs(
   interaction: CommandInteraction,
   definitions?: CommandArgDefinition[],
-): DiscordCommandArgs | undefined {
+): CommandArgs | undefined {
   if (!definitions || definitions.length === 0) {
     return undefined;
   }
@@ -18,11 +18,11 @@ export function readDiscordCommandArgs(
   for (const definition of definitions) {
     let value: string | number | boolean | null | undefined;
     if (definition.type === "number") {
-      value = interaction.options.getNumber(definition.name) ?? null;
+      value = interaction.options.getNumber(definition.name);
     } else if (definition.type === "boolean") {
-      value = interaction.options.getBoolean(definition.name) ?? null;
+      value = interaction.options.getBoolean(definition.name);
     } else {
-      value = interaction.options.getString(definition.name) ?? null;
+      value = interaction.options.getString(definition.name);
     }
     if (value != null) {
       values[definition.name] = value;

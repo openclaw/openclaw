@@ -144,6 +144,12 @@ owns compaction. The native app-server harness supports context engines
 that need pre-prompt assembly; generic CLI backends, including `codex-cli`,
 do not provide that host capability.
 
+Fresh Codex threads, including ordinary **Fork conversation** sessions, receive
+recent saved history within a bounded continuity window. Conversation text and
+summaries that fit this window are preserved without a separate per-message
+cutoff; longer history keeps its newest tail. Tool payloads and restored
+attachments retain their own limits.
+
 For Codex-backed agents, `/compact` starts native Codex app-server
 compaction on the bound thread and waits for its terminal result. The shared
 `agents.defaults.compaction.timeoutSeconds` budget applies; on timeout,
@@ -151,7 +157,15 @@ OpenClaw asks Codex to interrupt the native turn and keeps the per-thread fence
 until termination is confirmed. It never falls back to a context engine or
 public OpenAI summarizer. If the native Codex thread binding is missing or
 stale, the command fails closed instead of silently switching compaction
-backends.
+backends. A SIWC-backed native thread cannot use manual `/compact`.
+Automatic in-turn compaction remains available; continue the conversation
+or start a new session when you need a fresh context.
+
+Cancellation prevents native requests that have not been submitted, including
+overload retries. After submission, OpenClaw keeps the thread occupied until
+native completion, interruption, or safe retirement is confirmed. Stopped turns
+close visible compaction progress without marking unfinished compaction successful
+or making previously observed native work eligible for replay.
 
 ### Direct API long context
 

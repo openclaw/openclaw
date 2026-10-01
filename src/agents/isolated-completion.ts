@@ -1,15 +1,16 @@
 /**
- * Fresh, prompt-only inference with an exact zero-tool execution contract.
+ * Fresh, prompt-only inference through the selected runtime.
  *
  * This operation deliberately bypasses the ordinary agent attempt, retry,
  * transcript, hook, and delivery lifecycle. Execution owners either prove a
- * literal empty native tool surface or fail before inference starts.
+ * literal empty native tool surface or fail before inference starts, except
+ * Agents API: its restricted sessions may retain service-owned helpers.
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { Model } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -298,7 +299,7 @@ function prepareIsolatedHostAuthorization<
   };
 }
 
-/** Run one fresh, zero-tool completion through its selected runtime. */
+/** Run one fresh completion with the selected runtime's documented isolation boundary. */
 export async function runIsolatedCompletion(
   params: RunIsolatedCompletionParams,
 ): Promise<IsolatedCompletionResult> {

@@ -29,7 +29,6 @@ type SubagentAnnounceSteerOutcome =
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
   | { status: "none" | "dropped" | "source_owner_changed" };
 
-/** Result of trying to deliver a subagent announcement. */
 export type SubagentAnnounceDeliveryResult = {
   delivered: boolean;
   path: SubagentDeliveryPath;
@@ -62,7 +61,17 @@ type SubagentAnnounceDispatchPhaseResult = {
   error?: string;
 };
 
-/** Converts a steer outcome into the shared delivery result shape. */
+export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "none",
+    reason: "source_owner_changed",
+    error: "subagent source lifecycle changed before completion delivery",
+    terminal: true,
+    disposition: "intentional_non_delivery",
+  };
+}
+
 function mapSteerOutcomeToDeliveryResult(
   outcome: SubagentAnnounceSteerOutcome,
 ): SubagentAnnounceDeliveryResult {
@@ -75,14 +84,7 @@ function mapSteerOutcomeToDeliveryResult(
     };
   }
   if (outcome.status === "source_owner_changed") {
-    return {
-      delivered: false,
-      path: "none",
-      reason: "source_owner_changed",
-      error: "subagent source lifecycle changed before completion delivery",
-      terminal: true,
-      disposition: "intentional_non_delivery",
-    };
+    return sourceOwnerChangedResult();
   }
   return {
     delivered: false,

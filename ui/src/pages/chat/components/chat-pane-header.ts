@@ -1,5 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../../../app/control-ui-auth.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
@@ -19,11 +22,28 @@ import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
+import type { ChatPageHost } from "../chat-state-host.ts";
+import {
+  ensureSidebarConversation,
+  promoteSidebarPanel,
+  setSidebarDock,
+  setSidebarExpanded,
+  sidebarActivePanel,
+  sidebarDock,
+  sidebarMainPanel,
+  type SidebarLayout,
+} from "../sidebar-layout.ts";
+import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
@@ -61,18 +81,11 @@ type ChatPaneHeaderProps = {
   actionsDisabled?: boolean;
   panelActions: TemplateResult | typeof nothing;
   panelLayoutActions: TemplateResult | typeof nothing;
-  discussionAction: TemplateResult | typeof nothing;
-  diffAction: TemplateResult | typeof nothing;
-  backgroundTasksAction: TemplateResult | typeof nothing;
-  sessionRailAction: TemplateResult | typeof nothing;
-  workspaceAction: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
-  faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
   publicAccessIndicator?: TemplateResult | typeof nothing;
   placementControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
-  onboarding?: boolean;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -113,12 +126,6 @@ export function resolveChatPaneParentSession(
   return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
 }
 
-/**
- * Header identity trail: which project, then which session inside it. Segments
- * and separators are rendered from one list so a further segment — the parent
- * session of a nested thread, yielding project / parent / child — slots in
- * without moving the project chip or the title.
- */
 function renderIdentityCrumbs(
   props: ChatPaneHeaderProps,
   copied: boolean,
@@ -173,8 +180,10 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
       placeholder=${t("chat.sessionHeader.renameInputPlaceholder")}
       @input=${(event: InputEvent) =>
         props.onRenameInput((event.currentTarget as HTMLInputElement).value)}
+      @compositionend=${recordCompositionEnd}
+      @keyup=${clearCompositionEnd}
       @keydown=${(event: KeyboardEvent) => {
-        if (event.isComposing || event.keyCode === 229) {
+        if (isComposingKeyboardEvent(event)) {
           return;
         }
         if (event.key === "Enter") {
@@ -185,7 +194,10 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
           props.onCancelRename();
         }
       }}
-      @blur=${props.onCommitRename}
+      @blur=${(event: FocusEvent) => {
+        clearCompositionEnd(event);
+        props.onCommitRename();
+      }}
     />`;
   }
   return props.catalog || !props.session || props.renameDisabledReason
@@ -300,12 +312,11 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
   const compactSessionActions = props.narrow && props.sessionMenuAction !== nothing;
-  const hasFaceControl = props.faceControl !== undefined && props.faceControl !== nothing;
   const hasSharingControl = props.sharingControl !== undefined && props.sharingControl !== nothing;
 
   return html`
     <div
-      class="chat-pane__header ${hasFaceControl ? "chat-pane__header--centered" : ""}"
+      class="chat-pane__header "
       role="group"
       aria-label=${props.title}
       tabindex="-1"
@@ -381,11 +392,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         }
         ${props.placementControl ?? nothing} ${props.presence ?? nothing}
       </div>
-      ${
-        hasFaceControl
-          ? html`<div class="chat-pane__header-center">${props.faceControl}</div>`
-          : nothing
-      }
       <div class="chat-pane__header-trailing">
         ${
           !props.catalog && props.branches.length > 1
@@ -460,87 +466,183 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           ${props.panelLayoutActions}
           <fieldset class="chat-pane__actions" ?disabled=${props.actionsDisabled}>
             ${compactSessionActions ? nothing : props.panelActions}
-            ${compactSessionActions ? nothing : props.discussionAction}
-            ${
-              props.catalog || compactSessionActions
-                ? nothing
-                : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
-                  ${props.sessionRailAction}`
-            }
-            ${
-              props.onOpenSplitView && !compactSessionActions
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
+            ${(
+              [
+                [
+                  props.onOpenSplitView && !compactSessionActions,
+                  "chat-open-split-view",
+                  "chat.splitView.open",
+                  icons.columns2,
+                  props.onOpenSplitView,
+                ],
+                [
+                  !props.narrow && props.onSplitDown,
+                  "chat-pane__split-down",
+                  "chat.splitView.splitDown",
+                  icons.panelBottomOpen,
+                  () => props.onSplitDown?.(props.paneId),
+                ],
+                [
+                  !props.narrow && props.onSplitRight,
+                  "chat-pane__split-right",
+                  "chat.splitView.splitRight",
+                  icons.panelRightOpen,
+                  () => props.onSplitRight?.(props.paneId),
+                ],
+                [
+                  props.onClosePane,
+                  "chat-pane__close-pane",
+                  "chat.splitView.closePane",
+                  icons.x,
+                  () => props.onClosePane?.(props.paneId),
+                ],
+                [
+                  props.mergedChrome && !compactSessionActions,
+                  "chat-pane__palette-open",
+                  "chat.openCommandPalette",
+                  icons.search,
+                  () => window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT)),
+                ],
+              ] as const
+            ).map(([visible, className, label, icon, onClick]) =>
+              visible
+                ? html`<openclaw-tooltip .content=${t(label)}>
                     <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
+                      class=${`btn btn--ghost btn--icon chat-icon-btn ${className}`}
                       type="button"
-                      aria-label=${t("chat.splitView.open")}
-                      @click=${props.onOpenSplitView}
+                      aria-label=${t(label)}
+                      @click=${onClick}
                     >
-                      ${icons.columns2}
+                      ${icon}
                     </button>
                   </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              !props.narrow && props.onSplitDown
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down"
-                      type="button"
-                      aria-label=${t("chat.splitView.splitDown")}
-                      @click=${() => props.onSplitDown?.(props.paneId)}
-                    >
-                      ${icons.panelBottomOpen}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              !props.narrow && props.onSplitRight
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right"
-                      type="button"
-                      aria-label=${t("chat.splitView.splitRight")}
-                      @click=${() => props.onSplitRight?.(props.paneId)}
-                    >
-                      ${icons.panelRightOpen}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              props.onClosePane
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane"
-                      type="button"
-                      aria-label=${t("chat.splitView.closePane")}
-                      @click=${() => props.onClosePane?.(props.paneId)}
-                    >
-                      ${icons.x}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              props.mergedChrome && !compactSessionActions
-                ? html`<openclaw-tooltip .content=${t("chat.openCommandPalette")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open"
-                      type="button"
-                      aria-label=${t("chat.openCommandPalette")}
-                      @click=${() => window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT))}
-                    >
-                      ${icons.search}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
+                : nothing,
+            )}
             ${props.sessionMenuAction}
           </fieldset>
         </div>
       </div>
     </div>
   `;
+}
+
+export function renderChatPanePanelLayoutActions(
+  layout: SidebarLayout | undefined,
+  definitions: SidebarPanelDefinition[],
+  narrow: boolean,
+  onLayoutChange: ChatPageHost["updateSidebarLayout"],
+) {
+  if (!layout) {
+    return nothing;
+  }
+  const side = sidebarActivePanel(layout);
+  const mainSlot = sidebarMainPanel(layout)?.slot ?? "conversation";
+  const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
+  const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
+  const split = layout.open === true && !layout.expanded;
+  const focusLabel = t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand");
+  const swapLabel =
+    mainDefinition && sideDefinition
+      ? t("chat.sidePanel.swap", { main: mainDefinition.label, side: sideDefinition.label })
+      : "";
+  return html`${
+    mainDefinition?.headerAction
+      ? html`<span class="side-panel__action-group side-panel__action-group--content"
+          >${mainDefinition.headerAction}</span
+        >`
+      : nothing
+  }
+  ${
+    split || layout.expanded
+      ? html`<openclaw-tooltip .content=${focusLabel}>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-panel-focus"
+            type="button"
+            aria-pressed=${String(layout.expanded === true)}
+            aria-label=${focusLabel}
+            @click=${() =>
+              onLayoutChange(
+                setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
+                { dashboardPresentation: "personal" },
+              )}
+          >
+            ${layout.expanded ? icons.minimize : icons.maximize}
+          </button>
+        </openclaw-tooltip>`
+      : nothing
+  }
+  ${
+    split && side && swapLabel
+      ? html`<openclaw-tooltip .content=${swapLabel}>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-panel-swap"
+            type="button"
+            aria-label=${swapLabel}
+            @click=${() => onLayoutChange(promoteSidebarPanel(layout, side.id))}
+          >
+            ${icons.arrowLeftRight}
+          </button>
+        </openclaw-tooltip>`
+      : nothing
+  }
+  ${
+    narrow || !split
+      ? nothing
+      : html`<wa-dropdown
+          class="chat-panel-layout-menu"
+          placement="bottom-end"
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            const dock = event.detail.item.value;
+            if (dock === "left" || dock === "right" || dock === "bottom") {
+              onLayoutChange(setSidebarDock(layout, dock), {
+                geometryOnly: true,
+              });
+            }
+          }}
+        >
+          <button
+            slot="trigger"
+            class="btn btn--ghost btn--icon chat-icon-btn"
+            type="button"
+            aria-label=${t("chat.sidePanel.layout")}
+            title=${t("chat.sidePanel.layout")}
+          >
+            ${icons.columns2}
+          </button>
+          ${(
+            [
+              ["left", "dockLeft", icons.panelLeftOpen],
+              ["right", "dockRight", icons.panelRightOpen],
+              ["bottom", "dockBottom", icons.panelBottomOpen],
+            ] as const
+          ).map(
+            ([dock, label, icon]) => html`<wa-dropdown-item
+              value=${dock}
+              type="checkbox"
+              ?checked=${sidebarDock(layout) === dock}
+              ><span slot="icon">${icon}</span>${t(`chat.sidePanel.${label}`)}</wa-dropdown-item
+            >`,
+          )}
+        </wa-dropdown>`
+  }`;
+}
+
+export function resolveChatPaneWorkspaceIcon(
+  context: ApplicationContext,
+  sessionKey: string | undefined,
+) {
+  if (!sessionKey) {
+    return null;
+  }
+  const gateway = context.gateway;
+  const authTokens = resolveControlUiAuthCandidates({
+    hello: gateway.snapshot.hello,
+    settings: { token: gateway.connection.token },
+    password: gateway.connection.password,
+  });
+  return {
+    routeUrl: buildControlUiResourcePath("workspaceIcon", context.resourceBasePath, sessionKey),
+    authTokens,
+    authReady: Boolean(gateway.snapshot.hello || authTokens.length),
+  };
 }

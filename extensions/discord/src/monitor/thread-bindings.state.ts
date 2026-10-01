@@ -1,3 +1,8 @@
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import {
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/outbound-echo-runtime";
 import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
@@ -46,7 +51,6 @@ type ThreadBindingsGlobalState = {
 // imports it via ESM. Store mutable state on globalThis so both paths share one
 // registry.
 const THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.discordThreadBindingsState");
-let threadBindingsState: ThreadBindingsGlobalState | undefined;
 
 function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
   return {
@@ -69,20 +73,12 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
   };
 }
 
-function resolveThreadBindingsGlobalState(): ThreadBindingsGlobalState {
-  if (!threadBindingsState) {
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    threadBindingsState =
-      (globalStore[THREAD_BINDINGS_STATE_KEY] as ThreadBindingsGlobalState | undefined) ??
-      createThreadBindingsGlobalState();
-    // Source-plugin reloads retain the previous generation's shared registry.
-    threadBindingsState.accountOperationTails ??= new WeakMap();
-    globalStore[THREAD_BINDINGS_STATE_KEY] = threadBindingsState;
-  }
-  return threadBindingsState;
-}
-
-export const THREAD_BINDINGS_STATE = resolveThreadBindingsGlobalState();
+export const THREAD_BINDINGS_STATE = resolveGlobalSingleton(
+  THREAD_BINDINGS_STATE_KEY,
+  createThreadBindingsGlobalState,
+);
+// Source-plugin reloads retain the previous generation's shared registry.
+THREAD_BINDINGS_STATE.accountOperationTails ??= new WeakMap();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
@@ -133,10 +129,6 @@ export function normalizeTargetKind(
   return targetSessionKey.includes(":subagent:") ? "subagent" : "acp";
 }
 
-export function normalizeThreadId(raw: unknown): string | undefined {
-  return normalizeOptionalStringifiedId(raw);
-}
-
 export function toBindingRecordKey(params: { accountId: string; threadId: string }): string {
   return `${normalizeAccountId(params.accountId)}:${params.threadId.trim()}`;
 }
@@ -145,7 +137,7 @@ export function resolveBindingRecordKey(params: {
   accountId?: string;
   threadId: string;
 }): string | undefined {
-  const threadId = normalizeThreadId(params.threadId);
+  const threadId = normalizeOptionalStringifiedId(params.threadId);
   if (!threadId) {
     return undefined;
   }
@@ -163,7 +155,7 @@ export function normalizePersistedBinding(
     return null;
   }
   const value = raw as Partial<PersistedThreadBindingRecord>;
-  const threadId = normalizeThreadId(value.threadId ?? threadIdKey);
+  const threadId = normalizeOptionalStringifiedId(value.threadId ?? threadIdKey);
   const channelId = normalizeOptionalString(value.channelId) ?? "";
   const targetSessionKey = normalizeOptionalString(value.targetSessionKey) ?? "";
   if (!threadId || !channelId || !targetSessionKey) {
@@ -177,22 +169,10 @@ export function normalizePersistedBinding(
   const webhookId = normalizeOptionalString(value.webhookId);
   const webhookToken = normalizeOptionalString(value.webhookToken);
   const boundBy = normalizeOptionalString(value.boundBy) ?? "system";
-  const boundAt =
-    typeof value.boundAt === "number" && Number.isFinite(value.boundAt)
-      ? Math.floor(value.boundAt)
-      : Date.now();
-  const lastActivityAt =
-    typeof value.lastActivityAt === "number" && Number.isFinite(value.lastActivityAt)
-      ? Math.max(0, Math.floor(value.lastActivityAt))
-      : boundAt;
-  const idleTimeoutMs =
-    typeof value.idleTimeoutMs === "number" && Number.isFinite(value.idleTimeoutMs)
-      ? Math.max(0, Math.floor(value.idleTimeoutMs))
-      : undefined;
-  const maxAgeMs =
-    typeof value.maxAgeMs === "number" && Number.isFinite(value.maxAgeMs)
-      ? Math.max(0, Math.floor(value.maxAgeMs))
-      : undefined;
+  const boundAt = resolveOptionalIntegerOption(value.boundAt) ?? Date.now();
+  const lastActivityAt = resolveOptionalIntegerOption(value.lastActivityAt, { min: 0 }) ?? boundAt;
+  const idleTimeoutMs = resolveOptionalIntegerOption(value.idleTimeoutMs, { min: 0 });
+  const maxAgeMs = resolveOptionalIntegerOption(value.maxAgeMs, { min: 0 });
   const metadata =
     value.metadata && typeof value.metadata === "object" ? { ...value.metadata } : undefined;
 
@@ -229,36 +209,22 @@ export function normalizePersistedBinding(
 }
 
 export function normalizeThreadBindingDurationMs(raw: unknown, defaultsTo: number): number {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return defaultsTo;
-  }
-  const durationMs = Math.floor(raw);
-  if (durationMs < 0) {
-    return defaultsTo;
-  }
-  return durationMs;
+  const durationMs = resolveOptionalIntegerOption(raw);
+  return durationMs !== undefined && durationMs >= 0 ? durationMs : defaultsTo;
 }
 
 export function resolveThreadBindingIdleTimeoutMs(params: {
   record: Pick<ThreadBindingRecord, "idleTimeoutMs">;
   defaultIdleTimeoutMs: number;
 }): number {
-  const explicit = params.record.idleTimeoutMs;
-  if (typeof explicit === "number" && Number.isFinite(explicit)) {
-    return Math.max(0, Math.floor(explicit));
-  }
-  return Math.max(0, Math.floor(params.defaultIdleTimeoutMs));
+  return resolveNonNegativeIntegerOption(params.record.idleTimeoutMs, params.defaultIdleTimeoutMs);
 }
 
 export function resolveThreadBindingMaxAgeMs(params: {
   record: Pick<ThreadBindingRecord, "maxAgeMs">;
   defaultMaxAgeMs: number;
 }): number {
-  const explicit = params.record.maxAgeMs;
-  if (typeof explicit === "number" && Number.isFinite(explicit)) {
-    return Math.max(0, Math.floor(explicit));
-  }
-  return Math.max(0, Math.floor(params.defaultMaxAgeMs));
+  return resolveNonNegativeIntegerOption(params.record.maxAgeMs, params.defaultMaxAgeMs);
 }
 
 function resolveTimestampExpiry(timestamp: number, durationMs: number): number | undefined {

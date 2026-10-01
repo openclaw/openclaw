@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawChatUI
 import OpenClawKit
 import OSLog
 
@@ -22,21 +21,6 @@ extension TalkModeRuntime {
         case cancelled
         case waitingForStartToFinish
         case ready
-    }
-
-    private static let realtimeStableSessionSeconds: TimeInterval = 30
-    private static let realtimeRestartDelaysNanoseconds: [UInt64] = [500_000_000, 2_000_000_000]
-
-    static func realtimeRestartAttempt(
-        previousRapidRestarts: Int,
-        activeDuration: TimeInterval) -> Int
-    {
-        activeDuration >= self.realtimeStableSessionSeconds ? 1 : previousRapidRestarts + 1
-    }
-
-    static func realtimeRestartDelayNanoseconds(attempt: Int) -> UInt64? {
-        guard attempt > 0, attempt <= self.realtimeRestartDelaysNanoseconds.count else { return nil }
-        return self.realtimeRestartDelaysNanoseconds[attempt - 1]
     }
 
     func stop(
@@ -198,14 +182,12 @@ extension TalkModeRuntime {
         relayGeneration: UInt64,
         status: String?) async -> Bool
     {
-        let ownsFallback = {
-            self.canCommitRecognitionStart(
-                lifecycleGeneration: lifecycleGeneration,
-                recognitionAttempt: recognitionGeneration) &&
-                self.realtimeRelayGeneration == relayGeneration &&
-                self.realtimeRelayStartGeneration == nil && self.realtimeSession == nil
-        }
-        guard ownsFallback() else { return false }
+        guard self.canCommitRecognitionStart(
+            lifecycleGeneration: lifecycleGeneration,
+            recognitionAttempt: recognitionGeneration),
+            self.realtimeRelayGeneration == relayGeneration,
+            self.realtimeRelayStartGeneration == nil, self.realtimeSession == nil
+        else { return false }
         phase = recognitionStarted ? .listening : .idle
         return await self.projectRealtimeRelay(relayGeneration, nil) {
             if recognitionStarted, let status {
@@ -255,16 +237,7 @@ extension TalkModeRuntime {
                     "brain=\(realtimeBrain ?? "missing", privacy: .public); using native fallback")
             return false
         }
-        return Self.shouldUseRealtimeRelay(
-            localOptIn: macOSRealtimeRelayOptIn,
-            hasGatewayRealtimeRelayTuple: hasGatewayRealtimeRelayTuple)
-    }
-
-    static func shouldUseRealtimeRelay(
-        localOptIn: Bool,
-        hasGatewayRealtimeRelayTuple: Bool) -> Bool
-    {
-        localOptIn && hasGatewayRealtimeRelayTuple
+        return true
     }
 
     func startRealtimeRelay(generation: Int) async throws {
@@ -302,8 +275,7 @@ extension TalkModeRuntime {
         try await ownAndStartRealtimeSession(
             session,
             lifecycleGeneration: generation,
-            relayGeneration: relayGeneration,
-            start: { session in try await session.start() })
+            relayGeneration: relayGeneration)
         realtimeSessionReadyAt = Date()
         phase = .listening
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
@@ -457,8 +429,7 @@ extension TalkModeRuntime {
     private func ownAndStartRealtimeSession(
         _ session: RealtimeTalkRelaySession,
         lifecycleGeneration: Int,
-        relayGeneration: UInt64,
-        start: @MainActor @Sendable (RealtimeTalkRelaySession) async throws -> Void) async throws
+        relayGeneration: UInt64) async throws
     {
         // Construction crosses executors. Claim ownership only after every lifecycle and
         // attempt fact is revalidated, then publish before start can suspend.
@@ -472,7 +443,7 @@ extension TalkModeRuntime {
         }
         realtimeSession = session
         do {
-            try await start(session)
+            try await session.start()
         } catch {
             await MainActor.run { session.stop() }
             if realtimeSession === session {
@@ -583,10 +554,10 @@ extension TalkModeRuntime {
         realtimeSessionReadyAt = nil
         phase = .idle
         let shouldRecover = isEnabled && !isPaused
-        let attempt = Self.realtimeRestartAttempt(
+        let attempt = RealtimeTalkRecovery.restartAttempt(
             previousRapidRestarts: rapidRealtimeRestartCount,
             activeDuration: activeDuration)
-        let delay = Self.realtimeRestartDelayNanoseconds(attempt: attempt)
+        let delay = RealtimeTalkRecovery.restartDelayNanoseconds(attempt: attempt)
         guard await self.projectRealtimeRelay(terminalGeneration, nil, {
             TalkModeController.shared.updateLevel(0)
             TalkModeController.shared.updateSpeakingLevel(nil)
@@ -617,16 +588,10 @@ extension TalkModeRuntime {
               isEnabled,
               !self.isPaused
         else { return }
-        if speaking {
-            phase = .speaking
-            _ = await self.projectRealtimeRelay(relayGeneration, session) {
-                TalkModeController.shared.updatePhase(.speaking)
-            }
-        } else if !isPaused {
-            phase = .listening
-            _ = await self.projectRealtimeRelay(relayGeneration, session) {
-                TalkModeController.shared.updatePhase(.listening)
-            }
+        let phase: TalkModePhase = speaking ? .speaking : .listening
+        self.phase = phase
+        _ = await self.projectRealtimeRelay(relayGeneration, session) {
+            TalkModeController.shared.updatePhase(phase)
         }
     }
 

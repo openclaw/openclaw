@@ -2,14 +2,16 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { materializeRequesterScopedMcpToolsForHarnessRunCore } from "./agent-bundle-mcp-harness.js";
 import {
   acquireRequesterScopedMcpRuntime,
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
   getSessionMcpRuntimeManagerForTesting,
-  releaseSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
 } from "./agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { createMcpProbeFixture, probeMcpServer } from "./agent-bundle-mcp-probe.test-support.js";
 import {
@@ -30,16 +32,20 @@ vi.mock("./mcp-oauth.js", () => ({
 
 const tempDirs: string[] = [];
 const releases: Array<() => void> = [];
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 beforeEach(async () => {
   await disposeAllSessionMcpRuntimes();
   // The process singleton's lazy factory must not retain another test file's OAuth mock.
   Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+  scheduler = createTestGatewayScheduler();
+  await setSessionMcpRuntimeScheduler(scheduler);
 });
 afterEach(async () => {
   for (const release of releases.splice(0)) {
     release();
   }
   await disposeAllSessionMcpRuntimes();
+  await scheduler.stop();
   Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
   cleanupTempDirs(tempDirs);
   readAuthorization

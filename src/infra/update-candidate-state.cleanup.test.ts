@@ -16,7 +16,10 @@ import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateStateSchemaVersions,
 } from "./update-candidate-state.js";
-import { inventoryUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
+import {
+  inventoryUpdateCandidateStateWorker,
+  materializeUpdateCandidateStateWorker,
+} from "./update-candidate-state.test-support.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 let root: string;
@@ -241,7 +244,7 @@ it("releases the shared discovery snapshot before agent inspection", async () =>
     discoverUpdateStateSchemaInspectionInProcess({ stateDir, config: {}, stagingRoot }),
   ).resolves.toMatchObject({
     files: expect.arrayContaining([
-      [shared, { spellings: [shared] }],
+      [shared, { spellings: [shared], owners: [{ role: "global" }] }],
       [agent, { spellings: [agent] }],
     ]),
     sharedVersion: { path: shared, userVersion: 3, contentVersion: 3 },
@@ -533,6 +536,7 @@ setInterval(() => {}, 60_000);
 it.each(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
   "settles the actual rehearsal backup child before removing scratch on %s",
   async (failure) => {
+    await materializeUpdateCandidateStateWorker(root);
     const stateDir = path.join(root, "backup-failure");
     const source = path.join(stateDir, "state", "openclaw.sqlite");
     await createDatabase(

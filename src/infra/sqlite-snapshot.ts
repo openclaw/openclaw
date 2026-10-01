@@ -4,7 +4,8 @@ import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import type { BackupProgressInfo, DatabaseSync } from "node:sqlite";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
   getPublishFileExclusiveFailureDetails,
@@ -22,13 +23,15 @@ import {
   sameFileMutationFingerprint,
   type FileMutationFingerprint,
 } from "./file-descriptor.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
-import { prepareSqliteReadOnlyLocationInProcess } from "./sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyLocationInProcess,
+  prepareSqliteReadOnlyLocationSyncInProcess,
+} from "./sqlite-readonly-location.js";
 import { withSqliteSnapshotSource } from "./sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
@@ -38,7 +41,12 @@ type CreateVerifiedSqliteSnapshotOptions = {
   sourcePath: string;
   targetPath: string;
   /** Only in an isolated child: acquire and consume a fresh private image, including crash recovery. */
-  sourceAcquisition?: { mode: "isolated-process"; stagingRoot: string };
+  sourceAcquisition?: {
+    mode: "isolated-process";
+    stagingRoot: string;
+    preserveSourceArtifacts?: boolean;
+  };
+  onProgress?: (progress: BackupProgressInfo) => void;
   /** Final caller checks around publication; failures remove only this helper's target. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;
@@ -71,7 +79,7 @@ type PublishVerifiedSqliteFileOptions = {
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
 };
 
-type VerifiedSqliteSnapshot = {
+type VerifiedSqliteSnapshot = SqliteFileContent & {
   path: string;
   userVersion: number;
 };
@@ -543,10 +551,17 @@ export async function createVerifiedSqliteSnapshot(
   await assertTargetAbsent(options.targetPath);
 
   if (options.sourceAcquisition) {
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(
-      sourcePath,
-      options.sourceAcquisition.stagingRoot,
-    );
+    const prepared = options.sourceAcquisition.preserveSourceArtifacts
+      ? prepareSqliteReadOnlyLocationSyncInProcess(
+          sourcePath,
+          options.sourceAcquisition.stagingRoot,
+        )
+      : await prepareSqliteReadOnlyLocationInProcess(
+          sourcePath,
+          options.sourceAcquisition.stagingRoot,
+          undefined,
+          options.onProgress,
+        );
     return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
       verifyAndPublishSqliteSnapshot(options, privateSourcePath),
     );
@@ -584,7 +599,7 @@ async function verifyAndPublishSqliteSnapshot(
             assertSqliteIntegrity(source, options.sourcePath);
             options.validate?.(source, options.sourcePath);
             if (!privateSourcePath) {
-              await backupNodeSqliteDatabase(source, stagedPath);
+              await backupNodeSqliteDatabase(source, stagedPath, options.onProgress);
             }
           } finally {
             source.exec("ROLLBACK;");
@@ -651,7 +666,7 @@ async function verifyAndPublishSqliteSnapshot(
           }
         },
       });
-      return { path: options.targetPath, userVersion };
+      return { path: options.targetPath, userVersion, ...expectedContent };
     } finally {
       if (snapshot.isOpen) {
         snapshot.close();

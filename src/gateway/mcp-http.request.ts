@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { getHeader } from "./http-utils.js";
+import { getHeader } from "./http-header-value.js";
 import {
   resolveAttachGrant,
   resolveMcpLoopbackClientGrant,
@@ -84,19 +84,12 @@ function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefin
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   const origin = getHeader(req, "origin");
   if (!origin) {
-    // No Origin header → not a browser request. Native MCP clients
-    // (curl, codex CLI, scripted MCP clients) never set Origin; let
-    // them through to the bearer check.
+    // Native MCP clients use bearer authentication without a browser Origin.
     return false;
   }
 
-  // Defer to checkBrowserOrigin. It already treats loopback peers
-  // talking to a loopback Origin as `local-loopback`, which covers
-  // the legitimate `localhost`↔`127.0.0.1` mismatch that browsers
-  // flag as `Sec-Fetch-Site: cross-site` even though both ends are
-  // local. A blanket cross-site early-return here would block that
-  // flow even with a valid bearer; the helper's isLocalClient +
-  // isLoopbackHost gating is the authoritative check.
+  // The origin owner accepts localhost ↔ 127.0.0.1 only for loopback peers,
+  // including when the browser describes those names as cross-site.
   return !checkBrowserOrigin({
     requestHost: getHeader(req, "host"),
     origin,
@@ -150,14 +143,17 @@ export function validateMcpLoopbackRequest(params: {
   nonOwnerToken: string;
   onSseResponse?: (res: ServerResponse) => void;
 }): McpLoopbackRequestAuth | null {
+  const reply = (status: number, body: unknown): null => {
+    params.res.writeHead(status, { "Content-Type": "application/json" });
+    params.res.end(JSON.stringify(body));
+    return null;
+  };
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
   } catch {
     logMcpLoopbackTraffic("reject", { reason: "bad_request_url", method: params.req.method ?? "" });
-    params.res.writeHead(400, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "bad_request" }));
-    return null;
+    return reply(400, { error: "bad_request" });
   }
 
   if (params.req.method === "GET" && url.pathname.startsWith("/.well-known/")) {
@@ -172,9 +168,7 @@ export function validateMcpLoopbackRequest(params: {
       method: params.req.method ?? "",
       path: url.pathname,
     });
-    params.res.writeHead(404, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "not_found" }));
-    return null;
+    return reply(404, { error: "not_found" });
   }
 
   if (
@@ -201,9 +195,7 @@ export function validateMcpLoopbackRequest(params: {
         origin: getHeader(params.req, "origin") ?? "",
       });
     }
-    params.res.writeHead(403, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "forbidden" }));
-    return null;
+    return reply(403, { error: "forbidden" });
   }
 
   const sender = resolveMcpSender(params);
@@ -215,9 +207,7 @@ export function validateMcpLoopbackRequest(params: {
         hasAuthorization: (getHeader(params.req, "authorization") ?? "").length > 0,
       });
     }
-    params.res.writeHead(401, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "unauthorized" }));
-    return null;
+    return reply(401, { error: "unauthorized" });
   }
 
   if (params.req.method === "GET") {
@@ -240,9 +230,7 @@ export function validateMcpLoopbackRequest(params: {
   if (params.req.method === "DELETE") {
     // This stateless listener owns no session lifecycle; authenticated teardown is a no-op.
     logMcpLoopbackTraffic("session-delete", { method: "DELETE", path: url.pathname });
-    params.res.writeHead(200, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ ok: true }));
-    return null;
+    return reply(200, { ok: true });
   }
 
   const contentType = getHeader(params.req, "content-type") ?? "";
@@ -252,9 +240,7 @@ export function validateMcpLoopbackRequest(params: {
       method: params.req.method ?? "",
       contentType,
     });
-    params.res.writeHead(415, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "unsupported_media_type" }));
-    return null;
+    return reply(415, { error: "unsupported_media_type" });
   }
 
   return sender;

@@ -281,10 +281,6 @@ export function buildBuiltinChatCommands(
         acceptsArgs: true,
       },
     ),
-    defineBuiltinCommand("tasks", "List background tasks for this session.", "status", "standard", {
-      activeRunSafe: true,
-      modelIndependent: "always",
-    }),
     defineBuiltinCommand("allowlist", "List/add/remove allowlist entries.", "management", "power", {
       modelIndependent: "always",
       nativeName: false,
@@ -609,7 +605,8 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("fast", "Toggle fast mode.", "options", "standard", {
       modelIndependent: "always",
       args: [
-        defineCommandArgument("mode", "on, off, auto, default, or status", {
+        defineCommandArgument("mode", "on, off, ultrafast, auto, default, or status", {
+          // Generic command menus have no authenticated account-tier facts for offering Ultrafast.
           choices: ({ cfg, provider, model }) => [
             "on",
             "off",

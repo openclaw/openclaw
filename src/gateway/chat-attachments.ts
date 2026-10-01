@@ -1,23 +1,21 @@
-// Gateway chat attachment parser.
-// Normalizes image attachments, offloads large media, and reports unsupported payloads.
-import { estimateBase64DecodedBytes, isValidBase64 } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
-import {
-  extensionForMime,
-  kindFromMime,
-  mimeTypeFromFilePath,
-  normalizeMimeType,
-} from "@openclaw/media-core/mime";
+import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { prepareMediaAttachment } from "../media/attachment-processor.js";
+import {
+  ATTACHMENT_OFFLOAD_THRESHOLD_BYTES,
+  isGenericContainerMime,
+} from "../media/attachment-processor.runtime.js";
 import type { MediaFact } from "../media/media-facts.js";
 import { probeMediaFilesWithinBudget } from "../media/media-probe.js";
 import { parseInboundMediaUri } from "../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
 import { DEFAULT_CHAT_ATTACHMENT_MAX_BYTES } from "./chat-attachment-policy.js";
 import { registerMediaCleanupDrain } from "./server-media-cleanup-lifecycle.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { formatForLog } from "./ws-log.js";
 
 export type ChatAttachment = {
@@ -36,6 +34,7 @@ export type ChatImageContent = {
   type: "image";
   data: string;
   mimeType: string;
+  fileName?: string;
   sourceIndex: number;
 };
 
@@ -105,7 +104,6 @@ type PersistInboundImagesResult = {
   omission: "none" | "inline-image-save-failed";
 };
 
-const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 const MAX_CHAT_ATTACHMENT_MEDIA_PROBES = 8;
 const CHAT_ATTACHMENT_MEDIA_PROBE_CONCURRENCY = 2;
@@ -158,35 +156,55 @@ export async function persistInboundImagesForTranscript(params: {
   offloadedRefs: OffloadedRef[];
   log: Pick<AttachmentLog, "warn">;
   logContext: string;
+  assertCurrent?: () => void;
 }): Promise<PersistInboundImagesResult> {
   const entries: PersistInboundImagesResult["entries"] = [];
   let omission: PersistInboundImagesResult["omission"] = "none";
-  for (const image of params.images) {
-    try {
-      const saved = await saveMediaBuffer(
-        Buffer.from(image.data, "base64"),
-        image.mimeType,
-        "inbound",
-      );
-      const trusted = assertSavedMedia(saved, `inline image ${image.sourceIndex + 1}`);
-      entries.push({
-        id: trusted.id,
-        path: trusted.path,
-        sourceIndex: image.sourceIndex,
-        imageKind: "inline",
-        fact: {
-          url: trusted.mediaRef,
-          contentType: saved.contentType ?? image.mimeType,
-          kind: "image",
-          sizeBytes: saved.size,
-        },
-      });
-    } catch (err) {
-      omission = "inline-image-save-failed";
-      params.log.warn(
-        `${params.logContext}: failed to persist inbound image (${image.mimeType}): ${formatErrorMessage(err)}`,
-      );
+  try {
+    params.assertCurrent?.();
+    for (const image of params.images) {
+      try {
+        params.assertCurrent?.();
+        const saved = await saveMediaBuffer(
+          Buffer.from(image.data, "base64"),
+          image.mimeType,
+          "inbound",
+          undefined,
+          image.fileName,
+          undefined,
+          { assertCommitAllowed: params.assertCurrent },
+        );
+        const trusted = assertSavedMedia(saved, `inline image ${image.sourceIndex + 1}`);
+        entries.push({
+          id: trusted.id,
+          path: trusted.path,
+          sourceIndex: image.sourceIndex,
+          imageKind: "inline",
+          fact: {
+            url: trusted.mediaRef,
+            contentType: saved.contentType ?? image.mimeType,
+            kind: "image",
+            ...(image.fileName ? { fileName: image.fileName } : {}),
+            sizeBytes: saved.size,
+          },
+        });
+      } catch (err) {
+        // An ended input admission is not a best-effort image omission.
+        if (err instanceof SessionMutationAuthorizationChangedError) {
+          throw err;
+        }
+        params.assertCurrent?.();
+        omission = "inline-image-save-failed";
+        params.log.warn(
+          `${params.logContext}: failed to persist inbound image (${image.mimeType}): ${formatErrorMessage(err)}`,
+        );
+      }
     }
+
+    params.assertCurrent?.();
+  } catch (error) {
+    await discardPreparedInboundMedia(entries, params.log);
+    throw error;
   }
 
   for (const ref of params.offloadedRefs) {
@@ -238,19 +256,6 @@ export class MediaOffloadError extends Error {
   }
 }
 
-function isGenericContainerMime(mime?: string): boolean {
-  return mime === "application/zip" || mime === "application/octet-stream";
-}
-
-function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
-  if (Math.abs(buffer.byteLength - estimatedBytes) > 3) {
-    throw new Error(
-      `attachment ${label}: base64 contains invalid characters ` +
-        `(expected ~${estimatedBytes} bytes decoded, got ${buffer.byteLength})`,
-    );
-  }
-}
-
 function ensureExtension(label: string, mime: string): string {
   if (/\.[a-zA-Z0-9]+$/.test(label)) {
     return label;
@@ -276,23 +281,19 @@ function assertSavedMedia(
     value === null ||
     typeof value !== "object" ||
     !("id" in value) ||
-    typeof (value as Record<string, unknown>).id !== "string"
+    typeof value.id !== "string"
   ) {
     throw new Error(`attachment ${label}: saveMediaBuffer returned an unexpected shape`);
   }
-  const id = (value as Record<string, unknown>).id as string;
-  const path = (value as Record<string, unknown>).path;
+  const id = value.id;
+  const path = "path" in value ? value.path : undefined;
   if (typeof path !== "string" || path.length === 0) {
     throw new Error(`attachment ${label}: saveMediaBuffer returned no on-disk path`);
   }
   return { id, mediaRef: buildManagedInboundMediaRef(id), path };
 }
 
-function normalizeAttachment(
-  att: ChatAttachment,
-  idx: number,
-  opts: { stripDataUrlPrefix: boolean; requireImageMime: boolean },
-): NormalizedAttachment {
+function normalizeAttachment(att: ChatAttachment, idx: number): NormalizedAttachment {
   const mime = att.mimeType ?? "";
   const content = att.content;
   const label = att.fileName || att.type || `attachment-${idx + 1}`;
@@ -300,17 +301,11 @@ function normalizeAttachment(
   if (typeof content !== "string") {
     throw new Error(`attachment ${label}: content must be base64 string`);
   }
-  if (opts.requireImageMime && !mime.startsWith("image/")) {
-    throw new Error(`attachment ${label}: only image/* supported`);
-  }
-
   let base64 = content.trim();
-  if (opts.stripDataUrlPrefix) {
-    // Inspect metadata only; never capture a multi-megabyte payload in a regex.
-    const commaIndex = base64.indexOf(",");
-    if (commaIndex >= 0 && /^data:[^;,]+;base64$/.test(base64.slice(0, commaIndex))) {
-      base64 = base64.slice(commaIndex + 1);
-    }
+  // Inspect metadata only; never capture a multi-megabyte payload in a regex.
+  const commaIndex = base64.startsWith("data:") ? base64.indexOf(",") : -1;
+  if (commaIndex >= 0 && /^data:[^;,]+;base64$/.test(base64.slice(0, commaIndex))) {
+    base64 = base64.slice(commaIndex + 1);
   }
   return { label, mime, base64 };
 }
@@ -326,6 +321,8 @@ export async function parseMessageWithAttachments(
     acceptNonImage?: boolean;
     /** Ephemeral image-only callers keep bounded image bytes in their request, not the media store. */
     imageStorage?: "inline";
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
   },
 ): Promise<ParsedMessageWithImages> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
@@ -362,43 +359,24 @@ export async function parseMessageWithAttachments(
   const savedMediaIds: string[] = [];
 
   try {
+    opts?.assertCurrent?.();
     for (const [idx, att] of attachments.entries()) {
       if (!att) {
         continue;
       }
 
-      const normalized = normalizeAttachment(att, idx, {
-        stripDataUrlPrefix: true,
-        requireImageMime: false,
-      });
-
-      const { base64: b64, label, mime } = normalized;
+      const { base64: b64, label, mime } = normalizeAttachment(att, idx);
 
       if (b64.length === 0) {
         throw new UnsupportedAttachmentError("empty-payload", `attachment ${label}: empty payload`);
       }
-      if (!isValidBase64(b64)) {
-        throw new Error(`attachment ${label}: invalid base64 content`);
-      }
-
-      const sizeBytes = estimateBase64DecodedBytes(b64);
-      if (sizeBytes > maxBytes) {
-        throw new Error(
-          `attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`,
-        );
-      }
-
+      const prepared = await prepareMediaAttachment(
+        { base64: b64, label, mime, imageStorage: opts?.imageStorage },
+        maxBytes,
+        opts?.signal,
+      );
+      const { sizeBytes, mime: finalMime } = prepared;
       const providedMime = normalizeMimeType(mime);
-      const mimeHints = [providedMime, mimeTypeFromFilePath(label)];
-      // Specific declared MIME precedes the filename when bytes are inconclusive.
-      // The canonical detector still owns byte precedence and container refinement.
-      const finalMime =
-        (await sniffMimeFromBase64(b64, {
-          additionalMimeHints: [
-            ...mimeHints.filter((hint) => !isGenericContainerMime(hint)),
-            ...mimeHints,
-          ],
-        })) ?? "application/octet-stream";
 
       if (providedMime && !isGenericContainerMime(providedMime) && finalMime !== providedMime) {
         log?.warn(`attachment ${label}: mime mismatch (${providedMime} -> ${finalMime})`);
@@ -406,6 +384,8 @@ export async function parseMessageWithAttachments(
 
       const isImage = finalMime.startsWith("image/");
       const shouldForceImageOffload = isImage && !(await resolveSupportsImages());
+      opts?.signal?.throwIfAborted();
+      opts?.assertCurrent?.();
       if (isImage && !supportsInlineImages && !shouldForceImageOffload) {
         throw new UnsupportedAttachmentError(
           "text-only-image",
@@ -431,11 +411,7 @@ export async function parseMessageWithAttachments(
         );
       }
 
-      if (
-        shouldForceImageOffload &&
-        isImage &&
-        textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT
-      ) {
+      if (shouldForceImageOffload && textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT) {
         log?.warn(
           `attachment ${label}: dropping image because text-only offload limit ` +
             `${TEXT_ONLY_OFFLOAD_LIMIT} was reached`,
@@ -447,16 +423,25 @@ export async function parseMessageWithAttachments(
       const shouldOffload =
         shouldForceImageOffload ||
         !isImage ||
-        (opts?.imageStorage !== "inline" && sizeBytes > OFFLOAD_THRESHOLD_BYTES);
+        (opts?.imageStorage !== "inline" && sizeBytes > ATTACHMENT_OFFLOAD_THRESHOLD_BYTES);
 
       if (!shouldOffload) {
-        images.push({ type: "image", data: b64, mimeType: finalMime, sourceIndex: idx });
+        images.push({
+          type: "image",
+          data: b64,
+          mimeType: finalMime,
+          ...(att.fileName ? { fileName: att.fileName } : {}),
+          sourceIndex: idx,
+        });
         imageOrder.push("inline");
         continue;
       }
 
-      const buffer = Buffer.from(b64, "base64");
-      verifyDecodedSize(buffer, sizeBytes, label);
+      opts?.assertCurrent?.();
+      const bytes = prepared.buffer;
+      const buffer = bytes
+        ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+        : Buffer.from(b64, "base64");
 
       let savedMedia: ReturnType<typeof assertSavedMedia>;
       try {
@@ -467,9 +452,15 @@ export async function parseMessageWithAttachments(
           "inbound",
           maxBytes,
           labelWithExt,
+          undefined,
+          { assertCommitAllowed: opts?.assertCurrent },
         );
         savedMedia = assertSavedMedia(rawResult, label);
       } catch (err) {
+        if (err instanceof SessionMutationAuthorizationChangedError) {
+          throw err;
+        }
+        opts?.assertCurrent?.();
         throw new MediaOffloadError(
           `[Gateway Error] Failed to save intercepted media to disk: ${formatErrorMessage(err)}`,
           { cause: err },
@@ -481,7 +472,7 @@ export async function parseMessageWithAttachments(
       const mediaRef = savedMedia.mediaRef;
       updatedMessage += `\n[media attached: ${mediaRef}]`;
       log?.info?.(
-        shouldForceImageOffload && isImage
+        shouldForceImageOffload
           ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
           : `[Gateway] Offloaded attachment (${finalMime}). Saved: ${mediaRef}`,
       );
@@ -515,14 +506,23 @@ export async function parseMessageWithAttachments(
         }
       }
     }
+    await enrichOffloadedMediaMetadata(offloadedRefs);
+    opts?.assertCurrent?.();
   } catch (err) {
     if (savedMediaIds.length > 0) {
       await Promise.allSettled(savedMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
     }
+    if (err instanceof WorkerTaskError && err !== opts?.signal?.reason) {
+      if (err.code === "failed") {
+        throw new Error(err.message, { cause: err });
+      }
+      throw new MediaOffloadError(
+        `[Gateway Error] Failed to prepare attachments: ${formatErrorMessage(err)}`,
+        { cause: err },
+      );
+    }
     throw err;
   }
-
-  await enrichOffloadedMediaMetadata(offloadedRefs);
 
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,

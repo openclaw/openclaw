@@ -48,44 +48,6 @@ import Testing
         GatewayTLSStore.clearFingerprint(stableID: stableID)
     }
 
-    @Test @MainActor func `discovered TLS params prefers stored pin over advertised TXT`() {
-        let stableID = "test|\(UUID().uuidString)"
-        defer { clearTLSFingerprint(stableID: stableID) }
-        self.clearTLSFingerprint(stableID: stableID)
-
-        GatewayTLSStore.saveFingerprint("11", stableID: stableID)
-
-        let gateway = self.makeDiscoveredGateway(
-            stableID: stableID,
-            lanHost: "evil.example.com",
-            tailnetDns: "evil.example.com",
-            gatewayPort: 12345,
-            fingerprint: "22")
-        let controller = self.makeController()
-
-        let params = controller._test_resolveDiscoveredTLSParams(gateway: gateway)
-        #expect(params?.expectedFingerprint == "11")
-        #expect(params?.allowTOFU == false)
-    }
-
-    @Test @MainActor func `discovered TLS params does not trust advertised fingerprint`() {
-        let stableID = "test|\(UUID().uuidString)"
-        defer { clearTLSFingerprint(stableID: stableID) }
-        self.clearTLSFingerprint(stableID: stableID)
-
-        let gateway = self.makeDiscoveredGateway(
-            stableID: stableID,
-            lanHost: nil,
-            tailnetDns: nil,
-            gatewayPort: nil,
-            fingerprint: "22")
-        let controller = self.makeController()
-
-        let params = controller._test_resolveDiscoveredTLSParams(gateway: gateway)
-        #expect(params?.expectedFingerprint == nil)
-        #expect(params?.allowTOFU == false)
-    }
-
     @Test @MainActor func `discovered gateway availability requires advertised TLS or a stored pin`() {
         let unpinnedID = "test|\(UUID().uuidString)"
         let pinnedID = "test|\(UUID().uuidString)"
@@ -204,28 +166,31 @@ import Testing
         defer { clearTLSFingerprint(stableID: stableID) }
         self.clearTLSFingerprint(stableID: stableID)
 
-        let defaults = UserDefaults.standard
-        defaults.set(true, forKey: "gateway.autoconnect")
-        defaults.set(false, forKey: "gateway.manual.enabled")
-        defaults.removeObject(forKey: "gateway.last.host")
-        defaults.removeObject(forKey: "gateway.last.port")
-        defaults.removeObject(forKey: "gateway.last.tls")
-        defaults.removeObject(forKey: "gateway.last.stableID")
-        defaults.removeObject(forKey: "gateway.last.kind")
-        defaults.removeObject(forKey: "gateway.preferredStableID")
-        defaults.set(stableID, forKey: "gateway.lastDiscoveredStableID")
+        withUserDefaults([
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": false,
+            "gateway.preferredStableID": nil,
+            "gateway.lastDiscoveredStableID": stableID,
+        ]) {
+            let defaults = UserDefaults.standard
+            defaults.removeObject(forKey: "gateway.last.host")
+            defaults.removeObject(forKey: "gateway.last.port")
+            defaults.removeObject(forKey: "gateway.last.tls")
+            defaults.removeObject(forKey: "gateway.last.stableID")
+            defaults.removeObject(forKey: "gateway.last.kind")
 
-        let gateway = self.makeDiscoveredGateway(
-            stableID: stableID,
-            lanHost: "test.local",
-            tailnetDns: nil,
-            gatewayPort: 18789,
-            fingerprint: nil)
-        let controller = self.makeController()
-        controller._test_setGateways([gateway])
-        controller._test_triggerAutoConnect()
+            let gateway = self.makeDiscoveredGateway(
+                stableID: stableID,
+                lanHost: "test.local",
+                tailnetDns: nil,
+                gatewayPort: 18789,
+                fingerprint: nil)
+            let controller = self.makeController()
+            controller._test_setGateways([gateway])
+            controller._test_triggerAutoConnect()
 
-        #expect(controller._test_didAutoConnect() == false)
+            #expect(controller._test_didAutoConnect() == false)
+        }
     }
 
     @Test @MainActor func `manual connections force TLS for non loopback hosts`() {

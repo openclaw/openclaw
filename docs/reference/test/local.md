@@ -19,6 +19,16 @@ worker concurrency, heap limits, or individual file boundaries. Raw Vitest and
 existing single-invocation selections, such as explicit targets, coverage, report
 output, bail, and watch mode, retain their existing behavior.
 
+Expanded full-suite runs split infrastructure and host-owned SQLite tests into
+batches of at most 64 files. Each batch keeps isolated fork workers within the
+existing full-suite worker budget. Focused selections and watch mode retain their
+usual routing.
+
+Gateway configurations marked exclusive drain other test plans before starting
+and finish before later plans are admitted. This applies to full-suite runs and
+explicit `OPENCLAW_TEST_PROJECTS_PARALLEL` overrides as well as automatic
+exact-target scheduling. Ordinary plans retain their configured parallelism.
+
 Tests that create real managed worktrees must satisfy the
 [capacity and disk-space requirements](/concepts/managed-worktrees#capacity-and-disk-space),
 including the additional allowance for executable setup scripts. Keep that space
@@ -107,11 +117,6 @@ OPENCLAW_CI_TEST_RUNTIME_POLICY=dual \
 node --import tsx scripts/ci-run-node-test-shard.mts
 ```
 
-The pinned fork can loop in CSS tokenization after particular UI file orders.
-The nonbrowser UI setup prevents inlining the native tokenizer's `endOfFile`
-predicate on Bun while retaining baseline, DFG, and FTL JIT. It does nothing on Node, and
-Chromium keeps its existing setup. See the
-[CI runtime policy](/ci/pipeline#test-runtime-selection) for the removal proof.
 The Bun partition deliberately excludes two whole GC-sensitive files, which
 remain covered by Node. Running the complete UI config directly with
 `OPENCLAW_VITEST_RUNTIME=bun` also runs those currently incompatible assertions.
@@ -124,6 +129,11 @@ mitigation; production CLI exit behavior, assertions, and deadlines are unchange
 
 The script erasability gate uses Node's strip-only parser, including when package
 checks run under Bun. It selects an installed Node runtime and skips Bun's `node` shim.
+Maintainer-tooling tests that need `node:module.registerHooks` or
+`stripTypeScriptTypes` also select Node explicitly for their tooling children.
+Use `requireNodeTool("node")` and `stripNodeTypeScriptTypes` from
+`test/helpers/node-toolchain.ts`, which share that Node-selection owner, while
+keeping the Vitest worker on the selected test runtime.
 
 The test toolchain pins stable Vitest `5.0.1`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
@@ -196,9 +206,11 @@ plugin's KNN child, session transcript archive and reconciliation workers, and
 managed GitHub credential resolution. The same generation also compiles the fake-backend TUI
 fixture's four runtime roots together: the real TUI, embedded reply producer,
 reply metadata reader, and outbound normalizer. Shared chunks preserve their
-module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
-launches them with `--import tsx` for their own syntax, while Bun handles that
-syntax natively without the Node loader. Only their runtime imports change.
+module and WeakMap identity. Prepared TUI fixtures are compiled to `.mjs` and run
+as JavaScript without a TypeScript loader. Direct source fixtures
+remain `.mts`: Node launches them with `--import tsx`, while Bun handles their
+syntax natively. The session-identity PTY tests load real provider policies, so
+their runtime prerequisite prepares the built host SDK before Vitest workers start.
 Existing package build entry paths and Vitest source parents stay unchanged. The
 CLI fork-recovery regression also compiles the real CLI entry and its concurrent
 rebind's session accessor and binding helper together. Both processes use the same
@@ -207,6 +219,9 @@ Doctor process output tests with bundled plugins disabled reuse that compiled CL
 inside one lazily created package fixture per test run, keeping real UI checks on
 fixture-owned assets and each scenario’s state separate. Standalone and watch runs
 use live source inside the same fixture.
+
+Broadcast output coverage prepares its message helper and exit finalizer together,
+preserving command substitution and joining its process tree before fixture cleanup.
 
 Isolated Doctor config scripts also share the prepared config-flow, health-writer,
 and install-index modules. Each case still starts a fresh process with separate
@@ -339,6 +354,12 @@ For local PR land/gate checks, run:
 - `pnpm build`
 - `pnpm test`
 - `pnpm check:docs`
+
+`pnpm check --base <ref>` pins the line-cap, max-lines suppression, and assertion
+safety ratchets to the merge base of `HEAD` and that ref. Native PR gates pass
+their candidate's fork from the captured main snapshot, so inherited main
+changes retain their allowance even when the shared `origin/main` ref is stale.
+Other check stages still run normally.
 
 If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm test <path/to/test>`. For memory-constrained hosts:
 

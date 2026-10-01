@@ -121,7 +121,6 @@ function findUrlRanges(
     }
   }
 
-  // Find new URL starts in visible text
   const urlRe =
     /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*)/gi;
   urlRe.lastIndex = searchFrom;
@@ -165,27 +164,18 @@ function findUrlRanges(
       }
     }
 
-    if (!found && knownUrls.has(fragment)) {
-      found = true;
-    }
-    if (!found) {
-      let bestLen = 0;
+    if (!found && !knownUrls.has(fragment)) {
+      let prefix = "";
+      let parent = "";
       for (const known of knownUrls) {
-        if (known.startsWith(fragment) && known.length > bestLen) {
-          resolvedUrl = known;
-          bestLen = known.length;
-          found = true;
+        if (known.startsWith(fragment) && known.length > prefix.length) {
+          prefix = known;
+        }
+        if (fragment.startsWith(known) && known.length > parent.length) {
+          parent = known;
         }
       }
-    }
-    if (!found) {
-      let bestLen = 0;
-      for (const known of knownUrls) {
-        if (fragment.startsWith(known) && known.length > bestLen) {
-          resolvedUrl = known;
-          bestLen = known.length;
-        }
-      }
+      resolvedUrl = prefix || parent || fragment;
     }
 
     ranges.push({ start, end: start + fragment.length, url: resolvedUrl });

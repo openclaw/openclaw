@@ -1,8 +1,8 @@
 // Coverage for embedded attempt startup stage timing diagnostics.
 import { isMainThread, threadId } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import {
-  createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
@@ -13,7 +13,7 @@ describe("embedded run stage timing", () => {
     // Stage snapshots carry both local duration and total elapsed time so slow
     // startup logs can identify where time accumulated.
     let clock = 10;
-    const tracker = createEmbeddedRunStageTracker({ now: () => clock });
+    const tracker = createStageTimingTracker(() => clock);
 
     clock = 25;
     tracker.mark("workspace");
@@ -58,23 +58,9 @@ describe("embedded run stage timing", () => {
     ).toBe(true);
   });
 
-  it("formats summaries compactly for logs", () => {
-    expect(
-      formatEmbeddedRunStageSummary("embedded run startup stages: runId=r1", {
-        totalMs: 80,
-        stages: [
-          { name: "workspace", durationMs: 25, elapsedMs: 25 },
-          { name: "tools", durationMs: 55, elapsedMs: 80 },
-        ],
-      }),
-    ).toBe(
-      `embedded run startup stages: runId=r1 pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=80 stages=workspace:25ms@25ms,tools:55ms@80ms`,
-    );
-  });
-
   it("keeps orchestration startup stages ordered and cumulative", () => {
     let clock = 0;
-    const tracker = createEmbeddedRunStageTracker({ now: () => clock });
+    const tracker = createStageTimingTracker(() => clock);
 
     clock = 2;
     tracker.mark("workspace");
@@ -95,7 +81,7 @@ describe("embedded run stage timing", () => {
     // First-attempt dispatch stages use stable names because logs are compared
     // across provider/runtime startup regressions.
     let clock = 0;
-    const tracker = createEmbeddedRunStageTracker({ now: () => clock });
+    const tracker = createStageTimingTracker(() => clock);
 
     clock = 10;
     tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);

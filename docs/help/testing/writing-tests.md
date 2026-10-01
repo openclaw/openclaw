@@ -92,6 +92,28 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
 - State the measured cost in the PR for every new or materially changed test
   file, and the CI seconds once the run exists.
 
+`withTestTimeout` and `raceWithTimeoutResult` are grandfathered wall-clock races;
+`check:test-timeout-race-ratchet` keeps their per-file counts in
+`config/test-timeout-race-baseline.txt` shrink-only. Wait for the owned completion
+signal with `awaitGateBeforeSettlement(gate, operation, message)` or
+`withinTest(work, signal)` from `test/helpers/promise.ts`, or use `vi.useFakeTimers()`
+through the owner's injected clock seam. After removing sites, run
+`pnpm check:test-timeout-race-ratchet --prune` to shrink the baseline.
+
+## Raw SQLite state access
+
+`closeOpenClawStateDatabaseForTest()` closes native handles synchronously, but
+worker-backed state writes (plugin state, deferred plugin migrations, and other
+worker stores) keep a worker connection whose retirement only starts at that
+call. Its final close checkpoints and deletes the WAL under an exclusive lock at
+an arbitrary later time. Before opening the database with a raw `DatabaseSync`,
+or copying, hashing, or snapshotting its files, `await
+closeOpenClawStateDatabaseAsync()` (or `closeStateDatabaseForTest()` from
+`src/test-utils/database-cleanup.ts`, which also clears failure latches).
+Otherwise the raw connection can fail with `SQLITE_BUSY`, or the snapshot can
+change underneath the test. `PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE` on
+a raw connection proves that no other connection remains.
+
 ## Flake triage
 
 A failure without a related change is a defect. Never re-run, re-push, or refresh

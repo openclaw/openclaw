@@ -3,14 +3,17 @@ import {
   isInternalDiagnosticEventMetadata,
   normalizeDiagnosticValue,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { redactSensitiveText } from "../api.js";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
-import { positiveFiniteNumber } from "./service-genai-attributes.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
   assignOtelToolContentAttributes,
   assignOtelToolIdentityAttributes,
 } from "./service-genai-content.js";
-import type { OtelToolCallContent } from "./service-genai-content.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { TelemetryExporterDiagnosticEvent } from "./service-types.js";
 
@@ -130,7 +133,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       { type: "tool.execution.completed" | "tool.execution.error" }
     >,
     metadata: DiagnosticEventMetadata,
-    toolContent?: OtelToolCallContent,
+    toolContent?: DiagnosticEventPrivateData["toolContent"],
   ) => {
     const attrs = toolExecutionBaseAttrs(evt);
     if (evt.type === "tool.execution.error") {
@@ -200,7 +203,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       "openclaw.reason": normalizeDiagnosticValue(evt.reason, "none"),
     };
     payloadLargeCounter.add(1, attrs);
-    const bytes = positiveFiniteNumber(evt.bytes);
+    const bytes = asPositiveFiniteNumber(evt.bytes);
     if (bytes !== undefined) {
       payloadLargeBytesHistogram.record(bytes, attrs);
     }

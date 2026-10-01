@@ -31,18 +31,17 @@ export function shouldKeepCodexSharedAbortOpen(params: {
 
 export function withCodexAppServerFastModeServiceTier(
   appServer: CodexAppServerRuntimeOptions,
-  params: EmbeddedRunAttemptParams,
+  params: Pick<EmbeddedRunAttemptParams, "fastMode">,
+  configuredAppServer: Pick<CodexAppServerRuntimeOptions, "serviceTier"> = appServer,
 ): CodexAppServerRuntimeOptions {
   const fastMode = typeof params.fastMode === "function" ? params.fastMode() : params.fastMode;
+  // Ultrafast starts from Fast; the actual turn revalidates native account/model access.
   const serviceTier =
-    fastMode === undefined ? appServer.serviceTier : fastMode ? "priority" : undefined;
+    fastMode === undefined ? configuredAppServer.serviceTier : fastMode ? "priority" : null;
   if (serviceTier === appServer.serviceTier) {
     return appServer;
   }
-  if (serviceTier) {
-    return { ...appServer, serviceTier };
-  }
-  return { ...appServer, serviceTier: null };
+  return { ...appServer, serviceTier: serviceTier || null };
 }
 
 export function estimateCodexAppServerProjectedTurnTokens(params: {

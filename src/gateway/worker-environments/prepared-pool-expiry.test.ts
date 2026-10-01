@@ -1,13 +1,11 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
+import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import { PROJECT_KEY, RECEIPT, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
-import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 
 class TestWorkerServiceError extends Error {
   constructor(
@@ -108,7 +106,7 @@ describe("prepared worker expiry during admitted work", () => {
         registerPreparedWorkspace,
         credentialBroker: createWorkerCredentialBroker({
           ...shared,
-          cancelInferenceEnvironment: () => {},
+          cancelInferenceEnvironment: async () => {},
         }),
         callProvider: async (_environmentId, run) => await run(),
         callBootstrap: async (_installation, run) => await run(fixture.abort.signal),
@@ -172,20 +170,13 @@ describe("prepared worker expiry during admitted work", () => {
         if (enrollment.mode !== "connect") {
           throw new Error("Fresh reserve must use its pending enrollment");
         }
-        runOpenClawStateWriteTransaction(
-          () => {
-            const { environmentId, ...patch } = bindCloudWorkerSetupCompletion({
-              db: fixture.database.db,
-              completion: {
-                setupId: enrollment.setupId,
-                deviceId: "expiry-node",
-                completedAtMs: fixture.nowMs,
-              },
-            });
-            publishWorkerEnvironmentNativeMutation(fixture.database.db, environmentId, patch);
-          },
-          { database: fixture.database },
-        );
+        await completeWorkerNodeSetupForTest({
+          baseDir: fixture.root,
+          store: fixture.store,
+          setupId: enrollment.setupId,
+          deviceId: "expiry-node",
+          completedAtMs: fixture.nowMs,
+        });
         return { leaseId: "expiry-lease", node: { deviceId: "expiry-node" }, sharedHost: false };
       });
       const owner = fixture.pool({

@@ -18,14 +18,22 @@ import {
   releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import {
+  createDiagnosticTraceContextFromActiveScope,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import {
+  logMessageDispatchCompleted,
+  logMessageDispatchStarted,
+} from "../../logging/diagnostic.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import { CronExecutionRootRuntimeError } from "../execution-root-runtime.js";
+import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import {
@@ -71,6 +79,14 @@ async function disposeCronRunContext(params: {
 export async function runCronIsolatedAgentTurn(
   params: RunCronAgentTurnParams,
 ): Promise<RunCronAgentTurnResult> {
+  return await runWithDiagnosticTraceContext(createDiagnosticTraceContextFromActiveScope(), () =>
+    runCronIsolatedAgentTurnInTrace(params),
+  );
+}
+
+async function runCronIsolatedAgentTurnInTrace(
+  params: RunCronAgentTurnParams,
+): Promise<RunCronAgentTurnResult> {
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
   const lifecycleAbortController = new AbortController();
@@ -104,6 +120,11 @@ export async function runCronIsolatedAgentTurn(
   if (!prepared.ok) {
     return { ...prepared.result, admissionDisposition: "rejected" };
   }
+  await using _ = {
+    [Symbol.asyncDispose]: async () => {
+      await prepared.context.workspaceLease?.release();
+    },
+  };
   await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
   let leaseActive = true;
   // Accounting, delivery, and teardown use the same metadata as inference. Keep
@@ -157,10 +178,11 @@ export async function runCronIsolatedAgentTurn(
           };
 
           const turnStartedAtMs = Date.now();
+          const diagnosticsEnabled = isDiagnosticsEnabled(params.cfg);
           const messageLifecycle = (() => {
             try {
               const lifecycle = createDiagnosticMessageLifecycle({
-                enabled: isDiagnosticsEnabled(params.cfg),
+                enabled: diagnosticsEnabled,
                 sessionId: prepared.context.runSessionId,
                 sessionKey: prepared.context.runSessionKey,
                 agentId: prepared.context.agentId,
@@ -170,6 +192,14 @@ export async function runCronIsolatedAgentTurn(
                 trackSessionState: true,
               });
               lifecycle.markProcessing();
+              if (diagnosticsEnabled) {
+                logMessageDispatchStarted({
+                  sessionId: prepared.context.runSessionId,
+                  sessionKey: prepared.context.runSessionKey,
+                  channel: "cron",
+                  source: "cron-isolated",
+                });
+              }
               return lifecycle;
             } catch (error) {
               prepared.context.sessionWorkAdmission.release();
@@ -230,6 +260,7 @@ export async function runCronIsolatedAgentTurn(
               runId,
               cfg: params.cfg,
               job: params.job,
+              deliveryAttemptFence: params.deliveryAttemptFence,
               lane: params.lane,
               agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
               persistRunContinuationSession: prepared.context.runContinuationSession?.sync,
@@ -347,6 +378,16 @@ export async function runCronIsolatedAgentTurn(
               sessionKey: prepared.context.runSessionKey,
             };
             try {
+              if (diagnosticsEnabled) {
+                logMessageDispatchCompleted({
+                  ...finalSessionRef,
+                  channel: "cron",
+                  source: "cron-isolated",
+                  durationMs: Date.now() - turnStartedAtMs,
+                  outcome,
+                  error: outcomeError,
+                });
+              }
               messageLifecycle.markIdle(undefined, finalSessionRef);
               messageLifecycle.markProcessed(outcome, {
                 ...finalSessionRef,

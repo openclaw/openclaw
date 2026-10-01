@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { Api } from "grammy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   PROXY_FIXTURE_HOST,
   PROXY_FIXTURE_PAYLOAD,
@@ -13,7 +14,6 @@ import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import type { TelegramContext } from "./bot/types.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
-import { makeProxyFetch } from "./proxy.js";
 
 beforeEach(() => {
   for (const key of [

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -108,11 +109,7 @@ type ToolInvocationContext = {
   sessionId?: string;
 };
 
-type ParsedList = {
-  action: "list";
-};
-
-type ParsedToolInput = ParsedGet | ParsedList;
+type ParsedToolInput = ParsedGet | { action: "list" };
 
 type ListedItem = {
   slug: string;
@@ -124,11 +121,6 @@ type ListedItem = {
 const APPROVAL_TIMEOUT_MS = 600_000;
 const PENDING_AUTHORIZATION_TTL_MS = APPROVAL_TIMEOUT_MS;
 
-function textParam(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params[key];
-  return typeof value === "string" ? value.trim() : undefined;
-}
-
 class BrokerError extends Error {
   readonly code: AuditInternalErrorCode;
 
@@ -137,10 +129,6 @@ class BrokerError extends Error {
     this.name = "BrokerError";
     this.code = code;
   }
-}
-
-function internalError(code: AuditInternalErrorCode, message: string): BrokerError {
-  return new BrokerError(code, message);
 }
 
 function fingerprintOnePasswordTarget(item: OnePasswordItemConfig): string {
@@ -160,24 +148,24 @@ export function parseToolInput(params: Record<string, unknown>): ParsedToolInput
     return { action: "list" };
   }
   if (params.action !== "get") {
-    throw internalError("INVALID_ACTION", "action must be list or get");
+    throw new BrokerError("INVALID_ACTION", "action must be list or get");
   }
-  const reason = textParam(params, "reason");
+  const reason = readStringValue(params.reason)?.trim();
   if (!reason || reason.length > 300) {
-    throw internalError("INVALID_REASON", "reason is required and must be at most 300 characters");
+    throw new BrokerError(
+      "INVALID_REASON",
+      "reason is required and must be at most 300 characters",
+    );
   }
-  const slug = textParam(params, "slug");
+  const slug = readStringValue(params.slug)?.trim();
   if (!slug || !SLUG_PATTERN.test(slug)) {
-    throw internalError("INVALID_SLUG", "slug must match ^[a-z0-9][a-z0-9-]{0,63}$");
+    throw new BrokerError("INVALID_SLUG", "slug must match ^[a-z0-9][a-z0-9-]{0,63}$");
   }
   return { action: "get", slug, reason };
 }
 
 function errorCode(error: unknown): AuditErrorCode | undefined {
-  if (error instanceof OnePasswordError) {
-    return error.code;
-  }
-  if (error instanceof BrokerError) {
+  if (error instanceof OnePasswordError || error instanceof BrokerError) {
     return error.code;
   }
   return undefined;
@@ -213,20 +201,11 @@ export class OnePasswordBroker {
     const config = this.resolveConfig();
     if (!config) {
       this.observeConfigFingerprint(null);
-      throw internalError("POLICY_CHANGED", "1Password broker is no longer configured");
+      throw new BrokerError("POLICY_CHANGED", "1Password broker is no longer configured");
     }
     const fingerprint = createHash("sha256").update(JSON.stringify(config)).digest("hex");
     this.observeConfigFingerprint(fingerprint);
     return { config, fingerprint };
-  }
-
-  private async registerPending(nonce: string, authorization: PendingAuthorization): Promise<void> {
-    await registerPendingAuthorization(
-      this.stores.pending,
-      nonce,
-      authorization,
-      PENDING_AUTHORIZATION_TTL_MS,
-    );
   }
 
   private context(
@@ -292,8 +271,8 @@ export class OnePasswordBroker {
       input = parseToolInput(event.params);
     } catch (error) {
       const context = this.context(event, ctx, {
-        slug: textParam(event.params, "slug"),
-        reason: textParam(event.params, "reason"),
+        slug: readStringValue(event.params.slug)?.trim(),
+        reason: readStringValue(event.params.reason)?.trim(),
       });
       await this.audit(context, "error", { errorCode: errorCode(error) ?? "INVALID_ACTION" });
       return {
@@ -335,14 +314,21 @@ export class OnePasswordBroker {
 
     const nonce = randomUUID();
     const authorizedParams = { ...event.params, [AUTHORIZATION_NONCE_PARAM]: nonce };
+    const authorize = (outcome: PendingAuthorization["outcome"], persistGrant = false) =>
+      registerPendingAuthorization(
+        this.stores.pending,
+        nonce,
+        {
+          ...context,
+          outcome,
+          persistGrant,
+          configFingerprint,
+          targetFingerprint: fingerprintOnePasswordTarget(item),
+        },
+        PENDING_AUTHORIZATION_TTL_MS,
+      );
     if (item.policy === "auto") {
-      await this.registerPending(nonce, {
-        ...context,
-        outcome: "auto",
-        persistGrant: false,
-        configFingerprint,
-        targetFingerprint: fingerprintOnePasswordTarget(item),
-      });
+      await authorize("auto");
       return { params: authorizedParams };
     }
 
@@ -356,13 +342,7 @@ export class OnePasswordBroker {
       grant.expiresAtMs > this.now() &&
       grant.targetFingerprint === fingerprintOnePasswordTarget(item)
     ) {
-      await this.registerPending(nonce, {
-        ...context,
-        outcome: "grant",
-        persistGrant: false,
-        configFingerprint,
-        targetFingerprint: fingerprintOnePasswordTarget(item),
-      });
+      await authorize("grant");
       return { params: authorizedParams };
     }
     if (grant && grantKey) {
@@ -384,13 +364,10 @@ export class OnePasswordBroker {
             : ["allow-once", "allow-always", "deny"],
         onResolution: async (decision) => {
           if (decision === "allow-once" || decision === "allow-always") {
-            await this.registerPending(nonce, {
-              ...context,
-              outcome: "approved",
-              persistGrant: decision === "allow-always" && context.agentId !== "unknown",
-              configFingerprint,
-              targetFingerprint: fingerprintOnePasswordTarget(item),
-            });
+            await authorize(
+              "approved",
+              decision === "allow-always" && context.agentId !== "unknown",
+            );
             return;
           }
           if (decision === "deny") {
@@ -482,7 +459,7 @@ export class OnePasswordBroker {
       authorization.reason !== input.reason
     ) {
       await this.audit(fallbackContext, "error", { errorCode: "POLICY_NOT_EVALUATED" });
-      throw internalError(
+      throw new BrokerError(
         "POLICY_NOT_EVALUATED",
         "1Password policy was not evaluated for this request",
       );
@@ -498,7 +475,7 @@ export class OnePasswordBroker {
     }
     if (!Object.hasOwn(config.items, input.slug)) {
       await this.audit(authorization, "error", { errorCode: "UNKNOWN_SLUG" });
-      throw internalError("UNKNOWN_SLUG", `Unknown 1Password slug: ${input.slug}`);
+      throw new BrokerError("UNKNOWN_SLUG", `Unknown 1Password slug: ${input.slug}`);
     }
     const item = config.items[input.slug];
     if (!item) {
@@ -506,7 +483,10 @@ export class OnePasswordBroker {
     }
     if (item.policy === "deny") {
       await this.audit(authorization, "policy-denied");
-      throw internalError("POLICY_CHANGED", `1Password access denied by policy for ${input.slug}`);
+      throw new BrokerError(
+        "POLICY_CHANGED",
+        `1Password access denied by policy for ${input.slug}`,
+      );
     }
     if (
       (authorization.outcome === "auto" && item.policy !== "auto") ||
@@ -515,7 +495,7 @@ export class OnePasswordBroker {
       authorization.targetFingerprint !== fingerprintOnePasswordTarget(item)
     ) {
       await this.audit(authorization, "error", { errorCode: "POLICY_CHANGED" });
-      throw internalError("POLICY_CHANGED", "1Password policy changed before tool execution");
+      throw new BrokerError("POLICY_CHANGED", "1Password policy changed before tool execution");
     }
     if (authorization.outcome === "grant") {
       const grant = await this.stores.grants.lookup(
@@ -529,7 +509,7 @@ export class OnePasswordBroker {
         grant.targetFingerprint !== fingerprintOnePasswordTarget(item)
       ) {
         await this.audit(authorization, "error", { errorCode: "GRANT_EXPIRED" });
-        throw internalError(
+        throw new BrokerError(
           "GRANT_EXPIRED",
           "1Password standing grant expired before tool execution",
         );

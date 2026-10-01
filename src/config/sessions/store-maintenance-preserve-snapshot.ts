@@ -7,6 +7,18 @@ export type SessionMaintenancePreservationSnapshot = {
   lifecycleIdentities: string[];
 };
 
+export function addSessionMaintenancePreserveKeys(
+  keys: Set<string>,
+  values: Iterable<string | undefined> | undefined,
+): void {
+  for (const value of values ?? []) {
+    const normalized = normalizeStoreSessionKey(value ?? "");
+    if (normalized) {
+      keys.add(normalized);
+    }
+  }
+}
+
 export function collectSessionWorkAdmissionKeysFromSnapshot(
   store: Record<string, SessionEntry>,
   identities: readonly string[],
@@ -34,12 +46,7 @@ export function resolveSessionMaintenancePreserveKeys(params: {
   baseKeys?: Iterable<string | undefined>;
 }): Set<string> {
   const keys = new Set(params.snapshot.providerKeys);
-  for (const key of params.baseKeys ?? []) {
-    const normalized = normalizeStoreSessionKey(key ?? "");
-    if (normalized) {
-      keys.add(normalized);
-    }
-  }
+  addSessionMaintenancePreserveKeys(keys, params.baseKeys);
   for (const key of collectSessionWorkAdmissionKeysFromSnapshot(
     params.store,
     params.snapshot.workIdentities,

@@ -17,6 +17,7 @@ import {
 import {
   assertServiceDefinitionWritable,
   type GatewayServiceEnv,
+  type GatewayServiceReadOptions,
   type ServiceDefinitionMutationArtifact,
   type ServiceDefinitionMutationCapability,
   type SystemdServiceReadBinding,
@@ -49,8 +50,12 @@ type SystemdDefinitionMutation = {
 const identity = (stat: Stats, contents?: Buffer) =>
   [stat.dev, stat.ino, stat.uid, stat.gid, stat.mode, contents && sha256Hex(contents)].join(":");
 
-function resolveMutationTargets(env: GatewayServiceEnv, environment: GatewayServiceEnv) {
-  const unit = resolveSystemdUnitPath(env);
+function resolveMutationTargets(
+  env: GatewayServiceEnv,
+  environment: GatewayServiceEnv,
+  target?: SystemdServiceReadTarget,
+) {
+  const unit = target?.unitPath ?? resolveSystemdUnitPath(env);
   const generated = resolveSystemdEnvironmentFilePath({
     stateDir: resolveStateDir({ ...env, ...environment }),
     environment,
@@ -100,11 +105,9 @@ async function readStableFile(
 async function inspect(
   env: GatewayServiceEnv,
   environment: GatewayServiceEnv,
-  timeoutMs?: number,
-  requireLoaded = false,
-  systemdReadBinding?: SystemdServiceReadBinding,
+  options?: GatewayServiceReadOptions,
 ) {
-  const { unit, generated } = resolveMutationTargets(env, environment);
+  const { unit, generated } = resolveMutationTargets(env, environment, options?.systemdReadTarget);
   const snapshots = new Map<string, Snapshot>();
   const fingerprint = new Map<string, string>();
   let shared = new Set<string>();
@@ -123,10 +126,8 @@ async function inspect(
   let artifact: ServiceDefinitionMutationArtifact | undefined;
   try {
     const command = await readSystemdServiceExecStart(env, {
+      ...options,
       requireEffective: true,
-      timeoutMs,
-      ...(systemdReadBinding ? { systemdReadBinding } : {}),
-      ...(requireLoaded ? { requireLoaded: true } : {}),
     });
     sourcePath = command?.sourcePath;
     const targets = new Set([unit, generated, `${unit}.bak`]);
@@ -219,7 +220,9 @@ export async function readSystemdDefinitionMutationCapability(
   if (options?.systemdReadTarget?.scope === "system") {
     return { kind: "sealed", reason: "system-owned" };
   }
-  const selected = path.basename(resolveSystemdUnitPath(env));
+  const selected =
+    options?.systemdReadTarget?.unitName ?? path.basename(resolveSystemdUnitPath(env));
+  const { environment = env, ...readOptions } = options ?? {};
   const names =
     selected === "openclaw-gateway.service" ? [selected, "openclaw.service"] : [selected];
   const budget =
@@ -258,13 +261,11 @@ export async function readSystemdDefinitionMutationCapability(
       if (!options?.requireLoaded || !isSystemSystemdOwnershipError(error)) {
         return unverified;
       }
-      const loaded = await inspect(
-        env,
-        options.environment ?? env,
-        remaining(),
-        true,
-        options.systemdReadBinding,
-      ).then(
+      const loaded = await inspect(env, environment, {
+        ...readOptions,
+        timeoutMs: remaining(),
+        requireLoaded: true,
+      }).then(
         (inspection) => inspection.capability,
         () => undefined,
       );
@@ -272,15 +273,7 @@ export async function readSystemdDefinitionMutationCapability(
     }
   }
   try {
-    return (
-      await inspect(
-        env,
-        options?.environment ?? env,
-        remaining(),
-        options?.requireLoaded,
-        options?.systemdReadBinding,
-      )
-    ).capability;
+    return (await inspect(env, environment, { ...readOptions, timeoutMs: remaining() })).capability;
   } catch {
     return { kind: "unknown", reason: "inspection-failed" };
   }
@@ -305,7 +298,7 @@ export async function withSystemdDefinitionMutation<T>(
     Promise.all([unit, generated].map(canonicalPathFromExistingAncestor));
   const preparation = await withGatewayServiceInstallationRecovery(
     async () => {
-      const initial = await inspect(env, environment, remainingTimeoutMs());
+      const initial = await inspect(env, environment, { timeoutMs: remainingTimeoutMs() });
       assertServiceDefinitionWritable(initial.capability);
       // Group-writable umasks must not create directories that inspect() would reject.
       assertGatewayServiceUpdateCurrent();
@@ -323,7 +316,7 @@ export async function withSystemdDefinitionMutation<T>(
     .toSorted();
   const execute = async (): Promise<T> => {
     const refresh = async (unchanged = false, firstUnitPublication = false) => {
-      const current = await inspect(env, environment, remainingTimeoutMs());
+      const current = await inspect(env, environment, { timeoutMs: remainingTimeoutMs() });
       assertServiceDefinitionWritable(current.capability);
       const expected = new Map(initial.fingerprint);
       // LoadUnit can reveal shared defaults only after the first base publication.
@@ -476,7 +469,7 @@ export async function withSystemdDefinitionMutation<T>(
       if (published === undefined) {
         return false;
       }
-      const current = await inspect(env, environment, remainingTimeoutMs());
+      const current = await inspect(env, environment, { timeoutMs: remainingTimeoutMs() });
       // A refreshed global snapshot never grants ownership of another artifact's edit.
       if (current.capability.kind !== "writable" || current.fingerprint.get(file) !== published) {
         return false;

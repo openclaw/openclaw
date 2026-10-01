@@ -1,10 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { formatUnsupportedNodeVersionMessage } from "../../../node-version.mjs";
-import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { resolveConfigPath } from "../../config/paths.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
@@ -15,6 +13,7 @@ import {
   formatExternalSupervisorUpdateRequired,
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
+import { readInstallOwner } from "../../infra/install-owner.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
@@ -77,6 +76,7 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-stat
 import { VERSION } from "../../version.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
+import { reportHostOwnedUpdate } from "./host-owned.js";
 import type { UpdateDisplayProgress } from "./progress.js";
 import {
   parseUpdateTimeoutMs,
@@ -86,6 +86,7 @@ import {
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
+import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
@@ -239,17 +240,8 @@ export async function admitUpdateCommandRun(params: {
   invocationCwd?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
   expectedForeground?: true;
-  initialization?: {
-    env: NodeJS.ProcessEnv;
-    runId: string;
-    databasePath: string;
-    configPath: string;
-    target: {
-      configSnapshot: ConfigFileSnapshot;
-      legacyConfigPlan?: LegacyConfigUpdatePlan;
-      updateInstallKind?: "git" | "package" | "unknown";
-    };
-  };
+  initialization?: UpdateInitializationAdmission;
+  assertCurrent?: () => void;
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
   assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
   const env = await resolveUpdateCommandAdmissionEnv(params);
@@ -273,21 +265,28 @@ export async function admitUpdateCommandRun(params: {
       throw new GatewayServiceUpdateOwnershipError(
         "Gateway state or configuration selectors changed during target initialization. Retry from the installation's current owning account.",
         undefined,
+        undefined,
+        "service-context-changed",
       );
     }
-    await revalidateUpdateDatabaseContext({
-      env,
-      readEnv: env,
-      config: initialized.target.configSnapshot.sourceConfig,
-      configSnapshot: initialized.target.configSnapshot,
-      ...(initialized.target.updateInstallKind === "package" &&
-      usesCandidateUpdateAdmission(params.opts, params.installKind ?? "unknown")
-        ? { configValidation: "candidate" as const }
-        : {}),
-      ...(initialized.target.legacyConfigPlan
-        ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
-        : {}),
-    });
+    if (initialized.target) {
+      const current = await revalidateUpdateDatabaseContext({
+        env,
+        readEnv: env,
+        config: initialized.target.configSnapshot.sourceConfig,
+        configSnapshot: initialized.target.configSnapshot,
+        ...(initialized.target.updateInstallKind === "package" &&
+        usesCandidateUpdateAdmission(params.opts, params.installKind ?? "unknown")
+          ? { configValidation: "candidate" as const }
+          : {}),
+        ...(initialized.target.legacyConfigPlan
+          ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
+          : {}),
+      });
+      initialized.target.configSnapshot = current.configSnapshot;
+      initialized.target.legacyConfigPlan = current.legacyConfigPlan;
+      initialized.target.configReadFailure = undefined;
+    }
   }
   const meta = await readControlPlaneUpdateSentinelMeta(env);
   await resolveForegroundUpdateAdmission({
@@ -305,6 +304,7 @@ export async function admitUpdateCommandRun(params: {
     env,
     busyTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
   };
+  params.assertCurrent?.();
   const created = createUpdateRun(
     {
       runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
@@ -339,6 +339,8 @@ export async function admitUpdateCommandRun(params: {
       : undefined;
   const run = {
     runId: record.runId,
+    originalRecoveryCapture:
+      params.initialization?.originalRecoveryCapture ?? params.opts.run?.originalRecoveryCapture,
     defaultStepTimeoutMs: record.trigger === "campaign" ? AUTO_UPDATE_STEP_TIMEOUT_MS : undefined,
     env,
     ...(record.trigger !== "cli" &&
@@ -625,18 +627,18 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
     );
   }
-  let devTarget: DevUpdateTarget | undefined;
-  if (requestedChannel === "dev") {
-    devTarget = readDevUpdateTarget();
-  }
+  const devTarget = requestedChannel === "dev" ? readDevUpdateTarget() : undefined;
 
-  if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
-    throw new Error(formatExternalSupervisorUpdateRequired());
-  }
   // The shim can move during preparation; the loaded module owns the executing generation.
   const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   const discoveredRoot = opts.sourceUpdate?.root ?? (await resolveUpdateRoot());
   const installKind = await resolveUpdateInstallKind(discoveredRoot, { timeoutMs });
+  if (installKind === "host") {
+    reportHostOwnedUpdate(await readInstallOwner(discoveredRoot), opts);
+  }
+  if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
+    throw new Error(formatExternalSupervisorUpdateRequired());
+  }
   if (opts.sourceUpdate && installKind !== "git") {
     throw new Error("Doctor source update requires the accepted Git checkout.");
   }

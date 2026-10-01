@@ -1,4 +1,3 @@
-// Unified operator approval lookup and first-answer resolution handlers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -175,7 +174,6 @@ async function applyApprovalDecision<TPayload>(params: {
   };
 }
 
-/** Creates kind-agnostic approval lookup and resolution handlers. */
 export function createApprovalHandlers(
   params: CreateApprovalHandlersParams,
 ): GatewayRequestHandlers {
@@ -191,7 +189,6 @@ export function createApprovalHandlers(
         );
         return;
       }
-      const historyParams = rawParams;
       if (!authority.isCurrent()) {
         respondApprovalNotFound(respond);
         return;
@@ -199,9 +196,9 @@ export function createApprovalHandlers(
       let history: Awaited<ReturnType<typeof listTerminalOperatorApprovals>>;
       try {
         history = await listTerminalOperatorApprovals({
-          cursor: historyParams.cursor,
-          limit: historyParams.limit,
-          kind: historyParams.kind,
+          cursor: rawParams.cursor,
+          limit: rawParams.limit,
+          kind: rawParams.kind,
           databaseOptions: params.databaseOptions,
           guard: authority.guard,
         });

@@ -9,6 +9,7 @@ import type { AgentRunClientContext, AgentRunMessageContext } from "./command/sh
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
+import type { InstalledSkill } from "./installed-skill-catalog.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -18,6 +19,8 @@ import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Complete model-discoverable catalog, prepared by the current host. */
+  installedSkills?: readonly InstalledSkill[];
   /**
    * How this run shows a blocking question tool's prompt. Harnesses that run tools
    * through the embedded tool lifecycle reserve the prompt themselves and leave this
@@ -87,6 +90,8 @@ export type OpenClawSharedToolsOptions = {
   swarmOutputSchema?: Record<string, unknown>;
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
   enableHeartbeatTool?: boolean;
+  /** Host-only observation after a canonical progress-card replacement commits. */
+  onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   claimYieldCompletion?: () => boolean | Promise<boolean>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */
@@ -94,6 +99,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Host-issued source for session-control schema projection; execution rechecks the caller. */
+  sessionControlAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Host-qualified restricted preview target; never permits Gateway-local ports. */
   sessionPortalTarget?: import("./tools/session-portal-target.js").SessionPortalToolTarget;
   sandboxBrowserBridgeUrl?: string;
@@ -102,6 +109,7 @@ export type OpenClawToolsOptions = {
   agentChannel?: string;
   /** Host-bound standalone request/grant authority, never supplied by tool arguments. */
   assertInvocationCurrent?: () => void;
+  assertInputCommitAllowed?: () => void;
   /** Exact admitted session policy shared with terminal-input authorization. */
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */

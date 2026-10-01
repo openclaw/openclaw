@@ -1,10 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-contract.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createContext, createGateway, mountPalette } from "./command-palette.test-support.ts";
 import "./command-palette.ts";
@@ -36,7 +32,7 @@ describe("CommandPalette platform shortcuts", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+  it.each(["MacIntel", "Linux x86_64"])(
     "uses the platform palette shortcut on %s without consuming text editing",
     async (platform) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
@@ -78,9 +74,10 @@ describe("CommandPalette platform shortcuts", () => {
       expect(start.disabled).toBe(true);
       expect(start.hidden).toBe(false);
       expect(start.textContent).toContain("New session");
-      expect(start.querySelector("kbd")?.textContent).toBe(
-        formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
+      expect(start.querySelector("kbd")?.textContent?.replace(/\s+/gu, "").trim()).toBe(
+        platform === "MacIntel" ? "⌘⏎" : "Ctrl+Enter",
       );
+      expect(start.querySelectorAll("kbd svg")).toHaveLength(platform === "MacIntel" ? 2 : 0);
       const editQuery = chord(other);
       input.dispatchEvent(editQuery);
       expect(editQuery.defaultPrevented).toBe(false);

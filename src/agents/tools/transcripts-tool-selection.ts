@@ -1,5 +1,5 @@
+import { activeSessions } from "../../transcripts/capture-startup.js";
 import {
-  activeSessions,
   authorizeTranscriptSource,
   resolveSourceProvider,
   type TranscriptCaptureSelection,

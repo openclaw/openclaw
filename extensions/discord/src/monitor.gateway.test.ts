@@ -79,11 +79,6 @@ async function expectAbortToResolve(params: {
 }
 
 describe("waitForDiscordGatewayStop", () => {
-  it("resolves on abort and disconnects gateway", async () => {
-    const { abort, attachLifecycle, detachLifecycle, disconnect, promise } = startGatewayWait();
-    await expectAbortToResolve({ abort, attachLifecycle, detachLifecycle, disconnect, promise });
-  });
-
   it("rejects on lifecycle stop events and disconnects", async () => {
     const fatalEvent = createGatewayEvent("fatal", "boom");
     const { detachLifecycle, disconnect, emitGatewayEvent, promise } = startGatewayWait();

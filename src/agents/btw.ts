@@ -94,7 +94,6 @@ import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 import { resolveSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
-import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
@@ -110,19 +109,6 @@ function collectTextContent(content: Array<{ type?: string; text?: string }>): s
     .filter((part): part is { type: "text"; text: string } => part.type === "text")
     .map((part) => part.text)
     .join("");
-}
-
-function resolveReturnedAuthProfileSource(
-  sessionEntry: StoredSessionEntry | undefined,
-  authProfileId: string | undefined,
-): "auto" | "user" | undefined {
-  if (!authProfileId?.trim()) {
-    return undefined;
-  }
-  if (sessionEntry?.authProfileOverride?.trim() !== authProfileId) {
-    return "auto";
-  }
-  return resolveCollapsedSessionAuthPinSource(sessionEntry);
 }
 
 // Planning and immediate resolution share one scoped snapshot so provider
@@ -302,31 +288,23 @@ async function toSimpleContextMessages(params: {
       continue;
     }
     const role = (message as { role?: unknown }).role;
-    if (role === "user") {
-      const sanitizedMessage = await sanitizeBtwUserMessage({
-        message: message as Extract<Message, { role: "user" }>,
-        imageLimits: params.imageLimits,
-      });
-      if (sanitizedMessage) {
-        contextMessages.push(sanitizedMessage);
-      }
-      continue;
-    }
-    if (role !== "assistant") {
+    if (role !== "user" && role !== "assistant") {
       continue;
     }
     // BTW is a no-tools path, so keep only user-visible blocks from prior
     // messages and strip hidden reasoning/tool replay data.
-    const sanitizedMessage = sanitizeBtwAssistantMessage(
-      message as Extract<Message, { role: "assistant" }>,
-    );
+    const sanitizedMessage =
+      role === "user"
+        ? await sanitizeBtwUserMessage({
+            message: message as Extract<Message, { role: "user" }>,
+            imageLimits: params.imageLimits,
+          })
+        : sanitizeBtwAssistantMessage(message as Extract<Message, { role: "assistant" }>);
     if (sanitizedMessage) {
       contextMessages.push(sanitizedMessage);
     }
   }
-  return stripToolResultDetails(
-    contextMessages as Parameters<typeof stripToolResultDetails>[0],
-  ) as Message[];
+  return contextMessages;
 }
 
 type BtwRuntimeAuthPreparation = ReturnType<typeof prepareAgentRuntimeAuth>;
@@ -642,8 +620,11 @@ async function runCliBtwSideQuestion(params: {
     }
     return { text };
   } finally {
-    await prepared?.preparedBackend.cleanup?.();
-    preparedRunAdmission.close();
+    try {
+      await prepared?.preparedBackend.cleanup?.();
+    } finally {
+      preparedRunAdmission.close();
+    }
   }
 }
 
@@ -1088,15 +1069,12 @@ export async function runBtwSideQuestion(
     const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);
     const imageLimits = resolveImageSanitizationLimits(params.cfg);
     let messages: Message[] = [];
-    let inFlightPrompt: string | undefined;
+    const inFlightPrompt = activeRunSnapshot?.inFlightPrompt;
     if (Array.isArray(activeRunSnapshot?.messages) && activeRunSnapshot.messages.length > 0) {
       messages = await toSimpleContextMessages({
         messages: activeRunSnapshot.messages,
         imageLimits,
       });
-      inFlightPrompt = activeRunSnapshot.inFlightPrompt;
-    } else if (activeRunSnapshot) {
-      inFlightPrompt = activeRunSnapshot.inFlightPrompt;
     }
     if (messages.length === 0) {
       messages = await toSimpleContextMessages({
@@ -1124,10 +1102,11 @@ export async function runBtwSideQuestion(
     });
     const fallbackRuntime = fallbackPolicy.runtime.trim();
     const sessionAuthProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
-    const sessionAuthProfileSource = resolveReturnedAuthProfileSource(
-      params.sessionEntry,
-      sessionAuthProfileId,
-    );
+    const sessionAuthProfileSource = !sessionAuthProfileId
+      ? undefined
+      : params.sessionEntry.authProfileOverride?.trim() !== sessionAuthProfileId
+        ? "auto"
+        : resolveCollapsedSessionAuthPinSource(params.sessionEntry);
     const cliProviderFromSessionAuth = sessionAuthProfileId
       ? resolveCliRuntimeExecutionProvider({
           provider: params.provider,
@@ -1275,6 +1254,7 @@ export async function runBtwSideQuestion(
       workspaceDir,
       env: process.env,
       wrapProviderStream: true,
+      auth: { mode: apiKeyInfo.mode, authFlow: apiKeyInfo.authFlow },
       apiRegistry: modelRegistryRuntime.apiRegistry,
     });
     const { streamFn } = resolveEmbeddedAgentStream({

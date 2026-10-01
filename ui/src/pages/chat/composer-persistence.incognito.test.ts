@@ -91,6 +91,7 @@ describe("Incognito composer persistence", () => {
       chatMessage: "@Alex private objective",
       chatMentions: [{ profileId: "alex", start: 0, end: 5 }],
       chatGoalDraftMode: { action: "start", sessionId: "private-session" },
+      chatReplyTarget: { messageId: "private-reply", text: "Private quote" },
       connected: true,
       client: { recoveryScope: "credential", recoveryScopeReady: true },
     });
@@ -107,6 +108,7 @@ describe("Incognito composer persistence", () => {
       draft: state.chatMessage,
       draftMentions: state.chatMentions,
       goalMode: state.chatGoalDraftMode,
+      replyTarget: state.chatReplyTarget,
     });
     sessionStorage.setItem(storageKey, JSON.stringify(legacy));
     const persistence = startPersistence(state);
@@ -122,6 +124,7 @@ describe("Incognito composer persistence", () => {
     expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draft).toBeUndefined();
     expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draftMentions).toBeUndefined();
     expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].goalMode).toBeUndefined();
+    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].replyTarget).toBeUndefined();
     expect(restoreChatComposerState(state)).toBe(true);
     expect(state.chatMessage).toBe("@Alex private objective");
     expect(state.chatMentions).toHaveLength(1);
@@ -199,7 +202,9 @@ describe("Incognito composer persistence", () => {
     const state = createState();
     const persistence = startPersistence(state);
     const reader = createStoredChatOutboxReader();
-    const stopReader = reader.subscribe(() => reader.read(state));
+    const stopReader = reader.subscribe(() =>
+      reader.read({ ...state, client: state.client ?? null, connected: state.connected ?? false }),
+    );
     const unsubscribe = subscribeStoredChatOutboxChanges(() => {
       state.selectedChatSessionIncognito = true;
       persistence.persistChangedState();
@@ -212,7 +217,11 @@ describe("Incognito composer persistence", () => {
         sessionStorage.getItem(storageKeyForGateway(state.settings?.gatewayUrl)),
       ).not.toContain("private notification draft");
       expect(state.chatMessage).toBe("private notification draft");
-      expect(reader.read(state).hasSessionDraft(state.sessionKey)).toBe(false);
+      expect(
+        reader
+          .read({ ...state, client: state.client ?? null, connected: state.connected ?? false })
+          .hasSessionDraft(state.sessionKey),
+      ).toBe(false);
     } finally {
       stopReader();
       unsubscribe();
@@ -225,6 +234,7 @@ describe("Incognito composer persistence", () => {
       chatMessage: "@Alex private legacy draft",
       chatMentions: [{ profileId: "alex", start: 0, end: 5 }],
       chatGoalDraftMode: { action: "start", sessionId: "private-session" },
+      chatReplyTarget: { messageId: "private-reply", text: "Private quote" },
     });
     expect(persistChatComposerState(state)).toBe(true);
     const queued = { ...reconnectItem("legacy-queue", 1), sendState: "held" as const };

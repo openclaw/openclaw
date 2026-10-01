@@ -196,6 +196,7 @@ export type AgentRuntimeAuthPlan = {
   forwardedAuthProfileCandidateIds?: string[];
   /** Exact selected credential/config mode; secret-free route materialization input. */
   selectedAuthMode?: string;
+  selectedAuthFlow?: string;
   /** Concrete provider-owned route selected before runtime dispatch. */
   modelRoute?: AgentRuntimeAuthModelRoute;
   /** Secret-free support shared by every route deferred to harness-owned auth. */

@@ -13,13 +13,40 @@ export type ThreadReleaseTransition = {
   invalidated?: boolean;
 };
 
+/**
+ * Exact lifecycle inputs a live ephemeral thread was told. The generic policy is
+ * creation-owned and cannot be refreshed or cold-resumed; skills, persona, and memory
+ * share one refreshable section recording what was last delivered to the thread.
+ */
+export type CodexEphemeralThreadPolicy = {
+  developerInstructions?: string;
+  refreshableInstructions?: string;
+  /**
+   * Refreshable section carried by the thread's creation-time native developer instructions.
+   * Compaction rebuilds initial context from those instructions and drops the
+   * client-authored refresh, so this is the section a compacted thread reverts to.
+   */
+  nativeRefreshableInstructions?: string;
+};
+
 export type RetainedLiveThread = {
   ownerToken?: ThreadOwnerToken;
   configFingerprint?: string;
-  ephemeralPolicy?: string;
+  ephemeralPolicy?: CodexEphemeralThreadPolicy;
   serviceTier?: CodexServiceTier | null;
   expiresAt: number;
   release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
+};
+
+export type CodexAppServerLiveThreadOwnership = {
+  assertCurrent: () => void;
+  configFingerprint?: string;
+  ephemeralPolicy?: CodexEphemeralThreadPolicy;
+  serviceTier?: CodexServiceTier | null;
+  /** Releases this active claim or the exact idle record it published. */
+  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
+  /** Forgets this local owner after native shutdown, without unsubscribing a successor. */
+  forget: () => void;
 };
 
 export type ThreadOwnershipState = {
@@ -129,4 +156,32 @@ export function forgetThreadOwnership(
     owner.invalidate();
   }
   return forgotten;
+}
+
+/** Compaction discards client-authored instruction refreshes, not creation policy. */
+export function revertRetainedThreadInstructions(
+  runtime: ThreadOwnershipState,
+  threadId: string,
+): void {
+  const retained = runtime.retainedThreads.get(threadId);
+  if (retained?.ephemeralPolicy) {
+    retained.ephemeralPolicy = {
+      ...retained.ephemeralPolicy,
+      refreshableInstructions: retained.ephemeralPolicy.nativeRefreshableInstructions,
+    };
+  }
+}
+
+export function createCodexEphemeralThreadPolicy({
+  developerInstructions,
+  refreshableInstructions,
+}: Pick<
+  CodexEphemeralThreadPolicy,
+  "developerInstructions" | "refreshableInstructions"
+>): CodexEphemeralThreadPolicy {
+  return {
+    developerInstructions,
+    refreshableInstructions,
+    nativeRefreshableInstructions: refreshableInstructions,
+  };
 }

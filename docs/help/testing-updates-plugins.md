@@ -118,6 +118,8 @@ runs the published `openclaw@2026.9.4` updater against the candidate.
 A legacy-plugin case returns from its command while a child keeps running,
 then proves that a missing idle-work callback blocks activation both during
 that work and after the child finishes.
+A default-plugin node, with no plugin restriction or node command allowlist,
+must activate the prepared update while idle.
 
 Use a new artifact directory outside the source checkout for every run, or omit
 it to create a fresh temporary directory. The scenario retains `observations.json`
@@ -208,6 +210,12 @@ OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="openai/gpt-5.5 anthropic/claude-opus-5 go
 pnpm test:docker:published-upgrade-survivor
 ```
 
+Source-pinned tarball runs of `base` and `sqlite-volume` verify the candidate
+commit before the update and compare the installed application payload with the
+frozen tarball afterward, before candidate probes. This distinguishes different
+builds with the same version string. npm still owns dependency reification;
+manual tarball runs without a selected source SHA retain their existing contract.
+
 Useful published-upgrade survivor variants:
 
 ```bash
@@ -241,6 +249,22 @@ Available scenarios: `base`, `acpx-openclaw-tools-bridge`, `feishu-channel`,
 fixtures but excludes the expensive `sqlite-volume` scenario. Use
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=far-reaching` to include it.
 
+The opt-in `backup-schedule` scenario uses the published `openclaw@2026.9.7`
+CLI to initialize a Git backup repository, enable its Gateway-owned 24-hour
+schedule, and record one Git backup and one archive backup. The published updater
+installs the source-pinned candidate tarball. After non-interactive Doctor and
+Gateway startup, the scenario checks the original schedule declaration and argv,
+both old ledger rows through `backup.status`, the status backup line, Doctor
+errors, and HTTP readiness. It also requires that `storage.locations` stays
+absent and the Cloudflare plugin stays inactive. This manual/release scenario
+is excluded from aggregate aliases and per-PR CI.
+
+```bash
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS=openclaw@2026.9.7 \
+OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=backup-schedule \
+pnpm test:docker:published-upgrade-survivor
+```
+
 The `custom-plugin-siblings` scenario starts from published 2026.9.4 or later
 with an enabled custom memory plugin importing `../shared/value.mjs` from both
 its runtime entry and Doctor config-repair contract. It runs the published
@@ -254,7 +278,7 @@ Those default release runs pin this scenario to the published 2026.9.4 driver,
 including when the source candidate still reports version 2026.9.4; other
 scenarios retain their existing baseline selection.
 
-The opt-in `projects-doctor`, `projects-startup-migration`, and `taskflow-restoration` scenarios require the exact
+The opt-in `projects-doctor` and `projects-startup-migration` scenarios require the exact
 published `openclaw@2026.9.4` baseline and a frozen candidate tarball. They use
 isolated state, manual restart, and no live providers or registry companion fixtures;
 none runs through `reported-issues` or `far-reaching`. They verify the original
@@ -283,11 +307,15 @@ candidate `commit`, `agentSchema`, and `operations.prepare`/`operations.open`
 triples of compiled basename, exact export symbol, and SHA-256. The snapshot
 preparer and SQLite opener must match the installed candidate payload; the file
 is mounted read-only. This scenario uses no remote repository or model turn.
-`taskflow-restoration` preserves three terminal tasks and two flows, starts a fresh
-candidate Gateway, exercises awaited task SDK reads through a synthetic local plugin,
-and reads two task pages on the same Gateway connection. Complete task, delivery,
-and flow records are checked again after Gateway shutdown. The taskflow cell covers
-terminal persisted state; it does not exercise active task recovery or provider work.
+The opt-in `channel-owner-policy` scenario uses the same pinned `openclaw@2026.9.4`
+published-driver and candidate-package checks. It seeds an existing
+`operator.channelPolicy` JSON specimen in the published database's machine-state
+table, then runs the installed updater. It requires state schema 19 content,
+preserved role/identity policy and configured owners, and a stable configured-owner
+reference across two candidate Gateway starts. The specimen is synthetic existing
+state, not a claim that the published baseline minted recovery references. This
+cell uses isolated state and manual restart; it does not prove updater-owned
+service restart or older-reader downgrade behavior.
 
 The `legacy-operator-state` scenario uses the published baseline's own CLI to
 create a second agent, allowlist exec approvals, and two command cron jobs: one

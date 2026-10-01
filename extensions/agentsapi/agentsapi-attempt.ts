@@ -1,0 +1,709 @@
+import { createHash } from "node:crypto";
+import {
+  buildCurrentInboundPrompt,
+  createAgentHarnessAttemptCancellation,
+  createAgentHarnessAttemptDeadlineController,
+  createAgentHarnessAttemptLifecycle,
+  emitAgentHarnessAttemptEvent,
+  AgentHarnessProjectionSettlement,
+  racePromiseWithAbortSignal,
+  resolveAgentHarnessHistoryLimits,
+  type AgentHarnessAttemptTimeout,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import {
+  agentHarnessAttemptTerminal,
+  awaitAgentEndSideEffects,
+  buildAgentHookContextChannelFields,
+  buildEmbeddedForegroundPromptContext,
+  clearActiveEmbeddedRun,
+  embeddedAgentLog,
+  formatErrorMessage,
+  resolveAgentDir,
+  resolveAgentHarnessBeforePromptBuildResult,
+  runAgentEndSideEffects,
+  runAgentHarnessLlmOutputHook,
+  sanitizeToolArgs,
+  setActiveEmbeddedRun,
+  type AgentHarnessAttemptParamsV2,
+  type EmbeddedRunAttemptResult,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { AgentsApiClient } from "./agentsapi-client.js";
+import * as files from "./agentsapi-files.js";
+import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
+import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
+import {
+  buildAgentsApiInstructions,
+  buildAgentsApiTurnInput,
+  HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK,
+} from "./agentsapi-prompt.js";
+import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
+import { createAgentsApiSession } from "./agentsapi-session.js";
+import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
+import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
+import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
+import { agentsApiConfigSchema, resolveAgentsApiEnvironment } from "./config.js";
+
+export async function runAgentsApiAttempt(
+  params: AgentHarnessAttemptParamsV2,
+  binding: import("./agentsapi-bindings.js").AgentsApiBinding | undefined,
+  bind: (binding: import("./agentsapi-bindings.js").AgentsApiBinding) => Promise<void>,
+  assertOwnerCurrent: () => void,
+  assertHarnessCurrent: () => void,
+  target: ReturnType<typeof requireAgentsApiSessionTarget>,
+  readPluginConfig: () => unknown,
+  promptHistories: AgentsApiPromptHistories,
+): Promise<EmbeddedRunAttemptResult> {
+  const startedAtMs = Date.now();
+  const cancellationState = {
+    explicitCancellationObserved: false,
+    terminalOutcomeFrozen: false,
+    sharedAbortAllowedAfterTerminalOutcome: false,
+  };
+  const cancellation = createAgentHarnessAttemptCancellation({
+    upstreamSignal: params.abortSignal,
+    onAttemptAbort: params.onAttemptAbort,
+    state: cancellationState,
+  });
+  const { controller } = cancellation;
+  const assertCurrent = () => {
+    assertOwnerCurrent();
+    controller.signal.throwIfAborted();
+  };
+  let finalizingProjection = false;
+  let finalizingProjectionSignal: AbortSignal | undefined;
+  const assertProjectionCurrent = () => {
+    assertOwnerCurrent();
+    if (finalizingProjection) {
+      finalizingProjectionSignal?.throwIfAborted();
+    } else {
+      controller.signal.throwIfAborted();
+    }
+  };
+  let lastToolError: EmbeddedRunAttemptResult["lastToolError"];
+  let toolTerminalObserved = false;
+  const observeToolTerminal = params.observeToolTerminal;
+  const runParams: AgentHarnessAttemptParamsV2 = observeToolTerminal
+    ? {
+        ...params,
+        observeToolTerminal: (observation) => {
+          assertProjectionCurrent();
+          const resolution = observeToolTerminal(observation);
+          assertProjectionCurrent();
+          toolTerminalObserved = true;
+          lastToolError = resolution.lastToolError;
+          return resolution;
+        },
+      }
+    : params;
+  let timeout: AgentHarnessAttemptTimeout | undefined;
+  let settling = false;
+  let settlementDeadlineAtMs: number | undefined;
+  const deadlines = createAgentHarnessAttemptDeadlineController({
+    startedAtMs,
+    timeoutMs: params.timeoutMs,
+    settlementTimeoutMs: 30_000,
+    signal: controller.signal,
+    onDeadlineChanged: (deadline) => {
+      if (settling && deadline.kind === "bounded") {
+        settlementDeadlineAtMs = deadline.deadlineAtMs;
+      }
+      params.onAttemptDeadlineChanged?.(deadline);
+    },
+    onTimeout: (expired) => {
+      timeout = expired;
+      const error = new Error(`Agents API ${expired.kind} timed out`);
+      params.onAttemptTimeout?.(error);
+      cancellation.abortExplicitly(error);
+    },
+  });
+  const beginSettlement = () => {
+    settling = true;
+    deadlines.beginSettlement(Date.now());
+  };
+  const emitEvent = (
+    event: Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0],
+  ) => emitAgentHarnessAttemptEvent(params, event, { label: "Agents API", log: embeddedAgentLog });
+  const lifecycle = createAgentHarnessAttemptLifecycle({
+    attempt: params,
+    backend: "agentsapi",
+    startedAtMs,
+    state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
+    emitEvent,
+  });
+  const contextWindow = {
+    contextTokenBudget: params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
+    contextWindowSource: params.contextWindowInfo?.source,
+    contextWindowReferenceTokens: params.contextWindowInfo?.referenceTokens,
+  };
+  const hookContext = {
+    runId: params.runId,
+    agentId: target.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    modelProviderId: params.provider,
+    modelId: params.model.id,
+    trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
+    ...buildAgentHookContextChannelFields(params),
+    channelContext: params.channelContext,
+    ...contextWindow,
+  };
+  let native: ReturnType<typeof createAgentsApiSession> | undefined;
+  let remoteSessionId = binding?.sessionId;
+  let terminal: ReturnType<typeof agentHarnessAttemptTerminal.normalize> = { kind: "ok" };
+  let reply: AgentsApiMessageProjection["reply"] | undefined;
+  let projection: AgentsApiMessageProjection | undefined;
+  let usageRecorded = false;
+  let projectionClosed = false;
+  const projectionSettlement = new AgentHarnessProjectionSettlement(
+    runParams,
+    () => {
+      if (projectionClosed || controller.signal.aborted) {
+        return false;
+      }
+      try {
+        assertOwnerCurrent();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    { label: "Agents API" },
+  );
+  let terminalTurnId: string | undefined;
+  const toolCleanups: Array<(reason: string) => Promise<void>> = [];
+  let toolSurface: ReturnType<typeof buildAgentsApiToolSurface> | undefined;
+  let outputMedia: string[] | undefined;
+  let startedToolCount = 0;
+  let completedToolCount = 0;
+  const handle = {
+    kind: "embedded",
+    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+    supportsTranscriptCommitWait: true,
+    runId: params.runId,
+    startedAtMs,
+    queueMessage: async (text, options) => {
+      assertCurrent();
+      if (!native?.isAvailable()) {
+        throw new Error("Agents API turn is not ready for steering");
+      }
+      if (options?.images?.length || options?.media?.length) {
+        // The queued followup owns attachment preparation; steering can carry only text.
+        throw new Error("Agents API attachments require a separate turn");
+      }
+      await native.queueMessage(
+        buildCurrentInboundPrompt({ context: options?.currentInboundContext, prompt: text }),
+        async () => {
+          await options?.userTurnTranscriptRecorder?.persistApproved();
+        },
+      );
+      options?.userTurnTranscriptRecorder?.markSentToProvider?.();
+    },
+    isStreaming: () => native?.isAvailable() ?? false,
+    isStopped: () => controller.signal.aborted || (native?.isSettled() ?? false),
+    isAborted: () => controller.signal.aborted,
+    isCompacting: () => false,
+    abort: () => cancellation.abortExplicitly(new Error("Agents API turn interrupted")),
+    cancel: () => cancellation.abortExplicitly(new Error("Agents API turn interrupted")),
+  } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
+  try {
+    params.replyOperation?.attachBackend(handle);
+    setActiveEmbeddedRun(
+      params.sessionId,
+      handle,
+      params.sessionKey,
+      params.sessionFile,
+      params.agentId,
+    );
+    assertCurrent();
+    const pluginConfig = agentsApiConfigSchema.parse(readPluginConfig() ?? {});
+    const environment = resolveAgentsApiEnvironment(pluginConfig, params.workspaceDir);
+    const surface = buildAgentsApiToolSurface(
+      runParams,
+      controller.signal,
+      assertCurrent,
+      (cleanup) => toolCleanups.push(cleanup),
+    );
+    toolSurface = surface;
+    const mcpTools = await buildAgentsApiMcpTools(params);
+    assertCurrent();
+    const sessionIdentity = [
+      params.model.id,
+      params.resolvedApiKey,
+      // Preserve existing hosted identities only when no network policy is configured.
+      ...(environment.type === "self_hosted" || environment.network != null ? [environment] : []),
+      ...(mcpTools.length ? [mcpTools] : []),
+    ];
+    const fingerprint = createHash("sha256").update(JSON.stringify(sessionIdentity)).digest("hex");
+    if (binding && binding.authFingerprint !== fingerprint) {
+      // Normalize bindings created by the unmerged tools implementation.
+      const toolsFingerprint = createHash("sha256")
+        .update(JSON.stringify([params.model.id, params.resolvedApiKey, surface.declarations]))
+        .digest("hex");
+      if (
+        environment.type !== "openai_hosted" ||
+        environment.network != null ||
+        mcpTools.length > 0 ||
+        binding.authFingerprint !== toolsFingerprint
+      ) {
+        throw new Error(
+          "Agents API model, credential, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
+        );
+      }
+      await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
+    }
+    const inputMedia =
+      environment.type === "openai_hosted" && params.hostCapabilities.resolveInputAttachmentMedia
+        ? await params.hostCapabilities.resolveInputAttachmentMedia()
+        : params.media;
+    assertCurrent();
+    const inputs =
+      environment.type === "openai_hosted"
+        ? await files.prepareInputs(
+            inputMedia,
+            params.workspaceDir,
+            assertCurrent,
+            controller.signal,
+          )
+        : await files.prepareSelfHostedInputs(params, assertCurrent, controller.signal);
+    const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
+    const reasoningEffort = resolveAgentsApiReasoningEffort(params);
+    const creatingSession = !remoteSessionId;
+    const instructions = creatingSession
+      ? await buildAgentsApiInstructions(params, surface.declarations, environment)
+      : "";
+    assertCurrent();
+    const recorder = params.userTurnTranscriptRecorder;
+    const admittedMessage = recorder?.message ?? (await recorder?.resolveMessage());
+    assertCurrent();
+    const historyLimits = resolveAgentHarnessHistoryLimits(
+      params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
+    );
+    const historyScope = JSON.stringify([
+      params.runId,
+      target.agentId,
+      target.sessionId,
+      target.sessionKey,
+      target.storePath,
+      params.workspaceDir,
+      historyLimits,
+    ]);
+    let preparedHistory: AgentsApiPromptHistory["messages"] | undefined;
+    const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: params.prompt,
+      currentInboundContext: params.currentInboundContext,
+      currentUserMessage: admittedMessage ?? params.prompt,
+      // Agents API cannot narrow native tools per turn; hook toolsAllow is advisory here.
+      developerInstructions: instructions,
+      messages: async () => {
+        assertCurrent();
+        const retained = recorder && promptHistories.get(recorder);
+        if (retained?.scope === historyScope && retained.nativeSessionId === remoteSessionId) {
+          return retained.messages;
+        }
+        if (recorder) {
+          promptHistories.delete(recorder);
+        }
+        const history = await SessionManager.openModelContextAsync(target, {
+          cwd: params.workspaceDir,
+          admission: recorder?.getAdmissionReceipt(),
+          signal: controller.signal,
+          limits: historyLimits,
+        });
+        assertCurrent();
+        preparedHistory = history.buildSessionContext().messages;
+        return preparedHistory;
+      },
+      ctx: hookContext,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
+      toolAuthority: {
+        fingerprint: params.toolAuthorityFingerprint,
+        activeToolNames: () => surface.declarations.map((tool) => tool.name),
+        assertActive: assertCurrent,
+      },
+    });
+    assertCurrent();
+    if (!remoteSessionId) {
+      // System hook contributions share the native session's immutable instruction snapshot.
+      remoteSessionId = await client.create(
+        controller.signal,
+        promptBuild.developerInstructions,
+        params.model.id,
+        {
+          nativeTools: pluginConfig.nativeTools,
+          functions: surface.declarations,
+          mcpTools,
+          files: inputs.files,
+          environment,
+          reasoning: {
+            effort: reasoningEffort,
+            ...(params.reasoningLevel && params.reasoningLevel !== "off"
+              ? { summary: "auto" }
+              : {}),
+          },
+        },
+      );
+      assertCurrent();
+      await bind({ sessionId: remoteSessionId, authFingerprint: fingerprint });
+    } else {
+      await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
+    }
+    assertCurrent();
+    if (recorder && preparedHistory) {
+      // A retry keeps this run's already-validated, detached hook context. The
+      // hook runner isolates each dispatch; live authority is checked separately.
+      promptHistories.set(recorder, {
+        scope: historyScope,
+        nativeSessionId: remoteSessionId,
+        messages: preparedHistory,
+      });
+    }
+    if (!creatingSession && inputs.files.length) {
+      const uploaded = await files.uploadInputs(
+        client,
+        remoteSessionId,
+        inputs.files,
+        assertCurrent,
+        controller.signal,
+      );
+      if (uploaded.status === "unavailable") {
+        // Native recovery can replace the workspace, including earlier files in this batch.
+        inputs.mappingText = "";
+        inputs.feedbackText = [inputs.feedbackText, HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK]
+          .filter(Boolean)
+          .join("\n");
+      }
+    }
+    projection = new AgentsApiMessageProjection(
+      projectionSettlement.params,
+      remoteSessionId,
+      async (event) => {
+        assertCurrent();
+        await emitEvent(event);
+        assertCurrent();
+      },
+      assertProjectionCurrent,
+    );
+    reply = projection.reply;
+    native = createAgentsApiSession({
+      client,
+      // Admitted hosted work must still be retired when host run authority closes.
+      cleanupClient: new AgentsApiClient(params.resolvedApiKey!, assertHarnessCurrent),
+      sessionId: remoteSessionId,
+      signal: controller.signal,
+      assertCurrent,
+      onSettled: beginSettlement,
+      onReconcile: (turn, items) =>
+        projection!.reconcile(turn, items, { presentation: !finalizingProjection }),
+      onUsageError: (error) =>
+        embeddedAgentLog.warn("Agents API token accounting unavailable", { error }),
+      onTranscriptOrderingGap: () => projection!.reportTranscriptOrderingGap(),
+      onReconcileHistory: async (entries) => {
+        for (const { turn, items } of entries) {
+          for (const item of items) {
+            assertProjectionCurrent();
+            await recordAgentsApiNativeToolTranscript(
+              runParams,
+              remoteSessionId!,
+              turn.id,
+              item,
+              assertProjectionCurrent,
+              Date.now,
+              { enclosingStatus: turn.status },
+            );
+            assertProjectionCurrent();
+          }
+        }
+      },
+      executeFunction: async (call) => {
+        startedToolCount++;
+        await emitEvent({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: call.name,
+            toolCallId: call.call_id,
+            args: asOptionalRecord(sanitizeToolArgs(call.arguments)),
+          },
+        });
+        assertCurrent();
+        const result = await surface.execute(call);
+        assertCurrent();
+        projection!.recordGatewayTranscriptReceipt(call.turn_id, call.call_id);
+        return result;
+      },
+      onFunctionResult: async (call, result) => {
+        completedToolCount++;
+        await emitEvent({
+          stream: "tool",
+          data: {
+            phase: "result",
+            name: call.name,
+            toolCallId: call.call_id,
+            isError: !result.success,
+            result: {
+              content: [{ type: "text", text: result.success ? result.output : result.error }],
+            },
+          },
+        });
+        assertCurrent();
+      },
+      onEvent: async (event) => {
+        await projection!.observe(event);
+        assertCurrent();
+        params.onRunProgress?.({
+          reason: event.type,
+          provider: "openai",
+          model: params.model.id,
+          backend: "agentsapi",
+        });
+      },
+    });
+    lifecycle.emitLifecycleStart({ provider: "openai", model: params.model.id });
+    const result = await native.run(
+      buildAgentsApiTurnInput(
+        params,
+        surface.declarations,
+        promptBuild.prompt,
+        inputs.mappingText,
+        environment.type,
+        inputs.feedbackText,
+      ),
+      async () => {
+        await params.userTurnTranscriptRecorder?.persistApproved();
+      },
+      () => params.userTurnTranscriptRecorder?.markSentToProvider?.(),
+    );
+    // A terminal root turn is insufficient: run() also waits for native session idle.
+    terminalTurnId = result.turn.id;
+    const turns = await native.readUsageTurns();
+    assertCurrent();
+    projection.recordUsage(params.model, turns);
+    usageRecorded = true;
+    params.hostCapabilities.reportOutputTokens?.(reply.usage?.output ?? 0);
+    if (result.cancelled) {
+      terminal = { kind: "aborted", source: "runtime" };
+    } else if (result.terminatedByTool) {
+      await projection.commitUsage(result.turn);
+      assertCurrent();
+    } else {
+      const items = await client.items(remoteSessionId, result.turn.id, controller.signal);
+      assertCurrent();
+      try {
+        if (environment.type === "openai_hosted") {
+          outputMedia = await files.collectOutputs(
+            client,
+            remoteSessionId,
+            result.turn.id,
+            assertCurrent,
+            controller.signal,
+            params.hostCapabilities.prepareReplyMedia,
+          );
+        }
+      } finally {
+        // Transfer failure must not discard the completed reply. The projection
+        // still requires current authority before publishing or persisting it.
+        await projection.commit(result.turn, items);
+        assertCurrent();
+      }
+    }
+  } catch (error) {
+    terminal = timeout
+      ? { kind: "timeout", phase: "prompt", source: "runtime", aborted: true }
+      : params.abortSignal?.aborted
+        ? { kind: "aborted", source: "external" }
+        : cancellationState.explicitCancellationObserved
+          ? { kind: "aborted", source: "runtime" }
+          : { kind: "failed", source: "prompt", error };
+    if (terminal.kind === "failed") {
+      embeddedAgentLog.warn("Agents API session failed", { error });
+    }
+  } finally {
+    beginSettlement();
+    // Reuse the owner's absolute settlement boundary. After an upstream abort
+    // closes that owner, one cleanup budget starts before native retirement.
+    const cleanupMs = Math.max(
+      0,
+      Math.min(30_000, (settlementDeadlineAtMs ?? Date.now() + 30_000) - Date.now()),
+    );
+    const cleanupSignal =
+      cleanupMs > 0
+        ? AbortSignal.timeout(cleanupMs)
+        : AbortSignal.abort(new Error("Agents API settlement timed out"));
+    try {
+      // Retirement retains the native binding lease until admitted POST/cancel
+      // work settles under its API timeouts; early release could cancel a successor.
+      await native?.close();
+    } catch (error) {
+      terminal = { kind: "failed", source: "prompt", error };
+    }
+    try {
+      if (native && projection && !usageRecorded) {
+        const turns = await native.readUsageTurns();
+        assertHarnessCurrent();
+        projection.recordUsage(params.model, turns);
+      }
+    } catch (error) {
+      terminal = { kind: "failed", source: "prompt", error };
+    }
+    if ((controller.signal.aborted || terminal.kind !== "ok") && native && projection) {
+      let ownerCurrent = false;
+      try {
+        assertOwnerCurrent();
+        ownerCurrent = true;
+      } catch {
+        // Retired authority cannot publish evidence into a successor session.
+      }
+      if (ownerCurrent) {
+        finalizingProjection = true;
+        finalizingProjectionSignal = cleanupSignal;
+        try {
+          await native.reconcileAfterClose(cleanupSignal);
+        } catch (error) {
+          embeddedAgentLog.warn("Agents API terminal history reconciliation failed", { error });
+        } finally {
+          finalizingProjection = false;
+          finalizingProjectionSignal = undefined;
+        }
+      }
+    }
+    try {
+      await racePromiseWithAbortSignal(projectionSettlement.drain(), cleanupSignal);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        terminal = { kind: "failed", source: "prompt", error };
+      }
+    }
+    projectionClosed = true;
+    if (timeout) {
+      terminal = { kind: "timeout", phase: "prompt", source: "runtime", aborted: true };
+    } else if (terminal.kind === "ok" && controller.signal.aborted) {
+      terminal = { kind: "aborted", source: params.abortSignal?.aborted ? "external" : "runtime" };
+    }
+    cancellation.freezeTerminalOutcome();
+    deadlines.dispose();
+    cancellation.dispose();
+    controller.abort();
+    for (const cleanup of toolCleanups.toReversed()) {
+      try {
+        await cleanup("Agents API attempt settled");
+      } catch (error) {
+        embeddedAgentLog.warn("Agents API tool cleanup failed", { error });
+      }
+    }
+    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    lifecycle.emitLifecycleTerminal({ phase: terminal.kind === "failed" ? "error" : "end" });
+  }
+  const result: EmbeddedRunAttemptResult = {
+    terminal,
+    sessionIdUsed: params.sessionId,
+    sessionFileUsed: params.sessionFile,
+    agentHarnessId: "agentsapi",
+    messagesSnapshot: SessionManager.open(target, params.workspaceDir).buildSessionContext()
+      .messages,
+    assistantTexts:
+      reply?.lastAssistant?.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text) ?? [],
+    lastAssistant: reply?.lastAssistant,
+    currentAttemptAssistant: reply?.lastAssistant,
+    currentAttemptCompletedAssistant: reply?.lastAssistant,
+    assistantTranscriptOwned: Boolean(reply?.lastAssistant),
+    assistantTranscriptIdempotencyKey:
+      reply?.lastAssistant && terminalTurnId
+        ? `agentsapi:${remoteSessionId}:${terminalTurnId}`
+        : undefined,
+    toolMetas: [...(projection?.toolMetas ?? []), ...(toolSurface?.toolMetas ?? [])],
+    lastToolError: toolTerminalObserved
+      ? lastToolError
+      : (toolSurface?.lastToolError ?? projection?.lastToolError),
+    ...toolSurface?.runtimeFacts,
+    didSendViaMessagingTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    ...toolSurface?.delivery,
+    ...(outputMedia && {
+      hostOwnedToolMediaUrls: [...outputMedia],
+      toolMediaUrls: [...new Set([...(toolSurface?.delivery.toolMediaUrls ?? []), ...outputMedia])],
+      // Verified hosted artifacts must not promote unrelated plugin media.
+      toolTrustedLocalMedia:
+        outputMedia.length && !toolSurface?.delivery.toolMediaUrls?.length
+          ? true
+          : toolSurface?.delivery.toolTrustedLocalMedia,
+    }),
+    cloudCodeAssistFormatError: false,
+    attemptUsage: projection?.tokenUsage,
+    agentHarnessResultClassification: projection?.resultClassification,
+    replayMetadata: {
+      hadPotentialSideEffects: native?.wasSubmitted() ?? false,
+      replaySafe: !native?.wasSubmitted(),
+    },
+    itemLifecycle: {
+      startedCount: startedToolCount + (projection?.itemLifecycle.startedCount ?? 0),
+      completedCount: completedToolCount + (projection?.itemLifecycle.completedCount ?? 0),
+      activeCount:
+        Math.max(0, startedToolCount - completedToolCount) +
+        (projection?.itemLifecycle.activeCount ?? 0),
+    },
+  };
+  assertHarnessCurrent();
+  runAgentHarnessLlmOutputHook({
+    event: {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      provider: params.provider,
+      model: params.model.id,
+      resolvedRef: `${params.provider}/${params.model.id}`,
+      harnessId: "agentsapi",
+      prompt: params.prompt,
+      ...contextWindow,
+      assistantTexts: result.assistantTexts,
+      lastAssistant: result.lastAssistant,
+      usage: result.attemptUsage,
+    },
+    ctx: hookContext,
+  });
+  const agentEnd = {
+    event: {
+      runId: params.runId,
+      messages: result.messagesSnapshot,
+      success: terminal.kind === "ok",
+      error: terminal.kind === "failed" ? formatErrorMessage(terminal.error) : undefined,
+      durationMs: Date.now() - startedAtMs,
+    },
+    ctx: {
+      ...hookContext,
+      config: params.config,
+      foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+        { ...params, agentId: target.agentId },
+        params.agentDir ?? resolveAgentDir(params.config ?? {}, target.agentId),
+      ),
+      skillWorkshopAvailable: false,
+      compacted: false,
+    },
+  };
+  if (!params.messageChannel && !params.messageProvider) {
+    await awaitAgentEndSideEffects(agentEnd);
+  } else {
+    runAgentEndSideEffects(agentEnd);
+  }
+  return result;
+}
+
+type AgentsApiPromptHistory = {
+  scope: string;
+  nativeSessionId: string;
+  messages: ReturnType<SessionManager["buildSessionContext"]>["messages"];
+};
+
+/** One bounded snapshot per original recorder, owned by the harness lifetime. */
+export type AgentsApiPromptHistories = WeakMap<
+  NonNullable<AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"]>,
+  AgentsApiPromptHistory
+>;

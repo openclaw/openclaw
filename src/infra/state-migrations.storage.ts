@@ -19,20 +19,20 @@ import {
   INSTALLED_PLUGIN_INDEX_VERSION,
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { sha256FileSync } from "./crypto-digest.js";
 import {
   LEGACY_DELIVERY_QUEUE_DIRS,
   listLegacyDeliveryQueueFiles,
   listLegacyDeliveryQueueDeliveredMarkers,
   resolveLegacyDeliveryQueuePath,
 } from "./delivery-queue-legacy-files.js";
-import { deliveryQueueMetadata } from "./delivery-queue-sqlite-bound.js";
-import {
-  inferDeliveryQueueFailureRetention,
-  projectDeliveryQueueTerminalEntry,
-} from "./delivery-queue-sqlite.types.js";
-import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import {
+  buildLegacyDeliveryQueueRow,
+  legacyDeliveryQueueRowsMatch,
+} from "./state-migrations.delivery-queue-row.js";
 import { migrationFileExists } from "./state-migrations.fs.js";
 import {
   markLegacyMigrationSourceRemoved,
@@ -40,6 +40,10 @@ import {
   recordLegacyMigrationReceipt,
   resolveLegacyMigrationSourceKey,
 } from "./state-migrations.receipts.js";
+import {
+  backupLegacyStateSource,
+  recoverLegacyStateSource,
+} from "./state-migrations.source-backup.js";
 import {
   assertLegacyMigrationSourceUnchanged,
   readLegacyMigrationSourceSnapshotSync,
@@ -57,15 +61,6 @@ type LegacyArchiveResolution = {
   action: "archived" | "removed";
 };
 
-function hashLegacyArchiveSource(sourcePath: string): string {
-  const fd = fs.openSync(sourcePath, "r");
-  try {
-    return hashFileDescriptorSync(fd).sha256;
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
 function archiveLegacyFileSource(params: {
   sourcePath: string;
   label: string;
@@ -82,8 +77,8 @@ function archiveLegacyFileSource(params: {
         return { targetPath, action: "archived" };
       }
       // Legacy sources can exceed whole-file allocation limits; hash only collisions.
-      sourceSha256 ??= hashLegacyArchiveSource(params.sourcePath);
-      if (sourceSha256 === hashLegacyArchiveSource(targetPath)) {
+      sourceSha256 ??= sha256FileSync(params.sourcePath);
+      if (sourceSha256 === sha256FileSync(targetPath)) {
         fs.rmSync(params.sourcePath, { force: true });
         return { targetPath, action: "removed" };
       }
@@ -128,10 +123,10 @@ export function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPlu
 function readLegacyTopLevelInstallRecords(
   parsed: unknown,
 ): Record<string, PluginInstallRecord> | null | undefined {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const legacy = asNullableRecord(parsed);
+  if (!legacy) {
     return null;
   }
-  const legacy = parsed as Record<string, unknown>;
   const key = Object.hasOwn(legacy, "installRecords")
     ? "installRecords"
     : Object.hasOwn(legacy, "records")
@@ -143,24 +138,21 @@ function readLegacyTopLevelInstallRecords(
 function readLegacyEmbeddedInstallRecords(
   parsed: unknown,
 ): Record<string, PluginInstallRecord> | null {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const plugins = (parsed as { plugins?: unknown }).plugins;
+  const plugins = asNullableRecord(parsed)?.plugins;
   if (!Array.isArray(plugins)) {
     return null;
   }
   const records = createPluginInstallRecordMap<unknown>();
   let found = false;
-  for (const plugin of plugins) {
-    if (!plugin || typeof plugin !== "object" || Array.isArray(plugin)) {
+  for (const item of plugins) {
+    const plugin = asNullableRecord(item);
+    if (!plugin) {
       return null;
     }
     if (!Object.hasOwn(plugin, "installRecord")) {
       continue;
     }
-    const pluginId = (plugin as { pluginId?: unknown }).pluginId;
-    const installRecord = (plugin as { installRecord?: unknown }).installRecord;
+    const { pluginId, installRecord } = plugin;
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       return null;
     }
@@ -362,113 +354,6 @@ export function archiveLegacyImportSource(params: {
   return resolution;
 }
 
-function buildLegacyDeliveryQueueRow(params: {
-  queueName: string;
-  id: string;
-  status: "pending" | "failed";
-  entry: Record<string, unknown>;
-  now: number;
-}): (SqliteBindRow & { id: string }) | null {
-  const originalEnqueuedAt =
-    asSafeIntegerInRange(params.entry.enqueuedAt, { min: 0 }) ?? params.now;
-  const retryCount = asSafeIntegerInRange(params.entry.retryCount, { min: 0 }) ?? 0;
-  const lastAttemptAt = asSafeIntegerInRange(params.entry.lastAttemptAt, { min: 0 });
-  const platformSendStartedAt = asSafeIntegerInRange(params.entry.platformSendStartedAt, {
-    min: 0,
-  });
-  const failed = params.status === "failed";
-  const retention = failed
-    ? inferDeliveryQueueFailureRetention(params.entry, params.id, params.queueName)
-    : undefined;
-  if (failed && !retention) {
-    return null;
-  }
-  const failedAt = failed
-    ? (asSafeIntegerInRange(params.entry.failedAt, { min: 0 }) ??
-      lastAttemptAt ??
-      originalEnqueuedAt)
-    : null;
-  const enqueuedAt = failedAt ?? originalEnqueuedAt;
-  const meta = failed ? undefined : deliveryQueueMetadata(params.queueName, params.entry);
-  const retainedEntry: Record<string, unknown> = {
-    ...params.entry,
-    id: params.id,
-    enqueuedAt,
-    retryCount,
-  };
-  if (lastAttemptAt === undefined) {
-    delete retainedEntry.lastAttemptAt;
-  } else {
-    retainedEntry.lastAttemptAt = lastAttemptAt;
-  }
-  if (platformSendStartedAt === undefined) {
-    delete retainedEntry.platformSendStartedAt;
-  } else {
-    retainedEntry.platformSendStartedAt = platformSendStartedAt;
-  }
-  const failedEntry = failed
-    ? projectDeliveryQueueTerminalEntry(
-        { id: params.id, retryCount },
-        enqueuedAt,
-        "failed",
-        retention,
-      )
-    : undefined;
-  return {
-    queue_name: params.queueName,
-    id: params.id,
-    status: params.status,
-    entry_kind: meta?.entryKind ?? null,
-    session_key: meta?.sessionKey ?? null,
-    channel: meta?.channel ?? null,
-    target: meta?.target ?? null,
-    account_id: meta?.accountId ?? null,
-    retry_count: retryCount,
-    last_attempt_at: !failed ? (lastAttemptAt ?? null) : null,
-    last_error:
-      !failed && typeof params.entry.lastError === "string" ? params.entry.lastError : null,
-    recovery_state: failed
-      ? (failedEntry?.recoveryState ?? null)
-      : typeof params.entry.recoveryState === "string"
-        ? params.entry.recoveryState
-        : null,
-    platform_send_started_at: !failed ? (platformSendStartedAt ?? null) : null,
-    entry_json: JSON.stringify(failedEntry ?? retainedEntry),
-    enqueued_at: enqueuedAt,
-    updated_at: params.now,
-    failed_at: failedAt,
-  };
-}
-
-function legacyDeliveryQueueRowsMatch(
-  existing: Record<string, unknown>,
-  incoming: SqliteBindRow,
-): boolean {
-  return [
-    "status",
-    "entry_kind",
-    "session_key",
-    "channel",
-    "target",
-    "account_id",
-    "retry_count",
-    "last_attempt_at",
-    "last_error",
-    "recovery_state",
-    "platform_send_started_at",
-    "entry_json",
-    "enqueued_at",
-    "failed_at",
-  ].every((column) => {
-    const left = existing[column];
-    const right = incoming[column];
-    return (
-      (typeof left === "bigint" ? Number(left) : left) ===
-      (typeof right === "bigint" ? Number(right) : right)
-    );
-  });
-}
-
 /** Never recursively remove a queue directory containing retained archives or unknown files. */
 function removeEmptyLegacyDeliveryQueueDirs(queueDir: string): void {
   for (const dir of [path.join(queueDir, "failed"), queueDir]) {
@@ -486,6 +371,7 @@ function removeEmptyLegacyDeliveryQueueDirs(queueDir: string): void {
 
 type LegacyDeliveryQueueImport = {
   snapshot: LegacyMigrationSourceSnapshot;
+  backup?: Awaited<ReturnType<typeof backupLegacyStateSource>>;
   sourceKey: string;
   row: (SqliteBindRow & { id: string }) | null;
   reason?: string;
@@ -499,6 +385,7 @@ export async function migrateLegacyDeliveryQueues(params: {
   const changes: string[] = [];
   const warnings: string[] = [];
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
   // Both namespaces use the same inclusive cutoff, not the latest retry or file mtime.
   const now = Date.now();
   let refused = false;
@@ -523,12 +410,20 @@ export async function migrateLegacyDeliveryQueues(params: {
       ...markerPaths.map((sourcePath) => ({ sourcePath, status: "delivered" as const })),
     ]) {
       try {
+        if (file.status !== "delivered") {
+          await recoverLegacyStateSource({
+            filePath: file.sourcePath,
+            claimPaths: file.claimPaths,
+            assertCurrent: () => maintenance?.assertOwnerCurrent(),
+          });
+        }
         const snapshot = readLegacyMigrationSourceSnapshotSync({
           sourcePath: file.sourcePath,
           label: queue.label,
         });
         let reason: string | undefined;
         let mediaPaths: string[] = [];
+        let backup: LegacyDeliveryQueueImport["backup"];
         let row: (SqliteBindRow & { id: string }) | null = null;
         if (file.status === "delivered") {
           reason = "delivered";
@@ -572,6 +467,11 @@ export async function migrateLegacyDeliveryQueues(params: {
             ).resolveLegacyDeliveryQueueMediaPaths(entry, params.stateDir);
           }
           if (!reason) {
+            backup = await backupLegacyStateSource({
+              filePath: file.sourcePath,
+              expectedSnapshot: snapshot,
+              assertCurrent: () => maintenance?.assertOwnerCurrent(),
+            });
             row = buildLegacyDeliveryQueueRow({
               queueName: queue.queueName,
               id,
@@ -583,6 +483,7 @@ export async function migrateLegacyDeliveryQueues(params: {
         }
         imports.push({
           snapshot,
+          backup,
           sourceKey: resolveLegacyMigrationSourceKey(
             "delivery-queue",
             file.sourcePath,
@@ -705,7 +606,7 @@ export async function migrateLegacyDeliveryQueues(params: {
         `Left ${queue.label} in place because ${conflicts.length} ${conflicts.length === 1 ? "entry" : "entries"} already existed in shared state: ${conflicts[0]}`,
       );
     }
-    for (const { snapshot, sourceKey, reason, mediaPaths, mediaBackups } of committed) {
+    for (const { snapshot, backup, sourceKey, reason, mediaPaths, mediaBackups } of committed) {
       // Keep delivered evidence while its pending twin could still need repair.
       // Unrelated conflicts must not retain already-settled markers.
       const ids = markerIds.get(path.basename(snapshot.sourcePath, ".delivered"));
@@ -782,13 +683,22 @@ export async function migrateLegacyDeliveryQueues(params: {
           snapshot,
           label: queue.label,
         });
-        const archive = archiveLegacyImportSource({
-          sourcePath: snapshot.sourcePath,
-          label: queue.label,
-          changes,
-          warnings,
-        });
-        if (archive) {
+        let archive: LegacyArchiveResolution | null;
+        if (backup) {
+          backup.removeSource(() => {
+            markLegacyMigrationSourceRemoved(sourceKey, env);
+          });
+          archive = { targetPath: backup.backupPath, action: "archived" };
+          changes.push(`Archived ${queue.label} legacy source → ${backup.backupPath}`);
+        } else {
+          archive = archiveLegacyImportSource({
+            sourcePath: snapshot.sourcePath,
+            label: queue.label,
+            changes,
+            warnings,
+          });
+        }
+        if (archive && !backup) {
           markLegacyMigrationSourceRemoved(sourceKey, env);
         }
         if (reason && reason !== "delivered") {
@@ -816,4 +726,3 @@ export async function migrateLegacyDeliveryQueues(params: {
     ...(!refused && warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

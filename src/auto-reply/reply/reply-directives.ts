@@ -1,5 +1,5 @@
 /** Parses inline reply directives such as media, reply targets, audio, and silence. */
-import { trySafeFileURLToPath } from "../../infra/local-file-access.js";
+import { trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import {
   parseInlineDirectives,

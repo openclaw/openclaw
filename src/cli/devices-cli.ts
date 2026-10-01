@@ -11,16 +11,12 @@ const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 const loadDevicesRuntime = createLazyRuntimeModule(() => import("./devices-cli.runtime.js"));
 const deviceAction = createLazyRuntimeMethodBinder(loadDevicesRuntime);
 
-const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
+const devicesCallOpts = (cmd: Command) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
-    .option(
-      "--timeout <ms>",
-      "Timeout in ms",
-      String(defaults?.timeoutMs ?? DEFAULT_DEVICES_TIMEOUT_MS),
-    )
+    .option("--timeout <ms>", "Timeout in ms", String(DEFAULT_DEVICES_TIMEOUT_MS))
     .option("--json", "Output JSON", false);
 
 export function registerDevicesCli(program: Command) {

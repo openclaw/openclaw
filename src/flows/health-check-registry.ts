@@ -1,4 +1,3 @@
-// Health check registry stores doctor health checks by identifier.
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 // Process-local registry populated by core and plugin doctor checks.

@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -29,7 +30,6 @@ import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
-import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -236,14 +236,12 @@ export function resolveRunFastModeForFallbackCandidate(params: {
       : state.fastAutoOnSeconds,
   };
 }
-function buildEmbeddedContextFromTemplate(params: {
+function applyReplyRouteToTemplate(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
   sessionCtx: TemplateContext;
-  hasRepliedRef: { value: boolean } | undefined;
 }) {
-  const config = params.run.config;
-  const sessionCtx = {
+  return {
     ...params.sessionCtx,
     OriginatingChannel:
       params.replyRoute?.originatingChannel ?? params.sessionCtx.OriginatingChannel,
@@ -260,6 +258,32 @@ function buildEmbeddedContextFromTemplate(params: {
     ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
     ReplyToMode: params.replyRoute?.originatingReplyToMode ?? params.sessionCtx.ReplyToMode,
   };
+}
+
+/**
+ * Builds message-tool threading context for the queued reply route. Embedded
+ * and CLI runtimes share it so the channel adapter decides the default thread.
+ */
+export function buildReplyRouteThreadingToolContext(params: {
+  run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
+  sessionCtx: TemplateContext;
+  hasRepliedRef: { value: boolean } | undefined;
+}): InternalChannelThreadingToolContext {
+  return buildThreadingToolContext({
+    sessionCtx: applyReplyRouteToTemplate(params),
+    config: params.run.config,
+    hasRepliedRef: params.hasRepliedRef,
+  });
+}
+
+function buildEmbeddedContextFromTemplate(params: {
+  run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
+  sessionCtx: TemplateContext;
+  hasRepliedRef: { value: boolean } | undefined;
+}) {
+  const sessionCtx = applyReplyRouteToTemplate(params);
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
@@ -277,24 +301,15 @@ function buildEmbeddedContextFromTemplate(params: {
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
-    memberRoleIds: normalizeMemberRoleIds(sessionCtx.MemberRoleIds),
+    memberRoleIds: normalizeOptionalTrimmedStringList(sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx,
-      config,
+      config: params.run.config,
       hasRepliedRef: params.hasRepliedRef,
     }),
     currentInboundAudio: hasInboundAudio(sessionCtx),
   };
-}
-
-function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string[] | undefined {
-  const roles = Array.isArray(value)
-    ? value
-        .map((roleId) => normalizeOptionalString(roleId))
-        .filter((roleId): roleId is string => Boolean(roleId))
-    : [];
-  return roles.length > 0 ? roles : undefined;
 }
 
 function buildTemplateSenderContext(sessionCtx: TemplateContext) {
@@ -400,22 +415,11 @@ export async function buildEmbeddedRunExecutionParams(params: {
   allowTransientCooldownProbe?: boolean;
 }) {
   const authProfile = resolveRunAuthProfile(params.run, params.provider);
-  const embeddedContext = buildEmbeddedContextFromTemplate({
-    run: params.run,
-    replyRoute: params.replyRoute,
-    sessionCtx: params.sessionCtx,
-    hasRepliedRef: params.hasRepliedRef,
-  });
+  const embeddedContext = buildEmbeddedContextFromTemplate(params);
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
   const runBaseParams = await buildEmbeddedRunBaseParams({
-    run: params.run,
-    provider: params.provider,
-    model: params.model,
-    runId: params.runId,
-    promptCacheKey: params.promptCacheKey,
+    ...params,
     authProfile,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-    isReasoningTagProvider,
   });
   return {
     embeddedContext,
