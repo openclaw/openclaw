@@ -4,17 +4,20 @@ import type {
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
 } from "@openclaw/workboard-contract";
-import type { ControlUiAgentPickerProps } from "openclaw/plugin-sdk/control-ui";
+import type { ControlUiAgentPickerProps, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mountPage } from "./workboard-page.test-support.ts";
 
-beforeEach(() => vi.useFakeTimers());
+beforeEach(() => {
+  vi.useFakeTimers();
+  localStorage.clear();
+});
 afterEach(() => vi.useRealTimers());
 
-function sessionsPage() {
+function sessionsPage(options: { boardId?: string; gatewayId?: string; profileId?: string } = {}) {
   const board: WorkboardSessionsBoard = {
-    id: "sessions",
+    id: options.boardId ?? "sessions",
     name: "Team sessions",
     kind: "sessions",
     createdAt: 1,
@@ -35,6 +38,11 @@ function sessionsPage() {
   const result: WorkboardSessionsBoardRead = {
     board,
     columns: board.sessions.columns,
+    people: [
+      { identity: { type: "profile", id: "viewer" }, label: "Viewer", sessionCount: 2 },
+      { identity: { type: "profile", id: "ada" }, label: "Ada", sessionCount: 1 },
+      { identity: { type: "profile", id: "grace" }, sessionCount: 1 },
+    ],
     sessions: [
       {
         key: "agent:main:working",
@@ -69,6 +77,12 @@ function sessionsPage() {
   const page = mountPage({ boardId: board.id });
   const request = expectDefined(page.request.getMockImplementation(), "request");
   page.request.mockImplementation(async (method, params) => {
+    if (method === "gateway.identity.get") {
+      return { deviceId: options.gatewayId ?? "gateway-one" };
+    }
+    if (method === "users.self") {
+      return { profile: { id: options.profileId ?? "viewer" } };
+    }
     if (method === "workboard.cards.list") {
       return { cards: [], boards: [{ ...board, total: 0, active: 0, archived: 0, byStatus: {} }] };
     }
@@ -92,6 +106,104 @@ function sessionsPage() {
     },
   };
 }
+
+function peoplePicker(page: ReturnType<typeof mountPage>) {
+  return expectDefined(
+    page.container.querySelector<
+      HTMLElement & Parameters<ControlUiHost["components"]["mountSelectPicker"]>[1]
+    >(".workboard-people-filter [data-test-select-picker]"),
+    "people filter",
+  );
+}
+
+it("renders the people facet, rereads the selected view and restores it only for its viewer, Gateway and board", async () => {
+  const page = sessionsPage();
+  await page.connect();
+  expect(peoplePicker(page).options).toEqual([
+    { value: "everyone", label: "Everyone" },
+    { value: "me", label: "Involving me" },
+    { value: "profile:ada", label: "Ada" },
+    { value: "profile:grace", label: "grace" },
+  ]);
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+  });
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingMe: true },
+  });
+  page.result.sessions.splice(0, 1);
+  peoplePicker(page).onSelect("profile:ada");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingProfileId: "ada" },
+  });
+  expect(
+    page.container.querySelector('[data-session-column="working"]')?.getAttribute("aria-label"),
+  ).toBe("Working, 0");
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(1);
+  page.dispose();
+
+  const restored = sessionsPage();
+  await restored.connect();
+  expect(peoplePicker(restored).value).toBe("profile:ada");
+  expect(restored.request).toHaveBeenCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingProfileId: "ada" },
+  });
+  restored.dispose();
+  for (const options of [
+    { boardId: "another-board" },
+    { gatewayId: "another-gateway" },
+    { profileId: "another-viewer" },
+  ]) {
+    const other = sessionsPage(options);
+    await other.connect();
+    expect(peoplePicker(other).value).toBe("everyone");
+    other.dispose();
+  }
+  const everyone = sessionsPage();
+  await everyone.connect();
+  peoplePicker(everyone).onSelect("everyone");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(everyone.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+  });
+});
+
+it("ignores a stale view response and keeps filtering when browser storage is unavailable", async () => {
+  const page = sessionsPage();
+  const unavailable = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    throw new Error("Storage unavailable");
+  });
+  await page.connect();
+  unavailable.mockRestore();
+  const pending = createDeferred<WorkboardSessionsBoardRead>();
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  page.request.mockImplementation((method, params) =>
+    method === "workboard.sessionsBoard.read" &&
+    (params as { view?: { involvingMe?: boolean } }).view?.involvingMe
+      ? pending.promise
+      : request(method, params),
+  );
+  const blockedWrite = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("Storage unavailable");
+  });
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  peoplePicker(page).onSelect("profile:ada");
+  await vi.advanceTimersByTimeAsync(0);
+  pending.resolve({ ...page.result, sessions: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(peoplePicker(page).value).toBe("profile:ada");
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  blockedWrite.mockRestore();
+});
 
 function button(page: ReturnType<typeof mountPage>, label: string) {
   return expectDefined(
@@ -153,6 +265,8 @@ it("renders session columns, owner avatars and canonical facts without card cont
 it("moves a dragged session through the placement RPC and refreshes through the board classifier", async () => {
   const page = sessionsPage();
   await page.connect();
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
   const tile = expectDefined(page.container.querySelector("[data-session-key]"), "session tile");
   tile.dispatchEvent(new Event("dragstart", { bubbles: true }));
   await vi.advanceTimersByTimeAsync(0);
@@ -171,27 +285,38 @@ it("moves a dragged session through the placement RPC and refreshes through the 
   expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.refresh", {
     boardId: "sessions",
   });
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingMe: true },
+  });
   expect(page.request.mock.calls.some(([method]) => method === "workboard.cards.move")).toBe(false);
 });
 
 it("coalesces observer events for visible sessions and rereads canonical placements on board changes", async () => {
   const page = sessionsPage();
   await page.connect();
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  page.request.mockClear();
   page.fixture.emit("session.observer", { sessionKey: "agent:other:unseen" });
   await vi.advanceTimersByTimeAsync(1000);
-  expect(page.reads()).toBe(1);
+  expect(page.reads()).toBe(0);
   page.result.sessions[0]!.observerDigest!.headline = "New canonical headline";
   for (let revision = 1; revision <= 3; revision += 1) {
     page.fixture.emit("session.observer", { sessionKey: "agent:main:working", revision });
   }
   await vi.advanceTimersByTimeAsync(999);
-  expect(page.reads()).toBe(1);
+  expect(page.reads()).toBe(0);
   await vi.advanceTimersByTimeAsync(1);
-  expect(page.reads()).toBe(2);
+  expect(page.reads()).toBe(1);
   expect(page.container.textContent).toContain("New canonical headline");
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await vi.advanceTimersByTimeAsync(0);
-  expect(page.reads()).toBe(3);
+  expect(page.reads()).toBe(2);
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingMe: true },
+  });
 });
 
 it("discards a sessions read completed after navigating to a card board", async () => {
@@ -304,6 +429,8 @@ it("creates and saves one board conversation before opening the optional dock, r
     return request(method, params);
   });
   await page.connect();
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
   button(page, "Board agent").click();
   await vi.advanceTimersByTimeAsync(0);
   expect(page.container.textContent).toContain("Save unavailable");
