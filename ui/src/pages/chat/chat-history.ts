@@ -59,16 +59,45 @@ export async function loadChatHistory(
   ]);
   const requestKey = `${requestKeyPrefix}${requestModeKey}`;
   const inFlight = requests.historyLoad;
-  // Live events replace the rendered array while their snapshot is pending;
-  // only stable session and connection ownership may start another request.
+  // Retire a stale publication immediately, but let its raw read settle before
+  // issuing one fresh snapshot for all live changes observed while it was pending.
   if (
-    opts.supersedeInFlight !== true &&
     inFlight.phase === "in-flight" &&
-    inFlight.key === requestKey &&
+    areUiSessionKeysEquivalent(inFlight.sessionKey, sessionKey) &&
+    inFlight.requestAgentId === requestAgentId &&
     inFlight.client === client &&
     inFlight.connectionEpoch === connectionEpoch
   ) {
-    return inFlight.promise;
+    if (inFlight.refresh) {
+      inFlight.refresh.startup ||= startup;
+      inFlight.refresh.deferBranches &&= opts.deferBranches === true;
+      return inFlight.refresh.promise;
+    }
+    if (opts.supersedeInFlight !== true && inFlight.key === requestKey) {
+      return inFlight.promise;
+    }
+    const version = ++requests.historyVersion;
+    const refresh = {
+      startup: startup || inFlight.startup,
+      deferBranches: opts.deferBranches === true,
+      promise: Promise.resolve<ChatHistoryResult | undefined>(undefined),
+    };
+    refresh.promise = inFlight.promise.then(() => {
+      if (
+        requests.historyVersion !== version ||
+        !state.connected ||
+        state.client !== client ||
+        state.connectionEpoch !== connectionEpoch ||
+        !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+        (isUiSelectedGlobalSessionKey(state, sessionKey) &&
+          resolveUiSelectedSessionAgentId(state) !== requestAgentId)
+      ) {
+        return undefined;
+      }
+      return loadChatHistory(state, refresh);
+    });
+    inFlight.refresh = refresh;
+    return refresh.promise;
   }
   if (
     opts.deferBranches !== true &&

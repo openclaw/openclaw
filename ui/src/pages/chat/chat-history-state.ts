@@ -26,6 +26,11 @@ type ChatHistoryLoadState =
       connectionEpoch: number;
       key: string;
       promise: Promise<ChatHistoryResult | undefined>;
+      refresh?: {
+        promise: Promise<ChatHistoryResult | undefined>;
+        startup: boolean;
+        deferBranches: boolean;
+      };
     } & ChatHistoryLoadRequest)
   | { phase: "committed"; key: string }
   | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);

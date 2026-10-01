@@ -26,7 +26,7 @@ import {
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import { sleep } from "./chat-history-retry.ts";
-import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { chatScopedEventSessionMatches, getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   pullRequestLinksIn,
@@ -151,6 +151,14 @@ function handleSessionMessageEvent(
   const isUserMessage =
     readSessionMessageIdentity(asNullableRecord(payload)?.message)?.role === "user";
   if (matchesChat) {
+    // A pre-commit snapshot can erase even an admitted live reply when its leaf advances.
+    // Fence it before run settlement, while retaining the loader's single queued refresh.
+    if (getChatHistoryLoadState(state).phase === "in-flight") {
+      void loadChatHistory(state, {
+        deferBranches: !presentation(),
+        supersedeInFlight: true,
+      }).finally(() => state.requestUpdate?.());
+    }
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
     // replaces it in place instead of appending below the newer user turn.
@@ -204,7 +212,6 @@ function handleSessionMessageEvent(
     state.pendingSessionMessageReloadSessionKey = null;
     void loadChatHistory(state, {
       deferBranches: !presentation(),
-      supersedeInFlight: isUserMessage && event.hasActiveRun === true,
     }).finally(() => state.requestUpdate?.());
   }
 }
@@ -414,10 +421,11 @@ function handleSessionsChangedEvent(
     source.messageSeq === undefined
   ) {
     // Legacy multi-message writes cannot prove individual message cursors.
-    // One scoped authoritative snapshot recovers them without ending a run.
-    void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
-      state.requestUpdate?.(),
-    );
+    // A snapshot begun before this invalidation cannot recover the committed rows.
+    void loadChatHistory(state, {
+      deferBranches: !presented,
+      supersedeInFlight: true,
+    }).finally(() => state.requestUpdate?.());
     return;
   }
   if (
