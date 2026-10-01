@@ -80,6 +80,37 @@ afterEach(async () => {
 });
 
 describe("stored draft projection", () => {
+  it.each(["read", "sweep"])(
+    "clears a cached attachment-only draft badge after expiry through %s",
+    async (path) => {
+      const now = 1_800_000_000_000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      await writeDraft("expired");
+      const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
+      const reader = createStoredChatOutboxReader();
+      const changes = subscribe(reader);
+      const host = state();
+      reader.read(host);
+      await changes.changed;
+      expect(reader.read(host).hasSessionDraft(key("expired"))).toBe(true);
+      changes.listener.mockClear();
+
+      clock.mockReturnValue(now + 7 * 24 * 60 * 60 * 1_000 + 1);
+      if (path === "read") {
+        expect(await drafts.readDurableComposerDraft(scope("expired"))).toMatchObject({
+          status: "not-found",
+        });
+      } else {
+        await vi.runOnlyPendingTimersAsync();
+        // Queue a read behind the sweep transaction before checking its invalidation.
+        await drafts.listDurableChatDraftPresence(owner);
+      }
+      await Promise.all(list.mock.results.map(({ value }) => value));
+      expect(reader.read(host).hasSessionDraft(key("expired"))).toBe(false);
+      expect(changes.listener).toHaveBeenCalledOnce();
+    },
+  );
+
   it("preserves the summary and stays silent when a durable write leaves badges unchanged", async () => {
     seedTab({ a: { draft: "tab input", draftRevision: 10, updatedAt: 1 } });
     const list = vi.spyOn(drafts, "listDurableChatDraftPresence");

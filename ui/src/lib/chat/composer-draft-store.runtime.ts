@@ -5,6 +5,7 @@ import type {
   DurableComposerDraftAttachment,
   HumanMention,
 } from "./chat-types.ts";
+import { notifyDurableComposerDraftChanges } from "./composer-draft-changes.ts";
 import {
   openControlUiDatabase,
   requestResult,
@@ -14,6 +15,8 @@ import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
 import { parseStoredChatOutboxScope, storedChatOutboxScopeKey } from "./outbox-store.ts";
 import { isChatReplyTarget } from "./reply-target.ts";
+
+export { subscribeDurableComposerDraftChanges } from "./composer-draft-changes.ts";
 
 const STORE_NAME = "composerDrafts";
 const OWNER_INDEX = "ownerKey";
@@ -81,22 +84,6 @@ type DurableComposerDraftWriteResult =
   | { status: "storage-failed" };
 
 let lastFenceRevision = 0;
-const durableComposerDraftChangeListeners = new Set<() => void>();
-
-export function subscribeDurableComposerDraftChanges(listener: () => void): () => void {
-  durableComposerDraftChangeListeners.add(listener);
-  return () => void durableComposerDraftChangeListeners.delete(listener);
-}
-
-function notifyDurableComposerDraftChanges(): void {
-  for (const listener of durableComposerDraftChangeListeners) {
-    try {
-      listener();
-    } catch (error) {
-      console.error("[openclaw] durable composer draft listener failed", error);
-    }
-  }
-}
 
 let sweptDatabase: IDBDatabase | null = null;
 async function openDraftDatabase(): Promise<IDBDatabase> {
@@ -300,12 +287,13 @@ async function sweepExpiredRecords(database: IDBDatabase): Promise<void> {
       }
       const record = parseStoredDraft(cursor.value);
       const expired = record ? expiredRecord(record, now) : undefined;
-      // Deleting an expired fence can reveal tab input; re-fencing changes no presence.
+      // Readers may have cached active presence before the draft expired.
       if (expired === null) {
         cursor.delete();
         changed = true;
       } else if (expired) {
         cursor.update(expired);
+        changed = true;
       }
       cursor.continue();
     } catch {
@@ -546,9 +534,9 @@ export async function readDurableComposerDraft(
       return { status: "not-found" };
     }
     if (expired) {
-      // Presence already projects an expired draft as the newest clear.
       store.put(expired);
       await transactionComplete(transaction);
+      notifyDurableComposerDraftChanges();
       return { status: "not-found", revision: expired.revision, writeId: expired.writeId };
     }
     await transactionComplete(transaction);
