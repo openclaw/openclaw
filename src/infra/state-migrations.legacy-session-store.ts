@@ -309,20 +309,20 @@ async function archiveRemovedSessionTranscripts(params: {
   reason: "deleted";
   restrictToStoreDir: true;
 }): Promise<Set<string>> {
-  const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
+  const { archiveSessionTranscriptsDetailed } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
   for (const [sessionId, sessionFile] of params.removedSessionFiles) {
     if (params.referencedSessionIds.has(sessionId)) {
       continue;
     }
-    const archived = archiveSessionTranscripts({
+    const archived = archiveSessionTranscriptsDetailed({
       sessionId,
       storePath: params.storePath,
       sessionFile,
       reason: params.reason,
       restrictToStoreDir: params.restrictToStoreDir,
     });
-    for (const archivedPath of archived) {
+    for (const { archivedPath } of archived) {
       archivedDirs.add(path.dirname(archivedPath));
     }
   }

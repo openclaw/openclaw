@@ -247,7 +247,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
   const selectedArgument = argv.find((arg) => arg.startsWith("--extensions="));
   let selected: string[] | undefined;
   let discoverPreparation: typeof resolveExtensionBoundaryPreparation | undefined;
-  let preparation: ReturnType<typeof resolveExtensionBoundaryPreparation> | undefined;
+  let preparation: Awaited<ReturnType<typeof resolveExtensionBoundaryPreparation>> | undefined;
   if (selectedArgument) {
     const requested: unknown = JSON.parse(selectedArgument.slice("--extensions=".length));
     if (
@@ -261,7 +261,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     selected = requested;
     ({ resolveExtensionBoundaryPreparation: discoverPreparation } =
       await import("./lib/extension-boundary-projects.mts"));
-    preparation = discoverPreparation(repoRoot, selected);
+    preparation = await discoverPreparation(repoRoot, selected);
     process.stdout.write(
       `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
     );
@@ -442,7 +442,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     await prepareBatch([sdkUnit]);
     // Only admitted SDK output may reveal declaration-only producer edges. Expand
     // their SDK inputs before compiling any producer or selected package.
-    const discovered = discoverPreparation!(repoRoot, selected!, {
+    const discovered = await discoverPreparation!(repoRoot, selected!, {
       preparedSdk: true,
     });
     const roots = [...new Set([...sdkUnit.roots!, ...discovered.sdkRoots])].toSorted();

@@ -21,7 +21,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-multi-node-update-e2e" OPENCLAW_MULTI_NODE_UPDATE_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_MULTI_NODE_UPDATE_E2E_SKIP_BUILD:-0}"
@@ -31,10 +30,7 @@ ARTIFACT_DIR="${OPENCLAW_MULTI_NODE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/multi-nod
 
 mkdir -p "$ARTIFACT_DIR"
 chmod -R a+rwX "$ARTIFACT_DIR" || true
-cleanup() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"' EXIT
 
 # Build the bare e2e image and prepare the package tarball.
 docker_e2e_build_or_reuse "$IMAGE_NAME" multi-node-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"

@@ -95,7 +95,6 @@ posixDescribe.each([false, true])(
           path.join(root, `progress-${index}.test.ts`),
           `import fs from "node:fs";
 import { expect, it } from "vitest";
-import { waitForFile } from ${JSON.stringify(path.join(repoRoot, "test/helpers/process-wait.ts"))};
 ${fixtureReceiptClientSource(receipts.endpoint)}
 const index = ${index};
 it("real progress " + index, async () => {
@@ -103,7 +102,7 @@ it("real progress " + index, async () => {
   fs.writeFileSync(ready + ".tmp", String(process.pid));
   fs.renameSync(ready + ".tmp", ready);
   sendReceipt(ready, "ready");
-  await waitForFile(${JSON.stringify(root)} + "/release-" + index, 15000);
+  await awaitRelease(ready, "continue");
   expect(index).toBeLessThan(5);
 });
 `,
@@ -203,8 +202,8 @@ export default {
           workerPid = Number(fs.readFileSync(readyPath, "utf8"));
           clock.tick(600);
           expect(onNoOutputTimeout, output).not.toHaveBeenCalled();
-          fs.writeFileSync(path.join(root, `release-${index}`), "");
-          // File barriers never enter the watched pipes. Only Vitest's completed
+          receipts.release(readyPath, "continue");
+          // Release receipts never enter the watched pipes. Only Vitest's completed
           // case output can reset the watchdog before the next 600ms advance.
           await withinTest(
             awaitGateBeforeSettlement(
@@ -231,7 +230,7 @@ export default {
           clock.tick(1);
           expect(onNoOutputTimeout).toHaveBeenCalledOnce();
         } else {
-          fs.writeFileSync(path.join(root, "release-4"), "");
+          receipts.release(path.join(root, "ready-4"), "continue");
         }
         const result = await withinTest(watched.completion, signal);
         // Vitest's logger handles SIGTERM and exits with 128 + 15, rather than
@@ -261,6 +260,9 @@ export default {
           expect(diagnostic).toMatchObject({ reason: "passed", active: [] });
         }
       } finally {
+        for (let index = 0; index < 5; index++) {
+          receipts.release(path.join(root, `ready-${index}`), "continue");
+        }
         watched.teardown();
         forceKillVitestProcessGroup(watched.child);
         await watched.completion;

@@ -1,5 +1,8 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
+import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -16,7 +19,6 @@ import {
   outboxPayloadHistory as history,
   outboxPaneFor as paneFor,
   outboxComposerFor as composerFor,
-  readOutboxQueue as readQueue,
   countOutboxPayloads as payloadCount,
   readOutboxPayloadBytes as readPayloadBytes,
   stageOutboxAttachment as stage,
@@ -27,6 +29,23 @@ const plainHttpHost = "plain-http.test";
 const suite = createChatFlowE2eSuite({
   args: [`--host-resolver-rules=MAP ${plainHttpHost} 127.0.0.1`],
 });
+
+// Legacy metadata shares the v4 prefix but is not the current account's admitted queue.
+async function readQueue(page: Page): Promise<ChatQueueItem[]> {
+  return paneFor(page).evaluate((element) => {
+    const { state } = element as HTMLElement & { state: ChatPageHost };
+    const account = state.client?.recoveryScope ?? state.client?.offlineRecoveryScope;
+    if (!account) {
+      throw new Error("Expected the retained composer account");
+    }
+    const gatewayOwner = state.settings.gatewayUrl.trim() || "default";
+    const key = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}:account:${encodeURIComponent(account)}`;
+    const store = JSON.parse(sessionStorage.getItem(key) ?? '{"sessions":{}}') as {
+      sessions: Record<string, { queue?: ChatQueueItem[] }>;
+    };
+    return Object.values(store.sessions).flatMap((session) => session.queue ?? []);
+  });
+}
 
 suite.define(() => {
   it.each(["agent:main:topic", "global"])(
@@ -82,16 +101,23 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}outbox-legacy-seed`);
           const legacyKey = await page.evaluate(
             ({ item, sessionKey }) => {
-              const currentKey = Object.keys(sessionStorage).find((key) =>
-                key.startsWith("openclaw.control.chatComposer.v4:"),
-              );
-              if (!currentKey) {
+              if (!item.storageScope) {
+                throw new Error("Missing admitted account ownership");
+              }
+              const [gatewayOwner, recoveryScope] = JSON.parse(item.storageScope) as [
+                string,
+                string,
+              ];
+              const currentKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}:account:${encodeURIComponent(recoveryScope)}`;
+              const raw = sessionStorage.getItem(currentKey);
+              if (!raw) {
                 throw new Error("Missing admitted metadata");
               }
-              const current = JSON.parse(sessionStorage.getItem(currentKey)!) as {
+              const current = JSON.parse(raw) as {
                 gatewayOwner: string;
               };
               const key = `openclaw.control.chatComposer.v3:${encodeURIComponent(current.gatewayOwner)}`;
+              const { storageScope: _storageScope, ...legacyItem } = item;
               sessionStorage.setItem(
                 key,
                 JSON.stringify({
@@ -103,7 +129,7 @@ suite.define(() => {
                       draftRevision: 42,
                       queue: [
                         {
-                          ...item,
+                          ...legacyItem,
                           sessionKey,
                           agentId: "main",
                           sendAttempts: 1,
@@ -128,23 +154,28 @@ suite.define(() => {
           expect(await readPayloadBytes(page, reference.key)).toEqual([
             file.buffer.toString("base64"),
           ]);
-          if (legacySessionKey === "global") {
-            expect(await readQueue(page)).toEqual([]);
-            const notice = paneFor(page).locator(".chat-outbox-recovery");
-            await notice.locator("summary").click();
-            await notice
-              .getByText("Mock Gateway: retained v3 Blob submission", { exact: true })
-              .waitFor();
-            await expectRequestCountStable(gateway, "chat.send", 0);
-            await notice.getByRole("button", { name: "Restore here for review" }).click();
-            const dialog = page.locator("openclaw-modal-dialog");
-            await dialog.getByText(`${destination} (main)`, { exact: true }).waitFor();
-            await page.screenshot({
-              path: path.join(suite.artifactDir, "v3-global-destination-confirmation.png"),
-              animations: "disabled",
-            });
-            await dialog.getByRole("button", { name: "Restore here for review" }).click();
-          }
+          expect(await readQueue(page)).toEqual([]);
+          expect(await paneFor(page).locator(".chat-queue__item").count()).toBe(0);
+          expect(
+            await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).count(),
+          ).toBe(0);
+          const notice = paneFor(page).locator(".chat-outbox-recovery");
+          await notice.locator("summary").click();
+          await notice
+            .getByText("Mock Gateway: retained v3 Blob submission", { exact: true })
+            .waitFor();
+          await expectRequestCountStable(gateway, "chat.send", 0);
+          await notice.getByRole("button", { name: "Restore here for review" }).click();
+          const dialog = page.locator("openclaw-modal-dialog");
+          await dialog.getByText(`${destination} (main)`, { exact: true }).waitFor();
+          await page.screenshot({
+            path: path.join(
+              suite.artifactDir,
+              `v3-${legacySessionKey === "global" ? "global" : "named"}-destination-confirmation.png`,
+            ),
+            animations: "disabled",
+          });
+          await dialog.getByRole("button", { name: "Restore here for review" }).click();
           await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
           await page.reload();
           await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
@@ -155,6 +186,7 @@ suite.define(() => {
             sendRunId: original.sendRunId,
             sendAttempts: 1,
             attachmentPayload: reference,
+            storageScope: original.storageScope,
           });
           expect(await readPayloadBytes(page, reference.key)).toEqual([
             file.buffer.toString("base64"),
@@ -292,10 +324,34 @@ suite.define(() => {
         .poll(() => composerFor(page).inputValue())
         .toBe("Mock Gateway: old durable draft");
       await expect.poll(() => paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
-      expect((await readQueue(page))[0]?.sendRunId).toBe("legacy-idempotency");
+      expect(await readQueue(page)).toEqual([]);
+      expect(await paneFor(page).locator(".chat-queue__item").count()).toBe(0);
+      // Recovery cannot overwrite the independently migrated durable draft.
+      await composerFor(page).fill("");
+      await paneFor(page).getByRole("button", { name: "Remove draft.txt", exact: true }).click();
+      await waitForCommittedComposerDraft(page, "chat:v3:agent:main:main\u0000agent:main", null, 0);
+      const notice = paneFor(page).locator(".chat-outbox-recovery");
+      await notice.locator("summary").click();
+      await notice.getByText("Mock Gateway: upgrade this inline queue", { exact: true }).waitFor();
+      await expectRequestCountStable(gateway, "chat.send", 0);
+      await notice.getByRole("button", { name: "Restore here for review" }).click();
+      const dialog = page.locator("openclaw-modal-dialog");
+      await dialog.getByText("agent:main:main (main)", { exact: true }).waitFor();
+      await dialog.getByRole("button", { name: "Restore here for review" }).click();
+      await expect
+        .poll(() => readQueue(page))
+        .toMatchObject([{ sendRunId: "legacy-idempotency", sendAttempts: 0, sendState: "failed" }]);
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
       await composerFor(page).fill("Mock Gateway: newer independent draft");
+      await paneFor(page)
+        .locator(".agent-chat__file-input")
+        .setInputFiles({
+          name: "draft.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("draft bytes"),
+        });
+      await expect.poll(() => paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
       const row = paneFor(page).locator(".chat-queue__item");
       await row.dblclick();
       await row.locator(".chat-queue__edit-input").fill("cancel this edit");

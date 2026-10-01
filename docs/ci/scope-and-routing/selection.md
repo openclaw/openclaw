@@ -24,19 +24,24 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 ### Published-driver update cell
 
 `scripts/lib/ci-published-driver-update-plan.mts` selects the required
-`published-driver-update` job for changes to `src/infra/update-*`,
-`src/cli/update-cli/**`, state leases, state database admission, SQLite file
-identity, native-plugin assignments, both startup-trace owners, and updater
-scripts. Changes to the selector, cell harness, or CI workflow select it too.
-Unrelated PRs omit the job; an unavailable diff retains it. Current main-tier
-and ordinary manual/release CI select it, while frozen targets predating the
-harness omit it. Execution also requires the selected checkout revision to equal
+`published-driver-update` job on PRs only for the updater, activation, handoff,
+and canary owners: `src/infra/update-*` (including
+`src/infra/update-managed-service-handoff*`), `src/cli/update-cli/**`,
+`src/cli/startup-trace.ts`, and `src/gateway/server-startup-trace.ts`. The cell
+follows the shared candidate build, so selecting broad state, identity, plugin,
+or tooling changes would add its full runtime to those PRs' critical path.
+State leases, state database admission, generic SQLite identity, native-plugin
+files, and updater or CI scripts therefore defer this proof to hourly main and
+full release validation. Their ordinary owner tests still run on PRs.
+An unavailable diff retains the cell. Current main-tier and ordinary
+manual/release CI select it independently of changed paths, while frozen targets
+predating the harness omit it. Execution also requires the selected checkout revision to equal
 the caller's `github.sha`. Exact-head dispatch fallbacks and other target-ref
 dispatches selecting a different revision skip this cell and record the reason
 in the CI gate summary; they do not provide published-driver proof for that target.
 
 The reusable workflow checks out only `github.sha`, with credentials disabled,
-read-only contents permission, no inherited secrets, and caching off. It cannot
+read-only contents permission, no inherited secrets, and dependency caching off. It cannot
 accept a caller-selected checkout ref in a different cache scope. The selected
 `build-artifacts` job packages its existing build with the canonical integrity
 check and publishes one candidate tarball. The cell downloads that same-run
@@ -46,6 +51,20 @@ reused when only the failed consumer job is rerun.
 The checksum gate prints both digests and rejects mismatches before starting
 the update. The download action's `digest-mismatch: error` input configures its
 archive verification policy; that input line is not a reported mismatch.
+
+The published driver version is resolved once from npm. Its installed prefix is
+cached as an archive keyed by that version, runner platform, and the pinned
+Docker recipe. PRs only restore this exact key and mount the seed read-only;
+the update runs against a private extraction. Only canonical main push,
+scheduled, and manual runs prepare and save missing seeds, before any candidate
+executes. A missing seed retains the ordinary published npm install path.
+
+The PR cell targets five minutes after the shared candidate build. PRs use the
+serving published Gateway to initialize synthetic state; main and release runs
+also retain the initial Doctor repair pass. Readiness is checked every 100 ms
+with a 30-second overall and one-second per-request limit. The same managed
+update, recorded-run, restart, running-build, and readiness assertions apply in
+both modes.
 
 The cell reserves termination and diagnostic time within its twenty-minute budget.
 Its command deadline returns a failed step with the active phase recorded,
@@ -94,7 +113,7 @@ The iOS, macOS, and both shared OpenClawKit Periphery scans use Xcode 27 on GitH
 - **Control UI source selection** retains the complete ordinary UI unit family when its area changes. Control UI E2E on PRs uses the existing PR-exempt owner policy: a fixed smoke cohort plus tests whose source owners, imported dependencies, harness inputs, or test files changed. Unmapped tests run on hourly main and in release validation; PRs still select them when their own file or an imported dependency changes. Only the core E2E harness, UI bundle configuration, explicit global app-shell owners, or unavailable changed-path information select the full Control UI E2E inventory. Shared components, styles, and feature modules follow explicit route/component owners and direct runtime imports instead; test and fixture imports retain transitive selection. Shared shell/store cycles do not make a leaf change select every route. Hourly and release validation own the full transitive composition. Owner selections share one browser row per 30 files, bounded by the existing row cap; full validation and the kill switch retain their existing row counts. The preflight job summary lists every selected file and its reasons. Set the repository variable `OPENCLAW_CI_UI_E2E_FULL` to `true` or `1` to restore full coverage for admitted Control UI E2E jobs on PRs. Hourly main and manual/release validation select the full Control UI E2E inventory, including the mapped compositions formerly restricted to release validation. Real-Gateway and browser-extension families retain their independent owners, so a browser-extension change need not select Control UI jobs. Node excludes files delegated to a selected UI job.
 - **Documentation beside code** keeps all `docs/` content, including navigation JSON, generated metadata, and assets, plus README files, `AGENTS.md`, and skill Markdown from widening the code's Node plan. Packaged workspace templates and test fixtures retain their runtime owners. Docs-only routing still selects no Node rows; unrelated runtime Markdown outside `docs/` retains its owner.
 - **PR dependency and helper selection** combines bounded owner areas, transitive test import/re-export reachability through workspace and public SDK aliases, explicit policy watches, and protected regressions. Protected tests also follow runtime imports across owner areas. One-hop proximity alone misses observed catches. Unrelated global inputs do not request the full runtime repository; owner and protected-test policy supplies the retained coverage.
-- **PR extension lint** reports complete affected plugin directories, selected from changed files and their transitive import consumers. The installed check planner records selected extensions and reasons in the job summary; no affected extensions means no extension lint work. The native typed lint program still resolves shared dependencies, and core, script, compiler, boundary, and policy checks keep their existing owners. Shared lint/type policy, ambient or unresolved inputs retain full extension lint. Set repository variable `OPENCLAW_CI_EXTENSION_LINT_FULL` to `true` or `1` to restore full extension lint on PRs. Hourly main, release validation, and historical targets retain full coverage. Broad PR check families use the existing planner for extension selection while preserving their full non-extension checks.
+- **PR extension lint** reports directly changed plugin directories, the Telegram/Codex/Slack smoke cohort for shared source changes, and direct consumers of changed public SDK entries (including test imports). It shares package-selection policy with the boundary checker; transitive and ambient-type fan-out runs on hourly main and release validation. The planner records selected extensions and reasons in its summary; no selected extensions means no extension lint work. Selected stripes retain the existing full declaration preparation, native typed lint program, and diagnostics. Lint/type policy changes, directly changed loose extension sources, and unavailable public-entry inventories retain full coverage. The existing `OPENCLAW_CI_EXTENSION_LINT_FULL=true|1` switch restores full PR coverage; unset keeps the aggressive default. Historical targets retain their full coverage, and non-extension checks keep their existing owners.
 - **Erased TypeScript modules** retain their owner tests, affected runtime test consumers, and declared source watches. Type-only changes still select every consuming compiler graph through the separate static-check owner. Ambiguous compiler ownership, ambient/declaration files, and missing history retain complete static checks without widening runtime tests.
 - **Filesystem source scanners** retain their declared watched inputs alongside ordinary importers. A policy watch supplements each changed source's tests and never supplies a missing ordinary owner.
 - **Global and hub Node inputs** select their bounded owner tests, transitive import consumers, and protected regressions plus the fixed PR smoke set. Shared test bootstrap/configuration, root compiler resolution, workspace/install settings, patches, dependency hubs, and packing policy no longer request the complete runtime plan. Static checks retain full fallback where ownership is ambiguous. Missing changed paths or an unavailable bounded selector fail preflight instead of admitting every runtime family. Global package, lockfile, compiler, and shared Vitest inputs do not select every platform/browser family merely because Node ownership is broad; related protected tests remain selected. UI and wizard locale catalogs and translation metadata retain their dedicated localization and compiler checks without PR Node or browser rows; localization generators and runtime modules retain tests.

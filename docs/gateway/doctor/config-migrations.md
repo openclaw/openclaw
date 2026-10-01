@@ -407,6 +407,43 @@ changing the chat model. Downloads require setup consent. In the July provider,
 Doctor therefore preserves both fields instead of silently turning an ignored
 model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp).
 
+## Auth credential fields
+
+Doctor owns legacy credential-field conversion in both JSON imports and existing
+SQLite auth stores, including stores whose profile IDs already use current
+provider names. Field-only SQLite repair saves a private, verified backup and
+preserves profile IDs, credential material, unknown metadata, and rotation state.
+Malformed credential values and unreadable rotation-state JSON remain intact;
+they do not block repairs to supported fields. Alias renames still require valid
+complete stores and rotation state. Doctor defers affected config, session, and
+personal-account references whenever an owner cannot safely rename its IDs.
+An occupied alias destination or changed account receipt defers that mapping
+without preventing independent credential-field repairs or safe aliases.
+
+The conversion moves a recognized `mode` to a missing `type`, changes
+`type: "apiKey"` to `api_key`, and moves usable `apiKey` or `api_key` values to
+`key`. Usable canonical keys and references take precedence; empty or malformed
+keys do not discard a usable legacy value. These aliases may also hold SecretRefs.
+A SecretRef in the credential type's `key` or `token` moves to the matching
+`keyRef` or `tokenRef` only when that reference is missing or invalid. Fields for
+other credential types and aliases that did not supply a replacement stay intact.
+Doctor removes converted field names, verifies source rows before
+committing, and does nothing on a second run. Runtime rejects convertible legacy
+fields with `openclaw doctor --fix` instructions. Malformed extras do not prevent
+an otherwise valid canonical credential from loading.
+
+JSON import retains its existing canonical projection: recognized credential
+types and supported fields enter SQLite, string metadata is retained, and unknown
+fields or malformed sibling entries are omitted from the active import. The
+original JSON bytes are archived exactly with the existing migration receipt, so
+those omitted values remain recoverable. This differs from field-only repair of
+existing SQLite rows, which preserves unknown and malformed values in place.
+
+The installed updater invokes candidate Doctor before activation, so the same
+conversion runs during an update. Mixed JSON and SQLite stores are normalized
+before their credential sets are merged, and supplied alias mappings are checked
+against the current SQLite owners before the import can rename profiles.
+
 ## Checks 0-2
 
 <AccordionGroup>

@@ -43,10 +43,12 @@ function workspace() {
       },
     }),
   );
-  for (const id of ["alpha", "beta", "unrelated"]) {
+  for (const id of ["alpha", "beta", "unrelated", "telegram", "codex", "slack"]) {
     write(`extensions/${id}/package.json`, '{"private":true}');
     write(`extensions/${id}/index.ts`, "export {};\n");
   }
+  write("scripts/lib/plugin-sdk-entrypoints.json", '["api", "public"]');
+  write("scripts/lib/plugin-sdk-private-local-only-subpaths.json", "[]");
   write("src/plugin-sdk/api.ts", "export type Result = Promise<void>;\n");
   write("src/plugin-sdk/public.ts", 'export type { Result } from "./api.js";\n');
   write(
@@ -68,32 +70,36 @@ function workspace() {
   return { cwd, write, baseRef, commitBase };
 }
 
+const smokeRoots = ["extensions/codex", "extensions/slack", "extensions/telegram"];
+
 describe("extension lint package selection", () => {
-  it("selects whole packages for transitive aliased type consumers and directly changed metadata", async () => {
+  it("selects direct public-entry consumers and changed metadata while deferring transitive consumers", async () => {
     const { cwd, baseRef } = workspace();
     const selected = await resolveCiExtensionLintSelection(
-      ["src/plugin-sdk/api.ts", "extensions/unrelated/openclaw.plugin.json"],
+      ["src/plugin-sdk/public.ts", "extensions/unrelated/openclaw.plugin.json"],
       cwd,
       { baseRef },
     );
     expect(selected.mode).toBe("selected");
     expect(selected.extensionRoots).toEqual([
       "extensions/alpha",
-      "extensions/beta",
+      ...smokeRoots,
       "extensions/unrelated",
     ]);
     expect(selected.reasons["extensions/alpha"]).toEqual([
-      "import consumer: extensions/alpha/index.ts",
+      "direct import of changed public entry openclaw/plugin-sdk/public: extensions/alpha/index.ts",
     ]);
     expect(selected.reasons["extensions/unrelated"]).toEqual([
-      "changed: extensions/unrelated/openclaw.plugin.json",
+      "PR changes extensions/unrelated/openclaw.plugin.json",
     ]);
   });
 
-  it("omits extension lint when a source has no extension consumers", async () => {
+  it("omits extension lint for UI and documentation outside extension ownership", async () => {
     const { cwd, baseRef } = workspace();
     expect(
-      await resolveCiExtensionLintSelection(["src/leaf.ts", "docs/example.md"], cwd, { baseRef }),
+      await resolveCiExtensionLintSelection(["ui/src/leaf.ts", "docs/example.md"], cwd, {
+        baseRef,
+      }),
     ).toEqual({
       mode: "selected",
       extensionRoots: [],
@@ -110,12 +116,11 @@ describe("extension lint package selection", () => {
     );
     const selection = await resolveCiExtensionLintSelection(["src/leaf.ts"], cwd, { baseRef });
     expect(selection.mode).toBe("selected");
-    expect(selection.extensionRoots).toEqual([]);
+    expect(selection.extensionRoots).toEqual(smokeRoots);
   });
 
   it.each([
     "pnpm-lock.yaml",
-    "extensions/alpha/package.json",
     "extensions/tsconfig.json",
     "config/oxlint/boundary-guards.json",
     "config/tsconfig/oxlint.json",
@@ -123,8 +128,7 @@ describe("extension lint package selection", () => {
     "src/state/openclaw-state-schema.sql",
     "scripts/lib/plugin-sdk-entrypoints.json",
     ".github/workflows/ci.yml",
-    "src/removed.ts",
-  ])("retains full coverage for unresolved or shared policy %s", async (file) => {
+  ])("retains full coverage for lint or type policy %s", async (file) => {
     const { cwd } = workspace();
     const selection = await resolveCiExtensionLintSelection([file], cwd);
     expect(selection.mode).toBe("full");
@@ -132,20 +136,23 @@ describe("extension lint package selection", () => {
   });
 
   it.each([
-    ["extensions/shared.ts", "export const shared = true;\n", "shared extension input"],
-    ["src/global-types.ts", "interface GlobalResult { value: string }\n", "ambient type impact"],
+    ["extensions/shared.ts", "export const shared = true;\n", true],
+    ["src/global-types.ts", "interface GlobalResult { value: string }\n", false],
   ])(
-    "keeps full coverage for %s outside package import ownership",
-    async (file, source, reason) => {
+    "keeps direct lint ownership while sampling consumers of %s",
+    async (file, source, directSharedSource) => {
       const { cwd, write, baseRef } = workspace();
       write(file, source);
       const selection = await resolveCiExtensionLintSelection([file], cwd, { baseRef });
-      expect(selection.mode).toBe("full");
-      expect(selection.fullReasons).toContain(`${reason}: ${file}`);
+      expect(selection.mode).toBe(directSharedSource ? "full" : "selected");
+      expect(selection.extensionRoots).toEqual(directSharedSource ? [] : smokeRoots);
+      expect(selection.fullReasons).toEqual(
+        directSharedSource ? [`direct shared extension source: ${file}`] : [],
+      );
     },
   );
 
-  it("retains full lint when a changed script configures its execution owner", async () => {
+  it("uses smoke coverage when a script indirectly configures lint", async () => {
     const { cwd, write, baseRef } = workspace();
     write("scripts/lib/settings.mts", "export const flag = true;\n");
     write(
@@ -155,11 +162,12 @@ describe("extension lint package selection", () => {
     const selection = await resolveCiExtensionLintSelection(["scripts/lib/settings.mts"], cwd, {
       baseRef,
     });
-    expect(selection.mode).toBe("full");
-    expect(selection.fullReasons).toContain("lint execution consumer: scripts/run-oxlint.mts");
+    expect(selection.mode).toBe("selected");
+    expect(selection.extensionRoots).toEqual(smokeRoots);
+    expect(selection.fullReasons).toEqual([]);
   });
 
-  it("retains full coverage when a consumer augments globals outside import edges", async () => {
+  it("defers transitive global-augmentation consumers to hourly coverage", async () => {
     const { cwd, write, baseRef } = workspace();
     write(
       "src/ambient.ts",
@@ -168,8 +176,9 @@ describe("extension lint package selection", () => {
     const selection = await resolveCiExtensionLintSelection(["src/plugin-sdk/api.ts"], cwd, {
       baseRef,
     });
-    expect(selection.mode).toBe("full");
-    expect(selection.fullReasons).toContain("ambient type impact: src/ambient.ts");
+    expect(selection.mode).toBe("selected");
+    expect(selection.extensionRoots).toEqual(smokeRoots);
+    expect(selection.fullReasons).toEqual([]);
   });
 
   it("restores full coverage with the kill switch even for an unrelated diff", async () => {
@@ -181,43 +190,80 @@ describe("extension lint package selection", () => {
     expect(selection.fullReasons).toEqual(["OPENCLAW_CI_EXTENSION_LINT_FULL"]);
   });
 
-  it("keeps loose extension consumers under full lint", async () => {
+  it("uses smoke coverage for loose extension consumers", async () => {
     const { cwd, write, baseRef } = workspace();
     write(
       "extensions/shared.ts",
       'import { value } from "../src/leaf.js"; export const shared = value;\n',
     );
     const selection = await resolveCiExtensionLintSelection(["src/leaf.ts"], cwd, { baseRef });
-    expect(selection.mode).toBe("full");
-    expect(selection.fullReasons).toContain("shared extension consumer: extensions/shared.ts");
+    expect(selection.mode).toBe("selected");
+    expect(selection.extensionRoots).toEqual(smokeRoots);
+    expect(selection.fullReasons).toEqual([]);
   });
 
-  it("keeps implicit consumers of an unchanged script-global import type covered", async () => {
+  it("uses smoke coverage for script-global import types", async () => {
     const { cwd, write, baseRef } = workspace();
     write("src/global-alias.ts", 'type SharedResult = import("./plugin-sdk/api.js").Result;\n');
     const selection = await resolveCiExtensionLintSelection(["src/plugin-sdk/api.ts"], cwd, {
       baseRef,
     });
-    expect(selection.mode).toBe("full");
-    expect(selection.fullReasons).toContain("ambient type impact: src/global-alias.ts");
+    expect(selection.mode).toBe("selected");
+    expect(selection.extensionRoots).toEqual(smokeRoots);
+    expect(selection.fullReasons).toEqual([]);
   });
 
-  it("keeps global consumers covered when an existing augmentation is removed", async () => {
+  it("uses smoke coverage when an existing augmentation is removed", async () => {
     const { cwd, write, commitBase } = workspace();
     write("src/leaf.ts", "export {}; declare global { interface Window { work: string } }\n");
     const baseRef = commitBase();
     write("src/leaf.ts", "export {};\n");
     const selection = await resolveCiExtensionLintSelection(["src/leaf.ts"], cwd, { baseRef });
-    expect(selection.mode).toBe("full");
-    expect(selection.fullReasons).toContain("ambient type impact: src/leaf.ts");
+    expect(selection.mode).toBe("selected");
+    expect(selection.extensionRoots).toEqual(smokeRoots);
+    expect(selection.fullReasons).toEqual([]);
   });
 
-  it("retains full coverage when previous source types cannot be inspected", async () => {
+  it("does not require prior source bytes for an ordinary core change", async () => {
     const { cwd } = workspace();
     const selection = await resolveCiExtensionLintSelection(["src/leaf.ts"], cwd);
-    expect(selection.mode).toBe("full");
-    expect(selection.fullReasons).toContain(
-      "previous source types unavailable at the exact diff base",
+    expect(selection.mode).toBe("selected");
+    expect(selection.extensionRoots).toEqual(smokeRoots);
+    expect(selection.fullReasons).toEqual([]);
+  });
+
+  it.each([
+    ["extensions/alpha/package.json", ["extensions/alpha"]],
+    ["src/removed.ts", smokeRoots],
+  ])("keeps %s bounded to its package or smoke owners", async (file, expected) => {
+    const { cwd } = workspace();
+    const selection = await resolveCiExtensionLintSelection([file], cwd);
+    expect(selection.mode).toBe("selected");
+    expect(selection.extensionRoots).toEqual(expected);
+  });
+
+  it("includes direct public SDK imports from tests without selecting transitive packages", async () => {
+    const { cwd, write, baseRef } = workspace();
+    write(
+      "extensions/unrelated/api.test.ts",
+      'import type { Result } from "openclaw/plugin-sdk/api"; export type TestResult = Result;\n',
     );
+    const selection = await resolveCiExtensionLintSelection(["src/plugin-sdk/api.ts"], cwd, {
+      baseRef,
+    });
+    expect(selection.mode).toBe("selected");
+    expect(selection.extensionRoots).toEqual([...smokeRoots, "extensions/unrelated"]);
+    expect(selection.reasons["extensions/unrelated"]).toEqual([
+      "direct import of changed public entry openclaw/plugin-sdk/api: extensions/unrelated/api.test.ts",
+    ]);
+  });
+
+  it("retains full coverage when the public SDK inventory cannot be read at the pinned base", async () => {
+    const { cwd } = workspace();
+    const selection = await resolveCiExtensionLintSelection(["src/plugin-sdk/public.ts"], cwd, {
+      baseRef: "a".repeat(40),
+    });
+    expect(selection.mode).toBe("full");
+    expect(selection.fullReasons).toEqual(["direct public-entry inventory unavailable"]);
   });
 });

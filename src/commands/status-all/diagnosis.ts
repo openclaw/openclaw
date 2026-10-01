@@ -81,7 +81,7 @@ const AGENT_ACTIVITY_SOFT_WARNING_MS = 30 * 60_000;
 function countGatewayListenerPids(portUsage: PortUsageLike): number {
   const pids = new Set<number>();
   for (const listener of portUsage.listeners) {
-    if (classifyPortListener(listener, portUsage.port) !== "gateway") {
+    if (classifyPortListener(listener) !== "gateway") {
       continue;
     }
     if (typeof listener.pid === "number" && Number.isFinite(listener.pid)) {

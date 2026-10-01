@@ -3,7 +3,11 @@
  * Converts provider-specific usage shapes into OpenClaw's normalized input,
  * output, cache, reasoning, and total token accounting fields.
  */
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Usage } from "../llm/types.js";
 
@@ -365,13 +369,7 @@ export function toOpenAiChatCompletionsUsage(
   const promptTokens = Math.max(0, input + cacheRead);
   const completionTokens = Math.max(0, output);
   const componentTotal = promptTokens + completionTokens;
-  const aggregateRaw = usage?.total;
-  const aggregateTotal =
-    typeof aggregateRaw === "number" && Number.isFinite(aggregateRaw)
-      ? Math.max(0, aggregateRaw)
-      : undefined;
-  const totalTokens =
-    aggregateTotal !== undefined ? Math.max(componentTotal, aggregateTotal) : componentTotal;
+  const totalTokens = Math.max(componentTotal, asNonNegativeFiniteNumber(usage?.total) ?? 0);
 
   const reasoningTokens = normalizeTokenCount(usage?.reasoningTokens);
   return {
@@ -431,16 +429,9 @@ export function derivePromptTokens(usage?: {
 }
 
 function derivePromptTokensFromTotal(usage?: NormalizedUsage): number | undefined {
-  const total = usage?.total;
-  const output = usage?.output;
-  if (
-    typeof total !== "number" ||
-    !Number.isFinite(total) ||
-    total <= 0 ||
-    typeof output !== "number" ||
-    !Number.isFinite(output) ||
-    output < 0
-  ) {
+  const total = asPositiveFiniteNumber(usage?.total);
+  const output = asNonNegativeFiniteNumber(usage?.output);
+  if (total === undefined || output === undefined) {
     return undefined;
   }
   const promptTokens = total - output;
@@ -453,8 +444,8 @@ export function deriveContextPromptTokens(params: {
   promptTokens?: number;
   usage?: NormalizedUsage;
 }): number | undefined {
-  const promptOverride = params.promptTokens;
-  if (typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0) {
+  const promptOverride = asPositiveFiniteNumber(params.promptTokens);
+  if (promptOverride !== undefined) {
     return promptOverride;
   }
 
@@ -485,15 +476,7 @@ export function deriveSessionTotalTokens(params: {
   contextTokens?: number;
   promptTokens?: number;
 }): number | undefined {
-  // SessionEntry.totalTokens is used as a prompt/context snapshot.
-  // It intentionally excludes completion/output tokens.
-  const promptTokens = deriveContextPromptTokens(params);
-
-  if (!(typeof promptTokens === "number") || !Number.isFinite(promptTokens) || promptTokens <= 0) {
-    return undefined;
-  }
-
-  // Keep this value unclamped; display layers are responsible for capping
-  // percentages for terminal output.
-  return promptTokens;
+  // SessionEntry.totalTokens is an unclamped prompt/context snapshot, excluding
+  // completion tokens. Display layers own percentage caps.
+  return asPositiveFiniteNumber(deriveContextPromptTokens(params));
 }

@@ -251,9 +251,7 @@ describe("unit-fast vitest lane", () => {
         },
         {
           target: [{ runtime: "bun" }],
-          group: [
-            { runtime: "bun", includePatterns: ["src/test-utils/openclaw-test-state.test.ts"] },
-          ],
+          group: [{ runtime: "bun" }],
         },
       ],
       unselectedFileReads: 0,

@@ -304,7 +304,9 @@ Older unfinished shared requests without this requester binding require a new au
 
 Pending session deletion blocks publication actions without discarding the original request. A failed deletion restores its retry. Confirmed deletion retires the attempt. The page clears this memory on reload or connection changes. Profile, session access, and workspace changes also retire affected browser state; they never retarget an existing Gateway request.
 
-Publication requires `operator.write` and current access to change the session. Connecting your account alone does not grant either permission.
+Shared publication also supports `operator.sessions.write` for the session creator. When the Gateway identifies a supported GitHub target in an owned session's managed worktree or repository workspace, session-only callers can use **Publish PR** without access to the broader PR list. A plain conversation or project folder alone does not make publication available. The Gateway rechecks the workspace, unpublished work, current access, and workflow restrictions before publishing. Shared results remain visible after refresh or reconnect.
+
+Personal publication and confirmation require `operator.write` and current access to change the session. Connecting your account alone does not grant either permission.
 
 Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, and repository previews and discovery keep their existing credential behavior. OpenClaw cloud workers use the shared execution identity, never your personal connection. For a repository-only session, finish the current turn and wait for its accepted Git-normalized checkpoint. Personal publication is available while the worker is idle or after Stop, without a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud worker…** before personal publication. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
 

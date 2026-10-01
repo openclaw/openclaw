@@ -53,8 +53,12 @@ it.skipIf(process.platform === "win32").each(["consume", "cancel"] as const)(
       () => {},
     );
     try {
-      await expect.poll(() => observed.stderr, { timeout: 5_000 }).toBe("stderr tail\n");
-      expect(observed.stdout).toBe(body);
+      await expect
+        .poll(() => observed, { timeout: 5_000 })
+        .toEqual({
+          stdout: body,
+          stderr: "stderr tail\n",
+        });
       expect(ready).toBe(false);
       if (operation === "consume") {
         writeFileSync(release, "consume");
