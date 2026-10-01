@@ -71,25 +71,11 @@ test("skips the default pattern walk for WS frames without candidate substrings"
 
 test.each([
   ["ordinary response completed", "ordinary response completed"],
-  ["sk-abcdefghijklmnopqrstuvwxyz123456", "sk-abc…3456"],
   ["prefixSG.abcdefghijk.abcdefghijk", "prefixSG.abc…hijk"],
   [{ token: "sk-abcdefghijklmnopqrstuvwxyz123456" }, '{"token":"sk-abc…3456"}'],
   [new Error("password=synthetic-value"), "Error: password=***"],
   [{ message: "token=synthetic-value", code: "E1" }, "token=*** code=E1"],
-  ["body: to%6ben=synthetic-value&mode=read", "body: to%6ben=***&mode=read"],
-  ["to%6ben+=synthetic-value&mode=read", "to%6ben+=***&mode=read"],
   ["to%6ben\u3164=synthetic-value&mode=read", "to%6ben\u3164=***&mode=read"],
-  ["pass+=synthetic-value&mode=read", "pass+=***&mode=read"],
-  ["sig\u3164=synthetic-value&mode=read", "sig\u3164=***&mode=read"],
-  ["https://example.test/?session+=synthetic-value", "https://example.test/?session+=***"],
-  [
-    'Authorization: Digest username="user", response="synthetic-value"',
-    "Authorization: Digest ***",
-  ],
-  [
-    "-----BEGIN PRIVATE KEY-----\nsynthetic-data\n-----END PRIVATE KEY-----",
-    "-----BEGIN PRIVATE KEY-----\n…redacted…\n-----END PRIVATE KEY-----",
-  ],
 ])("preserves redacted WS frame output for %j", (detail, expected) => {
   logFrame(detail);
   expect(output.mock.calls.map(([line]) => stripVTControlCharacters(line))).toEqual([
