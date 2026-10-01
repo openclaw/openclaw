@@ -470,6 +470,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         ...(updateCwd ? { cwd: updateCwd } : {}),
         ...installEnv,
         timeoutMs: workTimeoutMs,
+        ...(installCommandTarget.manager === "pnpm" ? { input: "" } : {}),
       }),
       params.installTarget,
       params.env,
