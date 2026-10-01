@@ -1,6 +1,7 @@
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelInboundEnvelopeBuilder,
   createChannelPartialDeliveryError,
   implicitMentionKindWhen,
@@ -9,10 +10,6 @@ import {
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import {
-  createMessageReceiptFromOutboundResults,
-  listMessageReceiptPlatformIds,
-} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { resolveChannelGroupsConfigPath } from "openclaw/plugin-sdk/channel-policy";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -715,15 +712,13 @@ async function deliverZalouserReply(params: {
     if (!visibleReplySent) {
       throw error;
     }
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: accepted.map((result) => ({ receipt: result.receipt })),
-      kind: reply.hasMedia ? "media" : "text",
-    });
-    throw createChannelPartialDeliveryError(error, {
-      messageIds: listMessageReceiptPlatformIds(receipt),
-      receipt,
-      visibleReplySent: true,
-    });
+    throw createChannelPartialDeliveryError(
+      error,
+      createAcceptedChannelDeliveryResult({
+        results: accepted.map((result) => ({ receipt: result.receipt })),
+        kind: reply.hasMedia ? "media" : "text",
+      }),
+    );
   }
   return { visibleReplySent };
 }

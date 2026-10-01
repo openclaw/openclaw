@@ -2,9 +2,32 @@
 import { expect, it, vi } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayService } from "../daemon/service-types.js";
+import * as sqliteLibrary from "../infra/bun-sqlite-library.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
+
+export const doctorSqliteDiagnostic =
+  "SQLite (doctor process): /fixture/libsqlite3.dylib (3.53.4, extension loading enabled)";
+
+export function mockDoctorRuntimeFacts(runExec: ReturnType<typeof vi.fn>) {
+  runExec.mockReset().mockResolvedValue({
+    stdout: JSON.stringify({
+      nodeVersion: "26.8.1",
+      bunVersion: "1.4.2",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    }),
+    stderr: "",
+  });
+  vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue("/opt/available/bin/node");
+  vi.spyOn(sqliteLibrary, "ensureSqliteLibrarySelected").mockReturnValue({
+    source: "env",
+    path: "/fixture/libsqlite3.dylib",
+    version: "3.53.4",
+    extensionLoadingSupported: true,
+  });
+}
 
 export function createPrompter(confirmImpl: (message: string) => boolean) {
   return {

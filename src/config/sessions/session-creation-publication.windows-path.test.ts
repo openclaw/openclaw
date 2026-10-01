@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
@@ -13,6 +13,8 @@ import {
   withSessionEntryCreationPublication,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
 
+// A shared worker may already hold the identity owner with its real filesystem imports.
+vi.hoisted(() => vi.resetModules());
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return { ...actual, statSync: vi.fn(actual.statSync) };
@@ -25,6 +27,11 @@ it.each([
   { name: "drive", runtimePath: String.raw`C:\OpenClaw\agents\main\agent.sqlite` },
   { name: "UNC", runtimePath: String.raw`\\Server\Share\OpenClaw\agents\main\agent.sqlite` },
   {
+    name: "junction",
+    runtimePath: String.raw`C:\OpenClaw\agents\main\agent.sqlite`,
+    openedPath: String.raw`C:\agent-alias\agent.sqlite`,
+  },
+  {
     name: "long drive",
     runtimePath: path.win32.join(
       "C:\\OpenClaw",
@@ -34,14 +41,14 @@ it.each([
   },
 ])(
   "retains creation publication custody across $name namespace aliases",
-  async ({ runtimePath }) => {
+  async ({ runtimePath, openedPath = runtimePath }) => {
     const databasePath = path.join(
       directories.make("session-publication-windows-"),
       "agent.sqlite",
     );
     const database = new DatabaseSync(databasePath);
     const metadata = statSync(databasePath, { bigint: true });
-    const namespacedPath = path.win32.toNamespacedPath(runtimePath);
+    const namespacedPath = path.win32.toNamespacedPath(openedPath);
     const target = {
       agentId: "main",
       sessionKey: "agent:main:windows-publication",
@@ -53,7 +60,8 @@ it.each([
       vi.spyOn(path, "resolve").mockImplementation(resolveWindowsPath);
       vi.spyOn(database, "location").mockReturnValue(namespacedPath);
       // Model the Windows native boundary while preserving the real handle's physical identity.
-      vi.mocked(statSync).mockReturnValueOnce(metadata);
+      vi.spyOn(realpathSync, "native").mockReturnValue(path.win32.toNamespacedPath(runtimePath));
+      vi.mocked(statSync).mockReturnValueOnce(metadata).mockReturnValueOnce(metadata);
       registerOpenClawAgentDatabaseIdentity(database);
       const identity = readOpenClawAgentDatabaseIdentity({ db: database });
       if (typeof identity.identity !== "string") {
@@ -64,7 +72,7 @@ it.each([
           agentId: target.agentId,
           sessionKey: target.sessionKey,
           file: {
-            path: identity.filename,
+            path: identity.canonicalPath,
             agentId: target.agentId,
             databaseIdentity: identity.identity,
             assertCurrent: () => {

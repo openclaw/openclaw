@@ -9,6 +9,7 @@ read_when:
   - Running the iOS app from source
   - Debugging Gateway discovery or iOS node commands
   - Choosing colors for native chat sessions
+  - Snoozing or waking a session
 title: "iOS app"
 ---
 
@@ -23,6 +24,7 @@ Availability: The official iPhone app is available on the [App Store](https://ap
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired Gateway: cold opens paint the last known transcript immediately and refresh once the Gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
+- Sessions has **Active**, **Snoozed**, and **Archived** scopes. Snoozed sessions stay out of the active sidebar and Overview until they wake.
 - Agent narration appears inline as each segment finishes, including after reconnect. Narration, tool activity, and the reply stay grouped in one response with a single top-aligned agent avatar. Completed chat turns fold earlier work into a **Worked for …** disclosure above the reply on iPhone and iPad. Tap it to inspect the work. Final answers and media stay visible, and active or unanswered work stays expanded.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
 - Choose **+ → File** to attach audio, video, PDFs, text/code, CSV, JSON, Markdown, ZIP archives, and Office documents from Files. Removable chips show filenames and sizes. Files use the Gateway’s advertised attachment size limits and preserve their original bytes through the durable outbox. The file limit also caps the total attachment bytes per message, counting images after resizing; oversized drafts stay in the composer when you try to send. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Recorded voice notes keep their separate recording flow.
@@ -116,6 +118,27 @@ soon as the roster arrives. Resolved identities update each choice without
 delaying selection; configured names keep precedence and the Gateway's default
 identity is **Assistant**. The catalog refreshes when the picker opens and stays
 bound to the selected Gateway.
+
+## Sessions
+
+Choose **All Sessions…** in the sidebar to browse **Active**, **Snoozed**, or
+**Archived** sessions. Long-press an eligible session and choose **Snooze**:
+**In 1 hour**, **In 3 hours**, **This evening** (18:00 local, only when more than
+one hour away), **Tomorrow** (09:00 on the next calendar day), or **Next week**
+(next Monday at 09:00). On Sundays, Next week is omitted because it matches
+Tomorrow. Each preset shows its local wake time.
+
+The **Snoozed** scope shows **Wakes** and the scheduled time. Long-press a
+snoozed row and choose **Wake session** to bring it back early. A session also
+wakes when its deadline arrives, a real inbound message arrives, or an agent
+run completes. Pinning or archiving clears its snooze. Protected main sessions,
+child/subagent sessions, and archived sessions cannot be snoozed.
+
+Cached snoozed sessions remain browsable offline under the **Snoozed** scope.
+
+Snooze only hides a session from active lists. It never stops a run, prevents
+messages, or disables automations. The Gateway stores the wake time, so it is
+shared across connected clients; an open conversation stays open.
 
 ## Session colors
 

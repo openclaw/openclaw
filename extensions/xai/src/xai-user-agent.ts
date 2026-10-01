@@ -30,15 +30,8 @@ const XAI_NATIVE_API_HOSTS = new Set(["api.x.ai"]);
 // at a verified xAI-native API host. User-configured proxy baseUrls produce
 // an empty record so the openclaw identity is not forwarded to the proxy.
 export function xaiUserAgentHeaderFor(baseUrl: string | undefined): Record<string, string> {
-  if (!baseUrl) {
-    return {};
-  }
-  try {
-    if (XAI_NATIVE_API_HOSTS.has(new URL(baseUrl).hostname)) {
-      return { "User-Agent": xaiUserAgent() };
-    }
-  } catch {
-    return {};
+  if (baseUrl && XAI_NATIVE_API_HOSTS.has(URL.parse(baseUrl)?.hostname ?? "")) {
+    return { "User-Agent": xaiUserAgent() };
   }
   return {};
 }

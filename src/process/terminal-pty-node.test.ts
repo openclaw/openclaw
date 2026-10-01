@@ -5,12 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { spawnNodeTerminalPty } from "./terminal-pty-node.js";
 import type { TerminalPtyEvent } from "./terminal-pty-protocol.js";
 import type { TerminalPtyHandle } from "./terminal-pty.js";
@@ -25,6 +27,22 @@ afterEach(() => {
     handle.kill();
   }
 });
+
+// Worker exit joins the shell's onExit, but session signaling does not join foreign descendants.
+async function waitForPidsToExit(pids: number[], signal: AbortSignal): Promise<void> {
+  try {
+    while (pids.some(isPidAlive)) {
+      await delay(10, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Timed out waiting for PTY processes to exit: ${pids.join(", ")}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
 
 describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
   it.each(["before", "after"] as const)(
@@ -101,7 +119,7 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     });
     expect(await done.promise).toEqual({ exitCode: 7, signal: 0 });
     expect(output).toBe("READY\r\n37 101\r\nhello 🦞\r\nxterm-256color\r\n");
-    expect(await waitForPidToExit(handle.pid, 2_000)).toBe(true);
+    expect(isPidAlive(handle.pid)).toBe(false);
   });
 
   it("retains bounded pipe output while paused and drains it before reporting exit", async () => {
@@ -138,7 +156,9 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     expect(output).toBe(payload);
   });
 
-  it("reaps the PTY and its background process when the owning host disconnects", async () => {
+  it("reaps the PTY and its background process when the owning host disconnects", async ({
+    signal,
+  }) => {
     const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
     const node = resolveTestNodeExecPath();
     const child = spawn(node, resolveRuntimeWorkerArgv(worker, node), {
@@ -188,13 +208,15 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
       }
     });
     try {
-      await started.promise;
+      await withinTest(started.promise, signal);
       child.disconnect();
-      await exited;
+      await withinTest(exited, signal);
       expect(shellPid).toBeGreaterThan(0);
       expect(backgroundPid).toBeGreaterThan(0);
-      expect(await waitForPidToExit(shellPid!, 2_000)).toBe(true);
-      expect(await waitForPidToExit(backgroundPid!, 2_000)).toBe(true);
+      // The worker finishes only after the native shell onExit callback.
+      expect(isPidAlive(shellPid!)).toBe(false);
+      await waitForPidsToExit([backgroundPid!], signal);
+      expect(isPidAlive(backgroundPid!)).toBe(false);
     } finally {
       child.kill("SIGKILL");
       killPidIfAlive(backgroundPid);

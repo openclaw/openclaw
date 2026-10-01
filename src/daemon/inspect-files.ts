@@ -13,6 +13,7 @@ export type ExtraGatewayService = {
   platform: "darwin" | "linux" | "win32";
   label: string;
   detail: string;
+  sourcePath?: string;
   scope: "user" | "system";
   marker?: "openclaw" | "clawdbot";
   legacy?: boolean;
@@ -116,6 +117,7 @@ export async function scanSystemdDir(params: {
       platform: "linux",
       label: entry,
       detail: `unit: ${fullPath}`,
+      sourcePath: fullPath,
       scope: params.scope,
       marker,
       legacy: marker !== "openclaw",

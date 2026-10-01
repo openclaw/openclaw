@@ -1,11 +1,17 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import * as commandSpawner from "../../process/exec-spawn.js";
@@ -14,7 +20,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { killPidIfAlive, waitForPidFile } from "../../test-utils/process-tree.js";
+import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import * as worktreeGit from "./git.js";
 import { provisionIncludedFiles, snapshotProvisionedFiles } from "./provisioned-files.js";
 import {
@@ -65,8 +71,10 @@ describe("ManagedWorktreeService provisioned state", () => {
   let env: NodeJS.ProcessEnv;
   let now: number;
   let service: ManagedWorktreeService;
+  let receipts: FixtureReceiptChannel;
 
   beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
     const tempRoot = await fs.realpath(os.tmpdir());
     templateRoot = await fs.mkdtemp(path.join(tempRoot, "openclaw-worktree-state-template-"));
     gitTemplate = path.join(templateRoot, "git-template");
@@ -75,6 +83,7 @@ describe("ManagedWorktreeService provisioned state", () => {
   });
 
   afterAll(async () => {
+    await receipts.close();
     await fs.rm(templateRoot, { recursive: true, force: true });
   });
 
@@ -434,7 +443,9 @@ describe("ManagedWorktreeService provisioned state", () => {
     });
   });
 
-  it("cancels and joins a parent provisioned-membership child before removal settles", async () => {
+  it("cancels and joins a parent provisioned-membership child before removal settles", async ({
+    signal,
+  }) => {
     await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
     await git(repo, "add", ".gitignore", ".worktreeinclude");
@@ -453,8 +464,13 @@ describe("ManagedWorktreeService provisioned state", () => {
           return await runCommand(
             [
               process.execPath,
-              "-e",
-              'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);',
+              "--input-type=module",
+              "--eval",
+              `import { writeFileSync } from 'node:fs';
+              ${fixtureReceiptClientSource(receipts.endpoint)}
+              writeFileSync(process.argv[1], String(process.pid));
+              sendReceipt(process.argv[1], 'ready');
+              setInterval(() => {}, 1000);`,
               marker,
             ],
             options,
@@ -469,12 +485,28 @@ describe("ManagedWorktreeService provisioned state", () => {
     );
     let pid: number | undefined;
     try {
-      pid = await waitForPidFile(marker);
+      await withinTest(
+        Promise.race([
+          receipts.waitFor(marker, "ready"),
+          pending.then(() => {
+            // The fixture writes its PID before it can send a receipt or exit.
+            const value = existsSync(marker)
+              ? Number.parseInt(readFileSync(marker, "utf8"), 10)
+              : Number.NaN;
+            if (!Number.isInteger(value) || value <= 0) {
+              throw new Error(`Timed out waiting for pid file: ${marker}`);
+            }
+          }),
+        ]),
+        signal,
+      );
+      pid = Number.parseInt(await fs.readFile(marker, "utf8"), 10);
+      expect(Number.isInteger(pid) && pid > 0).toBe(true);
       expect(membershipStarted).toBe(true);
       expect(isPidAlive(pid!)).toBe(true);
       abort.abort(new Error("fixture membership cancelled"));
-      await vi.waitFor(() => expect(isPidAlive(pid!)).toBe(false), { timeout: 5_000 });
-      expect(await pending).toBe(true);
+      // Removal awaits the command runner, which joins its child and process cleanup.
+      expect(await withinTest(pending, signal)).toBe(true);
       expect(isPidAlive(pid!)).toBe(false);
       expect(await fs.readFile(path.join(created.path, "settings.local"), "utf8")).toBe(
         "synthetic provisioned bytes\n",

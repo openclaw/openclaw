@@ -412,6 +412,9 @@ phase() {
 }
 ${runner.slice(boundary)}
 `;
+    // The full runner exceeds Linux's per-argument limit when passed to bash -c.
+    const automaticPhasesPath = path.join(root, "automatic-phases.sh");
+    writeFileSync(automaticPhasesPath, automaticPhases);
     const runAutomaticChecks = (
       record: PluginInstallRecord | null = npmRecord,
       deniedPluginId?: string,
@@ -457,7 +460,7 @@ ${runner.slice(boundary)}
       );
       return spawnSync(
         process.platform === "darwin" ? "/bin/bash" : "bash",
-        ["-c", automaticPhases],
+        [automaticPhasesPath],
         {
           encoding: "utf8",
           env: {

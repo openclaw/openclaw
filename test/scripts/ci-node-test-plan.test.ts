@@ -152,7 +152,7 @@ describe("Control UI release-only inventories", () => {
   it("retains PR-exempt entries while omitting release-only UI matrices", () => {
     const groups = createUiTestShardGroups({ includeReleaseOnlyTests: false });
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
-    expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
+    expect(groups.e2e[0]?.includePatterns).toContain(embed);
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
     expect(
       uiE2eRealGatewayTestFiles.filter((file) => groups.e2e[0]?.includePatterns?.includes(file)),
@@ -169,7 +169,7 @@ describe("Control UI release-only inventories", () => {
     );
   });
 
-  it("retains directly edited matrices without widening from their source owner", () => {
+  it("retains directly edited release matrices alongside PR-exempt entries", () => {
     const options = {
       includeReleaseOnlyTests: false,
       changedPaths: [
@@ -186,7 +186,7 @@ describe("Control UI release-only inventories", () => {
     ).toEqual(
       uiE2eRealGatewayTestFiles.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
     );
-    expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
+    expect(groups.e2e[0]?.includePatterns).toContain(embed);
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
     expectRealGatewayCoverage(groups.e2e, uiE2eRealGatewayTestFiles);
     expectRealGatewayCoverage(
@@ -2021,10 +2021,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
       expect(isPolicyTestOwnedPath(changedPath), changedPath).toBe(false);
     }
-    const unrelatedTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.ts"]);
+    const newModule = "src/plugins/unrelated-new-plugin.ts";
+    const newModuleTargets = resolvePolicyTestTargets([newModule]);
+    const testOnlyTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.test.ts"]);
     for (const guard of guards) {
-      expect(unrelatedTargets).not.toContain(guard);
+      expect(newModuleTargets).toContain(guard);
+      expect(testOnlyTargets).not.toContain(guard);
     }
+    expect(isPolicyTestOwnedPath(newModule)).toBe(false);
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
     const shards = expectDefined(createChangedNodeTestShards([manifest]), "manifest test plan");
     for (const guard of guards) {
@@ -4055,6 +4059,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         String.raw`src\plugins\tools.optional.test.ts`,
         "src/plugins/tools.optional.test.ts",
         PLUGIN_PRERELEASE_NPM_SPEC_TEST,
+        "src/plugins/runtime.test.ts",
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
         "src/plugins/loader.test.ts",
         "src/plugins/install.npm-spec.e2e.test.ts",
@@ -4062,9 +4067,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     };
     const shards = createNodeTestShards(options);
     expect(shards.find((shard) => shard.shardName === "agentic-plugins")?.includePatterns).toEqual([
-      PLUGIN_PRERELEASE_NPM_SPEC_TEST,
+      "src/plugins/runtime.test.ts",
       "src/plugins/tools.optional.test.ts",
     ]);
+    expect(
+      shards.flatMap(
+        (shard) =>
+          shard.includePatterns
+            ?.filter((file) => file === PLUGIN_PRERELEASE_NPM_SPEC_TEST)
+            .map(() => shard.configs) ?? [],
+      ),
+    ).toEqual([["test/vitest/vitest.infra.config.ts"]]);
     expect(shards.filter((shard) => shard.shardName !== "agentic-plugins")).toEqual(
       createNodeTestShards({ includeReleaseOnlyPluginShards: false }),
     );

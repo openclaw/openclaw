@@ -25,6 +25,7 @@ private actor GatewayRequestProbe {
 
 private actor GatewayRequestStartGate {
     private var entered = false
+    private var released = false
     private var enteredWaiter: CheckedContinuation<Void, Never>?
     private var releaseWaiter: CheckedContinuation<Void, Never>?
 
@@ -32,6 +33,8 @@ private actor GatewayRequestStartGate {
         self.entered = true
         self.enteredWaiter?.resume()
         self.enteredWaiter = nil
+        // Reconnects after release pass through instead of replacing a parked waiter.
+        guard !self.released else { return }
         await withCheckedContinuation { self.releaseWaiter = $0 }
     }
 
@@ -43,6 +46,7 @@ private actor GatewayRequestStartGate {
     }
 
     func release() {
+        self.released = true
         self.releaseWaiter?.resume()
         self.releaseWaiter = nil
     }
@@ -432,6 +436,7 @@ struct GatewayChannelRequestTests {
 
         await connectGate.release()
         try await connecting.value
+        await channel.shutdown()
     }
 
     @Test func `cancelling the initiating connect leaves the shared attempt alive`() async throws {
@@ -475,5 +480,6 @@ struct GatewayChannelRequestTests {
         try await peer.value
         #expect(await channel._test_connectWaiterCount() == 0)
         #expect(socket.snapshotSendCount() == 1)
+        await channel.shutdown()
     }
 }

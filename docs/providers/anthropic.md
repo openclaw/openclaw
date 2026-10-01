@@ -470,7 +470,8 @@ Code sessions on the Gateway and on connected node hosts:
 - Claude CLI sessions come from valid project-index records. For unindexed
   transcripts, a bounded metadata fallback recognizes concurrent non-sidechain
   interactive (`cli`) and headless Agent SDK CLI (`sdk-cli`) sessions under
-  `~/.claude/projects/`.
+  `~/.claude/projects/`. Gateway-side discovery also recognizes bidirectional
+  stream-json (`sdk-ts`) sessions; the native macOS node reader does not.
 - Claude Desktop sessions use the Desktop title, activity time, and
   archive state when its metadata points to the same Claude Code session ID.
 - A CLI-only session has no archive flag, so it remains visible while its

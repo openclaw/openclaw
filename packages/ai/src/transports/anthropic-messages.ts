@@ -1,6 +1,7 @@
 import type {
   ContentBlockParam,
   MessageCreateParamsStreaming,
+  MessageParam,
   Tool as AnthropicTool,
   ImageBlockParam,
   TextBlockParam,
@@ -8,6 +9,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/messages.js";
 import type { Context, Model, Tool } from "@openclaw/llm-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAiTransportHost } from "../host.js";
 import {
   createAnthropicInlineImageBudget,
   normalizeAnthropicInlineContent,
@@ -16,7 +18,9 @@ import {
 } from "../internal/anthropic-inline-images.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
+import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
+  applyClaudeRequestContract,
   bindsClaudeThinkingPrefix,
   requiresClaudeAdaptiveThinking,
   requiresClaudeBetweenToolsThinking,
@@ -25,11 +29,14 @@ import {
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
+import { ANTHROPIC_SERVER_SIDE_FALLBACKS } from "../providers/anthropic-server-fallback.js";
 import {
+  applyAnthropicThinkingBindingControls,
   ANTHROPIC_OMITTED_REASONING_TEXT,
   findActiveAnthropicToolTurnAssistantIndex,
 } from "../providers/anthropic-thinking-replay.js";
 import {
+  normalizeAnthropicToolCallId,
   toClaudeCodeToolName,
   normalizeAnthropicToolChoice,
   reconcileAnthropicToolChoice,
@@ -41,7 +48,20 @@ import {
   extractToolResultBlockText,
   extractToolResultText,
 } from "../providers/tool-result-text.js";
-import type { AnthropicCompactionBlock } from "./anthropic-compaction-replay.js";
+import {
+  buildAnthropicReplayPlan,
+  type AnthropicCompactionBlock,
+} from "./anthropic-compaction-replay.js";
+import {
+  applyAnthropicContextManagementToRequest,
+  applyAnthropicRequestCacheControl,
+  buildAnthropicSystemBlocks,
+  isDirectAnthropicModel,
+  resolveAnthropicCacheOptions,
+  resolveAnthropicRequestBetaHeader,
+} from "./anthropic-payload-policy.js";
+import { resolveAnthropicMessagesMaxTokens } from "./anthropic-transport-options.js";
+import { resolveProviderEndpoint } from "./host-policy.js";
 import {
   coerceTransportToolCallArguments,
   sanitizeNonEmptyTransportPayloadText,
@@ -130,7 +150,7 @@ async function convertContentBlocks(
   return blocks;
 }
 
-export async function convertAnthropicMessages(
+async function convertAnthropicMessages(
   transformedMessages: Context["messages"],
   model: Model<"anthropic-messages">,
   isOAuthToken: boolean,
@@ -325,7 +345,7 @@ export async function convertAnthropicMessages(
 }
 
 /** Shared generation contract, after each entry point resolves its defaults and tool policy. */
-export function buildAnthropicGenerationParams({
+function buildAnthropicGenerationParams({
   model,
   options,
   tools,
@@ -420,7 +440,7 @@ export function buildAnthropicGenerationParams({
   return params;
 }
 
-export function convertAnthropicTools(
+function convertAnthropicTools(
   tools: Tool[],
   isOAuthTokenLocal: boolean,
   supportsEagerToolInputStreaming = false,
@@ -445,4 +465,128 @@ export function convertAnthropicTools(
       return projected;
     }),
   };
+}
+
+/** Assemble both public Messages routes without changing their replay/default profiles. */
+export async function buildAnthropicRequest(
+  model: Model<"anthropic-messages">,
+  context: Context,
+  options: (AnthropicOptions & { authProfileId?: string }) | undefined,
+  profile: "provider" | "transport",
+  isOAuthToken: boolean,
+  serverSideFallback: boolean,
+  claudeCodeVersion?: string,
+) {
+  const managed = profile === "transport";
+  const maxTokens = managed
+    ? resolveAnthropicMessagesMaxTokens({
+        modelContextWindow: model.contextWindow,
+        modelMaxTokens: model.maxTokens,
+        requestedMaxTokens: options?.maxTokens,
+      })
+    : (options?.maxTokens ?? model.maxTokens);
+  if (managed && maxTokens === undefined) {
+    throw new Error(
+      `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
+    );
+  }
+  const { cacheControl, supportsCacheControlOnTools } = resolveAnthropicCacheOptions(
+    model,
+    options?.cacheRetention,
+  );
+  const system = buildAnthropicSystemBlocks(
+    context.systemPrompt,
+    isOAuthToken,
+    cacheControl,
+    claudeCodeVersion,
+  );
+  const convertedTools = context.tools
+    ? convertAnthropicTools(
+        context.tools,
+        isOAuthToken,
+        !managed &&
+          (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks"),
+      )
+    : undefined;
+  const toolProjection = convertedTools?.projection;
+  const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
+    enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
+    authProfileId: options?.authProfileId,
+    sessionId: options?.sessionId,
+  });
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
+  const transformed = managed
+    ? getAiTransportHost().transformTransportMessages(
+        replayPlan.messages,
+        model,
+        normalizeAnthropicToolCallId,
+        undefined,
+      )
+    : transformProviderMessages(replayPlan.messages, model, normalizeAnthropicToolCallId);
+  const messages = await convertAnthropicMessages(transformed, model, isOAuthToken, {
+    profile,
+    allowReasoningContentReplay:
+      managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native",
+    allowEmptySignature: model.compat?.allowEmptySignature,
+    compaction: replayPlan.compaction,
+    replayThinkingEnabled:
+      requiresClaudeAdaptiveThinking(model) || options?.thinkingEnabled === true,
+    cacheBreakpointOptOutMessageIndexes,
+  });
+  if (managed && messages.length === 0) {
+    messages.push({ role: "user", content: "." });
+  }
+  const params: MessageCreateParamsStreaming = {
+    model:
+      managed && isDirectAnthropicModel(model) ? model.id.replace(/^anthropic\//i, "") : model.id,
+    // SAFETY: the beta endpoint accepts compaction blocks omitted by the stable SDK union.
+    messages: messages as MessageParam[],
+    max_tokens: maxTokens ?? model.maxTokens,
+    stream: true,
+  };
+  if (system) {
+    params.system = system;
+  }
+  if (serverSideFallback) {
+    Object.assign(params, { fallbacks: ANTHROPIC_SERVER_SIDE_FALLBACKS });
+  }
+  Object.assign(
+    params,
+    buildAnthropicGenerationParams({
+      model,
+      options,
+      tools: convertedTools?.tools,
+      toolProjection,
+      profile,
+    }),
+  );
+  applyAnthropicRequestCacheControl(
+    params,
+    cacheControl,
+    supportsCacheControlOnTools,
+    cacheBreakpointOptOutMessageIndexes,
+  );
+  return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
+}
+
+/** Apply caller payload edits before restoring required request contracts and beta headers. */
+export async function prepareAnthropicRequest(
+  initialParams: MessageCreateParamsStreaming,
+  model: Model<"anthropic-messages">,
+  options: AnthropicOptions | undefined,
+  directApiKeyBetaHeader: string | undefined,
+) {
+  let params = initialParams;
+  applyAnthropicContextManagementToRequest(params, model, options, directApiKeyBetaHeader);
+  const nextParams = await options?.onPayload?.(params, model);
+  if (nextParams !== undefined) {
+    // SAFETY: the public payload hook owns the replacement request shape.
+    params = nextParams as MessageCreateParamsStreaming;
+  }
+  applyClaudeRequestContract(params, model);
+  const betaHeader = resolveAnthropicRequestBetaHeader(params, directApiKeyBetaHeader);
+  const headers =
+    applyAnthropicThinkingBindingControls(params, betaHeader) ??
+    (betaHeader ? { "anthropic-beta": betaHeader } : undefined);
+  return { params, headers };
 }

@@ -40,6 +40,7 @@ export function retainedYieldIdentity(state: RequesterSettleWakeBatchState) {
     ...(state.pauseNotice ? { pauseNotice: state.pauseNotice } : {}),
     ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true as const } : {}),
     ...(state.afterRequesterYield === true ? { afterRequesterYield: true as const } : {}),
+    ...(state.yieldedFinalDeliverable === true ? { yieldedFinalDeliverable: true as const } : {}),
     ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
   };
 }
@@ -65,6 +66,7 @@ export function readSharedBatchState(
     ...(states.some((state) => state.afterRequesterYield === true)
       ? { afterRequesterYield: true }
       : {}),
+    ...(source?.yieldedFinalDeliverable === true ? { yieldedFinalDeliverable: true } : {}),
     ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
     deferralCount: Math.max(0, ...states.map((state) => state.deferralCount ?? 0)),
@@ -93,4 +95,34 @@ export function captureRequesterRunOwner(requesterRun: SubagentRunRecord | null 
     }
     return true;
   };
+}
+
+/**
+ * A yield hands continuation back to the requester, so its own final may reach the
+ * conversation under its normal reply rules; private findings stay wake input. The
+ * policy is fixed when the yield writes the batch: a batch without the marker came
+ * from an earlier build and stays private, so an upgrade cannot republish its input.
+ */
+export function resolvePrivateSettlePolicy(
+  completionRows: readonly SubagentRunRecord[],
+  requesterYielded: boolean,
+  state: RequesterSettleWakeBatchState,
+  requesterSessionId: string,
+) {
+  // One private result makes the aggregate private; public siblings keep their own route.
+  const privateRows = completionRows.filter((entry) => entry.completionTarget === "parent");
+  const hasPrivateRows = privateRows.length > 0;
+  const yieldedFinalDeliverable =
+    hasPrivateRows && requesterYielded && state.yieldedFinalDeliverable === true;
+  const parentOnly = hasPrivateRows && !yieldedFinalDeliverable;
+  // Private findings stay bound to the requester incarnation that produced them.
+  const privateBinding = {
+    ...(parentOnly ? { completionTarget: "parent" as const } : {}),
+    ...(hasPrivateRows ? { completionRequesterSessionId: requesterSessionId } : {}),
+  };
+  const admissionMarker = yieldedFinalDeliverable ? { yieldedFinalDeliverable: true as const } : {};
+  // A yield owes the conversation a visible final unless private findings let the
+  // requester choose silence.
+  const requireVisibleReply = requesterYielded && !hasPrivateRows;
+  return { privateRows, requireVisibleReply, parentOnly, privateBinding, admissionMarker };
 }

@@ -601,8 +601,7 @@ export function buildHostedOutboundMediaResponseHeaders(
   metadata: Pick<HostedOutboundMediaMetadata, "byteLength" | "contentType" | "fileName">,
   options: { fallbackFileName?: string } = {},
 ): Record<string, string> {
-  const contentType =
-    normalizeMimeType(metadata.contentType?.split(";", 1)[0]?.trim()) ?? "application/octet-stream";
+  const contentType = normalizeMimeType(metadata.contentType) ?? "application/octet-stream";
   const fileName = sanitizeUntrustedFileName(
     metadata.fileName ?? options.fallbackFileName ?? "attachment.bin",
     "attachment.bin",

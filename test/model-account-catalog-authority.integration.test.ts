@@ -371,13 +371,16 @@ describe("Gateway automatic account dispatch authority", () => {
               expect(readUserModelAuthProfile(selected)).toBeDefined();
               release.resolve();
             }
-            const response = await pending;
             if (scenario === "snapshot") {
+              // Direct handlers reject here; the transport owns the error response.
+              await expect(pending).rejects.toThrow(
+                "Profile authority requires live state, not a discovery snapshot",
+              );
               expect(transport.resolveAuth).not.toHaveBeenCalled();
-              expect(response.mock.calls[0]?.[0]).toBe(false);
               expect(requests).toHaveLength(0);
               return;
             }
+            const response = await pending;
             expect(transport.resolveAuth).toHaveBeenCalledWith(
               expect.objectContaining({ profileId: selected, lockedProfile: true }),
             );

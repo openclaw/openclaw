@@ -83,7 +83,7 @@ export function createSessionRowRelationReads(owner: {
       );
       return (
         source &&
-        (!residentOnly && owner.dirty.has(records.identity(source))
+        (!residentOnly && !source.retainedDatabaseFacts && owner.dirty.has(records.identity(source))
           ? owner.readEntry(source)
           : source.storedEntry)
       );
@@ -91,7 +91,7 @@ export function createSessionRowRelationReads(owner: {
     readChildLinks(this: void, row: records.Row, residentOnly = false) {
       const links = [...records.dependents(row, owner.byParent)].flatMap((child) => {
         let value = owner.rows.get(child);
-        if (value && !residentOnly && owner.dirty.has(child)) {
+        if (value && !residentOnly && !value.retainedDatabaseFacts && owner.dirty.has(child)) {
           value = owner.acquireEntry(value, owner.readEntry(value));
         }
         return value?.entry && [...value.parents].some((ref) => owner.referenced(ref) === row)
@@ -168,6 +168,7 @@ export function createSessionRowAncestorReads(owner: {
   referenced: (reference: string) => records.Row | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
   prepareExactRows: (queries: readonly records.Lookup[]) => Promise<void> | undefined;
+  prepareSelection: () => Promise<void> | undefined;
   retainExactPreparation: () => () => void;
   assertExactRowsPrepared: (queries: readonly records.Lookup[]) => void;
   retainArchiveRows: () => { update: (ids: readonly string[]) => void; release: () => void };
@@ -276,6 +277,7 @@ export function createSessionRowAncestorReads(owner: {
               owner.assertExactRowsPrepared(targets);
               return consume(read);
             },
+            options?.selection ? owner.prepareSelection : undefined,
           );
           if (prepared.kind === "pending") {
             return prepared;

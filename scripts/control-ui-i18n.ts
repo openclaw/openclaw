@@ -15,7 +15,7 @@ import {
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
 } from "./lib/control-ui-i18n-catalog-values.ts";
-import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
+import { CONTROL_UI_LOCALE_ENTRIES, controlUiLanguageLabel } from "./lib/control-ui-i18n-config.ts";
 import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
@@ -165,57 +165,6 @@ function parseArgs(argv: string[]) {
     refreshKeys,
     write,
   };
-}
-
-function prettyLanguageLabel(locale: string): string {
-  switch (locale) {
-    case "en":
-      return "English";
-    case "zh-CN":
-      return "Simplified Chinese";
-    case "zh-TW":
-      return "Traditional Chinese";
-    case "pt-BR":
-      return "Brazilian Portuguese";
-    case "ja-JP":
-      return "Japanese";
-    case "ko":
-      return "Korean";
-    case "fr":
-      return "French";
-    case "hi":
-      return "Hindi";
-    case "ar":
-      return "Arabic";
-    case "it":
-      return "Italian";
-    case "tr":
-      return "Turkish";
-    case "uk":
-      return "Ukrainian";
-    case "id":
-      return "Indonesian";
-    case "pl":
-      return "Polish";
-    case "th":
-      return "Thai";
-    case "vi":
-      return "Vietnamese";
-    case "nl":
-      return "Dutch";
-    case "fa":
-      return "Persian";
-    case "ru":
-      return "Russian";
-    case "sv":
-      return "Swedish";
-    case "de":
-      return "German";
-    case "es":
-      return "Spanish";
-    default:
-      return locale;
-  }
 }
 
 function resolveConfiguredProvider(): string {
@@ -385,7 +334,7 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
   const glossaryBlock = buildGlossaryPrompt(glossary);
   const lines = [
     "You are a translation function, not a chat assistant.",
-    `Translate UI strings from ${prettyLanguageLabel(SOURCE_LOCALE)} to ${prettyLanguageLabel(targetLocale)}.`,
+    `Translate UI strings from ${controlUiLanguageLabel(SOURCE_LOCALE)} to ${controlUiLanguageLabel(targetLocale)}.`,
     "",
     "Rules:",
     "- Output ONLY valid JSON.",

@@ -8,6 +8,7 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME } from "./legacy-config-migrations.run
 import { LEGACY_CONFIG_MIGRATIONS_WEB_SEARCH } from "./legacy-config-migrations.web-search.js";
 import { hasLegacyContextBudgetConfig } from "./legacy-context-budget.js";
 import { removeLegacyCopilotDiscovery } from "./legacy-copilot-discovery.js";
+import { LEGACY_CONFIG_MIGRATION_TOOLS_BY_SENDER } from "./legacy-tools-by-sender.js";
 
 const LEGACY_CONFIG_MIGRATION_SPECS = [
   ...LEGACY_CONFIG_MIGRATIONS_CHANNELS,
@@ -16,6 +17,7 @@ const LEGACY_CONFIG_MIGRATION_SPECS = [
   ...LEGACY_CONFIG_MIGRATIONS_QUEUE,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME,
   ...LEGACY_CONFIG_MIGRATIONS_WEB_SEARCH,
+  LEGACY_CONFIG_MIGRATION_TOOLS_BY_SENDER,
 ];
 
 /** Ordered legacy migrations without their preview-only rule metadata. */

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsRewindResult } from "../../api/types.ts";
@@ -426,14 +427,12 @@ it("does not restore a hidden live assistant from an older snapshot", async () =
 
 it("clears live projection ownership after history access is denied", async () => {
   const state = createState({ messages: [] });
+  const scopeError = missingScopeErrorShape({
+    missingScope: "operator.read",
+    requiredScopes: ["operator.read"],
+  });
   vi.spyOn(state.client!, "request")
-    .mockRejectedValueOnce(
-      new GatewayRequestError({
-        code: "PERMISSION_DENIED",
-        message: "not allowed",
-        details: { code: "AUTH_UNAUTHORIZED" },
-      }),
-    )
+    .mockRejectedValueOnce(new GatewayRequestError(scopeError))
     .mockResolvedValueOnce({ messages: [] });
   publishLive(state, message("user", "private prompt", { id: "private", seq: 1 }));
   await loadChatHistory(state);

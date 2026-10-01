@@ -30,6 +30,9 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   return {
     ...actual,
     publishFileExclusive: async (...args: Parameters<typeof actual.publishFileExclusive>) => {
+      if (path.basename(path.dirname(args[0].targetPath)).startsWith(".sqlite-publish-")) {
+        return actual.publishFileExclusive(...args);
+      }
       const published = durabilityTestState.publish
         ? await durabilityTestState.publish(args[0], actual.publishFileExclusive)
         : await actual.publishFileExclusive(...args);
@@ -705,7 +708,6 @@ describe("createVerifiedSqliteSnapshot", () => {
           identityObservation === "staging-transition" &&
           replaced &&
           !stagingReplaced &&
-          typeof identity.ino === "number" &&
           path.basename(filePath) === "database.sqlite" &&
           path.basename(path.dirname(filePath)).startsWith(".sqlite-publish-")
         ) {

@@ -335,6 +335,15 @@ type SessionEntryListWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+type SessionStoreSummaryWorkerInput = {
+  kind: "session-store-summary";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  agentIds: readonly string[];
+  recentLimit: number;
+  continuation?: CanonicalSessionReaderContinuation;
+};
+
 export type SessionExactEntriesWorkerInput = {
   kind: "session-exact-entries";
   database: { agentId: string; path: string };
@@ -484,6 +493,7 @@ export type SessionHistoryWorkerInput =
   | SessionEntryReadWorkerInput
   | SessionEntryCurrentWorkerInput
   | SessionDiagnosticTextWorkerInput
+  | SessionStoreSummaryWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
   | SessionStoreTargetWorkerInput
@@ -544,6 +554,12 @@ export type SessionTranscriptWorkerValues = {
     receipts: ReturnType<typeof listSessionPendingInputReceipts>;
   };
   "session-entry-list": { kind: "session-entry-list"; entries: SessionEntrySummary[] };
+  "session-store-summary": {
+    kind: "session-store-summary";
+    summary: ReturnType<
+      typeof import("./session-accessor.sqlite-summary.js").readSessionStoreSummaryReadOnly
+    >;
+  };
   "session-entry-read": SessionEntryReadWorkerResult;
   "session-entry-current": SessionEntryCurrentWorkerResult;
   "session-diagnostic-text": {
@@ -656,6 +672,10 @@ export type SessionHistoryWorkerDatabase = {
     scope: SessionEntryListWorkerInput["scope"],
     continuation?: CanonicalSessionReaderContinuation,
   ) => Promise<SessionEntrySummary[]>;
+  readStoreSummary: SessionHistoryReader<
+    SessionStoreSummaryWorkerInput,
+    SessionTranscriptWorkerValues["session-store-summary"]["summary"]
+  >;
   readEntryResult: SessionHistoryReader<
     SessionEntryReadWorkerInput,
     import("@openclaw/normalization-core/result").Result<

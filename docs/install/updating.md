@@ -103,6 +103,12 @@ without the capability marker fall back to installed checks, as do
 Admission selection is CLI-only: `--admission auto` is the default, and there is
 no environment-variable override.
 
+Windows candidates accept lease identities from the `2026.9.6` updater even
+when NTFS file IDs exceed JavaScript's exact numeric range. After validating
+the handoff, the candidate retains exact file and parent-directory identities;
+later replacement still stops the update. Lease read failures report their
+underlying cause instead of a parent-binding mismatch.
+
 Managed-service inspection is best effort. If the service manager is unavailable,
 including Linux hosts without systemd, the update continues and records a warning.
 It leaves unverified service definitions unchanged and skips their automatic
@@ -175,6 +181,12 @@ Node and Bun readers run only one child per read. An attempted nested reader
 stops before spawning and records `candidate-config-read-recursion`.
 Both runtimes use the same result channel for synchronous and asynchronous reads;
 config diagnostics stay separate from the result.
+
+Bun-hosted updates from 2026.9.7 can finish candidate Doctor and restart the
+Gateway after package replacement. Idle candidate workers release their IPC
+references after native work closes, so a completed Doctor does not leave the
+installed updater waiting indefinitely for its exit. This fix runs in the
+updated package; the published updater and its handoff markers are unchanged.
 
 The running Gateway retains its shutdown code before an in-place update can
 replace the package's bundled files. Transcript shutdown drains captures and
@@ -385,8 +397,8 @@ read transaction, so a busy Gateway can keep writing while the copy includes
 committed WAL data. Each acquisition makes one copy instead of retrying until
 the database becomes quiet. On rollback-journal volumes, SQLite can delay writer
 commits until the consistent read finishes. Rehearsal records copied pages, bytes, and elapsed
-time in the update ledger, then checks, compacts, and publishes the private
-copy for validation. Source databases and recovery backups retain their existing
+time in the update ledger, then checks and publishes the private copy with row IDs
+preserved for validation. Source databases and recovery backups retain their existing
 protection; the faster preparation takes effect when the newer updater runs.
 
 Package updates also check npm availability for enabled configured plugins before

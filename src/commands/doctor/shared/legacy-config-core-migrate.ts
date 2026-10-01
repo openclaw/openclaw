@@ -123,6 +123,7 @@ export function normalizeCompatibilityConfigValues(
   warnings?: string[];
 } {
   const changes: string[] = [];
+  const warnings: string[] = [];
   const reservedMcpServerNames = migrateReservedMcpServerNames(cfg, options.sourceRaw);
   changes.push(...reservedMcpServerNames.changes);
   let next = normalizeBaseCompatibilityConfigValues(
@@ -132,9 +133,7 @@ export function normalizeCompatibilityConfigValues(
       const setupMigration = runPluginSetupConfigMigrations({
         config,
       });
-      if (setupMigration.changes.length === 0) {
-        return config;
-      }
+      warnings.push(...(setupMigration.warnings ?? []));
       changes.push(...setupMigration.changes);
       return setupMigration.config;
     },
@@ -145,6 +144,7 @@ export function normalizeCompatibilityConfigValues(
     next = tuningCandidate;
   }
   const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
+  warnings.push(...(channelMigrations.warnings ?? []));
   if (channelMigrations.changes.length > 0) {
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);
@@ -163,6 +163,6 @@ export function normalizeCompatibilityConfigValues(
   return {
     config: next,
     changes,
-    ...(channelMigrations.warnings?.length ? { warnings: channelMigrations.warnings } : {}),
+    ...(warnings.length ? { warnings } : {}),
   };
 }

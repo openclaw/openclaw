@@ -2158,9 +2158,9 @@ struct GatewayProcessManagerTests {
                     task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
                 },
                 receiveHook: { _, receiveIndex in
-                    if receiveIndex == 0 {
-                        try await Task.sleep(nanoseconds: 100_000_000)
-                    }
+                    // Challenge late, then park the unanswered connect like a real socket; an
+                    // immediate reply on every receive spins the handshake until cancellation.
+                    try await Task.sleep(nanoseconds: receiveIndex == 0 ? 100_000_000 : 30 * 1_000_000_000)
                     return .data(GatewayWebSocketTestSupport.connectChallengeData())
                 })
         }
@@ -2195,9 +2195,9 @@ struct GatewayProcessManagerTests {
                     task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
                 },
                 receiveHook: { _, receiveIndex in
-                    if receiveIndex == 0 {
-                        try await Task.sleep(nanoseconds: 100_000_000)
-                    }
+                    // Challenge late, then park the unanswered connect like a real socket; an
+                    // immediate reply on every receive spins the handshake until cancellation.
+                    try await Task.sleep(nanoseconds: receiveIndex == 0 ? 100_000_000 : 30 * 1_000_000_000)
                     return .data(GatewayWebSocketTestSupport.connectChallengeData())
                 })
         }

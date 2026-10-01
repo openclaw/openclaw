@@ -252,6 +252,24 @@ describe("validateToolArguments — root references", () => {
     }
   });
 
+  it.each([
+    ["Partial<Filter>", "#/definitions/Partial<Filter>"],
+    ["Partial<Filter>", "#/definitions/Partial%3CFilter%3E"],
+    ["Partial<Filter>", "#%2Fdefinitions%2FPartial%3CFilter%3E"],
+    ["Filter/value~", "#%2Fdefinitions%2FFilter%7E1value%7E0"],
+    ["Filter%2Fvalue", "#/definitions/Filter%252Fvalue"],
+  ])("coerces through the definition %s referenced by %s", (name, ref) => {
+    const parameters = {
+      type: "object",
+      properties: { value: { $ref: ref } },
+      definitions: {
+        [name]: { type: "object", properties: { limit: { type: "number" } } },
+      },
+    };
+    expect(validate(parameters, { limit: "5" })).toEqual({ value: { limit: 5 } });
+    expect(() => validate(parameters, { limit: "invalid" })).toThrow(/Validation failed/);
+  });
+
   it("keeps union branch validators bound to each tool's root", () => {
     const branch = { anyOf: [{ $ref: "#/$defs/value" }, { type: "null" }] };
     for (const type of ["array", "object", "array"]) {

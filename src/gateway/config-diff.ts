@@ -74,6 +74,12 @@ export function diffGatewayReloadPaths(
   reloadPrefixes: Iterable<string>,
 ): string[] {
   const refinementPrefixes = new Set(reloadPrefixes);
+  // Preserve individual plugin owners when the entries dictionary is added or removed.
+  for (const config of [prevConfig, nextConfig]) {
+    for (const pluginId of Object.keys(config.plugins?.entries ?? {})) {
+      refinementPrefixes.add(`plugins.entries.${pluginId}`);
+    }
+  }
   // Decision selectors refine to authored leaves; other wildcard owners retain parent lifecycle rules.
   if (refinementPrefixes.delete("agents.entries.*.decisionModel")) {
     for (const config of [prevConfig, nextConfig]) {

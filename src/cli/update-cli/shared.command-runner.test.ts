@@ -268,7 +268,7 @@ describe("update CLI shared helpers", () => {
           "complete\n",
         );
         await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
-        await expect(fs.readdir(checkoutDir)).resolves.toEqual([".git", "checkout.marker"]);
+        expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
         expect(runCommandWithTimeout).toHaveBeenCalledWith(
           [
             "git",

@@ -7,7 +7,8 @@ import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createFixture } from "./control-ui-session-pr-access.test-support.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
@@ -35,7 +36,6 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
           const loaded = loadGatewayPlugins({
             cfg: fixture.cfg,
             autoEnabledReasons: {},
-            log: logger,
             baseMethods: [],
             loadIntent: "startup",
             pluginIds: ["visitor-access"],

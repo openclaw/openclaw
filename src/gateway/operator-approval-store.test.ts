@@ -32,7 +32,7 @@ import {
   pruneTerminalOperatorApprovals,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
-import { executeOperatorApprovalCommand } from "./operator-approval-store.worker.js";
+import { operatorApprovalOperations } from "./operator-approval-store.operations.js";
 
 type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
 type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
@@ -422,9 +422,12 @@ describe("operator approval store", () => {
       writer.exec("BEGIN IMMEDIATE");
       expect(Date.now()).toBeLessThan(expiresAtMs);
       const result = await withSqliteWriteAdmissionService(database.db, releaseWriter, async () =>
-        executeOperatorApprovalCommand(
-          { type: "operatorApprovals.get", input: { id: "lock-delayed-clock" } },
-          databaseOptions,
+        operatorApprovalOperations["operatorApprovals.get"](
+          { id: "lock-delayed-clock" },
+          {
+            open: () => database,
+            stateOptions: () => ({ path: database.path, env: databaseOptions.env ?? process.env }),
+          },
         ),
       );
 

@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { toQaError } from "../errors.js";
-import { trimToValue } from "../mantis-options.runtime.js";
 import {
   type CommandRunner,
   type CrabboxInspect,

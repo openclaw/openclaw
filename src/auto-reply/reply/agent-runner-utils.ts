@@ -236,14 +236,12 @@ export function resolveRunFastModeForFallbackCandidate(params: {
       : state.fastAutoOnSeconds,
   };
 }
-function buildEmbeddedContextFromTemplate(params: {
+function applyReplyRouteToTemplate(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
   sessionCtx: TemplateContext;
-  hasRepliedRef: { value: boolean } | undefined;
 }) {
-  const config = params.run.config;
-  const sessionCtx = {
+  return {
     ...params.sessionCtx,
     OriginatingChannel:
       params.replyRoute?.originatingChannel ?? params.sessionCtx.OriginatingChannel,
@@ -260,6 +258,32 @@ function buildEmbeddedContextFromTemplate(params: {
     ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
     ReplyToMode: params.replyRoute?.originatingReplyToMode ?? params.sessionCtx.ReplyToMode,
   };
+}
+
+/**
+ * Builds message-tool threading context for the queued reply route. Embedded
+ * and CLI runtimes share it so the channel adapter decides the default thread.
+ */
+export function buildReplyRouteThreadingToolContext(params: {
+  run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
+  sessionCtx: TemplateContext;
+  hasRepliedRef: { value: boolean } | undefined;
+}): InternalChannelThreadingToolContext {
+  return buildThreadingToolContext({
+    sessionCtx: applyReplyRouteToTemplate(params),
+    config: params.run.config,
+    hasRepliedRef: params.hasRepliedRef,
+  });
+}
+
+function buildEmbeddedContextFromTemplate(params: {
+  run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
+  sessionCtx: TemplateContext;
+  hasRepliedRef: { value: boolean } | undefined;
+}) {
+  const sessionCtx = applyReplyRouteToTemplate(params);
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
@@ -281,7 +305,7 @@ function buildEmbeddedContextFromTemplate(params: {
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx,
-      config,
+      config: params.run.config,
       hasRepliedRef: params.hasRepliedRef,
     }),
     currentInboundAudio: hasInboundAudio(sessionCtx),
@@ -386,6 +410,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
   hasRepliedRef: { value: boolean } | undefined;
   provider: string;
   model: string;
+  agentRuntime?: string;
   runId: string;
   promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
