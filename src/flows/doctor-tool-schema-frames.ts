@@ -98,29 +98,45 @@ export async function prepareDoctorToolSchemaFrames(
         : resolveDefaultModelForAgent({ cfg, agentId, allowPluginNormalization: true });
       let model: ProviderRuntimeModel;
       if (standalone) {
-        const { resolveModelAsync } = await import("../agents/embedded-agent-runner/model.js");
-        const resolution = await resolveModelAsync(
-          modelRef.provider,
-          modelRef.model,
-          agentDir,
-          cfg,
-          {
-            modelIdSource: "selected",
-            agentId,
-            workspaceDir,
-            skipAgentDiscovery: true,
-            allowBundledStaticCatalogFallback: true,
-            deferProviderDynamicModelPreparation: true,
-          },
-        );
-        if (!resolution.model) {
-          findings.push(
-            modelContextFinding(agentId, resolution.error, Boolean(resolution.deferred)),
-          );
-          return;
-        }
-        model = resolution.model;
-      } else {
+            const { resolveModelAsync } = await import("../agents/embedded-agent-runner/model.js");
+            const resolution = await resolveModelAsync(
+              modelRef.provider,
+              modelRef.model,
+              agentDir,
+              cfg,
+              {
+                modelIdSource: "selected",
+                agentId,
+                // Omit the per-agent workspace to share a single provider registry cache across the pass.
+                // With skipAgentDiscovery: true, provider resolution only needs the shared load context.
+                workspaceDir: undefined,
+                skipAgentDiscovery: true,
+                allowBundledStaticCatalogFallback: true,
+                deferProviderDynamicModelPreparation: true,
+              },
+            );
+            
+            if (!resolution.model) {
+              findings.push(
+                modelContextFinding(agentId, resolution.error, Boolean(resolution.deferred)),
+              );
+              return;
+            }
+
+            // Strip any retained plugin/loader closures from the resolved model instance
+            // before storing it in the long-lived frames array.
+            model = buildDoctorRuntimeModel({
+              entry: resolution.model as ModelCatalogEntry,
+              provider: modelRef.provider,
+              modelId: modelRef.model,
+            });
+
+            // If the resolution exposes a disposal method for standalone registries, defer it
+            const dispose = (resolution as any).dispose ?? (resolution as any).registry?.dispose;
+            if (dispose && options.deferInspectionDisposal) {
+              options.deferInspectionDisposal(dispose);
+            }
+          } else {
         // Lint and shipped updater passes retain their saved, read-only catalog contract.
         const catalog = await readPreparedModelCatalog({
           config: cfg,
