@@ -169,6 +169,9 @@ if (process.argv[2] === "sentinel") {
       throw error;
     }
   };
+  // Loaded macOS hosts can drop FSEvents directory notifications entirely.
+  const watch = fs.watch;
+  fs.watch = (target, ...args) => (target === root ? { close() {} } : watch(target, ...args));
 }
 syncFixtureBuiltinExports();
 `

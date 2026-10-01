@@ -515,20 +515,12 @@ export function createSessionsListTool(opts?: {
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
             sessionId,
-            sessionKey: resolveInternalSessionKey({
-              key,
-              alias,
-              mainKey,
-            }),
+            sessionKey: resolveInternalSessionKey({ key, alias }),
             agentId: resolvedAgentId,
           });
         }
         if (messageLimit > 0) {
-          const resolvedKey = resolveInternalSessionKey({
-            key,
-            alias,
-            mainKey,
-          });
+          const resolvedKey = resolveInternalSessionKey({ key, alias });
           historyTargets.push({ row, resolvedKey });
         }
         rows.push(row);
