@@ -1489,15 +1489,7 @@ source "$2"`,
     }
     if (options.cancelDuringBackoff) {
       try {
-        await until(
-          () =>
-            Boolean(stopping) ||
-            shell.exitCode !== null ||
-            shell.signalCode !== null ||
-            fs.existsSync(path.join(root, "backoff-ready.json")),
-          "owned backoff readiness",
-          operationDeadline,
-        );
+        await ready("backoff-ready.json");
         if (!stopping && shell.exitCode === null && shell.signalCode === null) {
           await boundary("backoff-cancel");
           shell.kill("SIGTERM");
