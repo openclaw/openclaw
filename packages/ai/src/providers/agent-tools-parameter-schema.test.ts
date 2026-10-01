@@ -369,3 +369,31 @@ describe("root unions with preset and custom strings", () => {
     expect(validator.Check({ value: "unknown" })).toBe(false);
   });
 });
+
+
+describe("percent-encoded local references", () => {
+  it.each(["$defs", "definitions"])("normalizes percent-encoded %s names", (table) => {
+    const schema = {
+      type: "object",
+      properties: { filter: { $ref: `#/${table}/Partial%3CFilter%3E` } },
+      required: ["filter"],
+      [table]: {
+        "Partial<Filter>": {
+          type: "object",
+          properties: { limit: { type: "number" } },
+        },
+      },
+    };
+    const normalized = normalizeToolParameterSchema(schema, {
+      modelProvider: "google",
+      modelId: "gemini-2.5-pro",
+    });
+    expect(normalized).toEqual({
+      type: "object",
+      properties: {
+        filter: { type: "object", properties: { limit: { type: "number" } } },
+      },
+      required: ["filter"],
+    });
+  });
+});
