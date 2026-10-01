@@ -241,6 +241,11 @@ describe("CI changed Node test plan", () => {
 
   it.each([
     {
+      source: "scripts/check-test-timeout-race-ratchet.mts",
+      targets: ["test/scripts/check-test-timeout-race-ratchet.test.ts"],
+      areas: ["scripts", "src/scripts", "test/scripts"],
+    },
+    {
       source: "ui/src/styles/chat/layout.css",
       areas: ["ui"],
       targets: [

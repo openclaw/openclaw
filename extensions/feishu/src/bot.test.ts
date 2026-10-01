@@ -1631,6 +1631,45 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it.each([
+    { caption: "Compare the attached report", files: ["report.csv"] },
+    { caption: "", files: ["report.csv", "notes.csv"] },
+  ])("delivers post files with caption '$caption' to agent context", async ({ caption, files }) => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockImplementation(
+      async (params: { fileKey: string; originalFilename?: string }) => ({
+        saved: {
+          id: params.fileKey,
+          path: `/tmp/${params.originalFilename}`,
+          size: 20,
+          contentType: "text/csv",
+        },
+      }),
+    );
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
+      event: createFeishuTestEvent({
+        messageId: `msg-post-files-${files.length}`,
+        senderOpenId: "ou-sender",
+        messageType: "post",
+        content: JSON.stringify({
+          content: [[{ tag: "text", text: caption }]],
+          files: files.map((fileName, index) => ({
+            file_key: `file_report_${index}`,
+            file_name: fileName,
+          })),
+        }),
+      }),
+    });
+
+    const context = inboundContext();
+    if (caption) {
+      expect(context.BodyForAgent).toContain(caption);
+    }
+    expect(context.MediaPaths).toEqual(files.map((fileName) => `/tmp/${fileName}`));
+    expect(context.MediaTypes).toEqual(files.map(() => "text/csv"));
+  });
+
   it("delivers unique rich-post attachments in their original mixed-media order", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockImplementation(

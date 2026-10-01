@@ -20,3 +20,7 @@ OpenAI Agents API harness with hosted or self-hosted sessions.
 ## Surface
 
 This plugin declares no channels, providers, commands, or contracts.
+
+## Related docs
+
+- [agentsapi](/plugins/agentsapi)

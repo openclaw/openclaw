@@ -397,13 +397,13 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             agentID: agentID ?? self.chatGatewayAgentID)
     }
 
-    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+    func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
         try await self.listChildSessions(parentKey: parentKey, serverLease: nil)
     }
 
     private func listChildSessions(
         parentKey: String,
-        serverLease: GatewayConnection.ServerLease?) async throws -> [OpenClawChatSessionEntry]
+        serverLease: GatewayConnection.ServerLease?) async throws -> OpenClawChatChildSessionsResult
     {
         try await OpenClawChatChildSessionPager.collect { offset in
             let request = OpenClawChatGatewayRequests.sessionsList(

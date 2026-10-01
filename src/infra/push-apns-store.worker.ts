@@ -10,7 +10,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { nextApnsRegistrationVersion } from "./push-apns-store-transaction.js";
+import {
+  clearApnsRegistrationFromDatabase,
+  nextApnsRegistrationVersion,
+} from "./push-apns-store-transaction.js";
 import {
   readApnsRegistrationFromDatabase,
   readApnsRegistrationsFromDatabase,
@@ -26,6 +29,31 @@ type ApnsRegistrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "apns_registrations" | "apns_registration_tombstones"
 >;
+
+function apnsRegistrationsEqual(left: ApnsRegistration, right: ApnsRegistration): boolean {
+  if (
+    left.nodeId !== right.nodeId ||
+    left.transport !== right.transport ||
+    left.topic !== right.topic ||
+    left.environment !== right.environment ||
+    left.updatedAtMs !== right.updatedAtMs
+  ) {
+    return false;
+  }
+  if (left.transport === "direct" && right.transport === "direct") {
+    return left.token === right.token;
+  }
+  return (
+    left.transport === "relay" &&
+    right.transport === "relay" &&
+    left.relayHandle === right.relayHandle &&
+    left.sendGrant === right.sendGrant &&
+    left.installationId === right.installationId &&
+    left.distribution === right.distribution &&
+    left.relayOrigin === right.relayOrigin &&
+    left.tokenDebugSuffix === right.tokenDebugSuffix
+  );
+}
 
 function registerApnsRegistrationInDatabase(
   database: OpenClawStateDatabase,
@@ -99,6 +127,19 @@ export function executeApnsRegistrationCommand(
   switch (command.type) {
     case "apns.registration.register":
       return registerApnsRegistrationInDatabase(database, command.input);
+    case "apns.registration.clearIfCurrent":
+      return runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          const { nodeId, registration, nowMs } = command.input;
+          const current = readApnsRegistrationFromDatabase(db, nodeId);
+          return Boolean(
+            current &&
+            apnsRegistrationsEqual(current, registration) &&
+            clearApnsRegistrationFromDatabase(db, nodeId, nowMs),
+          );
+        },
+        { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+      );
     case "apns.registration.read":
       return readApnsRegistrationFromDatabase(database.db, command.input);
     case "apns.registrations.read":

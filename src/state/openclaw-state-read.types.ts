@@ -209,6 +209,7 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
+  | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | {
       type: "githubPublication.lifecycle";
@@ -418,6 +419,10 @@ export type OpenClawStateReadResult =
   | {
       type: "userPreferences.values";
       values: Map<string, unknown>;
+    }
+  | {
+      type: "userModelAccounts.links";
+      links: import("./user-model-accounts.js").UserProfileAuthLink[];
     }
   | {
       type: "userProfiles.reconcile";

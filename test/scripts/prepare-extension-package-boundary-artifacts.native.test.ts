@@ -49,6 +49,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     "scripts/compile-extension-boundary.mts",
     "scripts/run-tsgo.mjs",
     "scripts/run-tsgo.mts",
+    "scripts/generate-kysely-types.mts",
     "scripts/tsx.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib",
@@ -118,6 +119,41 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
 }
 
 describe("native declaration preparation", () => {
+  it("publishes generated schema types for an isolated SDK consumer", ({ signal }) =>
+    fixture.run(async () => {
+      const f = createPreparationFixture("package-boundary", signal);
+      for (const name of ["state", "agent"]) {
+        f.write(
+          `src/state/openclaw-${name}-schema.sql`,
+          "CREATE TABLE records (title TEXT NOT NULL);",
+        );
+      }
+      f.write(
+        "src/state/openclaw-state-db.generated.ts",
+        fs.readFileSync("src/state/openclaw-state-db.generated.ts", "utf8"),
+      );
+      f.write(
+        "src/plugin-sdk/core.ts",
+        'export type { DB } from "../state/openclaw-state-db.generated.js";',
+      );
+      fs.cpSync(fs.realpathSync("node_modules/kysely"), path.join(f.root, "node_modules/kysely"), {
+        recursive: true,
+      });
+      await f.run();
+      f.write(
+        "consumer.ts",
+        'import type { DB } from "fixture-sdk"; declare const row: DB["records"]; const wrong: number = row.title;',
+      );
+      const result = spawnSync(
+        f.native,
+        ["--ignoreConfig", "--module", "nodenext", "--noEmit", "--skipLibCheck", "consumer.ts"],
+        { cwd: f.root, encoding: "utf8", timeout: 20_000 },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(2);
+      expect(result.stdout).toContain("Type 'string' is not assignable to type 'number'");
+    }));
+
   it.for([
     { name: "Windows 8.3 short entry", entry: true, workspace: false },
     { name: "Windows 8.3 workspace junction", entry: false, workspace: true },

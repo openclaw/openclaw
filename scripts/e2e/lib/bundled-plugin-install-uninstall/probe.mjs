@@ -3,10 +3,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const normalizePathForProbe = (value) => String(value ?? "").replace(/\\/g, "/");
 const bundledRuntimeFragments = (pluginDir) => [
   `/dist/extensions/${pluginDir}`,

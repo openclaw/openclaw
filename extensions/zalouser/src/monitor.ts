@@ -160,15 +160,6 @@ function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: str
   }
 }
 
-async function sendZalouserDeliveryAcks(params: {
-  profile: string;
-  isGroup: boolean;
-  message: NonNullable<ZaloInboundMessage["eventMessage"]>;
-}): Promise<void> {
-  await sendZaloDeliveredEvent({ ...params, isSeen: true });
-  await sendZaloSeenEvent(params);
-}
-
 async function processMessage(
   message: ZaloInboundMessage,
   account: ResolvedZalouserAccount,
@@ -217,11 +208,13 @@ async function processMessage(
 
   if (message.eventMessage) {
     try {
-      await sendZalouserDeliveryAcks({
+      const ack = {
         profile: account.profile,
         isGroup,
         message: message.eventMessage,
-      });
+      };
+      await sendZaloDeliveredEvent({ ...ack, isSeen: true });
+      await sendZaloSeenEvent(ack);
     } catch (err) {
       logVerbose(core, runtime, `zalouser: delivery/seen ack failed for ${chatId}: ${String(err)}`);
     }
@@ -886,10 +879,7 @@ export async function monitorZalouserProvider(
     );
   };
 
-  const onAbort = () => {
-    settleSuccess();
-  };
-  abortSignal.addEventListener("abort", onAbort, { once: true });
+  abortSignal.addEventListener("abort", settleSuccess, { once: true });
 
   let listener: Awaited<ReturnType<typeof startZaloListener>>;
   try {
@@ -914,7 +904,7 @@ export async function monitorZalouserProvider(
       },
     });
   } catch (error) {
-    abortSignal.removeEventListener("abort", onAbort);
+    abortSignal.removeEventListener("abort", settleSuccess);
     await ingress.stop();
     throw error;
   }
@@ -934,7 +924,7 @@ export async function monitorZalouserProvider(
   try {
     await waitForExit;
   } finally {
-    abortSignal.removeEventListener("abort", onAbort);
+    abortSignal.removeEventListener("abort", settleSuccess);
   }
 
   return { stop };

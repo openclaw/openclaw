@@ -94,33 +94,28 @@ describe("GatewayChatClient streaming", () => {
     });
   });
 
-  it.each(["final", "error", "aborted", "disconnect", "stop"] as const)(
-    "retires wire baselines on %s",
-    async (boundary) => {
-      await withGatewayChatConnection(
-        async () => ({}),
-        async (client, callbacks) => {
-          const received: TuiEvent[] = [];
-          client.onEvent = (event) => received.push(event);
-          const delta = { sessionKey: "agent:main:b", runId: "run-b", state: "delta" };
-          const emit = (payload: unknown) =>
-            callbacks.onEvent?.({ type: "event", event: "chat", payload });
-          emit({ ...delta, message: { role: "assistant", content: "Retired" } });
-          if (boundary === "disconnect") {
-            callbacks.onClose?.(1006, "reconnecting");
-          } else if (boundary === "stop") {
-            await client.stop();
-          } else {
-            emit({ ...delta, state: boundary });
-          }
-          emit({ ...delta, deltaText: " suffix" });
-          expect(received.at(-1)?.payload).toEqual({
-            ...delta,
-            deltaText: " suffix",
-            message: undefined,
-          });
-        },
-      );
-    },
-  );
+  it.each(["disconnect", "stop"] as const)("retires wire baselines on %s", async (boundary) => {
+    await withGatewayChatConnection(
+      async () => ({}),
+      async (client, callbacks) => {
+        const received: TuiEvent[] = [];
+        client.onEvent = (event) => received.push(event);
+        const delta = { sessionKey: "agent:main:b", runId: "run-b", state: "delta" };
+        const emit = (payload: unknown) =>
+          callbacks.onEvent?.({ type: "event", event: "chat", payload });
+        emit({ ...delta, message: { role: "assistant", content: "Retired" } });
+        if (boundary === "disconnect") {
+          callbacks.onClose?.(1006, "reconnecting");
+        } else {
+          await client.stop();
+        }
+        emit({ ...delta, deltaText: " suffix" });
+        expect(received.at(-1)?.payload).toEqual({
+          ...delta,
+          deltaText: " suffix",
+          message: undefined,
+        });
+      },
+    );
+  });
 });

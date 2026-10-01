@@ -342,14 +342,24 @@ function commitImmediateTransaction(
 }
 
 function discardUnsafeConnection(db: TransactionDatabase, error: unknown): void {
-  db[abortedTransactionSymbol] ??= { error };
-  discardSqliteTransactionState(db, error);
-  clearNodeSqliteKyselyCacheForDatabase(db);
+  const aborted = { error };
+  db[abortedTransactionSymbol] ??= aborted;
   try {
-    db.close();
-  } catch {
-    // Preserve the primary failure. The transaction helper also refuses reuse
-    // if the handle was already closed or a lifecycle close hook failed.
+    discardSqliteTransactionState(db, error);
+  } catch (rollbackError) {
+    // Retain this failure's observer aggregate across outer and future admission checks.
+    if (db[abortedTransactionSymbol] === aborted) {
+      aborted.error = rollbackError;
+    }
+    throw rollbackError;
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(db);
+    try {
+      db.close();
+    } catch {
+      // Preserve the primary failure. The transaction helper also refuses reuse
+      // if the handle was already closed or a lifecycle close hook failed.
+    }
   }
 }
 
@@ -361,14 +371,14 @@ function abortImmediateTransaction(
   if (db[abortedTransactionSymbol]) {
     return;
   }
+  // SQLITE_IOERR/FULL can roll back an operation before commit starts. Once
+  // the commit owner runs, no transaction may instead mean a durable COMMIT
+  // followed by a guard failure or rejected Promise: retain conservative fencing.
+  if (!commitStarted && db.isOpen && !db.isTransaction) {
+    discardSqliteTransactionState(db, error);
+    return;
+  }
   try {
-    // SQLITE_IOERR/FULL can roll back an operation before commit starts. Once
-    // the commit owner runs, no transaction may instead mean a durable COMMIT
-    // followed by a guard failure or rejected Promise: retain conservative fencing.
-    if (!commitStarted && db.isOpen && !db.isTransaction) {
-      discardSqliteTransactionState(db, error);
-      return;
-    }
     db.exec("ROLLBACK");
   } catch {
     // An abandoned transaction must not leak into later writes on this handle.

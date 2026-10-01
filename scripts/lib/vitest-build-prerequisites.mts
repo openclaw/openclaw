@@ -5,6 +5,7 @@ import path from "node:path";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { uiE2eRealGatewayTestFiles } from "../../test/vitest/vitest.ui-paths.mjs";
+import { ensureKyselyTypes } from "../generate-kysely-types.mts";
 import { runManagedCommand } from "./managed-child-process.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 
@@ -494,6 +495,8 @@ export async function prepareVitestRuntime(
   env: NodeJS.ProcessEnv = process.env,
   options: { runtimePrepared?: boolean; signal?: AbortSignal } = {},
 ): Promise<number> {
+  options.signal?.throwIfAborted();
+  await ensureKyselyTypes();
   const controlUi =
     !isE2eBuildSkipped(env) &&
     env.OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY !== "1" &&
@@ -654,7 +657,7 @@ function isMissingVitestResolveError(error: unknown): error is NodeJS.ErrnoExcep
 /**
  * Builds the actionable dependency-install message when Vitest is unavailable.
  */
-export function resolveMissingVitestDependencyMessage(
+function resolveMissingVitestDependencyMessage(
   baseDir = resolveRepoRoot(import.meta.url),
   fsImpl: Pick<VitestFs, "existsSync"> = fs,
 ): string {

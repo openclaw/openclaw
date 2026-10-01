@@ -11,7 +11,10 @@ import {
   createSessionCatalogRequestNodeSnapshot,
   listSessionCatalogProvider,
 } from "./session-catalog-provider-access.js";
-import { isSessionCatalogThreadVisible } from "./session-catalog-visibility.js";
+import {
+  resolveSessionCatalogThreadVisibility,
+  type SessionCatalogThreadVisibility,
+} from "./session-catalog-visibility.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export async function authorizeSessionCatalogThread(params: {
@@ -21,7 +24,11 @@ export async function authorizeSessionCatalogThread(params: {
   provider: SessionCatalogProvider;
   request: SessionCatalogLocator & { agentId?: string };
   respond: RespondFn;
-}): Promise<{ agentId: string; allowProcessHomeFallback: boolean } | null> {
+}): Promise<{
+  agentId: string;
+  allowProcessHomeFallback: boolean;
+  sourceVisibility: SessionCatalogThreadVisibility;
+} | null> {
   const resolvedAgent = resolveAgentIdOrRespondError({
     rawAgentId: params.request.agentId,
     respond: params.respond,
@@ -33,7 +40,7 @@ export async function authorizeSessionCatalogThread(params: {
   }
   const { agentId } = resolvedAgent;
   const allowHomeFallback = allowProcessHomeFallback(params.context.logGateway);
-  const visible = await isSessionCatalogThreadVisible({
+  const sourceVisibility = await resolveSessionCatalogThreadVisibility({
     access: params.access,
     allowProcessHomeFallback: allowHomeFallback,
     audience: params.provider.audience,
@@ -46,8 +53,8 @@ export async function authorizeSessionCatalogThread(params: {
     ...(params.request.sourceHomeId ? { sourceHomeId: params.request.sourceHomeId } : {}),
     threadId: params.request.threadId,
   });
-  if (visible) {
-    return { agentId, allowProcessHomeFallback: allowHomeFallback };
+  if (sourceVisibility) {
+    return { agentId, allowProcessHomeFallback: allowHomeFallback, sourceVisibility };
   }
   params.respond(
     false,

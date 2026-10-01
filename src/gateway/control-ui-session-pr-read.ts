@@ -37,6 +37,8 @@ export type ControlUiSessionPrTarget = {
 export type ControlUiSessionPrReadContext = {
   target: ControlUiSessionPrTarget;
   sourceIdentity: string;
+  // Internal consumers can inspect all fetched PRs without expanding the UI.
+  projection?: "publication";
   assertCurrent: () => void;
 };
 

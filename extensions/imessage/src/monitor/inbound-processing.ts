@@ -1,3 +1,4 @@
+import { normalizeChannelDmPolicy } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildChannelInboundEventContext,
   buildMentionRegexes,
@@ -25,7 +26,7 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
-import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
@@ -159,10 +160,6 @@ function normalizeIMessageChatGuidEntry(entry: string): string | null {
 function normalizeIMessageChatIdentifierEntry(entry: string): string | null {
   const parsed = parseIMessageAllowTarget(entry.trim());
   return parsed.kind === "chat_identifier" ? parsed.chatIdentifier.trim() || null : null;
-}
-
-function normalizeDmPolicy(policy: string): DmPolicy {
-  return policy === "open" || policy === "allowlist" || policy === "disabled" ? policy : "pairing";
 }
 
 function normalizeGroupPolicy(policy: string): GroupPolicy {
@@ -509,7 +506,7 @@ export async function resolveIMessageInboundDecision(params: {
         id: chatId != null ? String(chatId) : sender,
       },
       contextBinding,
-      dmPolicy: normalizeDmPolicy(params.dmPolicy),
+      dmPolicy: normalizeChannelDmPolicy(params.dmPolicy) ?? "pairing",
       groupPolicy: normalizeGroupPolicy(params.groupPolicy),
       policy: { groupAllowFromFallbackToAllowFrom: false },
       allowFrom: params.allowFrom,

@@ -758,6 +758,13 @@ the skills watchers. With watching enabled, later agent turns refresh file-backe
 skills through the existing snapshot preparation. Restart the Gateway after
 restoring watch capacity to enable native watching again.
 
+When native events are unavailable, skills polling runs every 30 seconds by
+default. This is also the minimum interval for explicitly requested polling;
+larger `CHOKIDAR_INTERVAL` values remain supported. Native event hints still
+trigger prompt refreshes with the normal debounce. Each watcher logs one warning
+when automatic selection falls back to polling, including the reported reason
+when available.
+
 Watcher subscriptions are retained for the 128 most recently used combinations of
 agent, configured workspace, and execution workspace. Subscriptions idle for an
 hour are also retired when another workspace prepares its skills. Shared skill

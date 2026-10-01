@@ -40,7 +40,8 @@ export async function callSessionTargetGateway<T>(params: {
   gateway: SessionTargetGateway;
   method: string;
   request?: unknown;
-  requiredScope: "operator.read" | "operator.admin";
+  requiredScope: "operator.read" | "operator.write" | "operator.admin";
+  timeoutMs?: number;
   shortRef?: boolean;
 }): Promise<T> {
   const explicitUrl = params.gateway.url?.trim() || undefined;
@@ -53,6 +54,7 @@ export async function callSessionTargetGateway<T>(params: {
       tlsFingerprint: params.gateway.tlsFingerprint,
       method: params.method,
       params: params.request,
+      timeoutMs: params.timeoutMs,
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       ...(explicitUrl

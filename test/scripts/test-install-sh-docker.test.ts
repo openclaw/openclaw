@@ -301,11 +301,9 @@ function runNonrootNodePreflight(
 
 function runDefaultSmokePlatform(env: Record<string, string>, hostArch: string): string {
   const script = readFileSync(SCRIPT_PATH, "utf8");
-  const match = script.match(
-    /(resolve_default_smoke_platform\(\) \{[\s\S]*?\n\})\n\nprint_pack_audit/u,
-  );
+  const match = script.match(/^SMOKE_PLATFORM=.*$/mu);
   if (!match) {
-    throw new Error("resolve_default_smoke_platform was not found");
+    throw new Error("install smoke platform assignment was not found");
   }
   const result = spawnSync(
     "bash",
@@ -313,7 +311,7 @@ function runDefaultSmokePlatform(env: Record<string, string>, hostArch: string):
       "--noprofile",
       "--norc",
       "-c",
-      `${match[1]}\nuname() { if [[ "\${1:-}" == "-m" ]]; then printf "%s" "$FAKE_UNAME_ARCH"; else command uname "$@"; fi; }\nresolve_default_smoke_platform`,
+      `source scripts/lib/docker-build.sh\nuname() { if [[ "\${1:-}" == "-m" ]]; then printf "%s" "$FAKE_UNAME_ARCH"; else command uname "$@"; fi; }\n${match[0]}\nprintf '%s' "$SMOKE_PLATFORM"`,
     ],
     {
       encoding: "utf8",

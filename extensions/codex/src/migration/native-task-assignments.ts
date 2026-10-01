@@ -3,14 +3,6 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  openNodeSqliteDatabase,
-  prepareSqliteReadOnlyLocation,
-  tableExists,
-} from "openclaw/plugin-sdk/sqlite-runtime";
 import { z } from "zod";
 import { readCodexNativeSubagentRunId } from "../app-server/native-subagent-assignment.js";
 import {
@@ -25,13 +17,13 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "../app-server/session-binding-meta.js";
-import {
-  bindingStoreKey,
-  readStoredCodexAppServerBinding,
-  type StoredCodexAppServerBinding,
-} from "../app-server/session-binding-record.js";
+import type { StoredCodexAppServerBinding } from "../app-server/session-binding-record.js";
 
 type Params = Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0];
+type AssignmentSessionStore = Pick<
+  typeof import("openclaw/plugin-sdk/session-store-runtime"),
+  "getSessionEntry" | "resolveStorePath"
+>;
 type LegacyTask = {
   task_id: string;
   runtime: string;
@@ -97,6 +89,15 @@ async function inspect(params: Params) {
     }
     throw error;
   }
+  const { bindingStoreKey, readStoredCodexAppServerBinding } =
+    await import("../app-server/session-binding-record.js");
+  const {
+    executeSqliteQuerySync,
+    getNodeSqliteKysely,
+    openNodeSqliteDatabase,
+    prepareSqliteReadOnlyLocation,
+    tableExists,
+  } = await import("openclaw/plugin-sdk/sqlite-runtime");
   const snapshot = await prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true });
   try {
     const db = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
@@ -180,7 +181,12 @@ async function inspect(params: Params) {
   }
 }
 
-function prepareAssignment(task: LegacyTask, stored: StoredCodexAppServerBinding, params: Params) {
+function prepareAssignment(
+  task: LegacyTask,
+  stored: StoredCodexAppServerBinding,
+  params: Params,
+  { getSessionEntry, resolveStorePath }: AssignmentSessionStore,
+) {
   const identity = taskIdentity(task);
   const native = readCodexNativeSubagentRunId(task.run_id ?? undefined);
   const detail: unknown = task.detail_json ? JSON.parse(task.detail_json) : {};
@@ -264,6 +270,9 @@ export const codexNativeTaskAssignmentMigration = {
     if (rows.length === 0) {
       return { changes: [], warnings };
     }
+    const { bindingStoreKey, readStoredCodexAppServerBinding } =
+      await import("../app-server/session-binding-record.js");
+    const sessionStore = await import("openclaw/plugin-sdk/session-store-runtime");
     let imported = 0;
     const store = params.context.openPluginStateKeyedStore<StoredCodexAppServerBinding>({
       namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -302,7 +311,7 @@ export const codexNativeTaskAssignmentMigration = {
         if (marker.taskIds.includes(task.task_id)) {
           continue;
         }
-        const assignment = prepareAssignment(task, stored, params);
+        const assignment = prepareAssignment(task, stored, params, sessionStore);
         if (stored.state !== "active" || observed.value?.state !== "active") {
           continue;
         }
@@ -326,7 +335,7 @@ export const codexNativeTaskAssignmentMigration = {
         // The import marker and recovery payload share one compare-and-apply commit.
         const writer = store.withCurrent({
           assertCurrent: () => {
-            prepareAssignment(task, stored, params);
+            prepareAssignment(task, stored, params, sessionStore);
           },
         });
         const result = await writer.compareAndApply(key, observed.comparison, {
