@@ -63,7 +63,13 @@ export function visitorGrant(email: string, overrides: Partial<VisitorGrant> = {
   };
 }
 
-type ProfileFixture = { id: string; emails: readonly string[]; role?: string };
+type ProfileFixture = {
+  id: string;
+  emails: readonly string[];
+  role?: string;
+  mergedInto?: string | null;
+  githubIdentity?: { login: string } | null;
+};
 
 export function visitorProfileFixture(initial: ProfileFixture[] = []) {
   let profiles = initial;
@@ -107,7 +113,7 @@ export function visitorFixture(
     emails?: string[];
     githubEmail?: string | null;
     gatewayConfig?: OpenClawConfig;
-    profiles?: Array<{ id: string; emails: string[]; role?: string }>;
+    profiles?: ProfileFixture[];
     store?: PluginStateKeyedStore<VisitorGrant>;
     gateway?: PluginRuntime["gateway"];
   } = {},

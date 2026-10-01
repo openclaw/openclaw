@@ -102,11 +102,11 @@ Guest admission or restore authority for unfinished work.
 
 ## Invite, inspect, and revoke visitors
 
-| Tool             | Input                                                 | Result                                                                               |
-| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `visitor_invite` | `github` and/or `email`; optional `days` or `forever` | Adds a grant or refreshes an existing email's expiry.                                |
-| `visitor_list`   | `{}`                                                  | Shows grants, selection IDs, dates, current Gateway access, and policy/record drift. |
-| `visitor_revoke` | `profileId`, `grantId`, or `github`/`email`           | Removes a person's recorded grants or cancels a selected invitation.                 |
+| Tool             | Input                                                 | Result                                                                                            |
+| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `visitor_invite` | `github` and/or `email`; optional `days` or `forever` | Adds a grant or refreshes an existing email's expiry.                                             |
+| `visitor_list`   | `{}`                                                  | Shows grants, verified GitHub identities, selection IDs, dates, Gateway access, and policy drift. |
+| `visitor_revoke` | `profileId`, `grantId`, or `github`/`email`           | Removes a person's recorded grants or cancels a selected invitation.                              |
 
 Each tool also returns structured `details`, visible to Code Mode, with the same
 information as its text: invite returns `outcome`, `email`, `grantId`, optional `githubLogin`,
@@ -114,6 +114,22 @@ information as its text: invite returns `outcome`, `email`, `grantId`, optional 
 and optional `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
 Recorded list rows include `grantId` when the invitation has a qualified lifetime,
 and `profileId` when its email belongs to a current canonical profile.
+
+Each listed grant's optional `githubLogin` is the selected verified identity from
+its current Gateway profile. The directory is read again on every listing,
+including identities linked after an email-only invitation. Without a selected
+verified account, the field is omitted and the text reports identity as unavailable.
+An email without a profile also reports first sign-in as pending. Stored invitation
+handles remain invitation metadata and are not another identity source.
+
+GitHub-only revocation resolves that same current verified profile and selects its
+recorded email grants, including multiple aliases. It never selects by historical
+invitation handles or guesses from a public GitHub email. Missing or conflicting
+profiles require an exact invitation email; a profile without recorded grants is a
+clean no-op. GitHub logins are mutable metadata, so use `profileId` to select a
+specific canonical person or `grantId`/`email` to cancel a specific invitation.
+Explicit email remains available before profile creation or when the directory
+cannot be read, and takes precedence when supplied with a GitHub login.
 
 Use `visitor_revoke` with `profileId` to select the recorded Visitor grants
 associated with that person's verified email aliases in an initial profile snapshot. Use `grantId` to
@@ -126,7 +142,7 @@ roles, saved work, and existing PRs remain intact. Unmanaged policy entries stil
 require explicit email removal; person-wide revocation does not infer ownership
 for them.
 
-Person-wide revocation retains the selected aliases' original profile-binding
+Revocation by profile ID or GitHub login retains the selected aliases' original profile-binding
 lifetimes. The profile owner revalidates them at local grant commit and immediately
 before each policy request. Reassignment, including a move away and back, stops
 remaining mutations. Already committed expirations remain ended if later cleanup
@@ -169,11 +185,11 @@ invitation for an email without a profile reports first sign-in as pending.
 An existing verified identity linked during sign-in keeps its assigned role;
 use `visitor_list` afterward to inspect the resulting access.
 
-When only `github` is supplied, the plugin looks up that account's public GitHub
-email. Many accounts have no public email. In that case, ask the visitor for the
-email they use to sign in to Team and pass it explicitly. A public GitHub email
-must match that sign-in email to be useful. The plugin cannot discover private
-account emails. The optional GitHub login is invitation metadata; it does not
+When only `github` is supplied to `visitor_invite`, the plugin looks up that
+account's public GitHub email. Many accounts have no public email. In that case,
+ask the visitor for the email they use to sign in to Team and pass it explicitly.
+A public GitHub email must match that sign-in email to be useful. The plugin
+cannot discover private account emails. The optional GitHub login is invitation metadata; it does not
 verify or link a Gateway identity or grant GitHub authorship credit.
 
 ## Expiry and drift

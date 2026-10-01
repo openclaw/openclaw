@@ -12,10 +12,13 @@ type VisitorProfile = {
   emails: string[];
   mergedInto?: string | null;
   role?: string;
+  githubIdentity?: { login: string } | null;
 };
 
 type VisitorGatewayAccess = {
   describe: (email: string) => string;
+  githubLogin: (email: string) => string | undefined;
+  resolveGithubProfile: (login: string) => VisitorProfile | undefined;
   assertInvitable: (email: string) => void;
   profileId: (email: string) => string | undefined;
   resolveProfile: (profileId: string) => VisitorProfile | undefined;
@@ -49,6 +52,19 @@ export function createVisitorAccessReader(
     const access = (email: string) => describeAccess(byEmail.get(email), roles);
     return {
       describe: (email) => access(email).description,
+      githubLogin: (email) => byEmail.get(email)?.githubIdentity?.login,
+      resolveGithubProfile(login) {
+        const normalized = login.toLowerCase();
+        const matches = canonical.filter(
+          (profile) => profile.githubIdentity?.login.toLowerCase() === normalized,
+        );
+        if (matches.length > 1) {
+          throw new VisitorAccessError(
+            "This GitHub login matches more than one Gateway profile. Use the exact invitation email.",
+          );
+        }
+        return matches[0];
+      },
       profileId: (email) => byEmail.get(email)?.id,
       resolveProfile: (profileId) => byId.get(profileId),
       withProfile(profileId, emails, run) {
