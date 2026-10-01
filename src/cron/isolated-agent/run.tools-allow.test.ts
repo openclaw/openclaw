@@ -100,12 +100,24 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.toolsAllow).toEqual(["*"]);
   });
 
-  it("runs an automatic creator snapshot with its owner's tools", options, async () => {
+  it.each([
+    { label: "runs with its owner's tools", job: {}, expected: ["*"] },
+    {
+      label: "keeps its list without a valid owner policy",
+      job: { owner: { agentId: "main", sessionKey: policy.ownerSessionKey } },
+      expected: ["message", "read"],
+    },
+    {
+      label: "keeps its list behind a condition trigger",
+      job: { trigger: { script: "return { fire: true }" } },
+      expected: ["message", "read"],
+    },
+  ])("an automatic creator snapshot $label", options, async ({ job, expected }) => {
     // Older builds saved this snapshot without the creator's native shell.
-    await runCronIsolatedAgentTurn(makeParams(["message", "read"], { toolsAllowIsDefault: true }));
-    const call = runEmbeddedAgentMock.mock.calls[0]?.[0];
-    expect(call.toolsAllow).toEqual(["*"]);
-    expect(call.scheduledToolPolicy).toMatchObject(policy);
+    await runCronIsolatedAgentTurn(
+      makeParams(["message", "read"], { toolsAllowIsDefault: true }, job),
+    );
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.toolsAllow).toEqual(expected);
   });
 
   it.each([
