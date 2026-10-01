@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { readSqliteTranscriptPayload } from "../../scripts/lib/sqlite-transcript-payload.mjs";
 import {
-  lookupSessionGoalOperation,
+  readSessionGoalOperationInDatabase,
   type SessionGoalOperation,
 } from "../config/sessions/goals-operations.js";
 import {
@@ -226,7 +226,7 @@ function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistor
   });
   expect(readStoredGoalState(reopened.db, store.scope.sessionKey)).toEqual(store.goalState);
   expect(
-    lookupSessionGoalOperation({
+    readSessionGoalOperationInDatabase(reopened, {
       ...store.scope,
       expectedSessionId: "doctor-session",
       operation: store.goalOperation,

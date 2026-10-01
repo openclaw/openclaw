@@ -85,6 +85,45 @@ function createExistingState(mutate?: (db: DatabaseSync) => void) {
 }
 
 describe("existing shared-state schema admission", () => {
+  it("refuses pre-July agent registry primary keys without migrating them", () => {
+    const { options } = createExistingState((db) => {
+      db.exec(`
+        DROP TABLE agent_databases;
+        CREATE TABLE agent_databases (
+          agent_id TEXT NOT NULL PRIMARY KEY,
+          path TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          size_bytes INTEGER
+        );
+        INSERT INTO agent_databases VALUES ('main', 'legacy.sqlite', 1, 10, 20);
+      `);
+    });
+    const before = readPersistedSchema(options.path);
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      "Upgrades from pre-July-2026 state are no longer migrated",
+    );
+    expect(repairOpenClawStateDatabaseSchema(options)).toMatchObject({
+      changes: [],
+      warnings: [expect.stringContaining("unsupported agent database registry schema")],
+    });
+    expect(readPersistedSchema(options.path)).toEqual(before);
+    const preserved = new DatabaseSync(options.path, { readOnly: true });
+    try {
+      expect(preserved.prepare("SELECT * FROM agent_databases").all()).toEqual([
+        {
+          agent_id: "main",
+          path: "legacy.sqlite",
+          schema_version: 1,
+          last_seen_at: 10,
+          size_bytes: 20,
+        },
+      ]);
+    } finally {
+      preserved.close();
+    }
+  });
+
   it("observes peer content-marker updates after its pinned read transaction ends", () => {
     const { options } = createExistingState((db) => {
       db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(

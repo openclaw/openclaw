@@ -115,6 +115,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "cold-metadata", ...input }),
       (value) => value,
     ),
+    readColdStorageInventory: reader(
+      "cold-storage-inventory",
+      "cold storage inventory",
+      (input) => ({ kind: "cold-storage-inventory", ...input }),
+      (value) => value,
+    ),
     searchTranscripts: reader(
       "transcript-search",
       "search",
@@ -307,6 +313,12 @@ export function createSessionHistoryWorkerReaders(
       "pending input receipts",
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
+    ),
+    readGoalOperationReceipt: reader(
+      "goal-operation-receipt",
+      "a Goal operation receipt",
+      (input) => ({ kind: "goal-operation-receipt", ...input }),
+      (value) => value.result,
     ),
     readEntryResult: reader(
       "session-entry-read",

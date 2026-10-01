@@ -11,6 +11,7 @@ import {
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
@@ -151,7 +152,8 @@ export function createMainRefreshFixture(
   } else {
     // Copy complete object stores (including sameTreeHead), never shared refs or
     // hardlinks. Create worktrees afterward so their absolute back-links stay local.
-    cpSync(template.canonical, canonical, copyOptions);
+    // The wrapper's process-group runner executes canonical scripts/pr directly.
+    copyTreeCloseOnExec(template.canonical, canonical);
   }
   git(canonical, "remote", "set-url", "origin", origin);
   git(canonical, "config", `url.${origin}.insteadOf`, "https://github.com/fixture/repo");
