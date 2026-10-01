@@ -6,15 +6,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 // Discovers and runs bundled plugin package asset hooks.
 import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
-import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { runPluginAssetCommand } from "./lib/plugin-asset-command.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 const rootDir = resolveRepoRoot(import.meta.url);
 const VALID_PHASES = new Set(["build", "copy"]);
-// Each complete bundled-plugin asset generator gets the same 10-minute build ceiling.
-const BUNDLED_PLUGIN_ASSET_HOOK_TIMEOUT_MS = 600_000;
 
 type AssetPhase = "build" | "copy";
 type AssetOptions = {
@@ -155,7 +153,6 @@ export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
  */
 export async function runBundledPluginAssetHooks(options: AssetOptions = {}) {
   const phase = options.phase;
-  const timeoutMs = options.timeoutMs ?? BUNDLED_PLUGIN_ASSET_HOOK_TIMEOUT_MS;
   const hooks = await readBundledPluginAssetHooks(options);
   if (hooks.length === 0) {
     const scope = options.plugins?.length ? ` for ${options.plugins.join(", ")}` : "";
@@ -168,27 +165,13 @@ export async function runBundledPluginAssetHooks(options: AssetOptions = {}) {
 
   for (const hook of hooks) {
     console.log(`[${hook.pluginId}] ${phase}: ${hook.command}`);
-    let status;
-    try {
-      status = await runManagedCommand({
-        bin: hook.command,
-        cwd: hook.pluginDir,
-        env: process.env,
-        shell: true,
-        stdio: "inherit",
-        timeoutMs,
-      });
-    } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ETIMEDOUT") {
-        throw Object.assign(
-          new Error(
-            `Bundled plugin asset ${phase} hook timed out after ${timeoutMs}ms: ${hook.pluginId}`,
-          ),
-          { code: "ETIMEDOUT" },
-        );
-      }
-      throw error;
-    }
+    const status = await runPluginAssetCommand({
+      command: hook.command,
+      cwd: hook.pluginDir,
+      pluginId: hook.pluginId,
+      phase: hook.phase,
+      timeoutMs: options.timeoutMs,
+    });
     if (status !== 0) {
       process.exit(status);
     }

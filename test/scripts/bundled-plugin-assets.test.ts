@@ -275,7 +275,7 @@ describe("bundled plugin assets", () => {
         expect(fs.readFileSync(readyFile, "utf8")).toBe(String(childPid));
         expect(thrown).toMatchObject({
           code: "ETIMEDOUT",
-          message: "Bundled plugin asset build hook timed out after 500ms: canvas",
+          message: "Plugin asset build hook timed out after 500ms: canvas",
         });
         expect((thrown as Error).message).not.toContain("launch-stall.mjs");
       } finally {
