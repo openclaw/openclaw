@@ -479,7 +479,9 @@ describe("handleWorkspaceIconHttpRequest", () => {
     });
     try {
       for (const stopped of [false, true]) {
-        if (stopped) release();
+        if (stopped) {
+          release();
+        }
         const response = await fetch(iconRoute("agent:main:one"));
         expect(response.status).toBe(404);
         expect(response.headers.get("etag")).toBeNull();
@@ -510,9 +512,9 @@ describe("handleWorkspaceIconHttpRequest", () => {
 
   it("recovers a missing session after its workspace is published", async () => {
     const key = "agent:main:new-session";
-    const absent = await fetch(iconRoute(key));
-    expect(absent.status).toBe(404);
-    await absent.arrayBuffer();
+    const missing = await fetch(iconRoute(key));
+    expect(missing.status).toBe(404);
+    await missing.arrayBuffer();
     seedSession(await makeWorkspace({ "favicon.png": PNG_BYTES }), key);
     const response = await fetch(iconRoute(key));
     expect(response.status).toBe(200);

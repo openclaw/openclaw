@@ -243,7 +243,9 @@ describe("chat pane workspace chip icon", () => {
     } as Response);
     const context = createSessionContext(createTestGatewayClient(async () => ({})));
     const initial = context.gateway.snapshot;
-    if (!initial.hello) throw new Error("expected a connected Gateway fixture");
+    if (!initial.hello) {
+      throw new Error("expected a connected Gateway fixture");
+    }
     context.publishGatewaySnapshot({
       ...initial,
       hello: { ...initial.hello, server: { connId: "initial-connection" } },
@@ -260,7 +262,9 @@ describe("chat pane workspace chip icon", () => {
       const icon = mounted.container.querySelector<
         HTMLElement & { updateComplete: Promise<unknown> }
       >("openclaw-workspace-icon");
-      if (!icon) throw new Error("expected a mounted workspace icon");
+      if (!icon) {
+        throw new Error("expected a mounted workspace icon");
+      }
       await icon.updateComplete;
       await vi.advanceTimersByTimeAsync(0);
       await icon.updateComplete;
@@ -271,7 +275,9 @@ describe("chat pane workspace chip icon", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(4);
     await vi.advanceTimersByTimeAsync(60_000);
     const unchanged = context.gateway.snapshot;
-    if (!unchanged.hello) throw new Error("expected a connected Gateway fixture");
+    if (!unchanged.hello) {
+      throw new Error("expected a connected Gateway fixture");
+    }
     context.publishGatewaySnapshot({
       ...unchanged,
       hello: { ...unchanged.hello, server: { ...unchanged.hello.server } },
@@ -284,7 +290,9 @@ describe("chat pane workspace chip icon", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:new-gateway-connection");
     const snapshot = context.gateway.snapshot;
     const hello = snapshot.hello;
-    if (!hello) throw new Error("expected a connected Gateway fixture");
+    if (!hello) {
+      throw new Error("expected a connected Gateway fixture");
+    }
     context.publishGatewaySnapshot({
       ...snapshot,
       hello: { ...hello, server: { ...hello.server, connId: "new-connection" } },
