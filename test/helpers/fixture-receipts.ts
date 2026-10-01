@@ -28,9 +28,13 @@ type Waiter = {
 
 /** Test-owned side channel for children whose process and stdio belong to the product. */
 export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel> {
-  // openclaw-temp-dir: allow short private socket path below macOS's Unix socket limit
+  const tempRoot = os.tmpdir();
+  const socketRoot =
+    Buffer.byteLength(path.join(tempRoot, "oc-r-XXXXXX", "s")) > 100 ? "/tmp" : tempRoot;
+  // openclaw-temp-dir: allow /tmp fallback for nested suites' deep TMPDIRs;
+  // Unix socket paths are capped at 108 bytes on Linux and 104 on macOS.
   const directory =
-    process.platform === "win32" ? undefined : await fs.mkdtemp(path.join(os.tmpdir(), "oc-r-"));
+    process.platform === "win32" ? undefined : await fs.mkdtemp(path.join(socketRoot, "oc-r-"));
   const endpoint = directory
     ? path.join(directory, "s")
     : `\\\\.\\pipe\\openclaw-fixture-receipts-${process.pid}-${randomUUID()}`;

@@ -9,8 +9,13 @@ import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-cl
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
-import { isProcessAlive, waitForDead, waitForFixtureFile } from "../helpers/process-wait.js";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { createDeferred, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
@@ -29,8 +34,10 @@ const preparedCli = createPreparedVitestCliFixture(repoRoot, wrapperEntries, {
   preserveSourceModuleExports: true,
 });
 let preparedModules: Array<readonly [URL, URL]>;
+let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   await preparedCli.prepare();
+  receipts = await openFixtureReceiptChannel();
   preparedModules = collectRuntimeImportClosure(
     repoRoot,
     wrapperEntries.map((entry) => `scripts/${entry}`),
@@ -46,7 +53,13 @@ beforeAll(async () => {
     )
     .filter(([, prepared]) => fs.existsSync(prepared));
 });
-afterAll(() => preparedCli.cleanup());
+afterAll(async () => {
+  try {
+    await receipts?.close();
+  } finally {
+    await preparedCli.cleanup();
+  }
+});
 
 type OwnerReceipt = { owner: number; borrower: number; generation: string };
 
@@ -109,12 +122,16 @@ it
 import fs from 'node:fs';
 import path from 'node:path';
 import {writeWorkerFixtureManifest} from ${JSON.stringify(new URL("./fixtures/vitest-worker-compiler.mjs", import.meta.url).href)};
+${fixtureReceiptClientSource(receipts.endpoint)}
 const directory=process.argv[2];
 fs.writeFileSync(${JSON.stringify(compilerBudget)},JSON.stringify([process.env.RAYON_NUM_THREADS,process.env.TOKIO_WORKER_THREADS]));
 if(${JSON.stringify(phase)}==='compilation') {
   const canceled=await new Promise(resolve=>{
     const finish=canceled=>{
-      if(canceled) fs.writeFileSync(${JSON.stringify(compilerCanceled)},'canceled');
+      if(canceled) {
+        fs.writeFileSync(${JSON.stringify(compilerCanceled)},'canceled');
+        sendReceipt(${JSON.stringify(compilerCanceled)},'ready');
+      }
       clearInterval(keepAlive);process.off('SIGTERM',stop);resolve(canceled);
     };
     const stop=()=>finish(true);
@@ -123,6 +140,7 @@ if(${JSON.stringify(phase)}==='compilation') {
     },50);
     process.once('SIGTERM',stop);
     fs.writeFileSync(${JSON.stringify(compiling)},'ready');
+    sendReceipt(${JSON.stringify(compiling)},'ready');
   });
   if(canceled) process.exit(0);
 }
@@ -161,6 +179,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {syncFixtureBuiltinExports} from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
+${fixtureReceiptClientSource(receipts.endpoint)}
 const root=${JSON.stringify(root)}, input=${JSON.stringify(input)};
 // CI workspaces need not provide native directory notifications. Control-file
 // readiness must remain observable without that optional filesystem facility.
@@ -173,6 +192,7 @@ const publish=(name,value)=>{
   const filename=path.join(root,name);
   fs.writeFileSync(filename+'.tmp',JSON.stringify(value));
   fs.renameSync(filename+'.tmp',filename);
+  sendReceipt(filename,'ready');
 };
 const spawn=cp.spawn;
 const phase=${JSON.stringify(phase)};
@@ -190,7 +210,9 @@ cp.spawn=(bin,args,options)=>{
   if(path.basename(args[bootstrap+2])!=='vitest.mjs') {
     generation=args[bootstrap+1];
     if(phase==='deletion') publish('ci-owner.json',{pid:process.pid});
-    return spawn(bin,args,options);
+    const child=spawn(bin,args,options);
+    child.once('close',()=>publish('owner-'+child.pid+'.closed',{pid:child.pid}));
+    return child;
   }
   const child=spawn(bin,[${JSON.stringify(borrower)}],options);
   child.once('close',(code,signal)=>{borrowerClosed=true;publish('borrower-closed',{pid:child.pid,code,signal});});
@@ -316,20 +338,28 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
         await command;
       });
       const waitForReceipt = (filename: string) =>
-        withTestTimeout(
-          waitForFixtureFile(filename, command),
-          10_000,
-          `Missing shutdown receipt: ${filename}`,
+        withinTest(
+          Promise.race([
+            receipts.waitFor(filename, "ready"),
+            command.then(() => {
+              // Publication precedes the receipt and command completion, but their
+              // separate transports can deliver command completion first.
+              if (!fs.existsSync(filename) || fs.statSync(filename).size === 0) {
+                throw new Error(`Missing shutdown receipt: ${filename}`);
+              }
+            }),
+          ]),
+          signal,
         );
       let owner: OwnerReceipt | undefined;
       let heldOwner: OwnerReceipt | undefined;
       try {
         // Child readiness can beat the parent's PID receipts. Join every required
-        // receipt within the command's existing startup deadline before reading them.
+        // publication before reading them.
         const ready = phase === "compilation" ? compiling : admitted;
         await Promise.all(
           [ready, ownerFile, compilerFile, ...(route === "ci-shared" ? [heldOwnerFile] : [])].map(
-            (filename) => waitForFixtureFile(filename, command),
+            (filename) => waitForReceipt(filename),
           ),
         );
         owner = JSON.parse(fs.readFileSync(ownerFile, "utf8")) as OwnerReceipt;
@@ -350,7 +380,8 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
           // the compiler, rather than waiting for that compiler before disposal.
           process.kill(owner.borrower, shutdownSignal);
           if (heldOwner) {
-            await waitForDead(owner.owner, 5_000);
+            await waitForReceipt(path.join(root, `owner-${owner.owner}.closed`));
+            expect(isProcessAlive(owner.owner)).toBe(false);
             expect(isProcessAlive(compilerPid)).toBe(true);
             expect(isProcessAlive(heldOwner.borrower)).toBe(true);
             expect(fs.existsSync(compilerCanceled)).toBe(false);
@@ -439,15 +470,15 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
             if (pid === undefined) {
               continue;
             }
-            await waitForDead(pid, 5_000);
-            await expect
-              .poll(() =>
-                managedChild.inspectManagedProcessGroup(
-                  { pid, exitCode: expectedExitCode },
-                  { errorPolicy: "indeterminate" },
-                ),
-              )
-              .toBe("dead");
+            // The command joins its process tree; nested wrappers join their
+            // borrowers and compiler before their own close can settle it.
+            expect(isProcessAlive(pid)).toBe(false);
+            expect(
+              managedChild.inspectManagedProcessGroup(
+                { pid, exitCode: expectedExitCode },
+                { errorPolicy: "indeterminate" },
+              ),
+            ).toBe("dead");
           }
           fs.rmSync(owner.generation, { recursive: true, force: true });
         }
