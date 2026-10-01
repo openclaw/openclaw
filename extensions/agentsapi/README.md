@@ -182,6 +182,10 @@ harness tells the model that inline images were omitted so it can use supplied
 text or inspect prepared original attachments with its tools. If no originals
 were transferred, the notice says so. Image-bearing steering follows the existing
 queue policy and is handled as a follow-up turn with its complete input.
+New native sessions also receive a system instruction describing the inline-image
+restriction and alternatives. Existing sessions retain their original system
+instructions, so the per-turn feedback remains necessary. System instructions
+guide model planning; they do not prevent host-side attachment preprocessing.
 Gateway sandbox placement is a separate unsupported configuration and produces
 a specific preflight error without retrying other models on the same harness.
 Gateway function availability follows the configured OpenClaw tool policy.

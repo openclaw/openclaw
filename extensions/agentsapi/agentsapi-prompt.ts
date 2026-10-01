@@ -33,6 +33,12 @@ const SELF_HOSTED_ENVIRONMENT_INSTRUCTIONS = [
   "OpenClaw does not automatically transfer output files from this executor through the Agents API.",
 ].join("\n\n");
 
+const INLINE_IMAGE_INPUT_INSTRUCTIONS = [
+  "The OpenClaw Agents API harness does not support inline image inputs. Do not send images as inline input to this harness.",
+  "For image or document tasks, use supplied text or available tools to inspect original files at the prepared execution paths in the current message.",
+  "If the needed content is unavailable, ask for a text description. Do not claim to have viewed an image you have not inspected.",
+].join(" ");
+
 const INLINE_IMAGE_INPUT_CAPABILITY_NOTICE =
   "Input capability feedback: The Agents API harness does not support inline image inputs. The inline images for this message were not sent.";
 const OMITTED_IMAGE_REPLY_GUIDANCE =
@@ -95,6 +101,7 @@ export async function buildAgentsApiInstructions(
     environment.type === "openai_hosted"
       ? OPENAI_HOSTED_ENVIRONMENT_INSTRUCTIONS
       : `${SELF_HOSTED_ENVIRONMENT_INSTRUCTIONS}\n\nYour executor workspace directory is ${JSON.stringify(environment.workspace_directory)}.`,
+    INLINE_IMAGE_INPUT_INSTRUCTIONS,
     environment.type === "openai_hosted"
       ? "OpenClaw workspace files below are Gateway-owned instruction and reference snapshots. Their paths identify their source, not files available in your hosted VM. Do not try to reread or edit those paths with hosted shell or file tools."
       : "OpenClaw workspace files below are Gateway-owned instruction and reference snapshots. Their paths identify their source, not files available in your connected executor. Do not try to reread or edit those paths with executor shell or file tools.",
