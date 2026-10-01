@@ -60,7 +60,13 @@ function extendSchemaDefs(
 }
 
 function decodeJsonPointerSegment(segment: string): string {
-  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+  let decoded = segment;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    // Keep malformed URI fragments unresolved rather than throwing while traversing a schema.
+  }
+  return decoded.replaceAll("~1", "/").replaceAll("~0", "~");
 }
 
 function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
