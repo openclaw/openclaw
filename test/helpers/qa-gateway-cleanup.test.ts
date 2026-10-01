@@ -1,4 +1,4 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import path from "node:path";
@@ -447,26 +447,29 @@ describe("QA gateway fixture error composition", () => {
     );
   });
 
-  it("retains startup and finalization errors through the actual OTel fixture", () =>
+  it("retains startup and finalization errors through the actual OTel fixture", ({ signal }) =>
     fixture.run(async () => {
       const startupError = new Error("fixture startup failed");
       const finalizationError = new Error("fixture finalization failed");
       const cleaned: string[] = [];
-      const bodies: Array<() => Promise<void>> = [];
+      const bodies: Array<(context: { signal: AbortSignal }) => Promise<void>> = [];
       const cleanups: Array<() => Promise<void>> = [];
-      const registry = {
+      const registry = Object.assign(new EventEmitter(), {
         exitCode: null as number | null,
+        signalCode: null,
         kill() {
           cleaned.push("registry");
           registry.exitCode = 0;
+          registry.emit("exit", 0, null);
           return true;
         },
-      };
+      });
       let receiverCount = 0;
       vi.doMock("vitest", () => ({
         afterAll: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
         describe: (_name: string, body: () => void) => body(),
-        test: (_name: string, body: () => Promise<void>) => bodies.push(body),
+        test: (_name: string, body: (context: { signal: AbortSignal }) => Promise<void>) =>
+          bodies.push(body),
         expect,
       }));
       vi.doMock("node:child_process", () => ({
@@ -476,7 +479,10 @@ describe("QA gateway fixture error composition", () => {
             callback(null, "", "");
           }
         },
-        spawn: () => registry,
+        spawn: () => {
+          queueMicrotask(() => registry.emit("message", 43210));
+          return registry;
+        },
       }));
       vi.doMock("node:fs/promises", () => ({
         copyFile: async () => {},
@@ -487,8 +493,7 @@ describe("QA gateway fixture error composition", () => {
           .mockResolvedValueOnce("/qa-fixture/scratch")
           .mockResolvedValueOnce("/qa-fixture/seed"),
         readdir: async () => ["diagnostics-otel.tgz"],
-        readFile: async (file: string) =>
-          file.endsWith("registry-port") ? "43210" : JSON.stringify({ version: "1.0.0" }),
+        readFile: async () => JSON.stringify({ version: "1.0.0" }),
         rm: async (target: string) => {
           cleaned.push(target);
         },
@@ -532,7 +537,7 @@ describe("QA gateway fixture error composition", () => {
       expect(cleanups).toHaveLength(1);
       let failure: unknown;
       try {
-        failure = await bodies[0]!().catch((error: unknown) => error);
+        failure = await bodies[0]!({ signal }).catch((error: unknown) => error);
       } finally {
         for (const cleanup of cleanups) {
           await cleanup();

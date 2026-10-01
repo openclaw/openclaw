@@ -487,7 +487,7 @@ describe("Gateway and node-host MCP live process parity", () => {
         await Promise.all([stopChild(sessionHttpFixture), stopChild(nodeHttpFixture)]);
         sessionHttpFixture = undefined;
         nodeHttpFixture = undefined;
-        await Promise.all(httpPids.map(waitForProcessExit));
+        expect(httpPids.map(processIsAlive)).toEqual([false, false]);
       } catch (error) {
         const message = error instanceof Error ? error.stack : String(error);
         proofError = new Error(`${message}\nnode logs:\n${node?.logs() ?? "not started"}`, {

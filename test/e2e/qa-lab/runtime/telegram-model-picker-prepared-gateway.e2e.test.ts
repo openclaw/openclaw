@@ -14,7 +14,7 @@ import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../../src/infra/kysely-sync.js";
 import type { DB } from "../../../../src/state/openclaw-state-db.generated.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db.js";
-import { withTestTimeout } from "../../../helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type JsonObject = Record<string, unknown>;
@@ -238,6 +238,7 @@ async function startControlledSourceGateway(params: {
   replacementConfigPath: string;
   fixtureRoot: string;
   repoRoot: string;
+  signal: AbortSignal;
 }) {
   const bootstrapPath = path.join(params.fixtureRoot, "source-gateway-control.mjs");
   const port = await reservePort();
@@ -326,6 +327,9 @@ process.on("message", async (message) => {
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
+  // Retain exit before any control request or stop signal can settle the child.
+  const exited = once(child, "exit");
+  void exited.catch(() => {});
   let output = "";
   child.stdout?.on("data", (chunk) => {
     output += String(chunk);
@@ -369,11 +373,11 @@ process.on("message", async (message) => {
     });
   });
   try {
-    await withTestTimeout(ready, SOURCE_GATEWAY_TIMEOUT_MS, "Source Gateway did not become ready");
+    await withinTest(ready, params.signal);
   } catch (error) {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
-      await withTestTimeout(once(child, "exit"), 10_000, "Source Gateway did not stop");
+      await exited;
     }
     throw new Error(`${String(error)}\n${output}`, { cause: error });
   }
@@ -403,7 +407,7 @@ process.on("message", async (message) => {
         await request("close").catch(() => child.kill("SIGTERM"));
       }
       if (child.exitCode === null && child.signalCode === null) {
-        await withTestTimeout(once(child, "exit"), 10_000, "Source Gateway did not exit");
+        await exited;
       }
     },
   };
@@ -924,7 +928,9 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
   });
 }, 120_000);
 
-test("recovers a replaced model catalog and drains the following Telegram callback", async () => {
+test("recovers a replaced model catalog and drains the following Telegram callback", async ({
+  signal,
+}) => {
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
   const getUpdatesOffsets: Array<number | undefined> = [];
@@ -1012,6 +1018,7 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           replacementConfigPath,
           fixtureRoot,
           repoRoot,
+          signal,
         });
         const queue = createChannelIngressQueue({
           channelId: "telegram",

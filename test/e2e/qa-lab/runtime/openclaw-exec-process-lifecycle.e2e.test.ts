@@ -1,5 +1,6 @@
 import { ChildProcess } from "node:child_process";
 import { constants } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 import { expect, test, vi } from "vitest";
 import {
   getActiveBackgroundExecSessionCount,
@@ -8,6 +9,7 @@ import {
 import { resetProcessRegistryForTests } from "../../../../src/agents/bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "../../../../src/agents/bash-tools.js";
 import { getProcessSupervisor } from "../../../../src/process/supervisor/index.js";
+import { withinTest } from "../../../helpers/promise.js";
 
 type ExecTool = ReturnType<typeof createExecTool>;
 type ProcessTool = ReturnType<typeof createProcessTool>;
@@ -53,6 +55,18 @@ function pidExists(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+// Process removal does not expose an extinction join, and its owner may remove child listeners.
+async function waitForExitedPids(pids: readonly number[], signal: AbortSignal): Promise<void> {
+  const check = async () => {
+    while (pids.some(pidExists)) {
+      await delay(25, undefined, { signal });
+    }
+  };
+  await withinTest(check(), signal).catch((cause: unknown) => {
+    throw new Error("tracked process PIDs did not exit before test cancellation", { cause });
+  });
 }
 
 function injectKillPermissionError(child: ChildProcess): void {
@@ -104,7 +118,7 @@ async function clearFinished(processTool: ProcessTool, sessionId: string): Promi
   expect(cleared.details).toMatchObject({ status: "completed" });
 }
 
-test("OpenClaw executes and controls the complete real process lifecycle", async () => {
+test("OpenClaw executes and controls the complete real process lifecycle", async ({ signal }) => {
   resetProcessRegistryForTests();
   const scopeKey = `agent:qa:exec-lifecycle-${process.pid}`;
   const execTool = createExecTool({
@@ -290,7 +304,8 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
       exitReason: "manual-cancel",
     });
     await clearFinished(processTool, killedSession.sessionId);
-    await expect.poll(() => pidExists(killedSession.pid), POLL_OPTIONS).toBe(false);
+    await waitForExitedPids([killedSession.pid], signal);
+    expect(pidExists(killedSession.pid)).toBe(false);
     expect(child.listenerCount("error")).toBe(0);
     expect(child.listenerCount("exit")).toBe(0);
     expect(child.listenerCount("close")).toBe(0);
@@ -312,7 +327,10 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
         process.kill(pid, "SIGKILL");
       }
     }
-    await expect.poll(() => [...cleanupPids].filter(pidExists).length, POLL_OPTIONS).toBe(0);
-    resetProcessRegistryForTests();
+    try {
+      await waitForExitedPids([...cleanupPids], signal);
+    } finally {
+      resetProcessRegistryForTests();
+    }
   }
 }, 30_000);
