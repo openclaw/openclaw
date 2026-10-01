@@ -1,7 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
-  hasNonTextEmbeddingParts,
   isEmbeddingBatchUnavailableError,
   type EmbeddingInput,
   type MemoryEmbeddingProviderRuntime,
@@ -34,7 +33,6 @@ import {
 } from "./manager-embedding-cache-ops.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
-  buildMemoryEmbeddingBatches,
   isSplittableMemoryEmbeddingBatchError,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -318,45 +316,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     this.syncProviderGenerationRelease = null;
   }
 
-  private async embedChunksInBatches(
-    candidates: MemoryEmbeddingCacheCandidate[],
-    generation: MemorySemanticProviderGeneration,
-  ): Promise<number[][]> {
-    const { embeddings, missing, missingCandidates } = this.collectCachedEmbeddings(
-      candidates,
-      generation,
-    );
-
-    if (missing.length === 0) {
-      return embeddings;
-    }
-
-    const batches = buildMemoryEmbeddingBatches(
-      missingCandidates.map((candidate) => candidate.chunk),
-      EMBEDDING_BATCH_MAX_TOKENS,
-    );
-    let cursor = 0;
-    for (const batchChunks of batches) {
-      const batchCandidates = missingCandidates.slice(cursor, cursor + batchChunks.length);
-      const inputs = batchChunks.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
-      const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
-      const batchEmbeddings = await this.embedBatchWithRetry(
-        hasStructuredInputs ? inputs : batchChunks.map((chunk) => chunk.text),
-        generation,
-        batchCandidates,
-      );
-      for (let i = 0; i < batchChunks.length; i += 1) {
-        const item = missing[cursor + i];
-        const embedding = batchEmbeddings[i] ?? [];
-        if (item) {
-          embeddings[item.index] = embedding;
-        }
-      }
-      cursor += batchChunks.length;
-    }
-    return embeddings;
-  }
-
   protected computeProviderKey(): string {
     return expectDefined(
       this.resolveProviderIndexIdentities().at(0),
@@ -381,12 +340,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     const provider = generation.provider;
     const batchEmbed = generation.runtime?.batchEmbed;
     if (!batchEmbed) {
-      return this.embedChunksInBatches(candidates, generation);
+      return this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
     }
-    const { embeddings, missing, missingCandidates } = this.collectCachedEmbeddings(
+    const { embeddings, missing, missingCandidates } = await this.collectCachedEmbeddings(
       candidates,
       generation,
     );
+    this.assertEmbeddingCacheGenerationCurrent(generation);
     if (missing.length === 0) {
       return embeddings;
     }
@@ -405,11 +365,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           debug: (message, data) =>
             log.debug(message, { ...data, source, chunks: candidates.length, ...debugContext }),
         }),
-      fallback: async () => await this.embedChunksInBatches(missingCandidates, generation),
+      fallback: async () =>
+        await this.embedChunksInBatches(missingCandidates, generation, EMBEDDING_BATCH_MAX_TOKENS),
     });
     const batchEmbeddings = batchResult.value;
     if (!batchEmbeddings) {
-      return this.embedChunksInBatches(candidates, generation);
+      return this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
     }
     if (batchResult.kind === "batch") {
       await this.persistGeneratedEmbeddings(missingCandidates, batchEmbeddings, generation);
@@ -420,7 +381,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     return embeddings;
   }
 
-  protected async embedBatchWithRetry(
+  protected override async embedBatchWithRetry(
     inputs: Array<string | EmbeddingInput>,
     generation?: MemorySemanticProviderGeneration,
     cacheCandidates?: MemoryEmbeddingCacheCandidate[],
@@ -1031,7 +992,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       }));
       embeddings = this.batch.enabled
         ? await this.embedChunksWithBatch(candidates, options.source, generation)
-        : await this.embedChunksInBatches(candidates, generation);
+        : await this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
     } catch (err) {
       const message = formatErrorMessage(err);
       if (

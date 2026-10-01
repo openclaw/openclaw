@@ -9,9 +9,15 @@ const NO_PENDING_CHILD_COMPLETION_MESSAGE =
 
 export type SessionsYieldClaimResult =
   | boolean
+  | { messageWaitRegistered: boolean }
   | { error: string }
   | { pendingChildren: readonly UnsettledRequesterChild[] };
 export type SessionsYieldIntent = { waitFor?: "message"; acknowledgment?: string };
+export type SessionsYieldCallback = (
+  message: string,
+  acknowledgment?: string,
+  messageWaitRegistered?: boolean,
+) => Promise<void> | void;
 
 function describePendingChild(child: UnsettledRequesterChild): string {
   const name = child.label ? `${child.label} (${child.childSessionKey})` : child.childSessionKey;
@@ -70,7 +76,7 @@ export function createSessionsYieldTool(opts?: {
   claimYield?: (
     intent?: SessionsYieldIntent,
   ) => SessionsYieldClaimResult | Promise<SessionsYieldClaimResult>;
-  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  onYield?: SessionsYieldCallback;
 }): AnyAgentTool {
   return {
     label: "Yield",
@@ -114,10 +120,10 @@ export function createSessionsYieldTool(opts?: {
           pendingChildren: claim.pendingChildren,
         });
       }
-      if (typeof claim === "object") {
+      if (typeof claim === "object" && "error" in claim) {
         return jsonResult({ status: "error", error: claim.error });
       }
-      if (claim !== true) {
+      if (claim !== true && typeof claim !== "object") {
         // Advisory, not a failure: the model keeps the turn and nothing the user asked for failed.
         return jsonResult({
           status: "nothing_pending",
@@ -125,7 +131,11 @@ export function createSessionsYieldTool(opts?: {
         });
       }
       // The runtime owns the actual pause/end-turn behavior; this tool records intent.
-      await opts.onYield(message, acknowledgment);
+      await opts.onYield(
+        message,
+        acknowledgment,
+        typeof claim === "object" ? claim.messageWaitRegistered : undefined,
+      );
       return jsonResult({
         status: "yielded",
         ...(acknowledgment ? { acknowledgment } : {}),

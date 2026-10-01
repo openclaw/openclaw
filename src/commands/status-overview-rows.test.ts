@@ -33,6 +33,32 @@ function findRowValue(rows: Array<{ Item: string; Value: string }>, item: string
 }
 
 describe("status-overview-rows", () => {
+  it("shows the latest offsite attempt beside a newer local backup", () => {
+    vi.spyOn(Date, "now").mockReturnValue(3_600_000);
+    const rows = buildStatusCommandOverviewRows({
+      ...createStatusCommandOverviewRowsParams(),
+      backupFreshness: {
+        latest: {
+          id: "local",
+          createdAt: 3_000_000,
+          archivePath: "/backup/local",
+          kind: "git",
+          status: "ok",
+        },
+        latestOffsite: {
+          id: "remote",
+          createdAt: 1,
+          archivePath: "",
+          kind: "archive",
+          status: "failed",
+          target: "offsite",
+        },
+      },
+    });
+    expect(findRowValue(rows, "Backups")).toContain("last ok");
+    expect(findRowValue(rows, "Offsite backup")).toContain("offsite: last attempt failed");
+  });
+
   it.each(["default", "all"])("preserves service inspection failures in %s output", (mode) => {
     const params = createStatusCommandOverviewRowsParams();
     const service = {

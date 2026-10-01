@@ -31,8 +31,8 @@ import {
   selectAcpSessionRow,
   selectLegacyFreeAcpSessionRows,
   upsertAcpSessionMetaRow,
-  type AcpSessionRow,
 } from "./session-meta-keys.js";
+import type { AcpSessionRow } from "./session-meta-read.types.js";
 import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 

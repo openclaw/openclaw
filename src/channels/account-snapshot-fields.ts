@@ -47,13 +47,6 @@ export function redactChannelStatusSummaryBaseUrl<T>(summary: T): T {
     : ({ ...summary, baseUrl: redactedBaseUrl } as T);
 }
 
-/** Redacts a plugin-provided base URL at the public account-snapshot boundary. */
-export function redactChannelAccountSnapshotBaseUrl<T extends Partial<ChannelAccountSnapshot>>(
-  snapshot: T,
-): T {
-  return redactChannelStatusSummaryBaseUrl(snapshot);
-}
-
 function readNullableNumber(
   record: Record<string, unknown>,
   key: string,

@@ -4,6 +4,7 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
 import {
@@ -587,7 +588,7 @@ export async function enqueueRun(
     releaseCallerAuthority?.();
     throw error;
   }
-  void queuedRun
+  const settled = queuedRun
     .catch(async (err: unknown) => {
       if (!accepted) {
         acceptance.reject(err);
@@ -627,8 +628,44 @@ export async function enqueueRun(
       // path that never entered the activation callback.
       activationSettled.resolve();
       releaseCallerAuthority?.();
+      state.queuedManualRuns.delete(runId);
     });
+  state.queuedManualRuns.set(runId, settled);
   return await acceptance.promise;
+}
+
+/**
+ * Resolves true once an accepted manual run has written its terminal history row,
+ * or false when the timeout or caller signal ends the wait first.
+ */
+export async function waitForManualRun(
+  state: CronServiceState,
+  runId: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const settled = state.queuedManualRuns.get(runId);
+  if (!settled) {
+    return true;
+  }
+  if (signal?.aborted) {
+    return false;
+  }
+  const { promise, resolve } = createDeferredCore<boolean>();
+  const timer = setSafeTimeout(() => resolve(false), timeoutMs);
+  const onAbort = () => resolve(false);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  // Background failures are logged by the run owner; the waiter only needs settlement.
+  settled.then(
+    () => resolve(true),
+    () => resolve(true),
+  );
+  try {
+    return await promise;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 /** Enqueues manual wake text through the cron wake API. */

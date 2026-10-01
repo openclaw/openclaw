@@ -140,6 +140,43 @@ export function createOxlintFileScope(files: readonly string[], cwd = process.cw
   };
 }
 
+/** Package roots narrow reported targets after their canonical stripe and chunk ownership. */
+export function createOxlintExtensionRootScope(roots: readonly string[], cwd = process.cwd()) {
+  const available = new Set(
+    listOxlintRootEntries(EXTENSIONS_DIR, { cwd, readDir: fs.readdirSync }).dirs,
+  );
+  if (
+    roots.length === 0 ||
+    new Set(roots).size !== roots.length ||
+    !roots.every(
+      (root) => /^extensions\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(root) && available.has(root),
+    )
+  ) {
+    throw new Error("Oxlint extension selection requires unique, present canonical package roots");
+  }
+  const selected = new Set(roots);
+  return {
+    roots: [...selected].toSorted((left, right) => left.localeCompare(right)),
+    selectShards(shards: readonly OxlintShard[]) {
+      return shards.flatMap((shard) => {
+        if (!shard.name.startsWith("extensions:")) {
+          throw new Error("Oxlint extension roots require canonical extension-only chunks");
+        }
+        const targets = shard.args.slice(2).filter((target) => selected.has(target));
+        return targets.length
+          ? [
+              {
+                ...shard,
+                args: [...shard.args.slice(0, 2), ...targets],
+                canonicalTargets: shard.canonicalTargets ?? shard.args.slice(2),
+              },
+            ]
+          : [];
+      });
+    },
+  };
+}
+
 export function createOxlintShards({
   cwd = process.cwd(),
   env = process.env,
@@ -329,7 +366,8 @@ export async function main(
   const shardArgs = parseShardRunnerArgs(extraArgs);
   const env = resolveLocalCheckEnv(runtimeEnv);
   const hostResources = resolveHostResources();
-  const splitExtensions = shardArgs.extensionStripe !== undefined;
+  const splitExtensions =
+    shardArgs.extensionStripe !== undefined || shardArgs.extensionRoots !== undefined;
   const shards = createOxlintShards({
     cwd: process.cwd(),
     env,
@@ -344,9 +382,11 @@ export async function main(
     }),
     shardArgs.extensionStripe,
   );
-  const selectedShards = shardArgs.files
-    ? createOxlintFileScope(shardArgs.files).selectShards(stripedShards)
-    : stripedShards;
+  const selectedShards = shardArgs.extensionRoots
+    ? createOxlintExtensionRootScope(shardArgs.extensionRoots).selectShards(stripedShards)
+    : shardArgs.files
+      ? createOxlintFileScope(shardArgs.files).selectShards(stripedShards)
+      : stripedShards;
 
   const needsArtifacts = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
     selectedShards,
@@ -445,6 +485,7 @@ export function parseShardRunnerArgs(args: string[]) {
   let extensionStripe: ShardStripe | undefined;
   let splitCore = false;
   let files: string[] | undefined;
+  let extensionRoots: string[] | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -461,6 +502,19 @@ export function parseShardRunnerArgs(args: string[]) {
         throw new Error("--files-json requires a nonempty JSON string array");
       }
       files = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--extension-roots-json") {
+      const value: unknown = JSON.parse(args[index + 1] ?? "null");
+      if (
+        !Array.isArray(value) ||
+        value.length === 0 ||
+        !value.every((root) => typeof root === "string")
+      ) {
+        throw new Error("--extension-roots-json requires a nonempty JSON string array");
+      }
+      extensionRoots = value;
       index += 1;
       continue;
     }
@@ -504,6 +558,9 @@ export function parseShardRunnerArgs(args: string[]) {
   if (coreStripe && !splitCore) {
     throw new Error("--core-stripe requires --split-core");
   }
+  if (extensionRoots && (files || only.size !== 1 || !only.has("extensions"))) {
+    throw new Error("--extension-roots-json requires --only=extensions without --files-json");
+  }
   return {
     coreStripe,
     extensionStripe,
@@ -511,6 +568,7 @@ export function parseShardRunnerArgs(args: string[]) {
     oxlintArgs,
     splitCore,
     ...(files ? { files } : {}),
+    ...(extensionRoots ? { extensionRoots } : {}),
   };
 }
 

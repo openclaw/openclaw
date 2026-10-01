@@ -33,7 +33,7 @@ import { parseTestProjectsArgs } from "../../scripts/test-projects.test-support.
 import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isProcessAlive, waitForChildClose } from "../helpers/process-wait.js";
-import { withTestTimeout } from "../helpers/promise.js";
+import { withinTest } from "../helpers/promise.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -534,12 +534,12 @@ registerHooks({resolve(specifier, context, nextResolve) {
     }
   });
 
-  posixIt.each([
+  posixIt.for([
     { timeout: false, exitCode: 0, expectedCode: 0 },
     { timeout: true, exitCode: 0, expectedCode: 1 },
     { timeout: true, exitCode: 7, expectedCode: 7 },
     { timeout: true, exitCode: null, expectedCode: null },
-  ])("settles descendants (timeout=$timeout, child=$exitCode)", async (row) => {
+  ])("settles descendants (timeout=$timeout, child=$exitCode)", async (row, context) => {
     const watchedEnv = {
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "5000",
     };
@@ -608,7 +608,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
     });
 
     try {
-      const snapshot = await withTestTimeout(
+      const snapshot = await withinTest(
         Promise.all([ready, rawExit, watched.completion]).then(([, raw, result]) => {
           const psArgs =
             process.platform === "linux" ? ["-eL", "-o", "pgid=,state="] : ["-axo", "pgid=,state="];
@@ -630,8 +630,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
               .every((processRow) => /^[ZX]/.test(processRow?.[2] ?? ""));
           return { groupStopped, noOutputTimedOut, raw, result };
         }),
-        LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-        "timed out waiting for watched Vitest completion",
+        context.signal,
       );
 
       const signal = row.exitCode === null ? "SIGTERM" : null;

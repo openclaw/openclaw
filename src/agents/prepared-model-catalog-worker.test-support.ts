@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { expect, vi } from "vitest";
+import { fixtureReceiptWorkerClientSource } from "../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
 import {
@@ -118,6 +119,7 @@ export function writeCodexAuth(codexHome: string, marker: string): void {
 export function writeFixturePlugin(params: {
   root: string;
   spinMs: number;
+  receiptBroadcastName?: string;
   pluginVersion?: string;
   builtPluginVersion?: string;
   nativeCatalog?: boolean;
@@ -256,11 +258,13 @@ module.exports = {
         },
       },
       async augmentModelCatalog(context) {
+        ${params.receiptBroadcastName ? `const { sendReceipt } = await import(${JSON.stringify("data:text/javascript," + encodeURIComponent(fixtureReceiptWorkerClientSource(params.receiptBroadcastName) + "\nexport { sendReceipt };"))});` : ""}
         const marker = process.env.OPENCLAW_WORKER_CATALOG_MARKER;
         const invocation = fs.existsSync(marker)
           ? fs.readFileSync(marker, "utf8").split("start\\n").length
           : 1;
         fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, "start\\n");
+        ${params.receiptBroadcastName ? 'sendReceipt(marker, "start");' : ""}
         const barrier = marker + ".hold";
         if (fs.existsSync(barrier)) {
           await new Promise((resolve) => {
@@ -301,6 +305,7 @@ module.exports = {
     const builtFile = writeFixturePlugin({
       root: params.root,
       spinMs: params.spinMs,
+      receiptBroadcastName: params.receiptBroadcastName,
       pluginVersion: params.builtPluginVersion,
       asyncSyntheticAuth: params.asyncSyntheticAuth,
       syntheticAuthAvailable: params.syntheticAuthAvailable,
@@ -360,6 +365,7 @@ export function createCatalogFixture(
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
+    receiptBroadcastName?: string;
     hydrateExternalCliProviderIds?: readonly string[];
     codexNativeOwner?: boolean;
     codexNativeHomeScope?: "agent" | "user";

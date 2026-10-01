@@ -454,6 +454,10 @@ const PR_SMOKE_TEST_FILES = [
   "src/plugins/loader.runtime-registry.test.ts",
   "test/qa-channel-message-tool-delivery.test.ts",
 ];
+const AGGRESSIVE_PR_SMOKE_TEST_FILES = [
+  "src/config/io.load-async.test.ts",
+  "src/plugins/loader.runtime-registry.test.ts",
+];
 const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
 
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
@@ -463,12 +467,15 @@ export function resolveChangedNodeTestTargets(
 ): string[] {
   const cwd = options.cwd ?? process.cwd();
   const paths = changedPaths.filter((file) => !isIndependentlyCheckedDocumentation(file, cwd));
+  const aggressive = options.selectionMode === "aggressive";
+  const smoke = aggressive ? AGGRESSIVE_PR_SMOKE_TEST_FILES : PR_SMOKE_TEST_FILES;
   const selections: { rule: string; input: string; targets: string[] }[] = [];
   const recordSelection = (selection: (typeof selections)[number]) => selections.push(selection);
   const targetPlan = resolveChangedTestTargetPlan(paths, {
     cwd,
     broad: false,
     boundedOwners: true,
+    aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
     combineSiblingWithImportGraph: true,
     resolveAliases: true,
     runtimeOnly: true,
@@ -483,38 +490,40 @@ export function resolveChangedNodeTestTargets(
   // Dependency and global build inputs reach every runtime area. Keep the
   // observed regression inventory without restoring the whole runtime suite.
   const globalProtection = paths.some((file) => getChangedPathFacts(file).surface === "rootGlobal");
-  const affectedProtectedTests = globalProtection
+  const affectedProtectedTests =
+    globalProtection || aggressive
+      ? []
+      : resolveAffectedTestsFromImportGraph(paths, cwd, {
+          tooling: true,
+          forceFull: true,
+          resolveAliases: true,
+          runtimeOnly: true,
+        }).filter((file) => protectedRuntimeTestFiles.has(file));
+  const ownerOptIns = aggressive
     ? []
-    : resolveAffectedTestsFromImportGraph(paths, cwd, {
-        tooling: true,
-        forceFull: true,
-        resolveAliases: true,
-        runtimeOnly: true,
-        maxDepth: options.selectionMode === "aggressive" ? 2 : undefined,
-      }).filter((file) => protectedRuntimeTestFiles.has(file));
-  const ownerOptIns =
-    options.selectionMode === "aggressive"
-      ? affectedProtectedTests
-      : [
-          ...PR_PROTECTED_RUNTIME_TEST_FILES.filter((file) => globalProtection || ownsFile(file)),
-          ...affectedProtectedTests,
-          ...listPrExemptRuntimeTestFiles(cwd).filter(ownsFile),
-        ];
+    : [
+        ...PR_PROTECTED_RUNTIME_TEST_FILES.filter((file) => globalProtection || ownsFile(file)),
+        ...affectedProtectedTests,
+        ...listPrExemptRuntimeTestFiles(cwd).filter(ownsFile),
+      ];
   recordSelection({ rule: "protected-owner", input: paths.join(", "), targets: ownerOptIns });
   recordSelection({
     rule: "policy-watch",
     input: paths.join(", "),
     targets: resolvePolicyTestTargets(paths),
   });
-  recordSelection({ rule: "fixed-smoke", input: "PR", targets: PR_SMOKE_TEST_FILES });
+  recordSelection({ rule: "fixed-smoke", input: "PR", targets: smoke });
   const owners = [
     ...new Set([
       ...targetPlan.targets,
+      ...(aggressive ? paths.filter(isTestFileTarget) : []),
       ...ownerOptIns,
-      ...paths.filter(
-        (file) =>
-          listRunnableVitestConfigTargets().includes(file) && isCanonicalNodeTestConfig(file),
-      ),
+      ...(aggressive
+        ? []
+        : paths.filter(
+            (file) =>
+              listRunnableVitestConfigTargets().includes(file) && isCanonicalNodeTestConfig(file),
+          )),
       ...(paths.some((file) => listRunnableVitestConfigTargets().includes(file))
         ? ["test/vitest-projects-config.test.ts"]
         : []),
@@ -527,7 +536,7 @@ export function resolveChangedNodeTestTargets(
       ["src", "test", "extensions", "packages", "ui"],
       cwd,
     ));
-  const optInTargets = new Set([...paths, ...PR_SMOKE_TEST_FILES, ...ownerOptIns]);
+  const optInTargets = new Set([...paths, ...smoke, ...ownerOptIns]);
   const expandTarget = (target: string): string[] => {
     if (isTestFileTarget(target)) {
       optInTargets.add(target);
@@ -563,7 +572,7 @@ export function resolveChangedNodeTestTargets(
   };
   const expanded = new Map(owners.map((target) => [target, expandTarget(target)]));
   const files = [...expanded.values()].flat();
-  const selected = [...new Set([...files, ...PR_SMOKE_TEST_FILES])]
+  const selected = [...new Set([...files, ...smoke])]
     .filter(
       (file) =>
         isTestFileTarget(file) &&

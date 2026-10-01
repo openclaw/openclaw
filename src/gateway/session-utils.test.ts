@@ -1,7 +1,7 @@
+import fs from "node:fs";
 // Session utility tests cover key parsing, store migration, agent/default rows,
 // model identity resolution, title derivation, and byte-capped row payloads.
 import "./session-utils-provider.test-support.js";
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -2440,7 +2440,7 @@ describe("gateway session utils", () => {
     },
   ])("listAgentsForGateway never overstates $name", async ({ cfg, approvals, expected }) => {
     await withAgentPermissionState(async () => {
-      execApprovalsStore.saveExecApprovals(approvals);
+      execApprovalsStore.updateExecApprovalsSync({ update: () => approvals });
       const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
       expect(agent).toBeDefined();
       if (expected === undefined) {

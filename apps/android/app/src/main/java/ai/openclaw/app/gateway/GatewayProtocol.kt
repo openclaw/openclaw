@@ -1049,6 +1049,9 @@ enum class GatewayMethod(
   GatewayStopRequest("gateway.stop.request"),
   DiagnosticsHeapSnapshot("diagnostics.heapSnapshot"),
   SessionsCatalogImport("sessions.catalog.import"),
+  BackupStatus("backup.status"),
+  StorageLocationsList("storage.locations.list"),
+  StorageLocationsProbe("storage.locations.probe"),
 }
 
 enum class GatewayEvent(

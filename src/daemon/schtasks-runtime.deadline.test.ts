@@ -154,6 +154,10 @@ describe("bounded Startup runtime observations", () => {
         { label: "empty command line", entry: { ProcessId: 222, CommandLine: "" } },
         { label: "blank command line", entry: { ProcessId: 222, CommandLine: "  " } },
         {
+          label: "unparseable command line",
+          entry: { ProcessId: 222, CommandLine: "node\0 gateway" },
+        },
+        {
           label: "missing process identity",
           entry: { CommandLine: command(kind).programArguments.join(" ") },
         },

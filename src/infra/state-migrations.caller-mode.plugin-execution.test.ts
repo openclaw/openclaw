@@ -587,7 +587,8 @@ module.exports = { stateMigrations: [{
         ).resolves.toMatchObject({
           changes: ["migrated relocated action"],
           warnings: [],
-          completedPluginIds: [pluginId],
+          // Nothing is deferred or retained here, so completion is not certified.
+          completedPluginIds: undefined,
         });
       } else {
         expect(

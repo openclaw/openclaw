@@ -126,12 +126,6 @@ export function renderChatCiAutomation(props: ChatCiAutomationProps) {
           `,
         )}
       </fieldset>
-      <p class="chat-ci__automation-help">${t("chat.pullRequests.automationHelp")}</p>
-      <details class="chat-ci__automation-help-details">
-        <summary>${t("chat.pullRequests.automationDetails")}</summary>
-        <p class="chat-ci__automation-help">${t("chat.pullRequests.automationStopHelp")}</p>
-        <p class="chat-ci__automation-help">${t("chat.pullRequests.automationArchiveHelp")}</p>
-      </details>
       ${
         props.schedulerEnabled === false
           ? html`<p class="chat-ci__automation-warning" role="status">

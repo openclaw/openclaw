@@ -43,7 +43,7 @@ import { createAgentsApiSession } from "./agentsapi-session.js";
 import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
-import { resolveAgentsApiEnvironment } from "./config.js";
+import { agentsApiConfigSchema, resolveAgentsApiEnvironment } from "./config.js";
 
 export async function runAgentsApiAttempt(
   params: AgentHarnessAttemptParamsV2,
@@ -221,7 +221,8 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
-    const environment = resolveAgentsApiEnvironment(readPluginConfig(), params.workspaceDir);
+    const pluginConfig = agentsApiConfigSchema.parse(readPluginConfig() ?? {});
+    const environment = resolveAgentsApiEnvironment(pluginConfig, params.workspaceDir);
     const surface = buildAgentsApiToolSurface(
       runParams,
       controller.signal,
@@ -277,11 +278,9 @@ export async function runAgentsApiAttempt(
       ? await buildAgentsApiInstructions(params, surface.declarations, environment)
       : "";
     assertCurrent();
-    const admittedMessage =
-      params.userTurnTranscriptRecorder?.message ??
-      (await params.userTurnTranscriptRecorder?.resolveMessage());
-    assertCurrent();
     const recorder = params.userTurnTranscriptRecorder;
+    const admittedMessage = recorder?.message ?? (await recorder?.resolveMessage());
+    assertCurrent();
     const historyLimits = resolveAgentHarnessHistoryLimits(
       params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
     );
@@ -336,6 +335,7 @@ export async function runAgentsApiAttempt(
         promptBuild.developerInstructions,
         params.model.id,
         {
+          nativeTools: pluginConfig.nativeTools,
           functions: surface.declarations,
           mcpTools,
           files: inputs.files,

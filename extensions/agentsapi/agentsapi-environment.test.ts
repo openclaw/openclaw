@@ -172,6 +172,39 @@ afterEach(() => {
 
 describe("Agents API attempt environment selection", () => {
   it.each([
+    { nativeTools: [] },
+    {
+      nativeTools: [
+        { type: "web_search", mode: "cached", allowed_domains: ["example.com"] },
+        { type: "programmatic_tool_calling", enabled: false },
+        { type: "future_native_tool", options: { feature: true } },
+      ],
+    },
+  ])(
+    "forwards native tools $nativeTools unchanged only when creating a session",
+    async ({ nativeTools }) => {
+      const created = await attempt(undefined, undefined, undefined, undefined, { nativeTools });
+
+      expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
+      expect(await requestBody(0)).toHaveProperty("agent.tools", nativeTools);
+      mocks.fetch.mockClear();
+
+      const continued = await attempt(
+        undefined,
+        created.bind.mock.calls[0]![0],
+        undefined,
+        undefined,
+        {
+          nativeTools: nativeTools.length ? [] : [{ type: "web_search", mode: "live" }],
+        },
+      );
+
+      expect(continued.result).toMatchObject({ terminal: { kind: "ok" } });
+      expect(await requestBody(0)).toEqual({ agent: { reasoning: { effort: null } } });
+    },
+  );
+
+  it.each([
     { access: "enabled" },
     { access: "disabled", allowed_domains: null },
     {
@@ -272,7 +305,13 @@ describe("Agents API attempt environment selection", () => {
           environment === "self_hosted"
             ? { type: "self_hosted", workspace_directory: path.resolve(workspaceDir) }
             : { type: "openai_hosted" },
-        agent: { model: "fixture-model", tools: [{ type: "web_search", mode: "live" }] },
+        agent: {
+          model: "fixture-model",
+          tools: [
+            { type: "web_search", mode: "live" },
+            { type: "programmatic_tool_calling", enabled: true },
+          ],
+        },
       });
       if (environment === "self_hosted") {
         expect(createRequest).toHaveProperty("environment", {

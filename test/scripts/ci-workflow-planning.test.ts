@@ -2326,6 +2326,8 @@ describe("ci workflow guards", () => {
       for (const family of [
         "run_build_artifacts",
         "run_ios_build",
+        "run_ios_voice_cleanup_tests",
+        "run_ios_lifecycle_tests",
         "run_macos_swift",
         "run_checks_windows",
         "run_ui_tests",
@@ -2516,6 +2518,8 @@ describe("ci workflow guards", () => {
         preflightOutputs: {
           compatibility_target: String(historical),
           run_openclawkit_tests: "true",
+          run_ios_voice_cleanup_tests: "true",
+          run_ios_lifecycle_tests: "true",
           release_scope: "full",
         },
       };
@@ -2548,6 +2552,7 @@ describe("ci workflow guards", () => {
           : {
               smoke: [
                 "Swift lint",
+                ...(historical ? [] : ["Configure iOS build and report simulator selection"]),
                 ...(historical ? [] : ["Prepare iOS simulator"]),
                 "Build iOS app",
                 ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
@@ -2557,6 +2562,7 @@ describe("ci workflow guards", () => {
               tests: [
                 "Test Watch RTC engine",
                 "Swift lint",
+                "Configure iOS build and report simulator selection",
                 "Prepare iOS simulator",
                 "Build iOS app",
                 "Run focused iOS voice cleanup simulator tests",
@@ -8032,6 +8038,13 @@ describe("ci workflow guards", () => {
         run_macos_swift: "false",
         run_openclawkit_tests: "false",
         run_ios_build: "false",
+        run_ios_voice_cleanup_tests: "false",
+        run_ios_lifecycle_tests: "false",
+        ios_simulator_selection: JSON.stringify({
+          mode: "not-selected",
+          voice: { selected: false, reasons: ["iOS job not selected"] },
+          lifecycle: { selected: false, reasons: ["iOS job not selected"] },
+        }),
         run_android: "false",
         run_android_job: "false",
         run_android_access_native: "false",
@@ -11801,4 +11814,90 @@ describe("ci workflow guards", () => {
       expect(runStep.run.split(file)).toHaveLength(3);
     }
   });
+});
+
+describe("extension lint PR admission", () => {
+  it.each([
+    { eventName: "pull_request", kill: "false", mode: "affected" },
+    { eventName: "pull_request", kill: "true", mode: "full" },
+    { eventName: "pull_request", kill: "1", mode: "full" },
+    { eventName: "schedule", kill: "false", mode: undefined },
+    { eventName: "workflow_dispatch", kill: "false", mode: undefined },
+  ] as const)(
+    "keeps $eventName extension coverage under kill=$kill",
+    ({ eventName, kill, mode }) => {
+      // Re-export the real installed owners while the existing harness supplies
+      // its bounded compiler inventory. No new shared fixture capability is needed.
+      const owner = pathToFileURL(path.resolve("scripts/lib/ci-extension-lint-plan.mts")).href;
+      const lint = pathToFileURL(path.resolve("scripts/run-oxlint-shards.mts")).href;
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        checkFamilyScope: true,
+        historicalCompatibility: false,
+        runnerProfile: "hybrid",
+        eventName,
+        changedPaths: ["tsconfig.json"],
+        changedPlannerSource: `
+        import { writeFileSync } from "node:fs";
+        writeFileSync(new URL("./ci-extension-lint-plan.mts", import.meta.url), ${JSON.stringify(`export { resolveCiExtensionLintSelection } from ${JSON.stringify(owner)};\n`)});
+        writeFileSync(new URL("../run-oxlint-shards.mts", import.meta.url), ${JSON.stringify(`export { createExtensionOxlintShards, createOxlintExtensionRootScope, selectExtensionOxlintStripe } from ${JSON.stringify(lint)};\n`)});
+        export const createChangedNodeTestShards = () => [{
+          checkName: "selected-extension-lint-test", shardName: "selected-extension-lint-test",
+          configs: [], targets: ["src/selected.test.ts"], requiresDist: false,
+          runner: "ubuntu-24.04",
+        }];
+      `,
+        scopeEnv: {
+          OPENCLAW_CI_EXTENSION_LINT_FULL: kill,
+          OPENCLAW_CI_CHANGED_BASE: "a".repeat(40),
+        },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_check_plan).toBe(String(eventName === "pull_request"));
+      if (mode) {
+        const input = JSON.parse(manifest.outputs.check_plan_input_json!);
+        expect(input.extensionLintMode).toBe(mode);
+        expect(input.changedBaseRef).toBe("a".repeat(40));
+        expect(input.preserveFullChecks).toBe(true);
+        expect(input.lintCoreMatrix.include).toEqual([{ stripe: 1 }, { stripe: 2 }]);
+        expect(input.typeGraphBoundaryOwner).toBe("additional-checks");
+        expect(
+          JSON.parse(manifest.checkPlanOutputs.check_matrix!).include.map(
+            (row: { task: string }) => row.task,
+          ),
+        ).toContain("prod-types");
+        expect(
+          JSON.parse(manifest.checkPlanOutputs.check_matrix!).include.map(
+            (row: { task: string }) => row.task,
+          ),
+        ).toContain("test-types");
+      } else {
+        expect(manifest.outputs.check_plan_input_json).toBe("");
+        expect(manifest.outputs.run_lint_extensions).toBe("true");
+      }
+      const steps = readCiWorkflow().jobs["check-plan"].steps;
+      const ensureBase = steps.find(
+        (step: WorkflowStep) => step.name === "Ensure extension lint comparison base",
+      );
+      const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        eventName,
+        runAttempt: 1,
+        repository: "openclaw/openclaw",
+        githubEvent: { pull_request: { base: { ref: "main" } } },
+        preflightOutputs: {
+          ...manifest.outputs,
+          diff_base_revision: "a".repeat(40),
+          check_plan_input_json: manifest.outputs.check_plan_input_json || "{}",
+        },
+      };
+      expect(evaluateWorkflowExpression(`\${{ ${ensureBase.if} }}`, context)).toBe(
+        eventName === "pull_request",
+      );
+      expect(evaluateWorkflowExpression(ensureBase.with["base-sha"], context)).toBe("a".repeat(40));
+      expect(evaluateWorkflowExpression(ensureBase.with["fetch-ref"], context)).toBe("main");
+      expect(steps.indexOf(ensureBase)).toBeLessThan(
+        steps.findIndex((step: WorkflowStep) => step.name === "Setup Node environment"),
+      );
+    },
+  );
 });
