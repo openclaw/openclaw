@@ -11,30 +11,32 @@ import java.util.zip.ZipFile
 import javax.inject.Inject
 
 @CacheableTask
-abstract class GenerateNativeI18n @Inject constructor(
-  private val execOperations: ExecOperations,
-) : DefaultTask() {
-  @get:InputFiles
-  @get:PathSensitive(PathSensitivity.RELATIVE)
-  abstract val sourceFiles: ConfigurableFileCollection
+abstract class GenerateNativeI18n
+  @Inject
+  constructor(
+    private val execOperations: ExecOperations,
+  ) : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sourceFiles: ConfigurableFileCollection
 
-  @get:Internal
-  abstract val repositoryDirectory: DirectoryProperty
+    @get:Internal
+    abstract val repositoryDirectory: DirectoryProperty
 
-  @get:OutputDirectory
-  abstract val kotlinDirectory: DirectoryProperty
+    @get:OutputDirectory
+    abstract val kotlinDirectory: DirectoryProperty
 
-  @get:OutputDirectory
-  abstract val resourceDirectory: DirectoryProperty
+    @get:OutputDirectory
+    abstract val resourceDirectory: DirectoryProperty
 
-  @TaskAction
-  fun generate() {
-    execOperations.exec {
-      workingDir(repositoryDirectory.get().asFile)
-      commandLine("node", "scripts/android-app-i18n.ts", "generate")
+    @TaskAction
+    fun generate() {
+      execOperations.exec {
+        workingDir(repositoryDirectory.get().asFile)
+        commandLine("node", "scripts/android-app-i18n.ts", "generate")
+      }
     }
   }
-}
 
 abstract class ExtractCloudflareSodium : DefaultTask() {
   @get:InputFile
