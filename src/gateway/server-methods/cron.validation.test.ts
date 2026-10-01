@@ -24,7 +24,6 @@ import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
-import { loadCronRows } from "../../cron/store/row-codec.js";
 import type { CronRunRecord } from "../../cron/store/run-history.types.js";
 import type { CronDelivery, CronJob } from "../../cron/types.js";
 import {
@@ -46,10 +45,10 @@ import {
 } from "../cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
 import {
   createCronTestContext,
+  agentTurnCronParams,
   createCronTestInvoker,
   createCronCallerClient as callerClient,
   createCronJob,
@@ -216,18 +215,6 @@ function telegramDeliveryWithSlackFailure(overrides: Partial<CronDelivery> = {})
 
 function setRuntimeConfig(config: OpenClawConfig): void {
   getRuntimeConfig.mockReturnValue(config);
-}
-
-function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
-  return {
-    name: "cron job",
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
-    ...overrides,
-  };
 }
 
 function expectCronSuccess(respond: ReturnType<typeof vi.fn>): void {
@@ -420,99 +407,6 @@ describe("cron method validation", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
-  });
-
-  it("persists canonical delivery for published cron.add and cron.update request aliases", async () => {
-    const { storePath } = await makeStorePath();
-    setRuntimeConfig(telegramConfig());
-    const scheduler = createTestGatewayScheduler();
-    const cron = new CronService({
-      scheduler,
-      storePath,
-      cronEnabled: false,
-      defaultAgentId: "main",
-      log: cronLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(),
-    });
-    const context = createDirectChatContext({ cron, cronStorePath: storePath, getRuntimeConfig });
-    const readRow = () =>
-      expectDefined(
-        loadCronRows(openOpenClawStateDatabase().db, cronStoreKey(storePath))[0],
-        "persisted cron request",
-      );
-    const createDelivery = Object.freeze({
-      mode: "deliver",
-      channel: "telegram",
-      to: "telegram:123",
-    });
-    const params = agentTurnCronParams({ enabled: false, delivery: createDelivery });
-    const respond = vi.fn();
-    try {
-      await expectDefined(
-        cronHandlers["cron.add"],
-        "cron.add handler",
-      )({
-        req: { type: "req", id: "delivery-alias-add", method: "cron.add", params },
-        params,
-        respond,
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenLastCalledWith(
-        true,
-        expect.objectContaining({
-          delivery: { mode: "announce", channel: "telegram", to: "telegram:123" },
-        }),
-        undefined,
-      );
-      const created = readRow();
-      expect(JSON.parse(created.job_json).delivery).toEqual({
-        mode: "announce",
-        channel: "telegram",
-        to: "telegram:123",
-      });
-      expect(createDelivery.mode).toBe("deliver");
-      await cron.update(created.job_id, { delivery: { mode: "none" } });
-      expect(JSON.parse(readRow().job_json).delivery.mode).toBe("none");
-      const updateDelivery = Object.freeze({ mode: " DeLiVeR ", to: "telegram:456" });
-      const updateParams = { id: created.job_id, patch: { delivery: updateDelivery } };
-      await expectDefined(
-        cronHandlers["cron.update"],
-        "cron.update handler",
-      )({
-        req: {
-          type: "req",
-          id: "delivery-alias-update",
-          method: "cron.update",
-          params: updateParams,
-        },
-        params: updateParams,
-        respond,
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenLastCalledWith(
-        true,
-        expect.objectContaining({
-          id: created.job_id,
-          delivery: { mode: "announce", channel: "telegram", to: "telegram:456" },
-        }),
-        undefined,
-      );
-      expect(JSON.parse(readRow().job_json).delivery).toEqual({
-        mode: "announce",
-        channel: "telegram",
-        to: "telegram:456",
-      });
-      expect(updateDelivery.mode).toBe(" DeLiVeR ");
-    } finally {
-      cron.stop();
-      await scheduler.stop();
-    }
   });
 
   it.each(["add", "add-current", "update", "wake"] as const)(
