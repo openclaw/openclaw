@@ -118,6 +118,13 @@ owner can flush it before finalization. Only confirmed receipts leave that buffe
 an uncertain flush cannot be replayed. Stored formats and warning ordering are
 unchanged.
 
+The fresh receiving process also replays transferred step data through this writer,
+in order, before finalization. It retains one captured environment and database
+source, rechecks its live executor and requester at write admission, and awaits
+each accepted result before advancing. A refused receipt prevents further replay
+and finalization; an uncertain outcome keeps the existing cleanup failure.
+Transferred recovery policy and shipped synchronous ledger exports are unchanged.
+
 After state-owner contention, Doctor observes the serving Gateway lease through
 the existing read worker using its captured installation path and environment.
 This finite read retains Doctor's private schema admission and never bootstraps a
