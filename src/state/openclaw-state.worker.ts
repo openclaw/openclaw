@@ -163,9 +163,9 @@ function createSharedStateWorkerBackend(
       if (runtime) {
         return runtime.prepareSharedStateCommand(commandType);
       }
-      return loadRuntime().then(async (loaded) => {
-        await loaded.prepareSharedStateCommand(commandType);
+      return loadRuntime().then((loaded) => {
         runtime = loaded;
+        return runtime.prepareSharedStateCommand(commandType);
       });
     },
     execute(command) {
