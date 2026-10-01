@@ -145,6 +145,13 @@ describe("listGatewayMethods", () => {
     "plugins.catalog.categories",
     "plugins.catalog.get",
   ];
+  const liveActivityMethods = [
+    "push.liveActivity.prepare",
+    "push.liveActivity.discover",
+    "push.liveActivity.register",
+    "push.liveActivity.rotate",
+    "push.liveActivity.revoke",
+  ];
 
   it("advertises plugin surface refresh for capability rotation", () => {
     expect(listGatewayMethods()).toContain("plugin.surface.refresh");
@@ -189,6 +196,7 @@ describe("listGatewayMethods", () => {
       "models.authLogin",
       "models.authSetApiKey",
       "sessions.status",
+      ...liveActivityMethods,
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -218,6 +226,7 @@ describe("listGatewayMethods", () => {
       "models.authLogin",
       "models.authSetApiKey",
       "sessions.status",
+      ...liveActivityMethods,
     ]);
   });
 
@@ -374,6 +383,7 @@ describe("listGatewayMethods", () => {
       "models.authLogin",
       "models.authSetApiKey",
       "sessions.status",
+      ...liveActivityMethods,
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

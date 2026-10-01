@@ -939,6 +939,11 @@ enum class GatewayMethod(
   ModelsAuthLogin("models.authLogin"),
   ModelsAuthSetApiKey("models.authSetApiKey"),
   SessionsStatus("sessions.status"),
+  PushLiveActivityPrepare("push.liveActivity.prepare"),
+  PushLiveActivityDiscover("push.liveActivity.discover"),
+  PushLiveActivityRegister("push.liveActivity.register"),
+  PushLiveActivityRotate("push.liveActivity.rotate"),
+  PushLiveActivityRevoke("push.liveActivity.revoke"),
 }
 
 enum class GatewayEvent(

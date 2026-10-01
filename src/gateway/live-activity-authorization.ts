@@ -21,7 +21,7 @@ function readProfile(profileId: string, database?: DatabaseSync) {
     : withExistingOpenClawStateDatabaseReadOnly(({ db }) => read(db));
 }
 
-function liveActivityScopesAllow(scopes: readonly string[], scope: string): boolean {
+export function liveActivityScopesAllow(scopes: readonly string[], scope: string): boolean {
   return roleScopesAllow({
     role: "operator",
     requestedScopes: [scope],
@@ -30,7 +30,7 @@ function liveActivityScopesAllow(scopes: readonly string[], scope: string): bool
 }
 
 /** Read existing authority only. Preparation must not materialize profiles or pairing state. */
-function readLiveActivityOwner(
+export function readLiveActivityOwner(
   profileId: string,
   deviceId: string,
   cfg: OpenClawConfig,
@@ -77,7 +77,7 @@ function readLiveActivityOwner(
     : withExistingOpenClawStateDatabaseReadOnly(({ db }) => read(db));
 }
 
-function readLiveActivitySession(
+export function readLiveActivitySession(
   target: Pick<LiveActivityBinding, "agentId" | "sessionKey" | "sessionId" | "lifecycleRevision">,
   owner: NonNullable<ReturnType<typeof readLiveActivityOwner>>,
   cfg: OpenClawConfig,
