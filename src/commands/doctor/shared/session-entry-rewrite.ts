@@ -19,6 +19,7 @@ import {
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "../../../config/sessions/session-entry-snapshots.js";
+import { LEGACY_SESSION_ENTRY_STATE_FIELDS } from "../../../config/sessions/session-entry-state-format.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../../../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
@@ -47,7 +48,7 @@ function parseDoctorSessionEntryRecord(entryJson: string): Record<string, unknow
   }
 }
 
-/** Raw migration preview must precede canonical validation and runtime projection. */
+/** Select legacy state before loading raw rows into canonical validation or runtime projection. */
 export function scanDoctorSessionEntryRecords(
   scope: DoctorSessionScanScope,
   visit: (record: { sessionKey: string; entry: Record<string, unknown> }) => void,
@@ -60,7 +61,15 @@ export function scanDoctorSessionEntryRecords(
       database.db,
       getSessionKysely(database.db)
         .selectFrom("session_nodes")
-        .select(["session_key", "entry_json"]),
+        .select(["session_key", "entry_json"])
+        .where(
+          /* kysely-allow-raw: JSON table-valued filtering keeps canonical payloads out of JavaScript. */
+          sql<boolean>`CASE WHEN json_valid(entry_json) THEN EXISTS (
+            SELECT 1 FROM json_each(entry_json)
+            WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
+              OR (key = 'pendingFinalDelivery' AND type IN ('true', 'false'))
+          ) ELSE 1 END`,
+        ),
     )) {
       const entry = parseDoctorSessionEntryRecord(row.entry_json);
       if (entry) {

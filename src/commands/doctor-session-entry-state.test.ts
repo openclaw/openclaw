@@ -99,6 +99,8 @@ it("backs up original rows and migrates pending delivery state before canonical 
     archivedBy: { type: "human", id: "prior-archiver" },
   });
   const transport = seedEntry("transport", { pendingFinalDelivery: true });
+  const cleared = seedEntry("cleared", { pendingFinalDelivery: false });
+  const nullLegacyField = seedEntry("null-legacy-field", { memoryFlushAt: null });
   const canonicalPending = {
     kind: "replayable",
     text: "current reply",
@@ -127,7 +129,7 @@ it("backs up original rows and migrates pending delivery state before canonical 
 
   expect(() => loadExactSessionEntryReadOnly(legacy.scope)).toThrow(/run openclaw doctor --fix/);
   expect(await repairLegacySessionEntryStates({ apply: false, cfg: {}, env: state.env })).toEqual({
-    found: 3,
+    found: 5,
     repaired: 0,
     scannedStores: 1,
   });
@@ -138,7 +140,9 @@ it("backs up original rows and migrates pending delivery state before canonical 
     run: (authority) =>
       repairLegacySessionEntryStates({ apply: true, cfg: {}, env: state!.env, authority }),
   });
-  expect(report).toMatchObject({ found: 3, repaired: 3 });
+  expect(report).toMatchObject({ found: 5, repaired: 5 });
+  expect(JSON.parse(String(cleared.readRaw()))).not.toHaveProperty("pendingFinalDelivery");
+  expect(JSON.parse(String(nullLegacyField.readRaw()))).not.toHaveProperty("memoryFlushAt");
   expect(unchanged.readRaw()).toBe(unchanged.raw);
   expect(JSON.parse(String(current.readRaw())).pendingFinalDelivery).toEqual({
     ...canonicalPending,

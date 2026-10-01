@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   runPostUpgradeProbes: vi.fn(),
   runDoctorStateSqliteCompact: vi.fn(),
   runDoctorSessionSqlite: vi.fn(),
+  sqliteMaintenanceAuthority: { assertCurrent: vi.fn() },
   submitGithubIssue: vi.fn(),
   withDoctorSqliteMaintenanceLock: vi.fn(),
   resolveInstalledPluginIndexStorePath: vi.fn(() => "/tmp/openclaw-installed-plugins.json"),
@@ -155,7 +156,7 @@ describe("doctorCommand", () => {
     mocks.reconcileGithubIssue.mockResolvedValue({ status: "not-found" });
     mocks.withDoctorSqliteMaintenanceLock.mockImplementation(
       async (params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
-        await params.run({ assertCurrent() {} }),
+        await params.run(mocks.sqliteMaintenanceAuthority),
     );
   });
 
@@ -231,10 +232,10 @@ describe("doctorCommand", () => {
       }),
     ).rejects.toThrow("exit:0");
 
-    expect(mocks.runDoctorSessionSqlite).toHaveBeenCalledWith({
-      agent: "main",
-      mode: "inspect",
-    });
+    expect(mocks.runDoctorSessionSqlite).toHaveBeenCalledWith(
+      { agent: "main", mode: "inspect" },
+      undefined,
+    );
     expect(mocks.withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
     expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
     expect(runtime.exit).toHaveBeenCalledWith(0);
@@ -258,10 +259,11 @@ describe("doctorCommand", () => {
       reconcileHardlink: expect.any(Function),
       run: expect.any(Function),
     });
-    expect(mocks.runDoctorSessionSqlite).toHaveBeenCalledWith({
-      allAgents: true,
-      mode: "restore",
-    });
+    expect(mocks.runDoctorSessionSqlite).toHaveBeenCalledWith(
+      { allAgents: true, mode: "restore" },
+      mocks.sqliteMaintenanceAuthority,
+    );
+    expect(mocks.runDoctorSessionSqlite.mock.calls[0]?.[1]).toBe(mocks.sqliteMaintenanceAuthority);
   });
 
   it("binds explicit destructive session stores to the maintenance lock", async () => {

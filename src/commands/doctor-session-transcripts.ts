@@ -268,11 +268,15 @@ export async function noteSessionTranscriptHealth(options?: {
     return postSessionPluginReceipt;
   };
   const runSessionSqlite = async (maintenanceAuthority?: DoctorSqliteMaintenanceAuthority) => {
+    const previewTargets = params.shouldRepair
+      ? undefined
+      : listExistingAgentDatabaseTargets(params.cfg ?? {}, params.env);
     if (!params.shouldRepair) {
       entryStateReport = await repairLegacySessionEntryStates({
         apply: false,
         cfg: params.cfg ?? {},
         env: params.env,
+        targets: previewTargets,
       });
       if (entryStateReport.found > 0) {
         return undefined;
@@ -300,10 +304,10 @@ export async function noteSessionTranscriptHealth(options?: {
       env: params.env,
     };
     canonicalKeyReport = await repairCanonicalSessionKeys(repairParams);
-    // Import and key repair can create stores; later row repairs share their settled inventory.
+    // Preview reuses its read-only inventory; import and key repair can create stores.
     const rowRepairParams = {
       ...repairParams,
-      targets: listExistingAgentDatabaseTargets(repairParams.cfg, params.env),
+      targets: previewTargets ?? listExistingAgentDatabaseTargets(repairParams.cfg, params.env),
     };
     // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
     resolvedSkillsReport = repairCanonicalSessionResolvedSkills(rowRepairParams);
