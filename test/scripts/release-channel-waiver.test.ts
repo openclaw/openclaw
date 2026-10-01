@@ -31,15 +31,17 @@ describe("reviewed release channel waiver", () => {
         }),
       ).toEqual(["telegram"]);
     }
-    expect(
-      releaseWaivedIntegrationChannels({
-        ...approved,
-        targetVersion: "2026.9.7",
-        candidateVersion: "2026.9.7",
-        telegramWaiver: "2026.9.7-owner-approved",
-        releaseProfile: "stable",
-      }),
-    ).toEqual(["telegram", "matrix"]);
+    for (const version of ["2026.9.7", "2026.9.8"]) {
+      expect(
+        releaseWaivedIntegrationChannels({
+          ...approved,
+          targetVersion: version,
+          candidateVersion: version,
+          telegramWaiver: `${version}-owner-approved`,
+          releaseProfile: "stable",
+        }),
+      ).toEqual(["telegram", "matrix"]);
+    }
     const projection = releaseWaivedIntegrationChannels(approved);
     projection.push("buzz");
     expect(releaseWaivedIntegrationChannels(approved)).toEqual(["telegram", "matrix"]);

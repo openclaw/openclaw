@@ -411,6 +411,7 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     },
   ],
   ["release/2026.9.7", CURRENT_SECURITY_INVENTORY_POLICY],
+  ["release/2026.9.8", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {
