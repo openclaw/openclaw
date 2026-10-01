@@ -93,7 +93,7 @@ export async function resolveRunModelHasVision(params: {
 }
 
 /** Hydrates route-specific thinking metadata for an embedded reply candidate. */
-export async function resolveRunModelThinkingCapability(params: {
+async function resolveRunModelThinkingCapability(params: {
   config: OpenClawConfig;
   provider: string;
   model: string;
