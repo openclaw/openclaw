@@ -102,7 +102,6 @@ extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
 extensions/matrix/src/matrix/send.test.ts
-extensions/mattermost/src/channel.test.ts
 extensions/mattermost/src/channel.ts
 extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/mattermost/src/mattermost/slash-http.ts
