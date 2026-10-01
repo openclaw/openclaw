@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { reconcileCodexComputerUseStartArtifacts } from "./auth-bridge.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { describeControlFailure } from "./capabilities.js";
@@ -738,12 +737,10 @@ async function resolveMarketplaceRef(params: {
     if (Date.now() >= waitUntil) {
       break;
     }
-    await delay(Math.min(CURATED_MARKETPLACE_POLL_INTERVAL_MS, waitUntil - Date.now()), undefined, {
-      signal: params.signal,
-    }).catch(() => {
-      const reason = params.signal?.reason;
-      throw reason instanceof Error ? reason : new Error("Computer Use setup was aborted.");
-    });
+    await delay(
+      Math.min(CURATED_MARKETPLACE_POLL_INTERVAL_MS, waitUntil - Date.now()),
+      params.signal,
+    );
     candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);
   }
 
@@ -886,6 +883,29 @@ function chooseKnownComputerUseMarketplace(
     }
   }
   return undefined;
+}
+
+async function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    throw abortError(signal);
+  }
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(abortError(signal));
+    };
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function abortError(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error ? reason : new Error("Computer Use setup was aborted.");
 }
 
 async function readComputerUsePlugin(

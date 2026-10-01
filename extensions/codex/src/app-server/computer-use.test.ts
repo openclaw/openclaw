@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 // Codex tests cover computer use plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -90,7 +89,6 @@ describe("Codex Computer Use setup", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    syncBuiltinESMExports();
     sharedClientMocks.assertCodexAppServerClientStartSelectionCurrent.mockReset();
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
     sharedClientMocks.readCodexAppServerClientDesktopGeneration.mockReset();
@@ -998,7 +996,6 @@ describe("Codex Computer Use setup", () => {
 
   it("waits for the default Codex marketplace during install", async () => {
     vi.useFakeTimers();
-    syncBuiltinESMExports();
     const request = createComputerUseRequest({
       installed: false,
       marketplaceAvailableAfterListCalls: 3,
@@ -1027,7 +1024,6 @@ describe("Codex Computer Use setup", () => {
 
   it("fails fast when Codex native plugins are disabled", async () => {
     vi.useFakeTimers();
-    syncBuiltinESMExports();
     const request = createComputerUseRequest({
       installed: false,
       nativePluginsEnabled: false,
@@ -1056,7 +1052,6 @@ describe("Codex Computer Use setup", () => {
 
   it("keeps waiting for marketplace discovery when the feature list does not report plugins", async () => {
     vi.useFakeTimers();
-    syncBuiltinESMExports();
     const request = createComputerUseRequest({
       installed: false,
       nativePluginsEnabled: "absent",
