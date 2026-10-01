@@ -336,7 +336,7 @@ it.each(["transaction", "commit"] as const)(
 );
 
 it("publishes captured summary notes without caller-thread transcript SQL", async () => {
-  const { store } = fixture();
+  const { env, store } = fixture();
   const session: TranscriptSessionDescriptor = {
     sessionId: "summary-worker",
     startedAt: "2026-09-20T12:00:00.000Z",
@@ -348,6 +348,7 @@ it("publishes captured summary notes without caller-thread transcript SQL", asyn
   closeOpenClawStateDatabaseForTest();
   await withoutParentTranscriptSql(async () => {
     const result = await persistTranscriptSummary({
+      stateDir: env.OPENCLAW_STATE_DIR,
       config: resolveTranscriptsConfig(undefined),
       store,
       session,
@@ -363,7 +364,7 @@ it("publishes captured summary notes without caller-thread transcript SQL", asyn
 it.each(["transaction", "commit"] as const)(
   "retains prior notes when the summary owner is revoked at the worker %s grant",
   async (stage) => {
-    const { store } = fixture();
+    const { env, store } = fixture();
     const session: TranscriptSessionDescriptor = {
       sessionId: `summary-revoked-${stage}`,
       startedAt: "2026-09-20T12:00:00.000Z",
@@ -394,6 +395,7 @@ it.each(["transaction", "commit"] as const)(
     try {
       await expect(
         persistTranscriptSummary({
+          stateDir: env.OPENCLAW_STATE_DIR,
           config: resolveTranscriptsConfig(undefined),
           store,
           session,

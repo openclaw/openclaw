@@ -220,6 +220,9 @@ export function createInternalAgentTurnFacade(
                 import("./agent-turn-service.js"),
                 import("./principal.js"),
               ]);
+              if (dispatchOptions.prepareDispatchCurrent) {
+                await dispatchOptions.prepareDispatchCurrent();
+              }
               throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
               entry?.assertOpen();
               options.assertContextCurrent?.();
@@ -334,6 +337,7 @@ export function createInternalAgentTurnFacade(
     timeoutMs?: number,
     signal?: AbortSignal,
     onSignalAbort?: () => Promise<void> | void,
+    prepareDispatchCurrent?: () => Promise<void>,
   ): Promise<T> => {
     const method = "agent.wait";
     throwIfGatewayDispatchAborted(method, signal);
@@ -372,6 +376,9 @@ export function createInternalAgentTurnFacade(
             options.client,
             async () => {
               const { createAgentTurnService } = await import("./agent-turn-service.js");
+              if (prepareDispatchCurrent) {
+                await prepareDispatchCurrent();
+              }
               throwIfGatewayDispatchAborted(method, signal);
               entry?.assertOpen();
               options.assertContextCurrent?.();

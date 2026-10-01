@@ -145,6 +145,34 @@ const catchAndContinueCases: Array<
 ];
 
 describe("ExtensionRunner handler dispatch", () => {
+  it("preserves discovery order and source ownership across partial resource contributions", async () => {
+    const runner = buildRunner([
+      buildExtension(
+        { resources_discover: [async () => ({ skillPaths: ["one", "two"], themePaths: [] })] },
+        "/tmp/first.ts",
+      ),
+      buildExtension(
+        {
+          resources_discover: [
+            async () => undefined,
+            async () => ({ skillPaths: ["three"], promptPaths: ["prompt"], themePaths: ["theme"] }),
+          ],
+        },
+        "/tmp/second.ts",
+      ),
+    ]);
+
+    expect(await runner.emitResourcesDiscover("/tmp", "reload")).toEqual({
+      skillPaths: [
+        { path: "one", extensionPath: "/tmp/first.ts" },
+        { path: "two", extensionPath: "/tmp/first.ts" },
+        { path: "three", extensionPath: "/tmp/second.ts" },
+      ],
+      promptPaths: [{ path: "prompt", extensionPath: "/tmp/second.ts" }],
+      themePaths: [{ path: "theme", extensionPath: "/tmp/second.ts" }],
+    });
+  });
+
   it.each(catchAndContinueCases)(
     "propagates committed metadata view loss from %s before another handler runs",
     async (event, invoke) => {

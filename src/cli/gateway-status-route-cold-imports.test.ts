@@ -1,4 +1,5 @@
 // The routed Gateway status path must not initialize full config IO for a plain config.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

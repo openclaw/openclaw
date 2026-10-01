@@ -194,21 +194,16 @@ function resolveAnthropicVertexSdkBaseUrl(baseUrl?: string): string | undefined 
     return undefined;
   }
 
-  try {
-    const url = new URL(trimmed);
-    const normalizedPath = url.pathname.replace(/\/+$/, "");
-    if (!normalizedPath) {
-      url.pathname = "/v1";
-      return url.toString().replace(/\/$/, "");
-    }
-    if (!normalizedPath.endsWith("/v1")) {
-      url.pathname = `${normalizedPath}/v1`;
-      return url.toString().replace(/\/$/, "");
-    }
-    return trimmed;
-  } catch {
+  const url = URL.parse(trimmed);
+  if (!url) {
     return trimmed;
   }
+  const normalizedPath = url.pathname.replace(/\/+$/, "");
+  if (!normalizedPath.endsWith("/v1")) {
+    url.pathname = `${normalizedPath}/v1`;
+    return url.toString().replace(/\/$/, "");
+  }
+  return trimmed;
 }
 
 /** Create an Anthropic Vertex stream function from model metadata and env. */

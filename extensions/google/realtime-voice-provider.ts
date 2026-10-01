@@ -16,6 +16,7 @@ import {
   StartSensitivity,
   TurnCoverage,
 } from "@google/genai";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
@@ -94,9 +95,10 @@ const GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE =
 // Google Live requires a leading letter/underscore and caps function names at 128 characters.
 const GOOGLE_REALTIME_TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
+const mulawTablePcm = mulawToPcm(Buffer.from(Array.from({ length: 256 }, (_, index) => index)));
 
 for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
-  MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
+  MULAW_LINEAR_SAMPLES[i] = mulawTablePcm.readInt16LE(i * 2);
 }
 
 type GoogleRealtimeSensitivity = "low" | "high";
@@ -468,18 +470,15 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.connectAttempt) {
       return this.connectAttempt.promise;
     }
-    let cancel = () => {};
-    const cancelled = new Promise<void>((resolve) => {
-      cancel = resolve;
-    });
+    const cancelled = createDeferred();
     const attempt: GoogleLiveConnectionAttempt = {
-      promise: cancelled,
-      cancel,
+      promise: cancelled.promise,
+      cancel: cancelled.resolve,
     };
     this.connectionOwner = attempt;
     this.connectAttempt = attempt;
     const connection = this.connectOwned(attempt);
-    attempt.promise = Promise.race([connection, cancelled]).finally(() => {
+    attempt.promise = Promise.race([connection, cancelled.promise]).finally(() => {
       if (this.connectAttempt === attempt) {
         this.connectAttempt = undefined;
       }
@@ -751,10 +750,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     try {
       const session = this.session;
-      const canSendImmediately = Boolean(
-        session && (!this.resumingSession || this.sessionConfigured),
-      );
-      if (session && canSendImmediately) {
+      if (session && (!this.resumingSession || this.sessionConfigured)) {
         session.sendToolResponse({
           functionResponses: [normalizedResponse],
         });
@@ -814,20 +810,12 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     return this.audioFormat.encoding === "pcm16" ? isPcm16Silence(audio) : isMulawSilence(audio);
   }
 
-  private toInputPcm(audio: Buffer): Buffer {
-    return this.audioFormat.encoding === "pcm16" ? audio : mulawToPcm(audio);
-  }
-
   private toGoogleInputPcm16k(audio: Buffer): Buffer {
-    if (
-      this.audioFormat.encoding === "g711_ulaw" &&
-      this.audioFormat.sampleRateHz === 8_000 &&
-      GOOGLE_REALTIME_INPUT_SAMPLE_RATE === 16_000
-    ) {
+    if (this.audioFormat.encoding === "g711_ulaw" && this.audioFormat.sampleRateHz === 8_000) {
       return convertMulaw8kToPcm16k(audio);
     }
     return resamplePcm(
-      this.toInputPcm(audio),
+      this.audioFormat.encoding === "pcm16" ? audio : mulawToPcm(audio),
       this.audioFormat.sampleRateHz,
       GOOGLE_REALTIME_INPUT_SAMPLE_RATE,
     );
@@ -1246,16 +1234,6 @@ function convertMulaw8kToPcm16k(muLaw: Buffer): Buffer {
     pcm.writeInt16LE(Math.round((current + next) / 2), i * 4 + 2);
   }
   return pcm;
-}
-
-function decodeMulawSample(value: number): number {
-  const muLaw = ~value & 0xff;
-  const sign = muLaw & 0x80;
-  const exponent = (muLaw >> 4) & 0x07;
-  const mantissa = muLaw & 0x0f;
-  let sample = ((mantissa << 3) + 132) << exponent;
-  sample -= 132;
-  return sign ? -sample : sample;
 }
 
 async function createGoogleRealtimeBrowserSession(

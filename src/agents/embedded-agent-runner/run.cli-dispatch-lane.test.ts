@@ -2,13 +2,12 @@
 // admission: the dispatch decision and the CLI run must happen within the
 // enqueued global-lane task, not before it, so dispatched runs obey the same
 // lifecycle, placement, and concurrency gates as native embedded runs.
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
@@ -19,11 +18,7 @@ vi.mock("./cli-backend-dispatch.js", () => ({
 
 import { runEmbeddedAgent } from "./run.js";
 
-const tempRoot = mkdtempSync(join(tmpdir(), "cli-dispatch-lane-"));
-
-afterAll(() => {
-  rmSync(tempRoot, { recursive: true, force: true });
-});
+const tempRoot = useSessionStoreTempDirs(afterAll, "cli-dispatch-lane-").make();
 
 const dispatchResult: EmbeddedAgentRunResult = {
   payloads: [{ text: "dispatched" }],

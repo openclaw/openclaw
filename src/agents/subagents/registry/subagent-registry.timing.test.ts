@@ -39,8 +39,9 @@ vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
 });
 vi.mock("./subagent-registry-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent-registry-state.js")>();
-  const { saveSubagentRegistryToSqlite } = await import("./subagent-registry.store.sqlite.js");
-  return { ...actual, persistSubagentRunsToDisk: saveSubagentRegistryToSqlite };
+  const { saveSubagentRegistryChangesToSqlite } =
+    await import("./subagent-registry.store.sqlite.js");
+  return { ...actual, persistSubagentRunsToDisk: saveSubagentRegistryChangesToSqlite };
 });
 
 describe("subagent timing completion", () => {

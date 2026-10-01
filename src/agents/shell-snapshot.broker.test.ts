@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
@@ -16,7 +16,9 @@ afterEach(() => {
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "shell snapshot broker deadlines",
   () => {
-    it("cancels capture before its PID arrives and cleans up the late shell", async () => {
+    it("cancels capture before its PID arrives and cleans up the late shell", async ({
+      signal,
+    }) => {
       const home = tempDirs.make("openclaw-snapshot-broker-deadline-");
       vi.stubEnv("HOME", home);
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "state"));
@@ -28,7 +30,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       try {
         const command = "printf original";
         await expect(
-          withTestTimeout(
+          withinTest(
             runWithSpawnBroker(host, () =>
               maybeWrapCommandWithShellSnapshot({
                 command,
@@ -38,8 +40,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
                 env: {},
               }),
             ),
-            7_000,
-            "capture did not honor its five-second deadline",
+            signal,
           ),
         ).resolves.toBe(command);
         expect(spawn).toHaveBeenCalledOnce();
@@ -47,7 +48,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         expect(child.pid).toBeUndefined();
         expect(child.killed).toBe(true);
         process.kill(host.pid!, "SIGCONT");
-        await withTestTimeout(child.waitForClose(), 5_000, "late capture was not reaped");
+        await withinTest(child.waitForClose(), signal);
         expect(isPidDefinitelyDead(child.pid!)).toBe(true);
       } finally {
         process.kill(host.pid!, "SIGCONT");

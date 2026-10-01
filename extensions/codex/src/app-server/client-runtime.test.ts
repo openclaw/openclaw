@@ -178,11 +178,15 @@ describe("Codex app-server client runtime", () => {
     });
   });
 
-  it("rejects a refreshed token from a different previous ChatGPT workspace", async () => {
+  it("requests retirement when its auth owner rejects a workspace change", async () => {
+    vi.useFakeTimers();
+    mocks.refreshAuth.mockRejectedValueOnce(new Error("ChatGPT workspace changed"));
     const harness = createHarness();
+    const onAuthRefreshFailure = vi.fn();
     ensureCodexAppServerClientRuntime(harness.client, {
       agentDir: "/tmp/agent",
       authProfileId: "openai:default",
+      onAuthRefreshFailure,
     });
 
     harness.send({
@@ -194,7 +198,8 @@ describe("Codex app-server client runtime", () => {
       },
     });
 
-    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(0));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onAuthRefreshFailure).toHaveBeenCalledOnce();
     expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toMatchObject({
       id: "refresh-other-workspace",
       error: { message: expect.stringContaining("ChatGPT workspace changed") },

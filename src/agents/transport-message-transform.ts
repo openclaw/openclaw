@@ -4,6 +4,7 @@
  * strict provider tool-result gaps when supported.
  */
 import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   FAILED_ASSISTANT_REPLAY_TEXT,
   isReasoningOnlyLengthAssistantTurn,
@@ -23,31 +24,13 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "bedrock-converse-stream",
   "google-generative-ai",
   "openclaw-google-generative-ai-transport",
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "azure-openai-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-  "openclaw-azure-openai-responses-transport",
+  ...OPENAI_RESPONSES_APIS,
 ]);
 
 // "aborted" is the OpenAI Responses-family synthetic result convention,
 // inherited from upstream Codex history normalization. It applies to public,
 // Codex, Azure, and their OpenClaw transport aliases; Gemini/Anthropic use their
 // own text. tool-replay-repair.live.test.ts exercises both paths against real models.
-const OPENAI_RESPONSES_ABORTED_OUTPUT_APIS = new Set<string>([
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "azure-openai-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-  "openclaw-azure-openai-responses-transport",
-]);
-
-function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
-  return SYNTHETIC_TOOL_RESULT_APIS.has(modelApi);
-}
-
 /** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
   messages: Context["messages"],
@@ -63,8 +46,8 @@ export function transformTransportMessages(
     preserveUnframedToolResults?: boolean;
   },
 ): Context["messages"] {
-  const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
-  const syntheticToolResultText = OPENAI_RESPONSES_ABORTED_OUTPUT_APIS.has(model.api)
+  const allowSyntheticToolResults = SYNTHETIC_TOOL_RESULT_APIS.has(model.api);
+  const syntheticToolResultText = OPENAI_RESPONSES_APIS.has(model.api)
     ? "aborted"
     : "No result provided";
   const toolCallIdMap = new Map<string, string>();

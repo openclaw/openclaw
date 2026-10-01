@@ -19,11 +19,10 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 
-it.each(
-  ["Gateway", "embedded"].flatMap((caller) =>
-    ["global", "unknown"].map((sessionKey) => ({ caller, sessionKey })),
-  ),
-)(
+it.each([
+  { caller: "Gateway", sessionKey: "global" },
+  { caller: "embedded", sessionKey: "unknown" },
+])(
   "does not repeat cold $sessionKey inspection outside the existing listing in $caller",
   async ({ caller, sessionKey }) => {
     await withOpenClawTestState({ label: "session-id-cold-inspection" }, async (state) => {

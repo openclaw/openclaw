@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -56,7 +57,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
     })().catch((error: unknown) => response.writeHead(500).end(String(error)));
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-  try {
+  const runProof = async () => {
     await new Promise<void>((resolve, reject) => {
       providerServer.once("error", reject);
       providerServer.listen(0, "127.0.0.1", resolve);
@@ -217,17 +218,25 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       expect(transcript.split(priorMessage)).toHaveLength(2);
       expect(transcript.split(nextMessage)).toHaveLength(retry ? 1 : 2);
     }
-  } finally {
-    if (gateway) {
-      await disconnectGatewayClient(gateway.client).catch(() => undefined);
-      await gateway.server.close().catch(() => undefined);
-    }
-    if (providerServer.listening) {
-      providerServer.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        providerServer.close(() => resolve());
-      });
-    }
-    await state.cleanup();
-  }
+  };
+  await runQaGatewayFixture(
+    runProof,
+    async () => {
+      if (gateway) {
+        await disconnectGatewayClient(gateway.client);
+      }
+    },
+    async () => {
+      await gateway?.server.close();
+    },
+    async () => {
+      if (providerServer.listening) {
+        providerServer.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          providerServer.close(() => resolve());
+        });
+      }
+    },
+    () => state.cleanup(),
+  );
 }, 90_000);

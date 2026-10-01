@@ -325,8 +325,9 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
           throw new Error(`unexpected command: ${command}`);
         };
         const runStep = vi.fn(
-          async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
+          async ({ name, argv, cwd, env, input }): Promise<PackageUpdateStepResult> => {
             if (name === "package-install") {
+              expect(input).toBe("");
               const stage = stagedPnpmPaths(argv, globalRoot);
               if (!stage.projectRoot || !stage.binDir) {
                 throw new Error("missing private pnpm stage");
@@ -394,6 +395,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
                 "dir",
               );
             } else if (name === "pnpm-package-preinstall") {
+              expect(input).toBeUndefined();
               expect(argv).toEqual([
                 process.execPath,
                 path.join(stagedPackageRoot, "scripts", "preinstall-package-manager-warning.mjs"),
@@ -402,6 +404,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
                 fs.readFile(path.join(stagedPackageRoot, ".openclaw-lifecycle-pending"), "utf8"),
               ).resolves.toBe("pending\n");
             } else if (name === "pnpm-package-postinstall") {
+              expect(input).toBeUndefined();
               expect(argv).toEqual([
                 process.execPath,
                 path.join(stagedPackageRoot, "scripts", "postinstall-bundled-plugins.mjs"),

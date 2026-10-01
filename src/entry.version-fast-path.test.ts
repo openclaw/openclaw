@@ -1,4 +1,5 @@
 // Tests version fast-path output before the full entrypoint loads.
+import "./test-utils/prepare-compiled-subprocesses.js";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../test/helpers/promise.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";

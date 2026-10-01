@@ -1,4 +1,3 @@
-/** Doctor diagnostics for pending, paired, and locally cached device auth state. */
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -121,35 +120,6 @@ function findTokenSummary(
   return device.tokenSummaries.find((entry) => entry.role === normalizedRole && !entry.revokedAtMs);
 }
 
-function hasPendingScopeUpgrade(params: {
-  requestedRoles: string[];
-  pendingScopes: string[];
-  approvedRoles: string[];
-  approvedScopes: string[];
-}): boolean {
-  for (const role of params.requestedRoles) {
-    if (!params.approvedRoles.includes(role)) {
-      continue;
-    }
-    const requestedForRole = params.pendingScopes.filter((scope) =>
-      role === "operator" ? scope.startsWith("operator.") : !scope.startsWith("operator."),
-    );
-    if (requestedForRole.length === 0) {
-      continue;
-    }
-    if (
-      !roleScopesAllow({
-        role,
-        requestedScopes: requestedForRole,
-        allowedScopes: params.approvedScopes,
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthFinding[] {
   const pairedByDeviceId = new Map(snapshot.paired.map((device) => [device.deviceId, device]));
   return snapshot.pending.map((pending): HealthFinding => {
@@ -196,12 +166,16 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     const approvedScopes = resolveApprovedScopes(paired);
     const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
     if (
-      hasPendingScopeUpgrade({
-        requestedRoles,
-        pendingScopes: requestedScopes,
-        approvedRoles,
-        approvedScopes,
-      })
+      requestedRoles.some(
+        (role) =>
+          !roleScopesAllow({
+            role,
+            requestedScopes: requestedScopes.filter((scope) =>
+              role === "operator" ? scope.startsWith("operator.") : !scope.startsWith("operator."),
+            ),
+            allowedScopes: approvedScopes,
+          }),
+      )
     ) {
       return {
         ...finding,
@@ -287,14 +261,6 @@ function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: st
   }
 }
 
-async function readLocalDeviceAuthTokens(deviceId: string, env: NodeJS.ProcessEnv = process.env) {
-  try {
-    return await loadDeviceAuthTokens({ deviceId, env });
-  } catch {
-    return [];
-  }
-}
-
 async function collectLocalDeviceAuthFindings(
   snapshot: DoctorPairingSnapshot,
 ): Promise<HealthFinding[]> {
@@ -302,7 +268,10 @@ async function collectLocalDeviceAuthFindings(
   if (!identity) {
     return [];
   }
-  const localTokens = await readLocalDeviceAuthTokens(identity.deviceId);
+  const localTokens = await loadDeviceAuthTokens({
+    deviceId: identity.deviceId,
+    env: process.env,
+  }).catch(() => []);
   const paired = snapshot.paired.find((device) => device.deviceId === identity.deviceId);
   if (!paired) {
     return [];
@@ -368,7 +337,6 @@ async function collectLocalDeviceAuthFindings(
   return findings;
 }
 
-/** Warn about retired pairing stores that still need Doctor repair. */
 async function collectLegacyPairingStoreFindings(cfg: OpenClawConfig): Promise<HealthFinding[]> {
   if (cfg.gateway?.mode === "remote") {
     return [];

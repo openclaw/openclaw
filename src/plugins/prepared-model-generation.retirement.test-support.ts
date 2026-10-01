@@ -17,6 +17,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { getPluginInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
+import { hasRetainedPluginRuntimeCloseError } from "./runtime-close-error.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
 function hasCause(error: unknown, message: string): boolean {
@@ -153,7 +154,9 @@ export async function verifyPreparedModelGenerationCleanup(scenario: "publicatio
           await failed.entered.promise;
           failed.release.resolve();
           const cleanup = await disposed;
-          assert.equal(cleanup.ok, true);
+          assert.ok(!cleanup.ok, "The releasing caller must receive its disposal failure");
+          assert.ok(hasCause(cleanup.error, failure));
+          assert.equal(hasRetainedPluginRuntimeCloseError(cleanup.error), false);
           assert.ok((await instance.dispose()).errors.some((error) => hasCause(error, failure)));
           assert.throws(() => service.id, /retir|reload|disabled/);
           const healthy: OpenClawConfig = {
@@ -195,7 +198,10 @@ export async function verifyPreparedModelGenerationCleanup(scenario: "publicatio
           );
           failed.release.resolve();
           assert.equal((await terminal).ok, true);
-          assert.equal((await laterDisposal).ok, true);
+          const cleanup = await laterDisposal;
+          assert.ok(!cleanup.ok, "The releasing caller must receive its disposal failure");
+          assert.ok(hasCause(cleanup.error, failure));
+          assert.equal(hasRetainedPluginRuntimeCloseError(cleanup.error), false);
         }
       } finally {
         fixtures.forEach((fixture) => fixture.release.resolve());

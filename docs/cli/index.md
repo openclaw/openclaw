@@ -389,6 +389,7 @@ openclaw [--dev] [--profile <name>] <command>
     status
     list
     get
+    show
     add
     edit
     rm
@@ -396,6 +397,7 @@ openclaw [--dev] [--profile <name>] <command>
     disable
     runs
     run
+    scratch
   nodes
     status
     describe

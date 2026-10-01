@@ -8,10 +8,8 @@ import { resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
 import { readMiniMaxCliCredentialsCached } from "../cli-credentials.js";
 import { EXTERNAL_CLI_SYNC_TTL_MS, MINIMAX_CLI_PROFILE_ID, authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
-import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
-  areOAuthCredentialsEquivalent,
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
   type RuntimeExternalOAuthProfile,
@@ -35,21 +33,6 @@ type ExternalCliSyncProvider = {
 };
 
 const PERSISTED_EXTERNAL_CLI_AUTH_FLOW = "external-cli";
-
-// External CLI bootstrap must never replace a local profile with another identity.
-/** Return true when imported CLI credentials match an existing profile identity. */
-function isSafeToUseExternalCliCredential(
-  existing: OAuthCredential | undefined,
-  imported: OAuthCredential,
-): boolean {
-  if (!existing) {
-    return true;
-  }
-  if (existing.provider !== imported.provider) {
-    return false;
-  }
-  return isSafeToCopyOAuthIdentity(existing, imported);
-}
 
 const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
@@ -344,25 +327,11 @@ export function resolveExternalCliAuthProfiles(
         });
         continue;
       }
-      if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {
+      if (existingOAuth && !isSafeToAdoptBootstrapOAuthIdentity(existingOAuth, creds)) {
         authProfilesLog.warn("refused external cli oauth bootstrap: identity mismatch", {
           profileId,
           provider: providerConfig.provider,
         });
-        continue;
-      }
-      if (
-        existingOAuth &&
-        !isSafeToAdoptBootstrapOAuthIdentity(existingOAuth, creds) &&
-        !areOAuthCredentialsEquivalent(existingOAuth, creds)
-      ) {
-        authProfilesLog.warn(
-          "refused external cli oauth bootstrap: identity mismatch or missing binding",
-          {
-            profileId,
-            provider: providerConfig.provider,
-          },
-        );
         continue;
       }
       if (

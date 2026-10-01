@@ -5,6 +5,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  compareCronRunRecordsNewestFirst,
   cronRunRecordStoreKey,
   cronRunRecordToRunLogEntry,
   parseCronRunDetailJson,
@@ -53,7 +54,11 @@ function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
 }
 
 /** Reads only Cron facts from the admitted released table, without restoring Tasks. */
-export function readCronRunRecordsInDatabase(db: DatabaseSync, jobId?: string): CronRunRecord[] {
+export function readCronRunRecordsInDatabase(
+  db: DatabaseSync,
+  jobId?: string,
+  runId?: string,
+): CronRunRecord[] {
   let select = query(db)
     .selectFrom("task_runs")
     .select([
@@ -81,6 +86,9 @@ export function readCronRunRecordsInDatabase(db: DatabaseSync, jobId?: string): 
     .orderBy("task_id", "asc");
   if (jobId !== undefined) {
     select = select.where("source_id", "=", jobId);
+  }
+  if (runId !== undefined) {
+    select = select.where("run_id", "=", runId);
   }
   return executeSqliteQuerySync(db, select).rows.map((row) => {
     // These released columns remain part of row admission even when Cron does not expose them.
@@ -133,7 +141,7 @@ export function readCronRunRecordsInDatabase(db: DatabaseSync, jobId?: string): 
 
 /** Caller owns the exact transaction. History never authorizes execution or receipt adoption. */
 export function recordCronRunInDatabase(db: DatabaseSync, input: CronRunHistoryWrite): void {
-  const existing = readCronRunRecordsInDatabase(db, input.jobId).find(
+  const existing = readCronRunRecordsInDatabase(db, input.jobId, input.runId).find(
     (row) =>
       row.runId === input.runId &&
       (cronRunRecordStoreKey(row) === input.storeKey ||
@@ -228,12 +236,7 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
     partitions.set(key, partition);
   }
   for (const rows of partitions.values()) {
-    rows.sort(
-      (a, b) =>
-        resolveCronRunRecordTimestamp(b) - resolveCronRunRecordTimestamp(a) ||
-        b.createdAt - a.createdAt ||
-        b.id.localeCompare(a.id),
-    );
+    rows.sort(compareCronRunRecordsNewestFirst);
     for (const row of rows.slice(CRON_HISTORY_KEEP_PER_JOB)) {
       expired.add(row.id);
     }

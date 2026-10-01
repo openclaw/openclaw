@@ -2,6 +2,7 @@ import { once } from "node:events";
 import type { Worker, WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -145,15 +146,32 @@ describe("maintenance lease heartbeat", () => {
     });
   });
 
+  it("renews through transient state contention before the maintenance lease expires", async () => {
+    await withOpenClawTestState({ label: "maintenance-lease-contention" }, async (state) => {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      await withOpenClawStateLease({ ...options(state.env), leaseMs: 1_500 }, async (lease) => {
+        const holder = holdStateDatabaseWriteTransaction(database.path, 1_200);
+        try {
+          await holder.ready;
+          await holder.joined;
+          block(400);
+          expect(() => lease.assertOwned()).not.toThrow();
+          expect(lease.signal.aborted).toBe(false);
+        } finally {
+          holder.release();
+          await holder.joined;
+        }
+      });
+    });
+  });
+
   it("acknowledges ownership checks while the parent holds a state write transaction", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-transaction" }, async (state) => {
-      // This control checks liveness during a transaction, not the one-second
-      // expiry boundary. Allow a cold worker to start under parallel checking.
-      await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
+      await withOpenClawStateLease({ ...options(state.env), leaseMs: 1_500 }, async (lease) => {
         runOpenClawStateWriteTransaction(
           ({ db }) => {
             lease.assertOwnedInTransaction(db);
-            block(450);
+            block(600);
             lease.assertOwnedInTransaction(db);
           },
           { env: state.env },

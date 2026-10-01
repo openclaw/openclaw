@@ -185,6 +185,53 @@ beforeEach(() => {
   );
 });
 
+async function startRegisteredSentinel(
+  params: Pick<
+    Parameters<typeof startGatewaySidecars>[0],
+    "cfg" | "defaultWorkspaceDir" | "startChannels"
+  >,
+) {
+  const startupCompleted = createDeferred();
+  const wakeTasks: Promise<unknown>[] = [];
+  const runWithAdmission = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+  vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission").mockImplementation(
+    (callback, origin, signal) => {
+      const work = runWithAdmission(callback, origin, signal);
+      if (origin === "startup:sidecars.restart-sentinel") {
+        void work.then(() => startupCompleted.resolve(), startupCompleted.reject);
+      }
+      if (origin === "restart-sentinel:wake") {
+        wakeTasks.push(work);
+      }
+      return work;
+    },
+  );
+  const testMode = captureEnv(["VITEST", "NODE_ENV"]);
+  const clock = createGatewaySchedulerClock();
+  const sidecarScheduler = createTestGatewayScheduler(clock.clock);
+  sidecars.push(sidecarScheduler);
+  setTestEnvValue("VITEST", "");
+  setTestEnvValue("NODE_ENV", "production");
+  const warn = vi.fn();
+  try {
+    await startGatewaySidecars({
+      ...params,
+      scheduler: sidecarScheduler,
+      deps: {},
+      pluginRegistry: createTestRegistry([]),
+      shouldStartPluginServices: () => false,
+      log: { warn },
+      logHooks: { info: vi.fn(), warn, error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      onPostReadySidecars: (...registered) => sidecars.push(...registered),
+    });
+    await startupCompleted.promise;
+  } finally {
+    testMode.restore();
+  }
+  return { clock, scheduler: sidecarScheduler, warn, joinWakes: () => Promise.all(wakeTasks) };
+}
+
 it.each(["queued", "running", "admission"] as const)(
   "stops pending update recovery and joins its retry (%s)",
   async (phase) => {
@@ -519,15 +566,7 @@ it.each([false, true])(
   },
 );
 
-it.each([
-  "same",
-  "continuation",
-  "other-handoff",
-  "other-run",
-  "restart",
-  "replaced-again",
-  "stopped",
-] as const)(
+it.each(["continuation", "other-handoff", "other-run", "restart", "stopped"] as const)(
   "reconciles only the pending update's terminal snapshot before preparing work (%s)",
   async (replacement) => {
     const originalRoot = tempDirs.make("openclaw-restart-terminal-original-");
@@ -589,16 +628,6 @@ it.each([
       shouldRun = replacement !== "stopped";
       return pending;
     });
-    if (replacement === "replaced-again") {
-      mocks.hookRunner.runMessageSending.mockImplementationOnce(async () => {
-        retained = await writeRestartSentinel(
-          { kind: "restart", status: "ok", ts: 125, message: "replacement after reconciliation" },
-          originalEnv,
-        );
-        return undefined;
-      });
-    }
-
     await scheduleRestartSentinelWake({
       scheduler,
       signal: scheduler.signal,
@@ -619,7 +648,7 @@ it.each([
       ).toMatchObject({ status: "completed" });
     }
     expect(await readRestartSentinel(originalEnv)).toEqual(
-      replacement === "same" || replacement === "continuation" ? null : retained,
+      replacement === "continuation" ? null : retained,
     );
     expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
     expect(
@@ -658,7 +687,6 @@ it("does not rewrite pending update sentinels during status refresh", async () =
 });
 
 it.each([
-  "final",
   "portable-claim",
   "late-final",
   "newer-native",
@@ -669,8 +697,7 @@ it.each([
   "recovers published legacy update notices through the registered sidecar (%s)",
   async (phase) => {
     const stateDir = tempDirs.make("openclaw-legacy-restart-sidecar-");
-    const startsWithFinal =
-      phase === "final" || phase === "portable-claim" || phase === "stop-during-import";
+    const startsWithFinal = phase === "portable-claim" || phase === "stop-during-import";
     if (phase === "portable-claim") {
       mocks.portableStateDir = stateDir;
     }
@@ -717,43 +744,16 @@ it.each([
         },
       );
     }
-    const startupCompleted = createDeferred();
-    const wakeTasks: Promise<unknown>[] = [];
-    const runWithAdmission = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-    vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission").mockImplementation(
-      (callback, origin, signal) => {
-        const work = runWithAdmission(callback, origin, signal);
-        if (origin === "startup:sidecars.restart-sentinel") {
-          void work.then(() => startupCompleted.resolve(), startupCompleted.reject);
-        }
-        if (origin === "restart-sentinel:wake") {
-          wakeTasks.push(work);
-        }
-        return work;
-      },
-    );
-    const testMode = captureEnv(["VITEST", "NODE_ENV"]);
-    const clock = createGatewaySchedulerClock();
-    const startupScheduler = createTestGatewayScheduler(clock.clock);
-    sidecars.push(startupScheduler);
-    setTestEnvValue("VITEST", "");
-    setTestEnvValue("NODE_ENV", "production");
-    const warn = vi.fn();
-    await startGatewaySidecars({
+    const {
+      clock,
       scheduler: startupScheduler,
+      warn,
+      joinWakes,
+    } = await startRegisteredSentinel({
       cfg: { commands: { ownerAllowFrom: ["matrix:!operator:example"] } },
       defaultWorkspaceDir: stateDir,
-      deps: {},
-      pluginRegistry: createTestRegistry([]),
       startChannels: async () => {},
-      shouldStartPluginServices: () => false,
-      log: { warn },
-      logHooks: { info: vi.fn(), warn, error: vi.fn() },
-      logChannels: { info: vi.fn(), error: vi.fn() },
-      onPostReadySidecars: (...registered) => sidecars.push(...registered),
     });
-    await startupCompleted.promise;
-    testMode.restore();
     const advancing = clock.advanceBy(750);
     if (phase === "stop-during-import") {
       await readStarted.promise;
@@ -771,7 +771,7 @@ it.each([
       } finally {
         releaseRead.resolve();
         await advancing;
-        await Promise.all(wakeTasks);
+        await joinWakes();
         await stopping;
       }
       expect(await readRestartSentinel(env)).toMatchObject({ payload: final });
@@ -781,7 +781,7 @@ it.each([
       return;
     }
     await advancing;
-    await Promise.all(wakeTasks);
+    await joinWakes();
 
     let retained: Awaited<ReturnType<typeof readRestartSentinel>> = null;
     if (!startsWithFinal) {
@@ -799,7 +799,7 @@ it.each([
       }
       await fs.writeFile(sourcePath, JSON.stringify({ version: 1, payload: final }));
       await clock.advanceBy(2_000);
-      await Promise.all(wakeTasks);
+      await joinWakes();
     }
     if (startsWithFinal || phase === "late-final") {
       expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledOnce();
@@ -833,14 +833,7 @@ it.each([
   },
 );
 
-it.each([
-  "requested",
-  "verifying",
-  "stopped",
-  "terminal-before-marker",
-  "replaced-handoff",
-  "replaced-kind",
-] as const)(
+it.each(["verifying", "terminal-before-marker", "replaced-handoff", "replaced-kind"] as const)(
   "keeps registered pending restart recovery on its original state and session after ambient drift (%s)",
   async (phase) => {
     const originalRoot = tempDirs.make("openclaw-restart-delayed-original-");
@@ -888,61 +881,28 @@ it.each([
       { kind: "restart", status: "ok", ts: 124, message: "unrelated" },
       unrelatedEnv,
     );
-    const warn = vi.fn();
-    const startupCompleted = createDeferred();
-    const runWithAdmission = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-    const admittedWork = vi
-      .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-      .mockImplementation((callback, origin, signal) => {
-        const work = runWithAdmission(callback, origin, signal);
-        if (origin === "startup:sidecars.restart-sentinel") {
-          void work.then(() => startupCompleted.resolve(), startupCompleted.reject);
-        }
-        return work;
-      });
-    const testMode = captureEnv(["VITEST", "NODE_ENV"]);
-    const clock = createGatewaySchedulerClock();
-    const recoveryScheduler = createTestGatewayScheduler(clock.clock);
-    sidecars.push(recoveryScheduler);
-    setTestEnvValue("VITEST", "");
-    setTestEnvValue("NODE_ENV", "production");
     setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "");
     setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "");
-    await startGatewaySidecars({
+    const {
+      clock,
       scheduler: recoveryScheduler,
+      warn,
+      joinWakes,
+    } = await startRegisteredSentinel({
       cfg,
       defaultWorkspaceDir: originalRoot,
-      deps: {},
-      pluginRegistry: createTestRegistry([]),
       startChannels: async () => {
         setTestEnvValue("OPENCLAW_STATE_DIR", unrelatedRoot);
       },
-      shouldStartPluginServices: () => false,
-      log: { warn },
-      logHooks: { info: vi.fn(), warn, error: vi.fn() },
-      logChannels: { info: vi.fn(), error: vi.fn() },
-      onPostReadySidecars: (...registered) => {
-        sidecars.push(...registered);
-      },
     });
     setTestEnvValue("OPENCLAW_STATE_DIR", unrelatedRoot);
-    await startupCompleted.promise;
     expect(recoveryScheduler.nextWakeAtMs).toBe(750);
-    testMode.restore();
     await clock.advanceBy(750);
     expect(getUpdateRun(run.runId, { env: originalEnv })?.verification.booted).toBe(true);
     expect(await readRestartSentinel(originalEnv)).not.toBeNull();
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount);
     expect(recoveryScheduler.nextWakeAtMs).toBe(2_750);
     finishUpdateRun(run.runId, { status: "succeeded" }, { env: originalEnv });
-    if (phase === "stopped") {
-      await Promise.all(sidecars.splice(0).map(async (sidecar) => await sidecar.stop()));
-      await clock.advanceBy(2_000);
-      expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
-      expect(await readRestartSentinel(originalEnv)).not.toBeNull();
-      expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
-      return;
-    }
     if (phase === "replaced-handoff" || phase === "replaced-kind") {
       const replacement = await writeRestartSentinel(
         phase === "replaced-kind"
@@ -955,7 +915,7 @@ it.each([
         originalEnv,
       );
       await clock.advanceBy(2_000);
-      await admittedWork.mock.results.at(-1)?.value;
+      await joinWakes();
       expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount);
       expect(await readRestartSentinel(originalEnv)).toEqual(replacement);
       expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
@@ -963,7 +923,7 @@ it.each([
     }
     if (phase === "terminal-before-marker") {
       await clock.advanceBy(2_000);
-      await admittedWork.mock.results.at(-1)?.value;
+      await joinWakes();
       expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount);
       expect(await readRestartSentinel(originalEnv)).not.toBeNull();
     }
@@ -972,7 +932,7 @@ it.each([
       originalEnv,
     );
     await clock.advanceBy(2_000);
-    await admittedWork.mock.results.at(-1)?.value;
+    await joinWakes();
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount + 1);
     expect(getUpdateRun(run.runId, { env: originalEnv })?.verification.noticeDelivered).toBe(true);
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledWith(

@@ -25,7 +25,7 @@ export async function listXaiTtsVoices(params: {
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
   const baseUrl = normalizeXaiTtsBaseUrl(params.baseUrl);
-  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+  const { assertOkOrThrowProviderError, readProviderJsonArrayFieldResponse } =
     await import("openclaw/plugin-sdk/provider-http");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedOrigin } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
@@ -44,13 +44,9 @@ export async function listXaiTtsVoices(params: {
   });
   try {
     await assertOkOrThrowProviderError(response, "xAI TTS voices API error");
-    const payload = await readProviderJsonResponse<unknown>(response, "xAI TTS voices", {
+    const voices = await readProviderJsonArrayFieldResponse(response, "xAI TTS voices", "voices", {
       maxBytes: XAI_TTS_VOICE_LIST_MAX_BYTES,
     });
-    const voices = asOptionalRecord(payload)?.voices;
-    if (!Array.isArray(voices)) {
-      throw new Error("xAI TTS voices: malformed JSON response");
-    }
     return voices.flatMap((value) => {
       const voice = asOptionalRecord(value);
       const id = trimToUndefined(voice?.voice_id);
@@ -98,8 +94,7 @@ function toXaiTtsWsUrl(params: {
   responseFormat: XaiSpeechResponseFormat;
   speed?: number;
 }): string {
-  assertXaiNativeTtsStreamEndpoint(params.baseUrl);
-  const url = new URL(normalizeXaiTtsBaseUrl(params.baseUrl));
+  const url = resolveXaiNativeTtsStreamEndpoint(params.baseUrl);
   url.protocol = "wss:";
   const basePath = url.pathname.replace(/\/+$/, "");
   url.pathname = `${basePath}/tts`;
@@ -112,21 +107,11 @@ function toXaiTtsWsUrl(params: {
   return url.toString();
 }
 
-function readXaiTtsStreamErrorMessage(event: XaiTtsStreamServerEvent): string {
-  const message = trimToUndefined(event.message);
-  return message ?? "xAI TTS stream error";
-}
-
-function parseXaiTtsStreamBaseUrl(baseUrl: string): URL {
-  try {
-    return new URL(normalizeXaiTtsBaseUrl(baseUrl));
-  } catch {
+function resolveXaiNativeTtsStreamEndpoint(baseUrl: string): URL {
+  const url = URL.parse(normalizeXaiTtsBaseUrl(baseUrl));
+  if (!url) {
     throw new Error(`Invalid xAI TTS stream baseUrl: ${baseUrl}`);
   }
-}
-
-function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
-  const url = parseXaiTtsStreamBaseUrl(baseUrl);
   if (url.protocol !== "https:") {
     throw new Error(
       `xAI streaming TTS only supports HTTPS for the native ${XAI_NATIVE_TTS_STREAM_HOST} endpoint; got protocol "${url.protocol}"`,
@@ -142,6 +127,7 @@ function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
   if (url.username || url.password || url.port || pathname !== "/v1" || url.search || url.hash) {
     throw new Error(`xAI streaming TTS requires the canonical ${XAI_BASE_URL} base URL`);
   }
+  return url;
 }
 
 export async function xaiTTSStream(params: XaiTtsRequest): Promise<{
@@ -357,7 +343,7 @@ export async function xaiTTSStream(params: XaiTtsRequest): Promise<{
             void release();
             return;
           case "error":
-            failStream(new Error(readXaiTtsStreamErrorMessage(event)));
+            failStream(new Error(trimToUndefined(event.message) ?? "xAI TTS stream error"));
           default:
         }
       };

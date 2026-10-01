@@ -41,6 +41,15 @@ Runtime-consuming tests prepare checkout artifacts through the explicit build ow
 not by launching the CLI with `--version`. Preparation reuses source-runner freshness
 checks and checkout artifact ownership, without updater service or database-maintenance
 custody. Current artifacts need no writable checkout or service inspection.
+`build-all` fingerprints production inputs in the existing stamps. Test preparation
+can reuse a coherent runtime after a source refresh or test-only correction,
+including a new private transport commit. Ordinary CLI and immutable deployment
+HEAD checks remain strict; UI E2E preparation also keeps its current-head checks.
+Changed production inputs, build configuration, dependencies, compiler identity,
+or required missing outputs still require preparation. Partial postbuilds that skip
+static assets cannot satisfy readers requiring those assets. A full build before E2E
+checks should use `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build`; scope that flag to the
+build command so its artifacts satisfy the strongest test prerequisite.
 
 Before writing, automatic preparation requires verified artifact separation or an
 observed offline managed Gateway. On Linux it reads the loaded command location without reading service

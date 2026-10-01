@@ -2,6 +2,7 @@
 import {
   CLAUDE_FABLE_5_THINKING_PROFILE,
   CLAUDE_OPUS_55_THINKING_PROFILE,
+  CLAUDE_SONNET_55_THINKING_PROFILE,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
@@ -10,6 +11,7 @@ import {
   resolveClaudeOpus55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
@@ -26,6 +28,7 @@ import type {
 import { headersToRecord } from "../utils/headers.js";
 export {
   bindsClaudeThinkingPrefix,
+  requiresClaudeBetweenToolsThinking,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
@@ -35,6 +38,7 @@ export {
   resolveClaudeOpus55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
@@ -171,9 +175,11 @@ export function resolveAnthropicThinkingEffort(
     level ??
     (resolveClaudeOpus55ModelIdentity(model)
       ? CLAUDE_OPUS_55_THINKING_PROFILE.defaultLevel
-      : resolveClaudeFable5ModelIdentity(model)
-        ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
-        : undefined);
+      : resolveClaudeSonnet55ModelIdentity(model)
+        ? CLAUDE_SONNET_55_THINKING_PROFILE.defaultLevel
+        : resolveClaudeFable5ModelIdentity(model)
+          ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
+          : undefined);
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
   const clampModel = {
     ...model,
@@ -298,17 +304,30 @@ function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefine
   return sonnetIdentity ? `sonnet:${sonnetIdentity}` : undefined;
 }
 
+const FABLE_51_REPLAY_IDENTITY = /^fable:claude-fable-5-1(?=$|[^a-z0-9])/;
+const SONNET_55_REPLAY_IDENTITY = /^sonnet:claude-sonnet-5-5(?=$|[^a-z0-9])/;
+
 /**
- * Fable 5.1 reads thinking from every earlier Claude generation (verified live:
- * Opus 5, Sonnet 5, Opus 4.8 replay with no drops), while the API silently
- * drops anything it cannot read. Moving onto it therefore keeps prior reasoning;
- * every other cross-identity move, including unregistered Mythos targets, is
- * still dropped here until its replay contract is proven separately.
+ * Verified live (2026-09-28): Fable 5.1 reads every earlier Claude generation
+ * except Sonnet 5.5; Sonnet 5.5 reads Sonnet 5 and pre-Claude-5 thinking but
+ * not Opus 5, Fable, or Mythos; no other model reads Sonnet 5.5 thinking. The
+ * API drops what a target cannot read, and every other cross-identity move
+ * stays dropped here until its replay contract is proven separately.
  */
-function readsPriorClaudeThinking(targetIdentity: string | undefined): boolean {
-  return (
-    targetIdentity !== undefined && /^fable:claude-fable-5-1(?=$|[^a-z0-9])/.test(targetIdentity)
-  );
+function readsPriorClaudeThinking(
+  targetIdentity: string | undefined,
+  sourceIdentity: string | undefined,
+): boolean {
+  if (targetIdentity === undefined) {
+    return false;
+  }
+  if (FABLE_51_REPLAY_IDENTITY.test(targetIdentity)) {
+    return sourceIdentity === undefined || !SONNET_55_REPLAY_IDENTITY.test(sourceIdentity);
+  }
+  if (SONNET_55_REPLAY_IDENTITY.test(targetIdentity)) {
+    return sourceIdentity === undefined || sourceIdentity.startsWith("sonnet:");
+  }
+  return false;
 }
 
 function isClaudeReplaySource(ref: ReplayModelRef): boolean {
@@ -334,7 +353,7 @@ export function resolveModelBoundThinkingReplayMode(params: {
   }
   if (
     sourceApi === targetApi &&
-    readsPriorClaudeThinking(targetIdentity) &&
+    readsPriorClaudeThinking(targetIdentity, sourceIdentity) &&
     isClaudeReplaySource(params.source)
   ) {
     return "preserve";

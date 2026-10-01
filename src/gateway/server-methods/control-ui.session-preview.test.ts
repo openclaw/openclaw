@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import * as subagentState from "../../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.test-support.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
@@ -80,6 +80,7 @@ describe("controlUi.sessionPreview", () => {
                 sessionKeys: [],
               }),
               (selection) => selection.runIds,
+              { sessionKeys: [run.childSessionKey], descendants: true },
             );
             void recovering.catch(() => {});
             await recoveryStarted.promise;

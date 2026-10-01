@@ -38,3 +38,11 @@ export function getSessionRowProjection(context?: { sessionRowProjectionOwner?: 
     ? projections.get(binding.owner)?.read()
     : undefined;
 }
+
+export function requireSessionRowProjection(context?: { sessionRowProjectionOwner?: object }) {
+  const projection = getSessionRowProjection(context);
+  if (!projection) {
+    throw new Error("Session projection is unavailable before Gateway startup completes");
+  }
+  return projection;
+}

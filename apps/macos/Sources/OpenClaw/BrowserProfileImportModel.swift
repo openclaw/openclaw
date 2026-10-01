@@ -276,15 +276,11 @@ final class BrowserProfileImportModel {
     }
 
     func dismiss() {
-        let wasOffering = if case .offering = self.phase {
-            true
-        } else {
-            false
-        }
+        let previousPhase = self.phase
         self.setPhase(.hidden)
         // Only an unanswered offer persists the dismissal; closing a result
         // banner must not overwrite the recorded "imported" state.
-        guard wasOffering else { return }
+        guard case .offering = previousPhase else { return }
         self.dismissedThisSession = true
         Task {
             let _: [String: Bool]? = try? await self.request(

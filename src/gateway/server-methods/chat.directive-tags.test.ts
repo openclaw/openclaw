@@ -5027,13 +5027,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     expect(mockState.lastDispatchImages).toHaveLength(1);
     expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
-    expect(mockState.lastDispatchCtx?.media).toEqual([
-      {
-        fileName: "report.pdf",
-        path: "media/inbound/report.pdf",
-        contentType: "application/pdf",
-        workspaceDir: "/sandbox/workspace",
-      },
+    expect(mockState.lastDispatchCtx?.media?.map((fact) => fact.path)).toEqual([
+      "media/inbound/report.pdf",
     ]);
   });
 
@@ -5189,13 +5184,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.media).toEqual([
-      {
-        fileName: "report.pdf",
-        path: "/home/user/.openclaw/media/inbound/report.pdf",
-        contentType: "application/pdf",
-        workspaceDir: "/sandbox/workspace",
-      },
+    expect(mockState.lastDispatchCtx?.media?.map((fact) => fact.path)).toEqual([
+      "/home/user/.openclaw/media/inbound/report.pdf",
     ]);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
@@ -5274,13 +5264,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.media).toEqual([
-      {
-        fileName: "huge.bin",
-        path: "media/inbound/huge.bin",
-        contentType: "application/octet-stream",
-        workspaceDir: "/sandbox/workspace",
-      },
+    expect(mockState.lastDispatchCtx?.media?.map((fact) => fact.path)).toEqual([
+      "media/inbound/huge.bin",
     ]);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });

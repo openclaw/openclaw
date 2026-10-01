@@ -8,6 +8,12 @@ import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 const modalLayers = (document.openClawModalLayers ??= new Set<HTMLElement>());
 
+function restoreFocus(target: HTMLElement): void {
+  target.focus({ preventScroll: true });
+  // Cross-origin frame adapters finish the return inside their own document.
+  target.dispatchEvent(new Event("openclaw:restore-focus"));
+}
+
 function setModalLayer(modal: HTMLElement, open: boolean) {
   const wasOpen = modalLayers.size > 0;
   modalLayers.delete(modal);
@@ -240,7 +246,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#returnFocus = null;
     this.#returnFocusOverride = undefined;
     if (returnFocus?.isConnected) {
-      returnFocus.focus({ preventScroll: true });
+      restoreFocus(returnFocus);
     }
     super.disconnectedCallback();
   }
@@ -290,15 +296,15 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    if (this.label) {
-      dialog.setAttribute("aria-label", this.label);
-    } else {
-      dialog.removeAttribute("aria-label");
-    }
-    if (this.description) {
-      dialog.setAttribute("aria-description", this.description);
-    } else {
-      dialog.removeAttribute("aria-description");
+    for (const [attribute, value] of Object.entries({
+      "aria-label": this.label,
+      "aria-description": this.description,
+    })) {
+      if (value) {
+        dialog.setAttribute(attribute, value);
+      } else {
+        dialog.removeAttribute(attribute);
+      }
     }
     if (this.open) {
       if (!dialog?.open) {
@@ -402,7 +408,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
           originalReturnFocus.blur();
         }
       } else if (returnFocus.isConnected) {
-        returnFocus.focus({ preventScroll: true });
+        restoreFocus(returnFocus);
       }
     }, 0);
   };

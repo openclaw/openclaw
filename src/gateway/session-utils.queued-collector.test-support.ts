@@ -23,6 +23,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { buildAgentSessionPatch } from "./server-methods/agent-session-patch.js";
+import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createChatAbortContext } from "./server-methods/chat.abort.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
@@ -284,6 +285,42 @@ export function useQueuedCollectorFixture() {
     };
   }
 
+  async function expectUnstartedChildHistory(
+    context: GatewayRequestContext,
+    sessionKey: string,
+    activeRunIds: string[],
+  ) {
+    const respond = vi.fn();
+    await expectDefined(
+      chatHistoryHandlers["chat.history"],
+      "chat.history handler",
+    )({
+      req: { type: "req", id: "queued-history", method: "chat.history" },
+      params: { sessionKey, agentId: "main", offset: 0, limit: 20 },
+      client: operatorClient(),
+      isWebchatConnect: () => false,
+      respond,
+      context,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        messages: [],
+        hasMore: false,
+        totalMessages: 0,
+        sessionInfo: expect.objectContaining({
+          hasActiveRun: activeRunIds.length > 0,
+          activeRunIds,
+          status: activeRunIds.length > 0 ? "queued" : "killed",
+        }),
+      }),
+    );
+    const payload = respond.mock.calls[0]?.[1];
+    expect(payload).not.toHaveProperty("inFlightRun");
+    expect(payload?.sessionInfo.startedAt).toBeUndefined();
+    expect(payload?.sessionInfo.runtimeMs).toBeUndefined();
+  }
+
   return {
     parentKey,
     launchedRunIds,
@@ -293,5 +330,6 @@ export function useQueuedCollectorFixture() {
     listChildren,
     spawnCollectors,
     createQueuedReservation,
+    expectUnstartedChildHistory,
   };
 }

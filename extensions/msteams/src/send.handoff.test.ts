@@ -176,7 +176,6 @@ describe("registered Teams delivery handoff", () => {
         const completion = sendMSTeamsMessages({
           replyStyle: "thread",
           app: fixture.app,
-          appId: "fixture-app",
           conversationRef: fixture.context.ref,
           context,
           messages: [{ text: "queued reply" }],

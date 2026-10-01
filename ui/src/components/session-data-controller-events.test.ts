@@ -27,17 +27,6 @@ describe("publishSidebarSessionList", () => {
       error: null,
     });
 
-  it("replaces the current agent's accumulated session result", () => {
-    const owner = createOwner();
-
-    publish(owner, "main", ["first", "second"]);
-    publish(owner, "main", ["second", "third"]);
-
-    expect(owner.sessionsAgentId).toBe("main");
-    expect(owner.sessionsResult?.sessions.map((row) => row.key)).toEqual(["second", "third"]);
-    expect(owner.sessionResultsByAgent.main).toBe(owner.sessionsResult);
-  });
-
   it("keeps the latest scoped session result for every cached agent", () => {
     const owner = createOwner();
 

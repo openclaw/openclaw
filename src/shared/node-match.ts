@@ -1,4 +1,3 @@
-// Node match helpers score and select nodes from names, ids, and addresses.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

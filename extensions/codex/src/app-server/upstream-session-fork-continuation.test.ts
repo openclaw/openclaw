@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createCodexCatalogHomeResolver } from "../session-catalog-homes.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
@@ -40,8 +40,9 @@ vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
 import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
 
 describe("persistent upstream fork continuation", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "codex-fork-home-");
   it("continues a persistent upstream fork on its secondary home and native model with applied harness configuration", async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-fork-home-")));
+    const root = sessionDirs.make();
     const agentDir = path.join(root, "agents", "main", "agent");
     const sourceAgentDir = path.join(root, "agents", "source", "agent");
     const secondaryHome = resolveCodexAppServerHomeDir(sourceAgentDir);
@@ -346,7 +347,6 @@ describe("persistent upstream fork continuation", () => {
       for (const client of clients) {
         client.close();
       }
-      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

@@ -1,7 +1,6 @@
 package ai.openclaw.app.gateway
 
 import ai.openclaw.app.SecurePrefs
-import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,7 +56,6 @@ private data class PersistedGatewayRegistryVersion(
 
 class GatewayRegistryStore(
   private val prefs: SecurePrefs,
-  private val onActiveChanged: ((String?) -> Unit)? = null,
 ) {
   companion object {
     internal const val STORAGE_KEY = "gateway.registry"
@@ -135,7 +133,6 @@ class GatewayRegistryStore(
         _connectedStableIds.value = _connectedStableIds.value + normalized
       }
       persist()
-      onActiveChanged?.invoke(normalized)
     }
 
   fun setConnectionEnabled(
@@ -172,20 +169,14 @@ class GatewayRegistryStore(
       if (!mutationsAllowed) return@synchronized false
       val normalized = stableId.trim()
       val nextEntries = _entries.value.filterNot { it.stableId == normalized }
-      val previousActiveStableId = _activeStableId.value
-      val nextActiveStableId = previousActiveStableId?.takeUnless { it == normalized }
+      val nextActiveStableId = _activeStableId.value?.takeUnless { it == normalized }
       val nextConnectedStableIds = _connectedStableIds.value.filterNot { it == normalized }
       if (!persistSynchronously(nextEntries, nextActiveStableId, nextConnectedStableIds)) return@synchronized false
 
-      // Publish only after the durable commit. Notification is post-commit and cannot turn a
-      // successful removal into a failure that would cancel the database recovery marker.
+      // Publish only after the durable commit.
       _entries.value = nextEntries
       _activeStableId.value = nextActiveStableId
       _connectedStableIds.value = nextConnectedStableIds
-      if (previousActiveStableId != nextActiveStableId) {
-        runCatching { onActiveChanged?.invoke(nextActiveStableId) }
-          .onFailure { Log.e("GatewayRegistry", "Active-gateway observer failed after durable removal", it) }
-      }
       true
     }
 

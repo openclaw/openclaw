@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listFeishuThreadMessages } from "./send.js";
 
 const { mockClientList, mockCreateFeishuClient, mockResolveFeishuAccount } = vi.hoisted(() => ({
   mockClientList: vi.fn(),
@@ -15,7 +16,6 @@ vi.mock("./accounts.js", () => ({
   resolveFeishuRuntimeAccount: mockResolveFeishuAccount,
 }));
 
-let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
 const thread = { cfg: {}, threadId: "omt_1" };
 
 function page<T>(items: T[], paging: { has_more?: boolean; page_token?: string } = {}) {
@@ -29,10 +29,6 @@ function body(content: unknown) {
 function textMessage(message_id: string, text: string) {
   return { message_id, body: body({ text }) };
 }
-
-beforeAll(async () => {
-  ({ listFeishuThreadMessages } = await import("./send.js"));
-});
 
 afterAll(() => {
   vi.doUnmock("./client.js");

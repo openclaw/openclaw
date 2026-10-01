@@ -13,7 +13,7 @@ import {
   waitForFixtureFile,
   waitForPidFile,
 } from "./process-wait.js";
-import { createDeferred, withTestTimeout } from "./promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./promise.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -95,7 +95,9 @@ it("rejects when the process remains alive at the deadline", async () => {
   await expect(waitForDead(process.pid, 20)).rejects.toThrow(`process still alive: ${process.pid}`);
 });
 
-it("rechecks process death after a worker stall crosses the polling deadline", async () => {
+it("rechecks process death after a worker stall crosses the polling deadline", async ({
+  signal,
+}) => {
   // A separate controller can reap the real child while this worker is stalled.
   const controller = spawn(
     process.execPath,
@@ -120,15 +122,22 @@ child.once('close', (_code, signal) => {
   const nativeKill = process.kill.bind(process);
   let childPid: number | undefined;
   try {
-    const [pid] = await withTestTimeout(once(controller, "message"), 2_000, "child not ready");
+    const [pid] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(controller, "message"),
+        closed,
+        "controller closed before child readiness",
+      ),
+      signal,
+    );
     if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
       throw new Error("child did not publish a valid PID");
     }
     childPid = pid;
     let observedAlive = false;
-    const killSpy = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
-      const result = nativeKill(target, signal);
-      if (target === childPid && signal === 0 && !observedAlive) {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((target, killSignal) => {
+      const result = nativeKill(target, killSignal);
+      if (target === childPid && killSignal === 0 && !observedAlive) {
         observedAlive = true;
         controller.send("kill");
         // Preserve the real live observation, but delay the next poll past its deadline.
@@ -153,7 +162,7 @@ child.once('close', (_code, signal) => {
       if (controller.connected) {
         controller.send("kill");
       }
-      await closed;
+      await withinTest(closed, signal);
     } finally {
       try {
         if (controller.pid && isProcessAlive(controller.pid)) {
@@ -170,9 +179,9 @@ child.once('close', (_code, signal) => {
   }
 });
 
-it.each(["borrower completion", "persistent file"] as const)(
+it.for(["borrower completion", "persistent file"] as const)(
   "observes readiness from %s without a file-watch event",
-  async (observation) => {
+  async (observation, { signal }) => {
     const filename = path.join(tempDirs.make("openclaw-process-receipt-"), "ready");
     const { promise: completion, resolve: finish } = createDeferred();
     const watchFile = fsSync.watchFile;
@@ -196,7 +205,7 @@ it.each(["borrower completion", "persistent file"] as const)(
         await nextTurn();
         expect(ready).toBe(true);
       }
-      await withTestTimeout(waiting, 10_000, "Persistent readiness was not observed");
+      await withinTest(waiting, signal);
       expect(ready).toBe(true);
     } finally {
       finish();

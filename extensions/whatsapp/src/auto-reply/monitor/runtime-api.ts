@@ -9,10 +9,7 @@ export {
 export { resolveChannelContextVisibilityMode } from "../config.runtime.js";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 export type LoadConfigFn = typeof import("../config.runtime.js").getRuntimeConfig;
-export {
-  buildHistoryContextFromEntries,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+export { buildHistoryContextFromEntries } from "openclaw/plugin-sdk/reply-history";
 export { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 export {
   resolveChunkMode,

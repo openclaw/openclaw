@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -13,6 +14,7 @@ const WORKFLOWS: {
   file: string;
   prGroup: string;
   manual: ManualPolicy;
+  manualAdmission?: string;
   push?: { group: string; cancel: boolean };
   convertToDraft?: true;
 }[] = [
@@ -20,16 +22,19 @@ const WORKFLOWS: {
     file: ".github/workflows/ci-check-testbox.yml",
     prGroup: "Blacksmith Testbox-pr-v1-123",
     manual: { mode: "isolated per-run", group: "Blacksmith Testbox-manual-v1-201" },
+    manualAdmission: "admission",
   },
   {
     file: ".github/workflows/ci-check-arm-testbox.yml",
     prGroup: "Blacksmith ARM Testbox-pr-v1-123",
     manual: { mode: "isolated per-run", group: "Blacksmith ARM Testbox-manual-v1-201" },
+    manualAdmission: "admission",
   },
   {
     file: ".github/workflows/ci-build-artifacts-testbox.yml",
     prGroup: "Blacksmith Build Artifacts Testbox-pr-v1-123",
     manual: { mode: "isolated per-run", group: "Blacksmith Build Artifacts Testbox-manual-v1-201" },
+    manualAdmission: "admission",
   },
   {
     file: ".github/workflows/ios-periphery.yml",
@@ -270,6 +275,7 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
           continue;
         }
         await runInNewContext(`(async () => {\n${step.with.script}\n})()`, {
+          require: createRequire(import.meta.url),
           context: { eventName: github.event_name, payload: github.event },
           core: {
             setOutput: (key: string, value: string) => {
@@ -433,7 +439,7 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expect(delayed.group).not.toBe(ready.group);
       for (const [id, eligible] of Object.entries(ready.eligibility!.jobs)) {
         if (id !== "scope") {
-          expect(eligible, id).toBe(true);
+          expect(eligible, id).toBe(id !== policy.manualAdmission);
         }
       }
     },

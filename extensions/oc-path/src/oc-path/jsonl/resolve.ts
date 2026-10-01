@@ -63,5 +63,5 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
   if (match === null) {
     return null;
   }
-  return { ...match, line: lineEntry.line };
+  return { ...match, path: match.path.map(String), line: lineEntry.line };
 }

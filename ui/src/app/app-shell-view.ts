@@ -27,6 +27,7 @@ import {
   type DevicePairSetupHost,
 } from "./app-shell-device-pair-setup.ts";
 import { renderShellDocks } from "./app-shell-docks.ts";
+import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import { renderShellLazyOverlays, type ShellLazyOverlayHost } from "./app-shell-lazy-view.ts";
 import type { ShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -74,6 +75,7 @@ export interface ShellViewHost
   readonly routeState: ShellRouteState;
   readonly settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   readonly settingsSearchQuery: string;
+  readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
@@ -241,8 +243,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       connected: gatewayConnected,
       connectionStatus,
       lastError: gatewaySnapshot.lastError,
-      outboxAttentionCountForSession: callbacks.outboxAttentionCountForSession,
-      hasSessionDraft: callbacks.hasSessionDraft,
+      storedOutboxes: host.storedOutboxes,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),

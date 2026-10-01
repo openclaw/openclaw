@@ -101,6 +101,7 @@ test.each([
 });
 
 test("sessions.patch rejects a session replaced before restore reaches the SQLite writer", async () => {
+  const patchPreparation = await import("./server-methods/sessions-patch-expectations.js");
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:restore-generation-race";
   const originalSessionId = "restored-original";
@@ -134,6 +135,14 @@ test("sessions.patch rejects a session replaced before restore reaches the SQLit
   await writerStarted.promise;
 
   const preflightCompleted = createDeferred();
+  const prepareTargets = patchPreparation.prepareSessionPatchTargets;
+  const preflight = vi
+    .spyOn(patchPreparation, "prepareSessionPatchTargets")
+    .mockImplementation((input) => {
+      const prepared = prepareTargets(input);
+      preflightCompleted.resolve();
+      return prepared;
+    });
   const broadcastToConnIds = vi.fn();
   const restored = directSessionReq(
     "sessions.patch",
@@ -146,14 +155,6 @@ test("sessions.patch rejects a session replaced before restore reaches the SQLit
       context: {
         broadcastToConnIds,
         getSessionEventSubscriberConnIds: () => new Set(["session-observer"]),
-        workerSessionPlacementService: {
-          getMany(sessionIds: readonly string[]) {
-            if (sessionIds.includes(originalSessionId)) {
-              preflightCompleted.resolve();
-            }
-            return new Map();
-          },
-        },
       },
     },
   );
@@ -178,6 +179,7 @@ test("sessions.patch rejects a session replaced before restore reaches the SQLit
   } finally {
     replaceSession.resolve();
     await Promise.allSettled([writer, restored]);
+    preflight.mockRestore();
   }
 });
 

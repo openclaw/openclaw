@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { promisify } from "node:util";
+import type { OpenClawPluginHttpRouteHandler } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { OpenClawPluginHttpRouteHandler } from "../api.js";
 import { registerDiffsLanguagePackPlugin } from "./plugin.js";
 
 const VIEWER_RUNTIME_PATH = "/plugins/diffs-language-pack/assets/viewer-runtime.js";

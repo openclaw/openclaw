@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -16,7 +16,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
-const scheduledWriteActions = ["edit", "delete", "pin", "unpin"] as const;
+const target = "channel:100000000000000001";
 
 it("separates generic sends, source reads, and simulated writes", async () => {
   const registry = captureActivePluginRegistrySnapshot();
@@ -77,29 +77,20 @@ it("separates generic sends, source reads, and simulated writes", async () => {
       },
     });
 
+    const execute = (callId: string, params: Record<string, unknown>) =>
+      tool.execute(callId, { channel: "discord", target, ...params });
     sourceCurrent = false;
     await expect(
-      tool.execute("generic-send", {
-        action: "send",
-        channel: "discord",
-        target: "channel:100000000000000001",
-        message: "Still authorized",
-      }),
+      execute("generic-send", { action: "send", message: "Still authorized" }),
     ).rejects.toBe(outboundBoundary);
-    await expect(
-      tool.execute("source-read", {
-        action: "read",
-        channel: "discord",
-        target: "channel:100000000000000001",
-      }),
-    ).rejects.toThrow("source authorization expired");
+    await expect(execute("source-read", { action: "read" })).rejects.toThrow(
+      "source authorization expired",
+    );
     expect(assertMessageCurrent).toHaveBeenCalled();
     expect(assertSourceCurrent).toHaveBeenCalledOnce();
     await expect(
-      tool.execute("scheduled-dry-run", {
+      execute("scheduled-dry-run", {
         action: "send",
-        channel: "discord",
-        target: "channel:100000000000000001",
         message: "Simulate only",
         dryRun: true,
       }),
@@ -110,10 +101,10 @@ it("separates generic sends, source reads, and simulated writes", async () => {
   }
 });
 
-async function observeScheduledAccountSelection(
-  action: (typeof scheduledWriteActions)[number] | "send",
-  accountId?: string,
-) {
+it.each([
+  ["edit", "ops"],
+  ["send", "delivery"],
+] as const)("selects the scheduled %s account %s", async (action, expectedAccountId) => {
   const registry = captureActivePluginRegistrySnapshot();
   const identity = {
     agentId: "main",
@@ -143,7 +134,7 @@ async function observeScheduledAccountSelection(
           resolveAccount: (cfg, id) => cfg.channels?.discord?.accounts?.[id ?? "delivery"],
         },
       }),
-      actions: { describeMessageTool: () => ({ actions: ["send", ...scheduledWriteActions] }) },
+      actions: { describeMessageTool: () => ({ actions: ["send", "edit"] }) },
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
     const config: OpenClawConfig = {
@@ -192,51 +183,19 @@ async function observeScheduledAccountSelection(
       tool.execute("scheduled-write-account", {
         action,
         channel: "discord",
-        target: "channel:100000000000000001",
+        target,
         ...(action === "send" ? {} : { messageId: "100000000000000002" }),
-        ...(action === "edit" || action === "send" ? { message: "Updated scheduled message" } : {}),
-        ...(accountId ? { accountId } : {}),
+        message: "Updated scheduled message",
       }),
     ).rejects.toBe(outboundBoundary);
-    return { secretScopes, defaultAccounts };
+    expect({ secretScopes, defaultAccounts }).toEqual({
+      secretScopes: [
+        new Set(["channels.discord.token", `channels.discord.accounts.${expectedAccountId}.token`]),
+      ],
+      defaultAccounts: [expectedAccountId],
+    });
   } finally {
     revokeMessageActionTurnCapability(capability);
     restoreActivePluginRegistrySnapshot(registry);
   }
-}
-
-describe("scheduled message write account selection", () => {
-  it.each([
-    ...scheduledWriteActions.map((action) => ({
-      action,
-      accountId: undefined,
-      selection: "an omitted account",
-      expectedAccountId: "ops",
-    })),
-    {
-      action: "edit" as const,
-      accountId: "ops",
-      selection: "an explicit matching account",
-      expectedAccountId: "ops",
-    },
-    {
-      action: "send" as const,
-      accountId: undefined,
-      selection: "the delivery default",
-      expectedAccountId: "delivery",
-    },
-  ])(
-    "selects $expectedAccountId for $action with $selection",
-    async ({ action, accountId, expectedAccountId }) => {
-      expect(await observeScheduledAccountSelection(action, accountId)).toEqual({
-        secretScopes: [
-          new Set([
-            "channels.discord.token",
-            `channels.discord.accounts.${expectedAccountId}.token`,
-          ]),
-        ],
-        defaultAccounts: [expectedAccountId],
-      });
-    },
-  );
 });

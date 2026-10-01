@@ -279,7 +279,6 @@ vi.mock("../skills/loading/workspace-skill-loader.js", () => {
     typeof import("../skills/loading/workspace-skill-loader.js").loadVisibleSkills
   >(() => []);
   return {
-    filterWorkspaceSkills: (entries: unknown[]) => entries,
     loadVisibleSkills,
     prepareWorkspaceSkills: async (...args: Parameters<typeof loadVisibleSkills>) =>
       loadVisibleSkills(...args),

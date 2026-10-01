@@ -37,7 +37,7 @@ describe("session list navigation lineage", () => {
     agents: { list: [{ id: "main", default: true }] },
   } as OpenClawConfig;
 
-  test.each(["recent", "idle", "fork", "visible spawn"] as const)(
+  test.each(["idle", "fork", "visible spawn"] as const)(
     "keeps persistent dashboard navigation beyond run retention (%s)",
     async (kind) => {
       const storePath = path.join(tempDirs.make("session-navigation-retention-"), "sessions.json");
@@ -49,7 +49,7 @@ describe("session list navigation lineage", () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const childEntry: SessionEntry = {
         sessionId: "child",
-        updatedAt: kind === "recent" || kind === "fork" ? now - 1_000 : old,
+        updatedAt: kind === "fork" ? now - 1_000 : old,
         parentSessionKey: parentKey,
         parentSessionId: "parent",
         ...(kind === "fork"

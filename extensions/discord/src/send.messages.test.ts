@@ -1,6 +1,6 @@
 import { Routes } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
-import { fetchVoiceStatusDiscord } from "./send.guild.js";
+import { createScheduledEventDiscord, fetchVoiceStatusDiscord } from "./send.guild.js";
 import { readMessagesDiscord, searchMessagesDiscord } from "./send.messages.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 import { sendTypingDiscord } from "./send.typing.js";
@@ -38,12 +38,18 @@ describe("Discord message reads", () => {
     getMock.mockResolvedValueOnce(results);
     await expect(
       searchMessagesDiscord(
-        { guildId: "G1", content: "hello", channelIds: ["c1", "c2"], authorIds: ["u1"], limit: 99 },
+        {
+          guildId: "G1",
+          content: "release & review",
+          channelIds: ["c1", "c2"],
+          authorIds: ["u1", "u2"],
+          limit: 99,
+        },
         opts,
       ),
     ).resolves.toEqual(results);
     expect(getMock).toHaveBeenCalledWith(
-      "/guilds/G1/messages/search?content=hello&channel_id=c1&channel_id=c2&author_id=u1&limit=25",
+      "/guilds/G1/messages/search?content=release+%26+review&channel_id=c1&channel_id=c2&author_id=u1&author_id=u2&limit=25",
     );
   });
 
@@ -115,4 +121,22 @@ it("sends typing to the resolved channel", async () => {
     channelId: "12345",
   });
   expect(postMock).toHaveBeenCalledWith(Routes.channelTyping("12345"));
+});
+
+it("posts scheduled event fields unchanged to the selected guild", async () => {
+  const { postMock, opts } = client();
+  const payload = {
+    name: "Release review",
+    scheduled_start_time: "2026-04-29T10:00:00.000Z",
+    scheduled_end_time: "2026-04-29T11:00:00.000Z",
+    privacy_level: 2,
+    entity_type: 3,
+    entity_metadata: { location: "Review room" },
+  } as const;
+  postMock.mockResolvedValueOnce({ id: "event1" });
+
+  await expect(createScheduledEventDiscord("g1", payload, opts)).resolves.toEqual({ id: "event1" });
+  expect(postMock).toHaveBeenCalledExactlyOnceWith("/guilds/g1/scheduled-events", {
+    body: payload,
+  });
 });

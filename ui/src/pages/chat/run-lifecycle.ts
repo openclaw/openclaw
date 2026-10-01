@@ -15,7 +15,7 @@ import {
   type SessionRunTerminal,
 } from "../../lib/sessions/index.ts";
 import {
-  areUiSessionKeysEquivalent,
+  normalizeDefaultMainSessionAliasForUi,
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
   uiSessionRowMatchesSelectedChat,
@@ -199,27 +199,28 @@ type SessionRunHost = {
   sessionsResult?: SessionsListResult | null;
 };
 
-export function hasDirectSessionRun(host: SessionRunHost): boolean {
+function hasSessionRun(host: SessionRunHost, includeSubagents: boolean): boolean {
+  if (host.chatRunId) {
+    return true;
+  }
+  const key = normalizeDefaultMainSessionAliasForUi(host.sessionKey);
   return Boolean(
-    host.chatRunId ||
+    key &&
     host.sessionsResult?.sessions.some(
       (session) =>
-        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
+        normalizeDefaultMainSessionAliasForUi(session.key) === key &&
+        (isSessionRunActive(session) ||
+          (includeSubagents && session.hasActiveSubagentRun === true)),
     ),
   );
 }
 
+export function hasDirectSessionRun(host: SessionRunHost): boolean {
+  return hasSessionRun(host, false);
+}
+
 export function hasAbortableSessionRun(host: SessionRunHost): boolean {
-  return (
-    hasDirectSessionRun(host) ||
-    Boolean(
-      host.sessionsResult?.sessions.some(
-        (session) =>
-          areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
-          session.hasActiveSubagentRun === true,
-      ),
-    )
-  );
+  return hasSessionRun(host, true);
 }
 
 export function isChatStopCommand(text: string) {

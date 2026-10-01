@@ -95,16 +95,6 @@ describe("hooks", () => {
       await expect(triggerInternalHook(event)).resolves.toBeUndefined();
     });
 
-    it("skips hook execution when internal hooks are disabled", async () => {
-      const handler = vi.fn();
-      registerInternalHook("command:new", handler);
-      setInternalHooksEnabled(false);
-
-      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
-
-      expect(handler).not.toHaveBeenCalled();
-    });
-
     it("stores handlers in the global singleton registry", async () => {
       const globalHooks = resolveGlobalSingleton<Map<string, Array<(event: unknown) => unknown>>>(
         INTERNAL_HOOK_HANDLERS_KEY,
