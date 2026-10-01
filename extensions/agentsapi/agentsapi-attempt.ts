@@ -33,7 +33,11 @@ import { AgentsApiClient } from "./agentsapi-client.js";
 import * as files from "./agentsapi-files.js";
 import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
-import { buildAgentsApiInstructions, buildAgentsApiTurnInput } from "./agentsapi-prompt.js";
+import {
+  buildAgentsApiInstructions,
+  buildAgentsApiTurnInput,
+  HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK,
+} from "./agentsapi-prompt.js";
 import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
@@ -359,13 +363,20 @@ export async function runAgentsApiAttempt(
       });
     }
     if (!creatingSession && inputs.files.length) {
-      await files.uploadInputs(
+      const uploaded = await files.uploadInputs(
         client,
         remoteSessionId,
         inputs.files,
         assertCurrent,
         controller.signal,
       );
+      if (uploaded.status === "unavailable") {
+        // Native recovery can replace the workspace, including earlier files in this batch.
+        inputs.mappingText = "";
+        inputs.feedbackText = [inputs.feedbackText, HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK]
+          .filter(Boolean)
+          .join("\n");
+      }
     }
     projection = new AgentsApiMessageProjection(
       projectionSettlement.params,

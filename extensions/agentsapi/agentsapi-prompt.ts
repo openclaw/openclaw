@@ -39,6 +39,9 @@ const INLINE_IMAGE_INPUT_INSTRUCTIONS = [
   "If the needed content is unavailable, ask for a text description. Do not claim to have viewed an image you have not inspected.",
 ].join(" ");
 
+export const HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK =
+  "Input attachment feedback: The hosted environment is unavailable for file uploads. There are no confirmed hosted VM paths for this message's attachments, including any files uploaded before the environment disconnected. Files retained from earlier turns do not establish the contents of these new attachments. Use supplied text or available Gateway tools that can access the originals. If the needed content remains inaccessible, explain that limitation and ask for relevant text. Do not claim to have inspected the current attachments unless a tool actually reads them.";
+
 const INLINE_IMAGE_INPUT_CAPABILITY_NOTICE =
   "Input capability feedback: The Agents API harness does not support inline image inputs. The inline images for this message were not sent.";
 const OMITTED_IMAGE_REPLY_GUIDANCE =
@@ -51,10 +54,10 @@ const IMAGE_RECOVERY_WITH_PREPARED_ATTACHMENTS = [
   OMITTED_IMAGE_REPLY_GUIDANCE,
 ].join(" ");
 
-// Inline image data arrived without an original attachment prepared for execution.
+// No execution paths are confirmed for the current originals, even if an upload began.
 const IMAGE_RECOVERY_WITHOUT_PREPARED_ATTACHMENTS = [
   INLINE_IMAGE_INPUT_CAPABILITY_NOTICE,
-  "No original attachment files were transferred for this message. Use any supplied text, or ask for a text description if the image is necessary.",
+  "No confirmed execution paths are available for this message's original attachments. Use supplied text or available tools that can access the originals, or ask for a text description if the image is necessary and remains inaccessible.",
   OMITTED_IMAGE_REPLY_GUIDANCE,
 ].join(" ");
 

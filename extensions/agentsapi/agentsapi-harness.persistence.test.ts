@@ -20,11 +20,13 @@ import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
-import { AgentsApiClient } from "./agentsapi-client.js";
+import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js";
 import plugin from "./index.js";
 
-const { createSession } = vi.hoisted(() => ({
+const { createSession, fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
+  fetchWithSsrFGuardMock:
+    vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
 }));
 
 // Keep the registered harness, input formatting, host generation, binding lifecycle,
@@ -40,12 +42,13 @@ vi.mock("./agentsapi-files.js", async (importOriginal) => ({
   collectOutputs: async () => [],
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: () => {
-    throw new Error("Unexpected live request in the Agents API persistence fixture");
-  },
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 beforeEach(() => {
+  fetchWithSsrFGuardMock.mockReset().mockImplementation(() => {
+    throw new Error("Unexpected live request in the Agents API persistence fixture");
+  });
   vi.useFakeTimers();
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
   createSession.mockImplementation((options) => {
@@ -212,7 +215,9 @@ it.each(["inline images", "oversized original"])(
         const input = message.mock.calls[0]![1];
         expect(input).toContain(prompt);
         expect(input).toContain("The Agents API harness does not support inline image inputs.");
-        expect(input).toContain("No original attachment files were transferred for this message.");
+        expect(input).toContain(
+          "No confirmed execution paths are available for this message's original attachments.",
+        );
         expect(input).toContain("ask for a text description if the image is necessary");
         if (original) {
           expect(input).toContain(
@@ -237,66 +242,136 @@ it.each(["inline images", "oversized original"])(
   },
 );
 
-it("transfers each turn's original image bytes to unique paths on the same hosted session", async () => {
-  await withOpenClawTestState({ label: "agentsapi-original-images" }, async (state) => {
-    const params = await createAttempt(state.stateDir);
-    const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue("image-session");
-    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
-    const upload = vi.spyOn(AgentsApiClient.prototype, "uploadFile").mockResolvedValue(undefined);
-    const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
-    vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
-    const image = Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
-      "base64",
-    );
-    const originals = ["first", "replacement"].map((label) =>
-      Buffer.concat([image, Buffer.from(label)]),
-    );
-    const harness = registerHarness(state.env);
-    try {
-      for (const [index, bytes] of originals.entries()) {
-        const saved = await saveMediaBuffer(bytes, "image/png", "inbound");
-        const media = [{ url: `media://inbound/${saved.id}`, fileName: "scene.png" }];
-        const result = await harness.runAttempt({
-          ...params,
-          runId: `image-turn-${index}`,
-          prompt: "Describe this image.",
-          images: [{ type: "image", data: image.toString("base64"), mimeType: "image/png" }],
-          hostCapabilities: {
-            ...params.hostCapabilities,
-            resolveInputAttachmentMedia: async () => media,
-          },
-        });
-        expect(result).toMatchObject({ terminal: { kind: "ok" } });
-      }
-      const firstFile = create.mock.calls[0]?.[3]?.files?.[0];
-      const nextFile = upload.mock.calls[0]?.[1];
-      expect(firstFile).toBeDefined();
-      expect(nextFile).toBeDefined();
-      expect(Buffer.from(firstFile!.data, "base64")).toEqual(originals[0]);
-      expect(Buffer.from(nextFile!.data, "base64")).toEqual(originals[1]);
-      expect(new Set([firstFile!.path, nextFile!.path]).size).toBe(2);
-      for (const [index, file] of [firstFile!, nextFile!].entries()) {
-        expect(path.posix.dirname(file.path)).toBe("/workspace/inputs");
-        expect(path.posix.basename(file.path)).toMatch(/-scene\.png$/u);
-        expect(message.mock.calls[index]?.[1]).toContain(file.path);
-      }
-      expect(create).toHaveBeenCalledTimes(1);
-      expect(upload).toHaveBeenCalledExactlyOnceWith(
-        "image-session",
-        nextFile,
-        expect.any(AbortSignal),
+it.each([
+  { availability: "connected", uploadsBeforeDisconnect: 2 },
+  { availability: "disconnected", uploadsBeforeDisconnect: 0 },
+  { availability: "disconnected after a partial upload", uploadsBeforeDisconnect: 1 },
+])(
+  "continues with original attachments on the same $availability hosted session",
+  async ({ uploadsBeforeDisconnect }) => {
+    await withOpenClawTestState({ label: "agentsapi-original-images" }, async (state) => {
+      const params = await createAttempt(state.stateDir);
+      const create = vi
+        .spyOn(AgentsApiClient.prototype, "create")
+        .mockResolvedValue("image-session");
+      vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
+      const upload = vi.spyOn(AgentsApiClient.prototype, "uploadFile");
+      const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
+      vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+      let uploadedCount = 0;
+      fetchWithSsrFGuardMock.mockImplementation(async ({ url, init, beforeRequest }) => {
+        beforeRequest?.();
+        const request = new Request(url, init);
+        const pathname = new URL(url).pathname;
+        let response: Response;
+        if (pathname === "/v1/agents/sessions/image-session") {
+          response = Response.json({
+            id: "image-session",
+            environment: { type: "openai_hosted", id: "image-environment" },
+          });
+        } else if (pathname === "/v1/agents/environments/image-environment") {
+          response = Response.json({
+            id: "image-environment",
+            type: "openai_hosted",
+            status: uploadedCount < uploadsBeforeDisconnect ? "connected" : "disconnected",
+          });
+        } else if (
+          pathname === "/v1/agents/environments/image-environment/files" &&
+          request.method === "POST"
+        ) {
+          const file: AgentsApiInputFile = await request.json();
+          uploadedCount++;
+          response = Response.json({
+            environment_id: "image-environment",
+            path: file.path,
+            size_bytes: Buffer.from(file.data, "base64").length,
+          });
+        } else {
+          throw new Error(`Unexpected fixture request: ${request.method} ${pathname}`);
+        }
+        return { response, finalUrl: url, release: async () => {} };
+      });
+      const image = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
+        "base64",
       );
-      expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
-        "image-session",
-        "image-session",
-      ]);
-      expect(upload.mock.invocationCallOrder[0]).toBeLessThan(message.mock.invocationCallOrder[1]!);
-    } finally {
-      await harness.dispose();
-    }
-  });
-});
+      const originals = ["first", "replacement", "companion"].map((label) =>
+        Buffer.concat([image, Buffer.from(label)]),
+      );
+      const harness = registerHarness(state.env);
+      try {
+        for (const [index, batch] of [[originals[0]!], originals.slice(1)].entries()) {
+          const media = await Promise.all(
+            batch.map(async (bytes) => {
+              const saved = await saveMediaBuffer(bytes, "image/png", "inbound");
+              return { url: `media://inbound/${saved.id}`, fileName: "scene.png" };
+            }),
+          );
+          const result = await harness.runAttempt({
+            ...params,
+            runId: `image-turn-${index}`,
+            prompt: "Describe the current attachments, including the replacement image.",
+            images: [{ type: "image", data: image.toString("base64"), mimeType: "image/png" }],
+            hostCapabilities: {
+              ...params.hostCapabilities,
+              resolveInputAttachmentMedia: async () => media,
+            },
+          });
+          expect(result).toMatchObject({ terminal: { kind: "ok" } });
+        }
+        const firstFile = create.mock.calls[0]?.[3]?.files?.[0];
+        expect(firstFile).toBeDefined();
+        expect(Buffer.from(firstFile!.data, "base64")).toEqual(originals[0]);
+        expect(message.mock.calls[0]?.[1]).toContain(firstFile!.path);
+        const attemptedFiles = upload.mock.calls.map(([, file]) => file);
+        expect(attemptedFiles).toHaveLength(Math.min(uploadsBeforeDisconnect + 1, 2));
+        expect(uploadedCount).toBe(uploadsBeforeDisconnect);
+        expect(new Set([firstFile!, ...attemptedFiles].map((file) => file.path)).size).toBe(
+          1 + attemptedFiles.length,
+        );
+        for (const [index, file] of attemptedFiles.entries()) {
+          expect(path.posix.dirname(file.path)).toBe("/workspace/inputs");
+          expect(path.posix.basename(file.path)).toMatch(/-scene\.png$/u);
+          expect(Buffer.from(file.data, "base64")).toEqual(originals[index + 1]);
+        }
+        const input = message.mock.calls[1]![1];
+        expect(input).toContain(
+          "Describe the current attachments, including the replacement image.",
+        );
+        if (uploadsBeforeDisconnect === 2) {
+          for (const file of attemptedFiles) {
+            expect(input).toContain(file.path);
+          }
+        } else {
+          expect(input).toContain("The hosted environment is unavailable for file uploads.");
+          expect(input).toContain(
+            "There are no confirmed hosted VM paths for this message's attachments",
+          );
+          expect(input).toContain(
+            "Files retained from earlier turns do not establish the contents of these new attachments.",
+          );
+          expect(input).toContain("available Gateway tools that can access the originals");
+          expect(input).toContain(
+            "No confirmed execution paths are available for this message's original attachments.",
+          );
+          for (const file of attemptedFiles) {
+            expect(input).not.toContain(file.path);
+          }
+        }
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+          "image-session",
+          "image-session",
+        ]);
+        for (const invocation of upload.mock.invocationCallOrder) {
+          expect(invocation).toBeLessThan(message.mock.invocationCallOrder[1]!);
+        }
+      } finally {
+        await harness.dispose();
+      }
+    });
+  },
+);
 
 it("reports unsupported tool restrictions without replacing the bound native session", async () => {
   await withOpenClawTestState({ label: "agentsapi-tool-policy-preflight" }, async (state) => {

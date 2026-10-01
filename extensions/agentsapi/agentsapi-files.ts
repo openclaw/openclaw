@@ -4,7 +4,11 @@ import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harn
 import { createStagedInputPathMatcher, root } from "openclaw/plugin-sdk/file-access-runtime";
 import { readMediaBuffer, resolveMediaBufferPath } from "openclaw/plugin-sdk/media-store";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
-import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js";
+import {
+  AgentsApiClient,
+  type AgentsApiFileUploadResult,
+  type AgentsApiInputFile,
+} from "./agentsapi-client.js";
 
 const maxFileBytes = 5 * 1024 * 1024;
 const maxTotalBytes = 10 * 1024 * 1024;
@@ -187,13 +191,18 @@ export async function uploadInputs(
   files: AgentsApiInputFile[],
   assertCurrent: () => void,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<AgentsApiFileUploadResult> {
   for (const file of files) {
     assertCurrent();
     signal.throwIfAborted();
-    await client.uploadFile(remoteSessionId, file, signal);
+    const result = await client.uploadFile(remoteSessionId, file, signal);
     assertCurrent();
+    signal.throwIfAborted();
+    if (result.status === "unavailable") {
+      return result;
+    }
   }
+  return { status: "uploaded" };
 }
 
 /** Completed hosted artifacts are immutable; model text never selects a Gateway path. */

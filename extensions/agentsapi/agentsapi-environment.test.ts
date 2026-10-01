@@ -151,7 +151,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
   mocks.prepareInputs.mockReset().mockResolvedValue({ files: [], mappingText: "" });
-  mocks.uploadInputs.mockReset().mockResolvedValue(undefined);
+  mocks.uploadInputs.mockReset().mockResolvedValue({ status: "uploaded" });
   mocks.collectOutputs.mockReset().mockResolvedValue([]);
   mocks.resolvePrompt.mockReset().mockImplementation((prompt) => prompt);
   mocks.fetch.mockImplementation(async ({ url }) => {

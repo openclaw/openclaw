@@ -174,6 +174,14 @@ limit and a 10 MiB total limit. Files exceeding these limits are omitted with
 per-turn feedback; supplied text and accepted files still reach the model.
 The model can use available tools that can access the originals or ask for a
 smaller attachment or relevant text when needed content remains inaccessible.
+When a reused hosted environment is disconnected or an upload receives the API's
+explicit dormant-environment conflict, the harness submits the actual user input
+to the same native session with attachment-availability feedback. It omits the
+entire current batch's execution paths, including partial uploads, because native
+recovery can replace the workspace. Earlier files do not establish the contents
+of new attachments. The native service owns recovery; OpenClaw does not send a
+wake-up message or create a replacement session. Other upload errors still fail
+the attempt.
 Self-hosted input attachments use the
 registered workspace provider's existing staging service. It prepares admitted
 originals on the executor workspace and returns execution-only paths without
@@ -188,7 +196,7 @@ input or automatic self-hosted output transfer. See the
 Inline images, including rendered document pages, do not abort the turn. The
 harness tells the model that inline images were omitted so it can use supplied
 text or inspect prepared original attachments with its tools. If no originals
-were transferred, the notice says so. Image-bearing steering follows the existing
+have confirmed execution paths, the notice says so. Image-bearing steering follows the existing
 queue policy and is handled as a follow-up turn with its complete input.
 New native sessions also receive a system instruction describing the inline-image
 restriction and alternatives. Existing sessions retain their original system
