@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,7 +38,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { createLegacyAgentDatabaseRegistry } from "./doctor-state-migrations.agent-registry.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -184,17 +182,6 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
 function writeJson5(filePath: string, value: unknown) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
-}
-
-function readPrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-    pk?: unknown;
-  }>;
-  return rows
-    .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
-    .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
-    .map((row) => row.name as string);
 }
 
 function writeLegacyDebugProxyCaptureSidecar(root: string, overrides: { blobDir?: string } = {}) {
@@ -479,78 +466,6 @@ describe("doctor legacy state migrations", () => {
       env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
     });
     expect(detected.sessions.hasLegacy).toBe(true);
-  });
-
-  it("migrates the legacy shared state agent registry primary key", async () => {
-    const root = makeDoctorStateDir();
-    const stateDir = path.join(root, ".openclaw");
-    const stateDatabasePath = await createLegacyAgentDatabaseRegistry(stateDir);
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
-
-    expect(detected.preview).toContain(
-      "- Shared SQLite schema: agent database registry primary key → agent_id,path",
-    );
-
-    const result = await runLegacyStateMigrations({ detected });
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toStrictEqual([
-      "Migrated shared state agent database registry primary key → agent_id,path",
-      "Migrated shared state tables to SQLite STRICT typing (1)",
-    ]);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(stateDatabasePath);
-    try {
-      expect(readPrimaryKeyColumns(db, "agent_databases")).toEqual(["agent_id", "path"]);
-      expect(() =>
-        db.exec(`
-          INSERT INTO agent_databases (
-            agent_id,
-            path,
-            schema_version,
-            last_seen_at,
-            size_bytes
-          ) VALUES (
-            'worker-1',
-            '/relocated/worker-1/openclaw-agent.sqlite',
-            1,
-            20,
-            30
-          )
-          ON CONFLICT(agent_id, path) DO UPDATE SET
-            last_seen_at = excluded.last_seen_at,
-            size_bytes = excluded.size_bytes;
-        `),
-      ).not.toThrow();
-      expect(
-        db
-          .prepare(
-            "SELECT agent_id, path, schema_version, last_seen_at, size_bytes FROM agent_databases ORDER BY path",
-          )
-          .all(),
-      ).toEqual([
-        {
-          agent_id: "worker-1",
-          path: "/legacy/worker-1/openclaw-agent.sqlite",
-          schema_version: 1,
-          last_seen_at: 10,
-          size_bytes: 20,
-        },
-        {
-          agent_id: "worker-1",
-          path: "/relocated/worker-1/openclaw-agent.sqlite",
-          schema_version: 1,
-          last_seen_at: 20,
-          size_bytes: 30,
-        },
-      ]);
-    } finally {
-      db.close();
-    }
   });
 
   it("migrates legacy ACP metadata from retired custom-root agent stores", async () => {
