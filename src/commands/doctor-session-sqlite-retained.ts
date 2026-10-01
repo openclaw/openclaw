@@ -58,14 +58,12 @@ import type {
 
 /** Receipt recovery belongs to offline Doctor; canonical session data is never replayed. */
 export async function prepareRetainedSessionImport(
-  params: {
-    cfg: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-    target: SessionStoreTarget;
+  params: Parameters<typeof archiveConflictingRetainedSessionSources>[0] & {
     mode: DoctorSessionSqliteMode;
   },
-  issues: DoctorSessionSqliteIssue[],
+  report: DoctorSessionSqliteTargetReport,
 ) {
+  const issues = report.issues;
   const isSqliteStore = params.target.storePath.endsWith(".sqlite");
   const sqlitePath = resolveTargetSqlitePath(params.target, params.env);
   if (!isSqliteStore && (params.mode === "import" || params.mode === "recover")) {
@@ -157,7 +155,15 @@ export async function prepareRetainedSessionImport(
   ) {
     appendRetainedIndexComparison(params, issues);
   }
-  return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath, emptySources };
+  if (emptySources.size) {
+    await archiveConflictingRetainedSessionSources(
+      { ...params, verifiedEmpty: true },
+      emptySources,
+      report,
+    );
+    sourceVerification.verification.clear();
+  }
+  return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath };
 }
 
 /** Compare current rows for diagnosis only; changed index values never gain receipt authority. */
