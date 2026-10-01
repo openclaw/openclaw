@@ -51,6 +51,8 @@ export type PreparedModelRuntimeCatalogPublicationHost = {
   getCancellationSignal: () => AbortSignal;
   getPendingReplacement: () => Promise<void> | undefined;
   getBuildTimeoutMs: () => number;
+  /** Same recovery configured publication installs; adopted owners replace those owners. */
+  onPluginGenerationRetired: (owner: PreparedModelRuntimeOwner) => void;
   pending?: {
     catalog: ActiveRemoteModelCatalog;
     /** Ends the adoption: a newer catalog or shutdown supersedes it. */
@@ -176,6 +178,7 @@ export function applyRemoteModelCatalogUpdateNow(
               owners: host.owners,
               agentBuildCompletions: host.agentBuildCompletions,
               buildTimeoutMs: host.getBuildTimeoutMs(),
+              onPluginGenerationRetired: host.onPluginGenerationRetired,
               controller: attempt,
               signal: host.getCancellationSignal(),
               isPublicationCurrent: () =>
@@ -369,6 +372,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
   owners: Map<string, PreparedModelRuntimeOwner>;
   agentBuildCompletions: Map<string, Promise<void>>;
   buildTimeoutMs: number;
+  onPluginGenerationRetired: (owner: PreparedModelRuntimeOwner) => void;
   controller: AbortController;
   signal: AbortSignal;
   isPublicationCurrent: () => boolean;
@@ -433,6 +437,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
   const candidates = claims.map(({ input, generation }) => {
     const candidate = prepareModelRuntimeOwner(input, "configured", "static");
     candidate.generation = generation;
+    candidate.onPluginGenerationRetired = () => params.onPluginGenerationRetired(candidate);
     return candidate;
   });
   const retireCandidates = () => {

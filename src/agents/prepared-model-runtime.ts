@@ -399,6 +399,8 @@ const remoteCatalogPublication: configuredRefresh.PreparedModelRuntimeCatalogPub
   getEpoch: () => refreshRequestEpoch,
   getCancellationSignal: () => refreshCancellation.signal,
   getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
+  // Declared below this host; resolve it when a retirement fires, not at module load.
+  onPluginGenerationRetired: (owner) => recoverRetiredConfiguredPluginGeneration(owner),
 };
 export const applyRemoteModelCatalogUpdate =
   configuredRefresh.applyRemoteModelCatalogUpdateNow.bind(null, remoteCatalogPublication);

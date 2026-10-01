@@ -22,13 +22,19 @@ import {
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import * as remoteRefresh from "../model-catalog/remote-refresh.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import * as nativeAdmission from "../plugins/plugin-native-admission-state.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { markPluginRegistryActive, quiescePluginRegistry } from "../plugins/registry-lifecycle.js";
+import { createPluginRegistryOwner } from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import * as catalogWorker from "./prepared-model-catalog-worker.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
   applyRemoteModelCatalogUpdate,
+  prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
@@ -432,5 +438,37 @@ it("does not hold Gateway shutdown on an adoption's pricing preparation", async 
   } finally {
     held.resolve();
     pricingSpy.mockRestore();
+  }
+});
+
+it("republishes adopted owners when their borrowed Gateway plugin retires", async () => {
+  const lender = createEmptyPluginRegistry();
+  const record = createPluginRecord({ id: "gateway-lender" });
+  lender.plugins.push(record);
+  const instance = new PluginInstance(record.id, { record, registry: lender });
+  markPluginRegistryActive(lender);
+  const gateway = createPluginRegistryOwner(lender);
+  mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(lender);
+  try {
+    await setup();
+    expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+    expect(instance.owner?.registry).toBe(lender);
+    const input = fixture.agentInput("default", config);
+    const adopted = await prepareModelRuntimeSnapshot(input);
+    const nextRegistry = createEmptyPluginRegistry();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear().mockReturnValue(nextRegistry);
+    quiescePluginRegistry(lender);
+    expect(adopted.isCurrent()).toBe(false);
+    // Recovery republishes the adopted catalog's owners; it does not wait for a restart.
+    const replacement = await withTestTimeout(
+      prepareModelRuntimeSnapshot(input),
+      10_000,
+      "adopted owner was not republished after its Gateway lender retired",
+    );
+    expect(replacement.pluginRegistry).toBe(nextRegistry);
+    expect(replacement.isCurrent()).toBe(true);
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
+  } finally {
+    await gateway.close();
   }
 });
