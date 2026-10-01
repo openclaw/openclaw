@@ -16,6 +16,7 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { createClosedSessionTranscriptSource } from "../session-end-transcript-reader.js";
 import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
@@ -165,6 +166,13 @@ export function emitAgentSendSessionLifecycleTransition(
       reason: transition.previousEndReason ?? "unknown",
       nextSessionId: transition.sessionId,
       nextSessionKey: transition.sessionKey,
+      endedTranscript: createClosedSessionTranscriptSource({
+        agentId: transition.agentId,
+        sessionId: transition.previousSessionId,
+        sessionKey: transition.sessionKey,
+        storePath: transition.storePath,
+        ...(transition.previousSessionFile ? { sessionFile: transition.previousSessionFile } : {}),
+      }),
     });
   }
   emitGatewaySessionStartPluginHook({

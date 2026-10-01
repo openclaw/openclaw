@@ -1,6 +1,7 @@
 import {
   asPositiveFiniteNumber,
   resolveIntegerOption,
+  resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -8,7 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -241,8 +242,7 @@ function formatWebFetchErrorDetail(params: {
     const withTitle = rendered.title ? `${rendered.title}\n${rendered.text}` : rendered.text;
     text = markdownToText(withTitle);
   }
-  const truncated = truncateWebFetchText(text.trim(), maxChars);
-  return truncated.text;
+  return truncateWebFetchText(text.trim(), maxChars).text;
 }
 
 function redactUrlForDebugLog(rawUrl: string): string {
@@ -327,17 +327,10 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
   };
 }
 
-type WebFetchWrappedContent = {
-  text: string;
-  truncated: boolean;
-  rawLength: number;
-  length: number;
-  spill?: {
-    path: string;
-    chars: number;
-    truncated?: true;
-  };
-};
+type WebFetchWrappedContent = Pick<
+  Static<typeof WebFetchOutputSchema>,
+  "text" | "truncated" | "rawLength" | "length" | "spill"
+>;
 
 async function spillWebFetchContent(
   value: string,
@@ -389,12 +382,7 @@ async function spillWebFetchContent(
 }
 
 function normalizeContentType(value: string | null | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const [raw] = value.split(";");
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed.toLowerCase() : undefined;
+  return value?.split(";", 1)[0]?.trim().toLowerCase() || undefined;
 }
 
 type WebFetchRuntimeParams = {
@@ -511,9 +499,7 @@ async function buildWebFetchPayload(params: {
     payload.truncated === true,
   );
   const providerRawLength =
-    typeof payload.rawLength === "number" && Number.isFinite(payload.rawLength)
-      ? Math.max(0, Math.floor(payload.rawLength))
-      : wrapped.rawLength;
+    resolveOptionalIntegerOption(payload.rawLength, { min: 0 }) ?? wrapped.rawLength;
   const url = params.requestedUrl;
   const resolvedFinalUrl = normalizeProviderFinalUrl(payload.finalUrl) ?? url;
   const oversizedFinalUrl =
@@ -522,10 +508,7 @@ async function buildWebFetchPayload(params: {
   // a different destination by clipping a redirect's path or query.
   const finalUrl = oversizedFinalUrl ? url : resolvedFinalUrl;
   metadataTruncated ||= oversizedFinalUrl;
-  const status =
-    typeof payload.status === "number" && Number.isFinite(payload.status)
-      ? Math.max(0, Math.floor(payload.status))
-      : 200;
+  const status = resolveIntegerOption(payload.status, 200, { min: 0 });
   const contentType =
     typeof payload.contentType === "string" ? normalizeContentType(payload.contentType) : undefined;
   const extractor =
@@ -562,10 +545,7 @@ async function buildWebFetchPayload(params: {
     rawLength: providerRawLength,
     ...(wrapped.spill ? { spill: wrapped.spill } : {}),
     fetchedAt,
-    tookMs:
-      typeof payload.tookMs === "number" && Number.isFinite(payload.tookMs)
-        ? Math.max(0, Math.floor(payload.tookMs))
-        : params.tookMs,
+    tookMs: resolveOptionalIntegerOption(payload.tookMs, { min: 0 }) ?? params.tookMs,
     text: wrapped.text,
     ...(warning ? { warning } : {}),
   };
@@ -573,8 +553,6 @@ async function buildWebFetchPayload(params: {
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   throwIfFetchAborted(params.signal);
-  const ssrfPolicy = params.ssrfPolicy;
-  const useTrustedEnvProxy = params.useTrustedEnvProxy;
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(params.url);
@@ -593,8 +571,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   const cacheDiscriminators = [
     `user-agent:${sha256Hex(params.userAgent)}`,
     params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
-    ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(ssrfPolicy))}` : "",
-    useTrustedEnvProxy ? "trusted-env-proxy" : "",
+    params.ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(params.ssrfPolicy))}` : "",
+    params.useTrustedEnvProxy ? "trusted-env-proxy" : "",
     headersCacheKey ? `headers:${headersCacheKey}` : "",
   ].filter(Boolean);
   const cacheKey = normalizeCacheKey(

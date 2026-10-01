@@ -80,6 +80,7 @@ function withVoiceCallConfig(params: {
           config: {
             enabled: true,
             provider: "mock",
+            responseModel: "mock-openai/gpt-5.6-luna",
             inboundPolicy: "open",
             maxConcurrentCalls: 4,
             serve: { port: params.servePort, bind: "127.0.0.1", path: "/voice/webhook" },
@@ -519,3 +520,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       process.exitCode = 1;
     });
 }
+
+export const testing = {
+  withVoiceCallConfig,
+};

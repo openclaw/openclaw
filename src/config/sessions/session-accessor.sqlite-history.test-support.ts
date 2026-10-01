@@ -1,12 +1,8 @@
-import { afterEach, beforeEach, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { TranscriptAnchorPageOptions } from "../../sessions/transcript-anchor-page.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { SessionTranscriptMessageAnchorPage } from "./session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
@@ -27,18 +23,12 @@ export function useHistoryEventScope() {
     sessionId: "history-events-test",
     sessionKey: "agent:main:history-events-test",
   };
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
-      vi.restoreAllMocks();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    });
-  });
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-history-events-");
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     scope.env = {
       ...process.env,
-      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-history-events-"),
+      OPENCLAW_STATE_DIR: sessionDirs.make(),
     };
   });
   return scope;

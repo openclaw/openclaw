@@ -6,7 +6,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import {
-  SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptWriteContext,
 } from "../../config/sessions/transcript-write-context.js";
@@ -41,6 +40,7 @@ import {
 } from "./compaction-safety-timeout.js";
 import {
   acceptCompactionSuccessor,
+  requireCompactionWriterEntry,
   type AcceptedCompactionSuccessor,
 } from "./compaction-successor.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
@@ -133,7 +133,7 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 function enqueueCompactionInLanes<T>(
   params: Pick<
     CompactEmbeddedAgentSessionParams,
-    "sessionKey" | "sessionId" | "spawnedBy" | "lane" | "enqueue" | "abortSignal"
+    "agentId" | "sessionKey" | "sessionId" | "spawnedBy" | "lane" | "enqueue" | "abortSignal"
   >,
   run: () => Promise<T>,
 ): Promise<T> {
@@ -141,7 +141,14 @@ function enqueueCompactionInLanes<T>(
   const globalLane = resolveGlobalLane(params.lane, params);
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  const options = { abortSignal: params.abortSignal };
+  const options = {
+    abortSignal: params.abortSignal,
+    sessionTarget: {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    },
+  };
   return enqueueCommandInLane(sessionLane, () => enqueueGlobal(run, options), options);
 }
 
@@ -153,18 +160,10 @@ export async function runPrimaryNativeCompactionInLanes<T>(
 ): Promise<T> {
   return await enqueueCompactionInLanes(params, async () => {
     host.assertActive?.();
-    const currentEntry = loadSessionEntryReadOnly({
-      ...params.sessionTarget,
-      readConsistency: "latest",
-    });
-    if (
-      !currentEntry ||
-      currentEntry.sessionId !== expectedEntry.sessionId ||
-      currentEntry.lifecycleRevision !== expectedEntry.lifecycleRevision ||
-      currentEntry.activeWriterRunId !== expectedEntry.activeWriterRunId
-    ) {
-      throw new SessionTranscriptWriterClaimReboundError();
-    }
+    requireCompactionWriterEntry(
+      loadSessionEntryReadOnly({ ...params.sessionTarget, readConsistency: "latest" }),
+      expectedEntry,
+    );
     return run();
   });
 }
@@ -217,15 +216,10 @@ export async function executeQueuedContextEngineCompaction(input: {
     };
     const assertActive = (target = runtimeTarget, owner = expected) => {
       assertCallerActive();
-      const current = loadSessionEntry({ ...target, readConsistency: "latest" });
-      if (
-        !current ||
-        current.sessionId !== owner.sessionId ||
-        current.lifecycleRevision !== owner.lifecycleRevision ||
-        current.activeWriterRunId !== owner.activeWriterRunId
-      ) {
-        throw new SessionTranscriptWriterClaimReboundError();
-      }
+      requireCompactionWriterEntry(
+        loadSessionEntry({ ...target, readConsistency: "latest" }),
+        owner,
+      );
     };
     const createTranscriptWriteContext = (
       target: SessionTranscriptRuntimeTarget,

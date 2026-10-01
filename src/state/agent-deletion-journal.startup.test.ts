@@ -26,6 +26,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { startAwaitedReadMock } from "./openclaw-state-read-mock.test-support.js";
 import * as readWorker from "./openclaw-state-read-worker.js";
 
 function deletion(state: OpenClawTestState, agentId = "worker") {
@@ -233,30 +234,40 @@ it.each(["deletion", "abort"] as const)(
       const controller = new AbortController();
       const aborted = new Error("Startup stopped during journal cleanup");
       let closed = false;
-      const createTransport = readWorker.createOpenClawStateReadTransport;
+      const captureSource = readWorker.captureOpenClawStateReadSource;
       let selected = false;
       const transport = vi
-        .spyOn(readWorker, "createOpenClawStateReadTransport")
-        .mockImplementation((command) => {
-          const owned = createTransport(command);
-          if (selected || command.type !== "agentDeletionJournal.status") {
-            return owned;
-          }
-          selected = true;
+        .spyOn(readWorker, "captureOpenClawStateReadSource")
+        .mockImplementation(() => {
+          const source = captureSource();
           return {
-            ...owned,
-            async read(...args: Parameters<typeof owned.read>) {
-              const outcome = await owned.read(...args);
-              expect(outcome).toMatchObject({
-                value: { ok: true, type: "agentDeletionJournal.status", status: "absent" },
-              });
-              return outcome;
-            },
-            async close() {
-              cleanupEntered.resolve();
-              await releaseCleanup.promise;
-              await owned.close();
-              closed = true;
+            ...source,
+            createTransport(command) {
+              const owned = source.createTransport(command);
+              if (selected || command.type !== "agentDeletionJournal.status") {
+                return owned;
+              }
+              selected = true;
+              return {
+                ...owned,
+                startRead(...args) {
+                  return startAwaitedReadMock(async () => {
+                    const outcome = await owned.startRead(...args).result;
+                    expect(outcome).toMatchObject({
+                      value: { ok: true, type: "agentDeletionJournal.status", status: "absent" },
+                    });
+                    return outcome;
+                  });
+                },
+                startClose() {
+                  return startAwaitedReadMock(async () => {
+                    cleanupEntered.resolve();
+                    await releaseCleanup.promise;
+                    await owned.startClose().result;
+                    closed = true;
+                  });
+                },
+              };
             },
           };
         });

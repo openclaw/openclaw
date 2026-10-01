@@ -159,7 +159,7 @@ Implementation: `normalizeAssistantReplayContent` in
 ## Global rule: inter-session input provenance
 
 When an agent sends a prompt into another session via `sessions_send`
-(including agent-to-agent reply/announce steps), OpenClaw persists the
+(including a delayed reply delivered to the requester), OpenClaw persists the
 created user turn with `message.provenance.kind = "inter_session"`.
 
 OpenClaw also prepends a same-turn `[Inter-session message] ... isUser=false`

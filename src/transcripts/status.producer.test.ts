@@ -11,8 +11,9 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
+import { activeSessions } from "./capture-startup.js";
 import * as transcriptCapture from "./capture.js";
-import { activeSessions, readTranscriptCaptureSnapshot, startTranscripts } from "./capture.js";
+import { readTranscriptCaptureSnapshot, startTranscripts } from "./capture.js";
 import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
 import type { TranscriptStartRequest } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";

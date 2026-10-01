@@ -1,4 +1,3 @@
-// Checks install policy constraints for package and plugin operations.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js";
@@ -484,10 +483,6 @@ export async function runInstallPolicy(params: {
       label: "security.installPolicy.exec.command",
       trustedDirs: policy.exec.trustedDirs,
     });
-  } catch (err) {
-    return failClosed(formatErrorMessage(err));
-  }
-  try {
     await assertSecurePolicyScriptArg({
       command: secureCommandPath,
       args: policy.exec.args ?? [],

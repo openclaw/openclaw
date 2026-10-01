@@ -1,4 +1,5 @@
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -10,6 +11,19 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+
+/** Native delegation cannot select a person, so its live turn must remain unambiguous. */
+export function bindHarnessNativeSpawnAuthority(
+  participants: ReplyTurnParticipants | undefined,
+  assertActive: () => void,
+): AgentHarnessHostCapabilities["assertNativeSubagentSpawnAllowed"] {
+  return participants
+    ? () => {
+        assertActive();
+        participants.resolve()?.assertCurrent();
+      }
+    : undefined;
+}
 
 /** Acquires original-source model authority while the issuing host is active. */
 export function bindHarnessModelExecution(

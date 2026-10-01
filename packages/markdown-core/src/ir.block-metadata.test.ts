@@ -176,9 +176,12 @@ describe("markdownToIR block metadata", () => {
     const fenced = markdownToIR("- ```\n  code\n  ```").listItems?.[0];
     const quoted = markdownToIR("- > quote").listItems?.[0];
 
+    expect(fenced).toBeDefined();
     expect(fenced?.markerOnly).toBeUndefined();
+    expect(quoted).toBeDefined();
     expect(quoted?.markerOnly).toBeUndefined();
     const thematic = markdownToIR("- ***", { horizontalRuleText: "" }).listItems?.[0];
+    expect(thematic).toBeDefined();
     expect(thematic?.markerOnly).toBeUndefined();
   });
 

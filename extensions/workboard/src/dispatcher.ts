@@ -32,8 +32,8 @@ import {
 
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
 
-export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
-export type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
+type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
+type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
 
 export type WorkboardDispatchStartOptions = {
   cardId?: string;
@@ -234,13 +234,12 @@ function selectStartableCards(
   if (limit <= 0) {
     return { cards: [] };
   }
-  const runningByOwner = new Map<string, number>();
+  const runningOwners = new Set<string>();
   for (const card of cards) {
     if (!workboardCardConsumesOwnerSlot(card, now)) {
       continue;
     }
-    const owner = workboardCardSlotOwner(card);
-    runningByOwner.set(owner, (runningByOwner.get(owner) ?? 0) + 1);
+    runningOwners.add(workboardCardSlotOwner(card));
   }
   const selected: WorkboardCard[] = [];
   const fallback: WorkboardCard[] = [];
@@ -259,7 +258,7 @@ function selectStartableCards(
               card.status !== "todo" &&
               card.status !== "ready"
             ? `Card cannot start from ${card.status}; move it to backlog, todo, or ready first.`
-            : (runningByOwner.get(owner) ?? 0) > 0
+            : runningOwners.has(owner)
               ? `Owner ${owner} already has active Workboard work; complete or stop it before starting another card.`
               : undefined;
     if (rejection !== undefined) {
@@ -354,7 +353,6 @@ async function runWorkboardDispatch(
     }
     const sessionKey = workboardSessionKeyForCard(card);
     let claimValue = "";
-    let materializedWorkspace: WorkboardWorkspace | undefined;
     let implicitWorkspaceCwd: string | undefined;
     let runStarted = false;
     let workspaceMutation: { before: WorkboardCard; after: WorkboardCard } | undefined;
@@ -453,7 +451,7 @@ async function runWorkboardDispatch(
       if (runCwd && !workspaceAccess.unrestricted) {
         await assertRestrictedTarget(runCwd);
       }
-      materializedWorkspace = materialized.workspace;
+      const materializedWorkspace = materialized.workspace;
       if (materializedWorkspace) {
         const workspaceBase = await params.store.get(card.id);
         if (!workspaceBase) {

@@ -20,12 +20,18 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
+import {
+  measureMcpMigrationHostSql,
+  observeLegacyMcpOAuthImport,
+} from "./state-migrations.mcp-oauth-faults.test-support.js";
 import { isDefinitelyStaleLegacyMcpOAuthLock } from "./state-migrations.mcp-oauth-lock-stale.js";
 import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock.js";
 import {
   detectLegacyMcpOAuthStores,
   migrateLegacyMcpOAuthStores,
 } from "./state-migrations.mcp-oauth.js";
+import { resolveLegacyMigrationSourceKey } from "./state-migrations.receipts.js";
 
 type MigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -208,7 +214,7 @@ describe("legacy MCP OAuth Doctor migration", () => {
     const { env, stateDir } = useStateDir();
     const bytes = Buffer.from(`${JSON.stringify(validStore())}\n`, "utf8");
     const sourcePath = await writeLegacy({ stateDir, bytes });
-    const result = await migrate(stateDir, env);
+    const { result, hostQueries } = await measureMcpMigrationHostSql(() => migrate(stateDir, env));
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain(`Migrated MCP OAuth store ${DEFAULT_FILE_NAME} to SQLite.`);
     expect(fs.existsSync(sourcePath)).toBe(false);
@@ -235,6 +241,137 @@ describe("legacy MCP OAuth Doctor migration", () => {
       importedRecordCount: 1,
       preservedSqliteRecordCount: 0,
       storeKey: DEFAULT_FILE_NAME.slice(0, -5),
+    });
+    expect(hostQueries).toEqual([]);
+  });
+
+  it("imports an exact 4 MiB UTF-8 source through the existing worker message bound", async () => {
+    const { env, stateDir } = useStateDir();
+    const value = validStore();
+    value.tokens.vendor_extension = "";
+    const remaining = 4 * 1024 * 1024 - Buffer.byteLength(JSON.stringify(value), "utf8");
+    const extension = "é".repeat(Math.floor(remaining / 2)) + "x".repeat(remaining % 2);
+    value.tokens.vendor_extension = extension;
+    const bytes = Buffer.from(JSON.stringify(value), "utf8");
+    expect(bytes.byteLength).toBe(4 * 1024 * 1024);
+    const sourcePath = await writeLegacy({ stateDir, bytes });
+    const observation = observeLegacyMcpOAuthImport(
+      resolveLegacyMigrationSourceKey("mcp-oauth-json", sourcePath),
+      "observe",
+    );
+    try {
+      const { result, hostQueries } = await measureMcpMigrationHostSql(() =>
+        migrate(stateDir, env),
+      );
+      expect(result.warnings).toEqual([]);
+      expect(hostQueries).toEqual([]);
+      expect(observation.importCount()).toBe(1);
+      expect(observation.importInputBytes()).toBeGreaterThan(0);
+      expect(observation.importInputBytes()).toBeLessThanOrEqual(SQLITE_WORKER_MAX_MESSAGE_BYTES);
+    } finally {
+      observation.restore();
+    }
+    expect(JSON.parse(storeRow(env)?.store_json ?? "null").tokens.vendor_extension).toBe(extension);
+    expect(receipt(env, sourcePath)).toMatchObject({
+      source_size_bytes: bytes.byteLength,
+      source_sha256: createHash("sha256").update(bytes).digest("hex"),
+      removed_source: 1,
+    });
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+  });
+
+  it.each(["post-commit-error", "native-exit"] as const)(
+    "retains the actual import outcome across %s failure",
+    async (mode) => {
+      const { env, stateDir } = useStateDir();
+      const bytes = Buffer.from(JSON.stringify(validStore()), "utf8");
+      const sourcePath = await writeLegacy({ stateDir, bytes });
+      const claimPath = `${sourcePath}.doctor-importing`;
+      const fault = observeLegacyMcpOAuthImport(
+        resolveLegacyMigrationSourceKey("mcp-oauth-json", sourcePath),
+        mode,
+      );
+      let result: Awaited<ReturnType<typeof migrate>>;
+      try {
+        result = await migrate(stateDir, env);
+        expect(fault.injected()).toBe(true);
+        expect(fault.importCount()).toBe(1);
+        if (mode === "native-exit") {
+          expect(fault.exitThreadId()).toBe(fault.writerThreadId());
+        }
+      } finally {
+        fault.restore();
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+      }
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      expect(JSON.parse(storeRow(env)?.store_json ?? "null").tokens).toEqual(validStore().tokens);
+      expect(receipt(env, sourcePath)).toMatchObject({
+        source_sha256: createHash("sha256").update(bytes).digest("hex"),
+        removed_source: mode === "native-exit" ? 0 : 1,
+      });
+      if (mode === "post-commit-error") {
+        expect(result.warnings.join("\n")).toContain(
+          "MCP OAuth import committed, but result delivery failed:",
+        );
+        expect(result.changes).toContain(
+          `Migrated MCP OAuth store ${DEFAULT_FILE_NAME} to SQLite.`,
+        );
+        expect(fs.existsSync(claimPath)).toBe(false);
+      } else {
+        expect(result.warnings.join("\n")).toContain(
+          "SQLite import outcome is unresolved; retained Doctor claim",
+        );
+        expect(result.changes).toEqual([]);
+        expect(await fsp.readFile(claimPath)).toEqual(bytes);
+        // The receipt, not credential existence, owns recovery; replay must not resurrect this row.
+        deleteCanonical(env);
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        const retryObservation = observeLegacyMcpOAuthImport(
+          resolveLegacyMigrationSourceKey("mcp-oauth-json", sourcePath),
+          "observe",
+        );
+        try {
+          const retry = await migrate(stateDir, env);
+          expect(retry.warnings).toEqual([]);
+          expect(retryObservation.importCount()).toBe(0);
+        } finally {
+          retryObservation.restore();
+        }
+        expect(storeRow(env)).toBeUndefined();
+        expect(fs.existsSync(claimPath)).toBe(false);
+        expect(receipt(env, sourcePath)).toMatchObject({ removed_source: 1 });
+      }
+    },
+  );
+
+  it("restores the exact source after the worker rejects canonical credential state before commit", async () => {
+    const { env, stateDir } = useStateDir();
+    const canonical = { credentialState: "invalid" };
+    seedCanonical(env, canonical);
+    const bytes = Buffer.from(JSON.stringify(validStore()), "utf8");
+    const sourcePath = await writeLegacy({ stateDir, bytes });
+    const observation = observeLegacyMcpOAuthImport(
+      resolveLegacyMigrationSourceKey("mcp-oauth-json", sourcePath),
+      "observe",
+    );
+    let result: Awaited<ReturnType<typeof migrate>>;
+    try {
+      result = await migrate(stateDir, env);
+      expect(observation.importCount()).toBe(1);
+    } finally {
+      observation.restore();
+    }
+    expect(result.warnings.join("\n")).toContain("credentialState is invalid");
+    expect(result.changes).toEqual([]);
+    expect(await fsp.readFile(sourcePath)).toEqual(bytes);
+    expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+    expect(receipt(env, sourcePath)).toBeUndefined();
+    expect(storeRow(env)).toMatchObject({
+      format_version: 1,
+      store_json: JSON.stringify(canonical),
     });
   });
 

@@ -356,6 +356,61 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "aborted" });
   });
 
+  describe("stalled turn recovery run", () => {
+    const stalledOperation = {
+      result: { kind: "failed", code: "run_stalled" },
+      staleExpiryReason: "stuck_recovery",
+    } as AdmittedFollowupTurn["operation"];
+    const aborted: AgentTurnExecutionResult = {
+      runId: "run-1",
+      outcome: { kind: "aborted", reason: "user" },
+    };
+
+    it.each(["automatic", "message_tool_only"] as const)(
+      "delivers the stall notice once the single recovery run stalls too (%s)",
+      async (sourceReplyDeliveryMode) => {
+        const turn = createTurn({ operation: stalledOperation });
+        turn.queued.stalledTurnRecovery = true;
+        turn.queued.run.sourceReplyDeliveryMode = sourceReplyDeliveryMode;
+
+        const decision = await resolveFollowupDeliveryDecision({ turn, execution: aborted });
+
+        expect(decision).toMatchObject({
+          kind: "deliver",
+          payloads: [
+            {
+              text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+              isError: true,
+            },
+          ],
+        });
+      },
+    );
+
+    it.each([
+      {
+        label: "an ordinary queued request stalls",
+        operation: stalledOperation,
+        recovery: false,
+      },
+      {
+        label: "the user stops the recovery run",
+        operation: {
+          result: { kind: "aborted", code: "aborted_by_user" },
+        } as AdmittedFollowupTurn["operation"],
+        recovery: true,
+      },
+    ])("stays silent when $label", async ({ operation, recovery }) => {
+      const turn = createTurn({ operation });
+      turn.queued.stalledTurnRecovery = recovery;
+
+      expect(await resolveFollowupDeliveryDecision({ turn, execution: aborted })).toEqual({
+        kind: "suppress",
+        reason: "aborted",
+      });
+    });
+  });
+
   it("does not leak rejected private text in message-tool-only mode", async () => {
     const turn = createTurn();
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
@@ -573,8 +628,8 @@ describe("resolveFollowupDeliveryDecision", () => {
         accounting: createAccounting(),
       }),
     ).toMatchObject({
-      kind: "deliver-diagnostic",
-      payload: { isError: true, isStatusNotice: true },
+      kind: "deliver",
+      payloads: [{ isError: true, isStatusNotice: true }],
     });
   });
 
@@ -909,14 +964,14 @@ describe("deliverFollowupDecision", () => {
         execution: createSettledExecution("Still unable to send the reply."),
         accounting: createAccounting(),
       });
-      if (diagnostic.kind !== "deliver-diagnostic") {
+      if (diagnostic.kind !== "deliver") {
         throw new Error("Recovery did not prepare its terminal delivery diagnostic");
       }
       await retryRun.queuedFollowupReplyDisposition.deliver({
         kind: "queued-followup",
         runId: retryTurn.runId,
         originatingChannel: "webchat",
-        payloads: [diagnostic.payload],
+        payloads: diagnostic.payloads,
         completion: { kind: "completed" },
       });
       expect(deliveryState.enqueue).toHaveBeenCalledOnce();

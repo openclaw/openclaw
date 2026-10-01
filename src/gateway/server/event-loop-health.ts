@@ -1,4 +1,3 @@
-// Event-loop health monitor samples delay, utilization, and CPU pressure for gateway readiness snapshots.
 import { cpus, type CpuInfo } from "node:os";
 import { createHistogram, performance, type RecordableHistogram } from "node:perf_hooks";
 import { isMainThread, Worker } from "node:worker_threads";

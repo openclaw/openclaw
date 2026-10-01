@@ -1,12 +1,12 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   beginConversationDeliveryOperation,
@@ -38,42 +38,39 @@ const upsertSessionEntry = (
   entry: LegacyDeliveryFixture,
 ) => upsertCanonicalSessionEntry(scope, normalizeLegacySessionEntryDelivery(entry as SessionEntry));
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-conversation-delivery-");
+
 async function withConversationStore(
   run: (params: {
     scope: { agentId: string; storePath: string };
     conversationRef: string;
   }) => Promise<void> | void,
 ): Promise<void> {
-  await withTestDir({ prefix: "openclaw-conversation-delivery-" }, async (dir) => {
-    const storePath = path.join(dir, "sessions.json");
-    const scope = { agentId: "main", storePath };
-    try {
-      await upsertSessionEntry(
-        { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
-        {
-          sessionId: "reef-session",
-          updatedAt: 100,
-          chatType: "direct",
-          deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-          origin: {
-            provider: "reef",
-            accountId: "default",
-            nativeDirectUserId: "peer-agent",
-          },
-        },
-      );
-      await run({
-        scope,
-        conversationRef: buildConversationRef({
-          channel: "reef",
-          accountId: "default",
-          kind: "direct",
-          peerId: "peer-agent",
-        }),
-      });
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-    }
+  const dir = sessionDirs.make();
+  const storePath = path.join(dir, "sessions.json");
+  const scope = { agentId: "main", storePath };
+  await upsertSessionEntry(
+    { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
+    {
+      sessionId: "reef-session",
+      updatedAt: 100,
+      chatType: "direct",
+      deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+      origin: {
+        provider: "reef",
+        accountId: "default",
+        nativeDirectUserId: "peer-agent",
+      },
+    },
+  );
+  await run({
+    scope,
+    conversationRef: buildConversationRef({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer-agent",
+    }),
   });
 }
 

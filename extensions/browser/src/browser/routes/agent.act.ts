@@ -423,30 +423,26 @@ export function registerBrowserAgentActRoutes(
             if (action.kind === "close" || result.aborted?.reason === "closed") {
               clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
             }
-            switch (action.kind) {
-              case "batch":
-                return await jsonOk(
-                  {
-                    results: result.results ?? [],
-                    ...(result.aborted ? { aborted: result.aborted } : {}),
-                    ...(downloads ? { downloads } : {}),
-                  },
-                  {
-                    ...resultTargetOptions,
-                    resolveCurrentTarget: result.aborted?.reason !== "closed",
-                  },
-                );
-              case "evaluate":
-                return await jsonOk(
-                  { result: result.result, ...(downloads ? { downloads } : {}) },
-                  resultTargetOptions,
-                );
-              case "resize":
-              case "close":
-                return await jsonOk(downloads ? { downloads } : undefined);
-              default:
-                return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
+            if (action.kind === "batch") {
+              return await jsonOk(
+                {
+                  results: result.results ?? [],
+                  ...(result.aborted ? { aborted: result.aborted } : {}),
+                  ...(downloads ? { downloads } : {}),
+                },
+                {
+                  ...resultTargetOptions,
+                  resolveCurrentTarget: result.aborted?.reason !== "closed",
+                },
+              );
             }
+            return await jsonOk(
+              {
+                ...(action.kind === "evaluate" ? { result: result.result } : {}),
+                ...(downloads ? { downloads } : {}),
+              },
+              action.kind === "resize" || action.kind === "close" ? undefined : resultTargetOptions,
+            );
           } catch (error) {
             verificationDeadline?.throwIfAborted();
             requestDeadline?.throwIfAborted();

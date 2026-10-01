@@ -279,8 +279,7 @@ export function createTalkRealtimeRelaySession(
       },
       clearAudio: clearPlayback,
       sendMark: (markName) => {
-        const relay = getActiveRelay();
-        if (!relay) {
+        if (!getActiveRelay()) {
           return;
         }
         const outputTurnId = outputOwnership.resolve(false);
@@ -351,12 +350,11 @@ export function createTalkRealtimeRelaySession(
       if (event.type === "tool.call.cancelled" && event.itemId) {
         const relayCallId = cancelTalkRealtimeRelayProviderToolCall(relay, event.itemId);
         if (relayCallId) {
-          const cancelledEvent = {
+          broadcastToOwner(params.context, params.connId, {
             relaySessionId,
-            type: "toolCallCancelled" as const,
+            type: "toolCallCancelled",
             callId: relayCallId,
-          };
-          broadcastToOwner(params.context, params.connId, cancelledEvent);
+          });
         }
         return;
       }
@@ -370,8 +368,7 @@ export function createTalkRealtimeRelaySession(
       }
     },
     onResponseDone: (outcome) => {
-      const relay = getActiveRelay();
-      if (!relay) {
+      if (!getActiveRelay()) {
         return;
       }
       const responseId = outcome.responseId ?? outputOwnership.responseId;

@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -133,7 +134,10 @@ it.each(["missing", "drifted"] as const)(
     await expect(
       assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
     ).resolves.toBeUndefined();
-    expect(agents.map((agent) => fs.readFileSync(agent.path))).toEqual(before);
+    deepStrictEqual(
+      agents.map((agent) => fs.readFileSync(agent.path)),
+      before,
+    );
     await runStartup();
     for (const agent of agents) {
       const reader = new (requireNodeSqlite().DatabaseSync)(agent.path, { readOnly: true });
@@ -204,7 +208,10 @@ it("reports every refused database and its missing indexes without mutating any 
     expect(row).toContain("missing or drifted index idx_agent_session_nodes_active");
     expect(row).toContain("openclaw doctor --fix");
   }
-  expect(agents.map((agent) => fs.readFileSync(agent.path))).toEqual(before);
+  deepStrictEqual(
+    agents.map((agent) => fs.readFileSync(agent.path)),
+    before,
+  );
 });
 
 it.each([
@@ -271,5 +278,8 @@ it.each([
     );
   }
   expect(resolveGatewayStartupFailureExitCode(failure)).toBe(exitCode);
-  expect(agents.map((agent) => fs.readFileSync(agent.path))).toEqual(before);
+  deepStrictEqual(
+    agents.map((agent) => fs.readFileSync(agent.path)),
+    before,
+  );
 });

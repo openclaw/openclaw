@@ -63,18 +63,12 @@ function shouldRetryTimedOutTelegramControlRequest(method: string | null): boole
 }
 
 export function createTelegramClientFetch(params: {
-  fetchImpl?: TelegramClientFetch;
+  fetchImpl: TelegramClientFetch;
   timeoutSeconds?: unknown;
   shutdownSignal?: unknown;
   transport?: Partial<Pick<TelegramTransport, "forceFallback" | "sourceFetch">>;
-}): TelegramCompatFetch | undefined {
-  if (!params.fetchImpl && !params.shutdownSignal) {
-    return undefined;
-  }
-
-  const callFetch = asTelegramCompatFetch(
-    params.fetchImpl ?? asTelegramClientFetch(globalThis.fetch),
-  );
+}): TelegramCompatFetch {
+  const callFetch = asTelegramCompatFetch(params.fetchImpl);
   const isRawSourceFetch =
     params.transport?.sourceFetch !== undefined &&
     params.fetchImpl === asTelegramClientFetch(params.transport.sourceFetch);

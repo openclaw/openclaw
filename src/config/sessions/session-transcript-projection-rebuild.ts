@@ -117,10 +117,6 @@ function readCanonicalEventId(event: unknown): string | null {
   return event.id.trim() || null;
 }
 
-function changesPriorProjectionVisibility(event: unknown): boolean {
-  return isCanonicalSessionTranscriptEntry(event) && event.type === "reset";
-}
-
 /** Streams projection payloads; only navigation metadata is retained for branch resolution. */
 export function visitSessionTranscriptProjection(
   db: DatabaseSync,
@@ -553,7 +549,7 @@ function prepareProjectionTailCatchUp(
   };
   for (const row of rows) {
     const event: unknown = JSON.parse(row.event_json);
-    if (changesPriorProjectionVisibility(event)) {
+    if (isCanonicalSessionTranscriptEntry(event) && event.type === "reset") {
       return undefined;
     }
     const append = prepareSessionTranscriptProjectionAppend({

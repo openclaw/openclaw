@@ -117,7 +117,7 @@ describe("gateway lifecycle hub import boundaries", () => {
             resolveGatewayRestartDrainTimeoutMs: () => 300_000,
             createGatewayActiveWorkSnapshot: () => idle,
             waitForGatewayActiveWork: vi.fn(async () => ({ drained: true, snapshot: idle })),
-            stopGatewayManagedProviderLocalServices: vi.fn(async () => {}),
+            stopActiveManagedProviderLocalServices: vi.fn(async () => {}),
             restartGatewayProcessWithFreshPid: vi.fn(() => ({ mode: "supervised" as const })),
             writeGatewayRestartHandoffSync: vi.fn(() => null),
           } satisfies Partial<LifecycleRuntime>;
@@ -174,7 +174,7 @@ describe("gateway lifecycle hub import boundaries", () => {
               expect(hub.consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledOnce();
               expect(hub.waitForGatewayActiveWork).toHaveBeenCalledOnce();
               expect(close).toHaveBeenCalledOnce();
-              expect(hub.stopGatewayManagedProviderLocalServices).toHaveBeenCalledOnce();
+              expect(hub.stopActiveManagedProviderLocalServices).toHaveBeenCalledOnce();
               expect(fixture.releaseLock).toHaveBeenCalledOnce();
               expect(fixture.error).not.toHaveBeenCalled();
               expect(completeBoot).toHaveBeenCalledWith(

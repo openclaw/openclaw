@@ -101,29 +101,16 @@ function pushHunkLine(
   raw: string,
   hunk: HunkState,
 ): void {
-  let kind: DiffLineKind;
-  let lineNo: number | undefined;
-  if (raw.startsWith("+")) {
-    kind = "add";
-    lineNo = hunk.newLine;
-    if (hunk.newLine !== undefined) {
-      hunk.newLine += 1;
-      hunk.newLeft = Math.max(0, (hunk.newLeft ?? 0) - 1);
-    }
-  } else if (raw.startsWith("-")) {
-    kind = "del";
-    lineNo = hunk.oldLine;
-    if (hunk.oldLine !== undefined) {
+  const kind: DiffLineKind = raw.startsWith("+") ? "add" : raw.startsWith("-") ? "del" : "ctx";
+  const lineNo = kind === "del" ? hunk.oldLine : hunk.newLine;
+  // Context consumes both sides together; unnumbered patch hunks keep both absent.
+  if (kind !== "ctx" || (hunk.oldLine !== undefined && hunk.newLine !== undefined)) {
+    if (kind !== "add" && hunk.oldLine !== undefined) {
       hunk.oldLine += 1;
       hunk.oldLeft = Math.max(0, (hunk.oldLeft ?? 0) - 1);
     }
-  } else {
-    kind = "ctx";
-    lineNo = hunk.newLine;
-    if (hunk.oldLine !== undefined && hunk.newLine !== undefined) {
-      hunk.oldLine += 1;
+    if (kind !== "del" && hunk.newLine !== undefined) {
       hunk.newLine += 1;
-      hunk.oldLeft = Math.max(0, (hunk.oldLeft ?? 0) - 1);
       hunk.newLeft = Math.max(0, (hunk.newLeft ?? 0) - 1);
     }
   }
@@ -135,7 +122,7 @@ function pushHunkLine(
 }
 
 function hunkComplete(hunk: HunkState): boolean {
-  return hunk.oldLeft !== undefined && hunk.oldLeft === 0 && hunk.newLeft === 0;
+  return hunk.oldLeft === 0 && hunk.newLeft === 0;
 }
 
 function sectionLabel(section: PatchSection): string {

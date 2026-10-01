@@ -127,7 +127,7 @@ export const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 type CachedTelegramClientOptions = {
   activeLeases: number;
-  clientOptions: ApiClientOptions | undefined;
+  clientOptions: ApiClientOptions & { fetch: NonNullable<ApiClientOptions["fetch"]> };
   closeStarted: boolean;
   retired: boolean;
   transport: TelegramTransport;
@@ -136,7 +136,7 @@ type TelegramClientOptionsLease = {
   release: () => void;
 };
 type ResolvedTelegramClientOptions = {
-  clientOptions: ApiClientOptions | undefined;
+  clientOptions: CachedTelegramClientOptions["clientOptions"];
   lease: () => TelegramClientOptionsLease;
 };
 const telegramClientOptionsCache = new Map<string, CachedTelegramClientOptions>();
@@ -253,16 +253,12 @@ function resolveTelegramClientOptions(
     fetchImpl: asTelegramClientFetch(transport.fetch),
     transport,
   });
-  const clientOptions =
-    fetchImpl || normalizedApiRoot
-      ? {
-          ...(fetchImpl ? { fetch: asTelegramClientFetch(fetchImpl) } : {}),
-          ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
-        }
-      : undefined;
   return setCachedTelegramClientOptions(cacheKey, {
     activeLeases: 0,
-    clientOptions,
+    clientOptions: {
+      fetch: asTelegramClientFetch(fetchImpl),
+      ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
+    },
     closeStarted: false,
     retired: false,
     transport,
@@ -341,11 +337,7 @@ export function normalizeMessageId(raw: string | number): number {
     return Math.trunc(raw);
   }
   if (typeof raw === "string") {
-    const value = raw.trim();
-    if (!value) {
-      throw new Error("Message id is required for Telegram actions");
-    }
-    const parsed = parseStrictInteger(value);
+    const parsed = parseStrictInteger(raw);
     if (parsed !== undefined) {
       return parsed;
     }
@@ -388,15 +380,14 @@ function resolveTelegramApiContext(opts: {
     // One op-level lease covers the full send/action (including pre-request work
     // and retries) so eviction cannot close the transport mid-operation.
     clientOptionsLease = client.lease();
-    const fetch = client.clientOptions?.fetch;
-    const clientOptions =
-      fetch && opts.assertPlatformSendAuthorized
-        ? {
-            ...client.clientOptions,
-            fetch: bindTelegramRequestAuthority(fetch, opts.assertPlatformSendAuthorized),
-          }
-        : client.clientOptions;
-    const bot = new Bot(token, clientOptions ? { client: clientOptions } : undefined);
+    const fetch = client.clientOptions.fetch;
+    const clientOptions = opts.assertPlatformSendAuthorized
+      ? {
+          ...client.clientOptions,
+          fetch: bindTelegramRequestAuthority(fetch, opts.assertPlatformSendAuthorized),
+        }
+      : client.clientOptions;
+    const bot = new Bot(token, { client: clientOptions });
     if (opts.signal || opts.assertPlatformSendAuthorized) {
       // grammY wraps later transformers around earlier ones. Check authority
       // after the account queue drains, immediately before its HTTP client runs.
@@ -490,7 +481,6 @@ export function createTelegramRequestWithDiag(params: {
 function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; input: string }) {
   const errorMsg = formatErrorMessage(err);
 
-  // Check for 403 "bot is not a member" or "bot was blocked" errors
   if (/403.*(bot.*not.*member|bot.*blocked|bot.*kicked)/i.test(errorMsg)) {
     return new Error(
       [

@@ -20,6 +20,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderSystemsBackups } from "./systems-backups.ts";
 import { SystemsController } from "./systems-controller.ts";
 import type { SystemsRouteData } from "./systems-controller.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
@@ -149,6 +150,12 @@ class SystemsPage extends OpenClawLightDomElement {
       } else if (controller.showStats || controller.showDetails) {
         void controller.refreshTelemetry();
       }
+      if (
+        (!controller.selected || controller.selectedId === "gateway") &&
+        !controller.needsInventoryRefresh
+      ) {
+        void controller.refreshBackups();
+      }
     },
     true,
     "visible",
@@ -157,10 +164,7 @@ class SystemsPage extends OpenClawLightDomElement {
   constructor() {
     super();
     void this.poll;
-    new SubscriptionsController(this).watch(
-      () => this.routeData?.controller,
-      (controller, notify) => controller.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.routeData?.controller);
   }
 
   override connectedCallback(): void {
@@ -257,7 +261,8 @@ class SystemsPage extends OpenClawLightDomElement {
                   event.preventDefault();
                   controller.context.navigate(face, target.options);
                 }}
-                ><strong>${session.displayName ?? session.label ?? session.key}</strong
+                ><strong class="systems-session-link__title"
+                  >${session.displayName ?? session.label ?? session.key}</strong
                 ><span>${t("systems.relations." + relation.kind)}</span></a
               >`;
             })
@@ -422,6 +427,7 @@ class SystemsPage extends OpenClawLightDomElement {
           : nothing
       }
       ${controller.showStats && row ? renderMeasurements(row, controller) : nothing}
+      ${!row || row.environment.id === "gateway" ? renderSystemsBackups(controller) : nothing}
       <div class="systems-body">
         <div class="systems-desktop">
           ${

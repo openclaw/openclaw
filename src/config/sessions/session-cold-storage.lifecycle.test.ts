@@ -341,7 +341,8 @@ describe("cold current transcript lifecycle", () => {
     expect(fixture.snapshot()).toEqual(before);
   });
 
-  it.each(actions)(
+  // Message cuts and parent transcript forks restore before dispatching their mutation modes.
+  it.each(actions.filter((action) => !["rewind", "branch switch", "parent fork"].includes(action)))(
     "refuses %s without changing state when its archive is missing",
     async (action) => {
       const fixture = await createColdCurrentSession();

@@ -9,14 +9,21 @@ import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  assertExistingDatabaseIdentity,
+  normalizeDatabasePath,
+} from "../infra/sqlite-worker-identity.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
+} from "../infra/sqlite-worker-operation-admission.js";
 import {
   reserveSqliteWorkerInputPreparation,
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -60,7 +67,11 @@ export type OpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperat
 export async function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
   publicationSource: DatabaseSync | { execution: OpenClawAgentDatabaseExecution },
-  worker: { moduleUrl: URL; input: unknown },
+  worker: {
+    moduleUrl: URL;
+    input: unknown;
+    assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
+  },
 ): Promise<
   OpenClawAgentSqliteWorkerStore<Operations> & {
     execute<Key extends keyof Operations>(
@@ -109,6 +120,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   );
   let revoked = false;
   let closing: Promise<void> | undefined;
+  let drainExecution: OpenClawAgentDatabaseExecution | undefined;
   let releaseBorrow: (() => void) | undefined;
   let unregisterAgent: (() => void) | undefined;
   let unregisterState: (() => void) | undefined;
@@ -128,7 +140,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       !current ||
       current.db !== expectedDatabase ||
       !expectedDatabase.isOpen ||
-      expectedDatabase.location() !== prepared?.filename
+      normalizeDatabasePath(expectedDatabase.location() ?? "") !== prepared?.filename
     ) {
       throw new Error("Borrowed agent database closed or changed before Worker admission");
     }
@@ -145,6 +157,10 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     revoked = true;
     closing ??= (async () => {
       await Promise.allSettled(pending);
+      if (drainExecution) {
+        await drainExecution.release();
+        drainExecution = undefined;
+      }
       releaseBorrow?.();
       releaseBorrow = undefined;
       unregisterAgent?.();
@@ -213,7 +229,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
           return {
             nativeLocations: binding.nativeLocations,
             admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              binding.authorize(request);
+              binding.authorize(worker.assertAdmission?.(request) ?? request);
               if (request.stage === "transaction" || request.stage === "commit") {
                 if (
                   !(
@@ -246,8 +262,15 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       } catch (error) {
         completed = { ok: false, error };
       }
+      let releasing: OpenClawAgentDatabaseExecution | undefined = execution;
+      if (completed.ok && !revoked && getGatewayRestartDrainSignal().aborted) {
+        // Keep the accepted publication sequence on one native lease until its store closes.
+        const previous = drainExecution;
+        drainExecution = execution;
+        releasing = previous;
+      }
       try {
-        await execution.release();
+        await releasing?.release();
       } catch (releaseError) {
         if (!completed.ok) {
           throw createSqliteLifecycleAggregateError(

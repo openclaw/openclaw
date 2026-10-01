@@ -1,4 +1,3 @@
-/** OpenRouter free-model scanner and fallback updater for model commands. */
 import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import {
@@ -183,7 +182,6 @@ function parsePositiveIntegerOption(raw: unknown, label: string, fallback: numbe
   return parsed;
 }
 
-/** Scans OpenRouter candidates, optionally probes them, then writes fallback defaults. */
 export async function modelsScanCommand(
   opts: {
     minParams?: string;

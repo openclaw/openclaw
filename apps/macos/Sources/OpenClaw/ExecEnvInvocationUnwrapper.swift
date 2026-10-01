@@ -60,7 +60,7 @@ enum ExecEnvInvocationUnwrapper {
                 idx += 1
                 continue
             }
-            if token.hasPrefix("-"), token != "-" {
+            if token.hasPrefix("-") {
                 let lower = token.lowercased()
                 let flag = lower.split(separator: "=", maxSplits: 1).first.map(String.init) ?? lower
                 if ExecEnvOptions.flagOnly.contains(flag) {
@@ -102,7 +102,7 @@ enum ExecEnvInvocationUnwrapper {
             guard ExecCommandToken.basenameLower(token) == "env" else {
                 break
             }
-            guard let unwrapped = unwrapWithMetadata(current), !unwrapped.command.isEmpty else {
+            guard let unwrapped = unwrapWithMetadata(current) else {
                 break
             }
             if unwrapped.usesModifiers {

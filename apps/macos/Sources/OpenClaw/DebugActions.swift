@@ -60,10 +60,6 @@ enum DebugActions {
         }
     }
 
-    static func sendTestNotification() async -> TestNotificationOutcome {
-        await TestNotificationAction.send()
-    }
-
     static func sendDebugVoice() async -> Result<String, DebugActionError> {
         let message = """
         This is a debug test from the Mac app. Reply with "Debug test works (and a funny pun)" \
@@ -151,20 +147,12 @@ enum DebugActions {
         LogLocator.bestLogFile()?.path ?? LogLocator.launchdLogPath
     }
 
-    @MainActor
-    static func runHealthCheckNow() async {
-        await HealthStore.shared.refresh(onDemand: true)
-    }
-
     static func sendTestHeartbeat() async -> Result<ControlHeartbeatEvent?, Error> {
         do {
             _ = await GatewayConnection.shared.setHeartbeatsEnabled(true)
             await ControlChannel.shared.configure()
             let data = try await ControlChannel.shared.request(method: "last-heartbeat")
-            if let evt = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data) {
-                return .success(evt)
-            }
-            return .success(nil)
+            return .success(try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data))
         } catch {
             return .failure(error)
         }
@@ -225,11 +213,8 @@ enum DebugActions {
 
     // MARK: - Port diagnostics
 
-    typealias PortListener = PortGuardian.ReportListener
-    typealias PortReport = PortGuardian.PortReport
-
     @MainActor
-    static func checkGatewayPorts() async -> [PortReport] {
+    static func checkGatewayPorts() async -> [PortGuardian.PortReport] {
         let mode = CommandResolver.connectionSettings().mode
         let hostsLocalGateway = AppStateStore.shared.hostsLocalGatewayWithRemotePrimary
         let tunnel = await RemoteTunnelManager.shared.controlTunnelStatus()

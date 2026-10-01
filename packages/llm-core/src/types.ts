@@ -510,7 +510,7 @@ export interface AssistantMessageEventStreamContract extends AsyncIterable<Assis
   push(event: AssistantMessageEvent): void;
   /** Complete the stream and optionally resolve the final message. */
   end(result?: AssistantMessage): void;
-  /** Final assistant message produced by the stream. */
+  /** Final assistant message produced independently of event iteration. */
   result(): Promise<AssistantMessage>;
 }
 

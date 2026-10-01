@@ -81,16 +81,6 @@ export function createDiscordSelectMenu<Type extends DiscordComponentSelectType>
   return select;
 }
 
-function buildTextDisplays(text?: string, texts?: string[]): TextDisplay[] {
-  if (texts && texts.length > 0) {
-    return texts.map((entry) => new TextDisplay(entry));
-  }
-  if (text) {
-    return [new TextDisplay(text)];
-  }
-  return [];
-}
-
 function createButtonComponent(params: {
   spec: DiscordComponentButtonSpec;
   componentId?: string;
@@ -208,7 +198,6 @@ export function buildDiscordComponentMessage(params: {
   const entries: DiscordComponentEntry[] = [];
   const consumptionGroupId = createShortId("grp_");
   const modals: DiscordModalEntry[] = [];
-  const components: TopLevelComponents[] = [];
   const containerChildren: Container["components"] = [];
 
   const addEntry = (entry: DiscordComponentEntry) => {
@@ -234,7 +223,9 @@ export function buildDiscordComponentMessage(params: {
       continue;
     }
     if (block.type === "section") {
-      const displays = buildTextDisplays(block.text, block.texts);
+      const displays = (block.texts?.length ? block.texts : block.text ? [block.text] : []).map(
+        (entry) => new TextDisplay(entry),
+      );
       if (displays.length > 3) {
         throw new Error("Section blocks support up to 3 text displays");
       }
@@ -350,12 +341,11 @@ export function buildDiscordComponentMessage(params: {
   }
 
   const container = new Container(containerChildren, params.spec.container);
-  components.push(container);
   const consumptionGroupEntryIds = entries.map((entry) => entry.id);
   for (const entry of entries) {
     entry.consumptionGroupEntryIds = consumptionGroupEntryIds;
   }
-  return { components, entries, modals };
+  return { components: [container], entries, modals };
 }
 
 export function buildDiscordComponentMessageFlags(

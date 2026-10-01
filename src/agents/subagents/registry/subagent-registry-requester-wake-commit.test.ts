@@ -11,6 +11,7 @@ import {
   shouldReportRequesterSettleWakeFailure,
 } from "./subagent-registry-requester-wake-commit.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { latestSubagentRun } from "./subagent-run-generation.js";
 
 function makeRetainedChild(runId = "run-a"): SubagentRunRecord {
   return {
@@ -35,7 +36,18 @@ function makeContext(entries: readonly SubagentRunRecord[]): {
   const warn = vi.fn();
   const runs = new Map(entries.map((entry) => [entry.runId, entry]));
   const context = {
-    options: { runs, warn },
+    options: {
+      runs,
+      warn,
+      getLatestRunForChildSession: (
+        sessionKey: string,
+        matches?: (entry: SubagentRunRecord) => boolean,
+      ) =>
+        latestSubagentRun(
+          [...runs.values()].filter((entry) => entry.childSessionKey === sessionKey),
+          matches,
+        ) ?? null,
+    },
     pendingRequesterSettleWakeCommits: new WeakMap<
       SubagentRunRecord,
       PendingRequesterSettleWakeCommit
@@ -97,6 +109,26 @@ describe("requester settle wake commit retry", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each(["another requester", "the same task"])(
+    "rejects a frozen completion whose newer run belongs to %s",
+    async (replacement) => {
+      const entry = makeRetainedChild();
+      entry.generation = 1;
+      const successor = {
+        ...makeRetainedChild("run-b"),
+        childSessionKey: entry.childSessionKey,
+        generation: 2,
+        ...(replacement === "another requester"
+          ? { requesterSessionKey: "agent:main:other" }
+          : { taskRunId: entry.runId }),
+      };
+      const { context } = makeContext([entry, successor]);
+      const commit = vi.fn(() => true);
+      await commitRequesterWake(context, [entry, successor], undefined, commit, false);
+      expect(commit).not.toHaveBeenCalled();
+    },
+  );
 
   it("holds one settlement fence until the async write and its retry settle", async () => {
     const entry = makeRetainedChild();

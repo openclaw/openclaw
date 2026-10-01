@@ -1,7 +1,75 @@
-import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import {
+  clearDeliveryState,
+  ensureCompletionState,
+  resetRequesterSettleWakeRetry,
+} from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import {
+  captureSubagentRunMutationSnapshot,
+  publishSubagentRunPostimages,
+  SubagentRegistryWriteError,
+} from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+/** Capture the accepted tool intent before the runtime publishes its yielded terminal. */
+export async function markSubagentMessageWaitInRuns(params: {
+  runId: string;
+  sessionKey: string;
+  acknowledgment?: string;
+  runs: Map<string, SubagentRunRecord>;
+  context: OpenClawStateWorkerContext;
+  assertCurrent: () => void;
+  persist: Parameters<typeof publishSubagentRunPostimages>[0]["persist"];
+}): Promise<boolean> {
+  params.assertCurrent();
+  const entry = params.runs.get(params.runId);
+  if (
+    !entry ||
+    entry.childSessionKey !== params.sessionKey ||
+    entry.expectsCompletionMessage !== true ||
+    entry.collect ||
+    entry.execution.status !== "running" ||
+    entry.killIntent ||
+    entry.killReconciliation ||
+    entry.suppressCompletionDelivery
+  ) {
+    return false;
+  }
+  if (entry.requesterSettleWake?.pauseNotice) {
+    return true;
+  }
+  const previous = captureSubagentRunMutationSnapshot(entry);
+  entry.requesterSettleWake = {
+    ...resetRequesterSettleWakeRetry(previous.requesterSettleWake),
+    batchRunIds: previous.requesterSettleWake?.batchRunIds ?? [entry.runId],
+    pauseNotice: {
+      // Match the announce completion delivery's retained-text bound.
+      acknowledgment: truncateUtf16Safe(
+        params.acknowledgment?.trim() || "Paused awaiting continuation.",
+        12_000,
+      ),
+    },
+  };
+  const result = await publishSubagentRunPostimages({
+    runs: params.runs,
+    previous: new Map([[entry, previous]]),
+    persist: params.persist,
+    context: params.context,
+    assertCurrent: params.assertCurrent,
+  });
+  try {
+    params.assertCurrent();
+    if (result.publication !== "published") {
+      throw new Error("Subagent message wait lost its original run");
+    }
+  } catch (error) {
+    throw new SubagentRegistryWriteError("committed", error, result.publication);
+  }
+  return true;
+}
 
 export function markSubagentRunPausedAfterYield(params: {
   entry: SubagentRunRecord;

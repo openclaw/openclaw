@@ -155,17 +155,6 @@ function findPairedDevicePendingNodeApprovalNotices(
   });
 }
 
-function findQueryPendingNodeApprovalNotices(
-  opts: DevicesRpcOpts,
-  paired: PairedDevice[] | undefined,
-  query: string,
-): PendingNodeApprovalNotice[] {
-  return findPairedDevicePendingNodeApprovalNotices(
-    opts,
-    paired?.filter((device) => pairedDeviceMatchesNodeApprovalQuery(device, query)),
-  );
-}
-
 function isDevicePairingApprovalDenied(error: unknown): boolean {
   return normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error)).includes(
     "device pairing approval denied",
@@ -1006,10 +995,11 @@ export async function runDevicesApproveCommand(
     defaultRuntime.error(
       `No pending device request matches ${sanitizeForLog(resolvedRequestId)}. Run ${formatCliCommand("openclaw devices list")} and retry with the current request ID.`,
     );
-    const nodeApprovalNotices = findQueryPendingNodeApprovalNotices(
+    const nodeApprovalNotices = findPairedDevicePendingNodeApprovalNotices(
       opts,
-      approvalContext.pairingList?.paired,
-      resolvedRequestId,
+      approvalContext.pairingList?.paired.filter((device) =>
+        pairedDeviceMatchesNodeApprovalQuery(device, resolvedRequestId),
+      ),
     );
     for (const notice of nodeApprovalNotices) {
       defaultRuntime.error(formatNodeApprovalNotice(notice));

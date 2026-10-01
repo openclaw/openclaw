@@ -1,4 +1,3 @@
-// Backup planning helpers for archive naming, payload paths, and deduplicated asset selection.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
@@ -140,12 +139,10 @@ function formatBackupArchiveTimestamp(
   return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}`;
 }
 
-/** Build the root directory name stored inside a backup tarball. */
 export function buildBackupArchiveRoot(nowMs = Date.now()): string {
   return `${formatBackupArchiveTimestamp(nowMs)}-openclaw-backup`;
 }
 
-/** Build the default `.tar.gz` filename for a backup archive. */
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {
   return `${buildBackupArchiveRoot(nowMs)}.tar.gz`;
 }
@@ -165,7 +162,6 @@ function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   return path.posix.join("relative", normalized);
 }
 
-/** Build the archive-relative payload path for one source path. */
 export function buildBackupArchivePath(archiveRoot: string, sourcePath: string): string {
   return path.posix.join(archiveRoot, "payload", encodeAbsolutePathForBackupArchive(sourcePath));
 }
@@ -236,41 +232,21 @@ async function resolveBackupPlanFromPaths(params: {
 
   if (onlyConfig) {
     const resolvedConfigPath = path.resolve(configPath);
-    if (!(await pathExists(resolvedConfigPath))) {
-      return {
-        stateDir,
-        configPath,
-        oauthDir,
-        workspaceDirs: [],
-        resources,
-        included: [],
-        skipped: [
-          {
-            kind: "config",
-            sourcePath: resolvedConfigPath,
-            displayPath: shortenHomePath(resolvedConfigPath),
-            reason: "missing",
-          },
-        ],
-      };
-    }
-
-    const canonicalConfigPath = await canonicalizeExistingPath(resolvedConfigPath);
+    const exists = await pathExists(resolvedConfigPath);
+    const sourcePath = exists
+      ? await canonicalizeExistingPath(resolvedConfigPath)
+      : resolvedConfigPath;
+    const asset = { kind: "config" as const, sourcePath, displayPath: shortenHomePath(sourcePath) };
     return {
       stateDir,
       configPath,
       oauthDir,
       workspaceDirs: [],
       resources,
-      included: [
-        {
-          kind: "config",
-          sourcePath: canonicalConfigPath,
-          displayPath: shortenHomePath(canonicalConfigPath),
-          archivePath: buildBackupArchivePath(archiveRoot, canonicalConfigPath),
-        },
-      ],
-      skipped: [],
+      included: exists
+        ? [{ ...asset, archivePath: buildBackupArchivePath(archiveRoot, sourcePath) }]
+        : [],
+      skipped: exists ? [] : [{ ...asset, reason: "missing" }],
     };
   }
 
@@ -555,7 +531,6 @@ export async function canonicalizePathForContainment(targetPath: string): Promis
   }
 }
 
-/** Resolve one configured agent's canonical backup root and owner database path. */
 export async function resolveBackupAgentRoot(
   config: OpenClawConfig,
   agentId: string,
@@ -570,14 +545,12 @@ export async function resolveBackupAgentRoot(
   };
 }
 
-/** Resolve configured agent storage roots and their canonical database paths for backup ownership. */
 export async function resolveBackupAgentRoots(config: OpenClawConfig): Promise<BackupAgentRoot[]> {
   return await Promise.all(
     listAgentIds(config).map((agentId) => resolveBackupAgentRoot(config, agentId)),
   );
 }
 
-/** Resolve the backup plan from the current OpenClaw state/config/workspace paths on disk. */
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;

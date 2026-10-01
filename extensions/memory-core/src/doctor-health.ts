@@ -90,9 +90,6 @@ function createManagedLocalEmbeddingSetupCheck(
           },
           async (params) => {
             const provider = resolveSelectedMemoryProvider(params.config, params.agentId);
-            if (!provider || provider === "none") {
-              return null;
-            }
             if (provider !== LOCAL_MEMORY_EMBEDDING_PROVIDER_ID) {
               return null;
             }

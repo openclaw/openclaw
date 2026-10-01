@@ -4,6 +4,7 @@ import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runti
 import type { Guild } from "../internal/discord.js";
 import {
   allowListMatches,
+  hasConfiguredDiscordChannels,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   resolveDiscordChannelConfigWithFallback,
@@ -86,8 +87,7 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
     return { ok: false, message: "This channel is disabled." };
   }
 
-  const channelAllowlistConfigured =
-    Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
+  const channelAllowlistConfigured = hasConfiguredDiscordChannels(guildInfo?.channels);
   if (!params.channelId && groupPolicy === "allowlist" && channelAllowlistConfigured) {
     return {
       ok: false,

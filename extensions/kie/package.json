@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/kie-provider",
-  "version": "2026.9.6",
+  "version": "2026.9.7",
   "private": true,
   "description": "OpenClaw Kie AI video provider plugin",
   "type": "module",

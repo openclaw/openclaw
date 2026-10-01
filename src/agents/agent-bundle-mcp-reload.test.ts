@@ -3,8 +3,16 @@ import http from "node:http";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -40,6 +48,15 @@ const tempDirs: string[] = [];
 const managers: ReturnType<typeof createSessionMcpRuntimeManager>[] = [];
 const cleanups: Array<() => Promise<unknown>> = [];
 const releaseHeld: Array<() => void> = [];
+let receipts: FixtureReceiptChannel;
+
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+
+afterAll(async () => {
+  await receipts.close();
+});
 
 afterEach(async () => {
   for (const release of releaseHeld.splice(0)) {
@@ -57,7 +74,7 @@ afterEach(async () => {
 });
 
 async function fixture(scheduler = createTestGatewayScheduler()) {
-  const source = await createMcpProbeFixture(tempDirs);
+  const source = await createMcpProbeFixture(tempDirs, receipts.endpoint);
   const manager = createSessionMcpRuntimeManager({ scheduler });
   managers.push(manager);
   return { ...source, manager };
@@ -128,7 +145,7 @@ it.each(["change", "disable", "remove", "collision"] as const)(
   },
 );
 
-it("allows an unchanged server call to finish across config publication", async () => {
+it("allows an unchanged server call to finish across config publication", async ({ signal }) => {
   const { manager, config, params } = await fixture();
   const original = await manager.getOrCreate({ ...params, cfg: config() });
   const healthy = await probe(original, "healthy");
@@ -136,9 +153,14 @@ it("allows an unchanged server call to finish across config publication", async 
   const result = probe(original, "healthy", { hold: held });
   const observed = result.catch(() => undefined);
   try {
-    await expect
-      .poll(async () => Boolean(await fs.stat(`${held}.started`).catch(() => undefined)))
-      .toBe(true);
+    await withinTest(
+      awaitGateBeforeSettlement(
+        receipts.waitFor(held, "started"),
+        result,
+        `Held MCP call settled before starting in ${held}`,
+      ),
+      signal,
+    );
     await manager.reloadConfig({ cfg: config("new"), manifestRegistry: params.manifestRegistry });
     const refreshed = await manager.getOrCreate({ ...params, cfg: config("new") });
     await fs.writeFile(held, "release");
@@ -799,7 +821,9 @@ it("joins config retirement cleanup before installing a replacement transport", 
   expect(await probe(await replacement, "first")).not.toEqual(healthy);
 });
 
-it("revokes transferred active work while unrelated transport cleanup is pending", async () => {
+it("revokes transferred active work while unrelated transport cleanup is pending", async ({
+  signal,
+}) => {
   const closing = createDeferred();
   const releaseClose = createDeferred();
   releaseHeld.push(() => releaseClose.resolve());
@@ -817,9 +841,14 @@ it("revokes transferred active work while unrelated transport cleanup is pending
   const held = probe(original, "healthy", { hold: marker }).catch(() => {
     revoked = true;
   });
-  await expect
-    .poll(async () => Boolean(await fs.stat(`${marker}.started`).catch(() => undefined)))
-    .toBe(true);
+  await withinTest(
+    awaitGateBeforeSettlement(
+      receipts.waitFor(marker, "started"),
+      held,
+      `Held MCP call settled before starting in ${marker}`,
+    ),
+    signal,
+  );
   const next = structuredClone(cfg);
   next.mcp!.servers!.changed = { transport: "streamable-http", url, headers: { generation: "2" } };
   const pending = manager.getOrCreate({ ...params, cfg: next });

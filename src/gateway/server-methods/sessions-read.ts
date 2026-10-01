@@ -1,4 +1,3 @@
-// Read-only session queries.
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -29,7 +28,10 @@ import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import type { MaterializedRow } from "../session-row-projection-record.js";
 import {
   canAccessIncognitoSession,
@@ -264,10 +266,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     await listProjectedSessions({
       projection,
       opts: params,
@@ -306,10 +305,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     const withPreviewRows = <T>(
       requestedKeys: readonly string[],
       consume: (read: SessionRowReadView) => T,
@@ -433,10 +429,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     await withPreparedSessionResolve(
       {
         projection,

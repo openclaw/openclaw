@@ -14,6 +14,7 @@ import {
 } from "../../../lib/bounded-response.mjs";
 import { isRecord } from "../../../lib/record-shared.mjs";
 import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
+import { readJson, writeJson } from "../fixtures/common.mjs";
 
 const TOKEN = "bundled-plugin-runtime-smoke-token";
 const RUNTIME_PORT_BASE_ENV = "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE";
@@ -92,15 +93,6 @@ export function resolveRuntimeSmokePort(pluginIndex, offset = 0, env = process.e
     );
   }
   return port;
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function readFileChunk(file, startOffset, maxBytes) {

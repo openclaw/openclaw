@@ -38,17 +38,8 @@ export function createCodexAuthProfileSelection({
     config?: AuthProfileOrderConfig;
   }): string | undefined {
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-    const store = resolveCodexAppServerAuthProfileStore({
-      agentDir,
-      authProfileId: params.authProfileId,
-      authProfileStore: params.authProfileStore,
-      config: params.config,
-    });
-    return resolveCodexAppServerAuthProfileId({
-      authProfileId: params.authProfileId,
-      store,
-      config: params.config,
-    });
+    const store = resolveCodexAppServerAuthProfileStore({ ...params, agentDir });
+    return resolveCodexAppServerAuthProfileId({ ...params, store });
   }
 
   function resolveCodexAppServerAuthProfileStore(params: {

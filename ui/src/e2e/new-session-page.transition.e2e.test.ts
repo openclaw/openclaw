@@ -9,6 +9,7 @@ import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   holdModuleResponse,
@@ -300,14 +301,17 @@ suite.define(() => {
     const chatModuleBlocked = new Promise<void>((resolve) => {
       releaseChatModule = resolve;
     });
-    await page.route("**/assets/route-entry-*.js*", async (route) => {
-      chatModuleRequested = true;
-      await chatModuleBlocked;
-      await route.continue();
-    });
+    await page.route(
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+      async (route) => {
+        chatModuleRequested = true;
+        await chatModuleBlocked;
+        await route.continue();
+      },
+    );
     const pendingPreviewModule = await holdModuleResponse(
       page,
-      /\/assets\/pending-session-create-[^/]+\.js(?:\?|$)/u,
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.ts"),
     );
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-sol",

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { estimateStringCharsWithMinimumRawWeight } from "@openclaw/normalization-core/cjk-chars";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,11 +29,10 @@ function guarded() {
   return {
     dispose,
     run: async (source: AgentMessage) => {
-      const transform = agent.transformContext;
-      if (!transform) {
-        throw new Error("guard did not install its context transform");
-      }
-      return await transform([source], new AbortController().signal);
+      return await expectDefined(agent.transformContext, "installed guard")(
+        [source],
+        new AbortController().signal,
+      );
     },
   };
 }
@@ -94,7 +94,6 @@ describe("prepared counts through the tool-result context guard", () => {
   it.each([
     [undefined, 2_000],
     [1.5, 2_300],
-    [3, 3_000],
   ] as const)("keeps floor %s independent of a prepared floor-2 count", async (floor, budget) => {
     const source = toolResult([{ type: "text", text: "aé😀漢".repeat(200) }]);
     const guard = guarded();

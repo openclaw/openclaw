@@ -8,7 +8,6 @@ import {
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyFailoverReason,
-  type FailoverReason,
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../../embedded-agent-helpers.js";
@@ -21,6 +20,7 @@ import {
   resolveFailoverStatus,
 } from "../../failover-error.js";
 import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,

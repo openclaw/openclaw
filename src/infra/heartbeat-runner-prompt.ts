@@ -5,7 +5,7 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
+import { readCronScratchSnapshot } from "../cron/scratch-read.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../sessions/session-state-event-kinds.js";
 import { formatErrorMessage } from "./errors.js";
@@ -90,6 +90,15 @@ export async function resolveHeartbeatPreflight(params: {
   scheduledEveryMs?: number;
   scheduledTasks?: readonly HeartbeatScheduledTask[];
 }): Promise<HeartbeatPreflight> {
+  let monitorScratch: Awaited<ReturnType<typeof readCronScratchSnapshot>>;
+  try {
+    monitorScratch = await readCronScratchSnapshot(resolveCronJobsStorePathFromConfig(params.cfg), {
+      kind: "heartbeat",
+      agentId: params.agentId,
+    });
+  } catch (error) {
+    log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
+  }
   const wakeFlags = resolveHeartbeatWakePayloadFlags({
     source: params.source,
     reason: params.reason,
@@ -119,15 +128,6 @@ export async function resolveHeartbeatPreflight(params: {
     wakeFlags.isCronWake ||
     wakeFlags.isWakePayload ||
     hasTaggedCronEvents;
-  let monitorScratch: ReturnType<typeof readHeartbeatMonitorScratch>;
-  try {
-    monitorScratch = readHeartbeatMonitorScratch(
-      resolveCronJobsStorePathFromConfig(params.cfg),
-      params.agentId,
-    );
-  } catch (error) {
-    log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
-  }
   const heartbeatScratchContent = monitorScratch?.state.scratch?.content;
   const basePreflight = {
     ...wakeFlags,
@@ -217,7 +217,6 @@ export function resolveHeartbeatRunPrompt(params: {
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
-  startedAt: number;
   scheduledTasks: readonly HeartbeatScheduledTask[];
   heartbeatScratchContent?: string;
   useHeartbeatResponseTool: boolean;

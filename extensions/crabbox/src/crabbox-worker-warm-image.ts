@@ -28,6 +28,7 @@ import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   CrabboxWarmImageRequestError,
+  isCrabboxCaptureRefusalRetained,
   isCrabboxWarmImageHeld as held,
   openCrabboxWarmImageStore,
   projectCrabboxWarmImage,
@@ -97,14 +98,17 @@ export function createCrabboxWarmImageManager(dependencies: {
   const retiringCurrent = (record: WarmProfileRecord) =>
     record.operation?.type === "retire" &&
     record.operation.checkpointId === record.image?.checkpointId;
+  const hasNoProviderObligations = (record: WarmProfileRecord) =>
+    !record.image &&
+    !record.previous &&
+    !record.operation &&
+    Object.keys(record.allocations).length === 0;
   const deleteEmptyProfile = (key: string) =>
     openStore().deleteIf(
       key,
       (record) =>
-        !record.image &&
-        !record.previous &&
-        !record.operation &&
-        Object.keys(record.allocations).length === 0,
+        hasNoProviderObligations(record) &&
+        !isCrabboxCaptureRefusalRetained(record, policy.refreshAfterMs),
     );
 
   const lookupLease = (id: string) => openStore().lookupLease(id);
@@ -235,6 +239,14 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (remaining() <= 0) {
         break;
       }
+      if (
+        value.captureUnsupported &&
+        hasNoProviderObligations(value) &&
+        !isCrabboxCaptureRefusalRetained(value, policy.refreshAfterMs)
+      ) {
+        await deleteEmptyProfile(key);
+        continue;
+      }
       await retireImage(context, key, value, remaining);
       let current = await openStore().lookup(key);
       if (
@@ -285,8 +297,10 @@ export function createCrabboxWarmImageManager(dependencies: {
         const image = current?.[generation];
         if (current && image && (generation === "previous" || !current.previous)) {
           await deleteImage(context, key, current, remaining, image.checkpointId);
-        } else if (generation === "image") {
-          await deleteEmptyProfile(key);
+        }
+        if (generation === "image") {
+          // A retained refusal marker is display-only and never holds a capacity slot.
+          await openStore().deleteIf(key, hasNoProviderObligations);
         }
       }
     }

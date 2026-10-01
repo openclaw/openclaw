@@ -238,6 +238,19 @@ export type ControlUiHost = {
     setScope: (agentId: string | null) => void;
     refresh: () => Promise<void>;
   };
+  dock?: {
+    /** Dock a conversation beside the current page; replaces a conversation dock already open. */
+    openSession: (params: {
+      sessionKey: string;
+      agentId: string;
+      /** Dock tab title. */
+      label: string;
+      /** Untrusted ambient reference data, never instructions or access authority. */
+      context?: { page: string; detail?: Readonly<Record<string, string>> };
+    }) => void;
+    close: () => void;
+    readonly openSessionKey: string | null;
+  };
   navigation: {
     openPage: (target: ControlUiPageTarget, options?: ControlUiPageNavigationOptions) => void;
     pageHref: (

@@ -3,8 +3,8 @@ import {
   listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
   listDirectoryUserEntriesFromAllowFrom,
   listDirectoryUserEntriesFromAllowFromAndMapKeys,
+  type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { isFeishuGroupReadAllowed } from "./read-policy.js";
 import { normalizeFeishuTarget } from "./targets.js";
@@ -21,15 +21,8 @@ export type FeishuDirectoryGroup = {
   name?: string;
 };
 
-export type FeishuDirectoryParams = {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-};
-
 export async function listFeishuDirectoryPeers(
-  params: FeishuDirectoryParams,
+  params: DirectoryConfigParams,
 ): Promise<FeishuDirectoryPeer[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const entries = listDirectoryUserEntriesFromAllowFromAndMapKeys({
@@ -44,7 +37,7 @@ export async function listFeishuDirectoryPeers(
 }
 
 export async function listFeishuDirectoryGroups(
-  params: FeishuDirectoryParams,
+  params: DirectoryConfigParams,
 ): Promise<FeishuDirectoryGroup[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const entries = listDirectoryGroupEntriesFromMapKeysAndAllowFrom({
@@ -57,7 +50,7 @@ export async function listFeishuDirectoryGroups(
 }
 
 export async function listAuthorizedFeishuDirectoryPeers(
-  params: FeishuDirectoryParams,
+  params: DirectoryConfigParams,
 ): Promise<FeishuDirectoryPeer[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const entries = listDirectoryUserEntriesFromAllowFrom({
@@ -70,7 +63,7 @@ export async function listAuthorizedFeishuDirectoryPeers(
 }
 
 export async function listAuthorizedFeishuDirectoryGroups(
-  params: FeishuDirectoryParams,
+  params: DirectoryConfigParams,
 ): Promise<FeishuDirectoryGroup[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const enabledGroups = Object.fromEntries(

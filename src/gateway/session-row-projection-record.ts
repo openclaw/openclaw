@@ -11,6 +11,7 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
@@ -31,6 +32,7 @@ export type ProjectionOptions = {
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   acpMeta: SessionAcpMeta | null;
+  repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
 export type SessionRowStore = {
@@ -55,6 +57,8 @@ export type Row = {
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
   databaseFactsRevision: number;
+  /** Category uncertainty keeps identity resident; earlier structural uncertainty dominates. */
+  unresolvedDatabaseFacts?: true | "category";
   /** Current committed sharing facts remain usable while display materialization is dirty. */
   sharingEntry?: SessionEntry;
   entry?: SessionEntry;
@@ -257,6 +261,7 @@ export function renewGeneration(row: Row): Row {
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
     preparedAcpMeta: undefined,
+    unresolvedDatabaseFacts: undefined,
     sharingEntry: undefined,
     materialized: undefined,
     lastMessagePreview: undefined,
@@ -272,7 +277,11 @@ export function hasEntry(row: Row | undefined): row is EntryRow {
 }
 export function ready(row: Row | undefined): row is MaterializedRow {
   // Acquisition can advance metadata before rendering, including after pending facts expire.
-  return Boolean(row?.entry && row.materialized?.source.entry === row.entry);
+  return Boolean(
+    row?.entry &&
+    row.unresolvedDatabaseFacts !== "category" &&
+    row.materialized?.source.entry === row.entry,
+  );
 }
 
 export function publishTranscriptFields(

@@ -17,7 +17,7 @@ import type {
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
-import type { LinkFaviconFetcher } from "./link-favicon-loader.ts";
+import type { LinkFaviconFetcher } from "./link-favicon-cache.ts";
 import {
   activatePanel,
   toggleSidebarPanelExpanded,

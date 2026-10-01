@@ -32,6 +32,7 @@ import {
   readCodexPluginConfig,
   type CodexPluginConfig,
 } from "./config.js";
+import { resolveCodexToolConstructionPlan } from "./dynamic-tool-construction-plan.js";
 import {
   filterCodexDynamicTools,
   filterCodexDynamicToolsForDisabledNativeSurface,
@@ -86,34 +87,6 @@ const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
   CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
 ]);
-
-/** Keeps node filesystem and process ownership on its native exec-server. */
-function resolveCodexNodePlacementToolConstructionPlan(
-  sandbox: OpenClawSandboxContext | undefined,
-  nativeToolSurfaceEnabled: boolean | undefined,
-): OpenClawCodingToolsOptions["toolConstructionPlan"] {
-  if (
-    !isCodexRemoteExecPlacementSandbox(sandbox) ||
-    sandbox?.backendId !== "node" ||
-    !("placementNodeId" in sandbox) ||
-    typeof sandbox.placementNodeId !== "string" ||
-    !sandbox.placementNodeId
-  ) {
-    return undefined;
-  }
-  if (!nativeToolSurfaceEnabled) {
-    throw new Error(
-      "Codex node execution requires its native exec-server tool surface; adjust the session tool policy and start a fresh attempt.",
-    );
-  }
-  return {
-    includeBaseCodingTools: false,
-    includeShellTools: false,
-    includeChannelTools: true,
-    includeOpenClawTools: true,
-    includePluginTools: true,
-  };
-}
 
 function preserveRingZeroSystemAgentTool<T extends { name: string; catalogMode?: string }>(
   allTools: T[],
@@ -233,9 +206,10 @@ export async function buildDynamicTools(
   });
   const messageToolProvider = resolveCodexMessageToolProvider(params);
   const webFetchHostnameAllowlistRef: { value?: string[] } = {};
-  const toolConstructionPlan = resolveCodexNodePlacementToolConstructionPlan(
+  const toolConstructionPlan = resolveCodexToolConstructionPlan(
     input.sandbox,
     input.nativeToolSurfaceEnabled,
+    params.requireWorkspaceOnly,
   );
   const options: OpenClawCodingToolsOptions = {
     agentId: input.sessionAgentId,
@@ -252,6 +226,7 @@ export async function buildDynamicTools(
       ? { mode: input.sessionPermissionPolicy.mode, root: input.sessionPermissionPolicy.root }
       : undefined,
     sandbox: input.sandbox,
+    requireWorkspaceOnly: params.requireWorkspaceOnly,
     ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
     messageProvider: messageToolProvider,
     toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
@@ -375,20 +350,10 @@ export async function buildDynamicTools(
     hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
       ? preserveRingZeroSystemAgentTool(readableAllTools, normallyProfiledTools)
       : normallyProfiledTools;
-  const codexFilteredTools = await addNodeShellDynamicToolsIfNeeded(
-    addGatewayShellDynamicToolsIfAvailable(
-      addSandboxShellDynamicToolsIfAvailable(
-        isCodexMemoryFlushRun(params)
-          ? filterCodexMemoryFlushDynamicTools(readableAllTools)
-          : profileFilteredTools,
-        readableAllTools,
-        input,
-        nativeExecutionPolicy,
-      ),
-      readableAllTools,
-      input,
-      nativeExecutionPolicy,
-    ),
+  const codexFilteredTools = await addShellDynamicTools(
+    isCodexMemoryFlushRun(params)
+      ? filterCodexMemoryFlushDynamicTools(readableAllTools)
+      : profileFilteredTools,
     readableAllTools,
     input,
     nativeExecutionPolicy,
@@ -516,60 +481,6 @@ export async function buildDynamicTools(
   }
   return exposedTools;
 }
-/** Keeps the OpenClaw Gateway execution path available beside Codex native shell. */
-function addGatewayShellDynamicToolsIfAvailable(
-  filteredTools: OpenClawDynamicTool[],
-  allTools: OpenClawDynamicTool[],
-  input: DynamicToolBuildParams,
-  executionPolicy: CodexNativeExecutionPolicy,
-): OpenClawDynamicTool[] {
-  if (
-    isCodexMemoryFlushRun(input.params) ||
-    input.nativeToolSurfaceEnabled !== true ||
-    input.sandbox?.enabled === true ||
-    !executionPolicy.nativeToolSurfaceAllowed ||
-    executionPolicy.effectiveExecHost !== "gateway"
-  ) {
-    return filteredTools;
-  }
-  const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
-  const processTool = allTools.find(
-    (tool) => normalizeCodexDynamicToolName(tool.name) === "process",
-  );
-  const existingNames = new Set(
-    filteredTools.map((tool) => normalizeCodexDynamicToolName(tool.name)),
-  );
-  const execExcluded = isCodexDynamicToolExcluded(input.pluginConfig, [
-    "exec",
-    CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
-  ]);
-  if (!execTool || execExcluded || existingNames.has(CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME)) {
-    return filteredTools;
-  }
-  const processExcluded = isCodexDynamicToolExcluded(input.pluginConfig, [
-    "process",
-    CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
-  ]);
-  const processAliasAvailable = Boolean(
-    processTool && !processExcluded && !existingNames.has(CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME),
-  );
-  const createProjection = resolveCodexScheduledToolProjectionFactory(
-    input.params.hostCapabilities,
-  );
-  if (!createProjection) {
-    return filteredTools;
-  }
-  const toolsToAppend = [
-    createGatewayExecProjection(createProjection, execTool, {
-      processAliasAvailable,
-      ...(input.sessionPermissionPolicy?.mode === "guarded" ? { ask: "always" } : {}),
-    }),
-  ];
-  if (processAliasAvailable && processTool) {
-    toolsToAppend.push(createGatewayProcessProjection(createProjection, processTool));
-  }
-  return [...filteredTools, ...toolsToAppend];
-}
 export function shouldEnableCodexAppServerNativeToolSurface(
   params: EmbeddedRunAttemptParams,
   sandbox?: OpenClawSandboxContext,
@@ -581,6 +492,7 @@ export function shouldEnableCodexAppServerNativeToolSurface(
 ): boolean {
   if (
     isCodexResponsesOAuthRun(params) ||
+    params.requireWorkspaceOnly === true ||
     params.pluginHarnessToolPolicyRestricted === true ||
     isCodexMemoryFlushRun(params) ||
     params.disableTools
@@ -597,14 +509,12 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     return false;
   }
   const toolsAllow = params.toolsAllow;
-  if (toolsAllow === undefined) {
-    return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
-  }
   // Codex native code mode exposes its shell/file surface as one app-server
   // capability, so narrow OpenClaw allowlists must fail closed rather than
   // widening `message` or `web_search` into shell access.
   return (
-    hasWildcardCodexToolsAllow(toolsAllow) &&
+    (toolsAllow === undefined ||
+      toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*")) &&
     canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
   );
 }
@@ -638,23 +548,15 @@ function canCodexAppServerNativeToolSurfaceHonorSandbox(
   if (!sandbox?.enabled) {
     return true;
   }
-  if (
-    options.sandboxExecServerEnabled === true &&
-    (sandbox.backend || isCodexRemoteExecPlacementSandbox(sandbox)) &&
-    canSandboxToolPolicyExposeCodexNativeToolSurface(sandbox)
-  ) {
-    return true;
-  }
   // Codex app-server native shell, filesystem, and user MCP execution are owned
   // by the app-server process. Without the explicit exec-server integration,
   // active OpenClaw sandboxing must disable the native surface and route shell
   // access through sandbox-backed dynamic tools instead.
-  return false;
-}
-function canSandboxToolPolicyExposeCodexNativeToolSurface(sandbox: {
-  tools: Parameters<typeof isToolAllowed>[0];
-}): boolean {
-  return CODEX_NATIVE_TOOL_REQUIREMENTS.every((toolName) => isToolAllowed(sandbox.tools, toolName));
+  return (
+    options.sandboxExecServerEnabled === true &&
+    (sandbox.backend || isCodexRemoteExecPlacementSandbox(sandbox)) &&
+    CODEX_NATIVE_TOOL_REQUIREMENTS.every((toolName) => isToolAllowed(sandbox.tools, toolName))
+  );
 }
 function isCodexMemoryFlushRun(
   params?: Pick<EmbeddedRunAttemptParams, "trigger" | "memoryFlushWritePath">,
@@ -735,73 +637,97 @@ export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPlu
     },
   };
 }
-/** Adds sandbox_exec/process aliases when native Code Mode cannot directly honor the sandbox. */
-function addSandboxShellDynamicToolsIfAvailable(
+/** Adds policy-selected shell aliases in sandbox, Gateway, then node order. */
+async function addShellDynamicTools(
   filteredTools: OpenClawDynamicTool[],
   allTools: OpenClawDynamicTool[],
   input: DynamicToolBuildParams,
   executionPolicy: CodexNativeExecutionPolicy,
-): OpenClawDynamicTool[] {
+): Promise<OpenClawDynamicTool[]> {
+  if (isCodexMemoryFlushRun(input.params)) {
+    return filteredTools;
+  }
+  const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
+  if (!execTool) {
+    return filteredTools;
+  }
+  const processTool = allTools.find(
+    (tool) => normalizeCodexDynamicToolName(tool.name) === "process",
+  );
+  const existingNames = new Set(
+    filteredTools.map((tool) => normalizeCodexDynamicToolName(tool.name)),
+  );
+  const additions: OpenClawDynamicTool[] = [];
   if (
-    isCodexMemoryFlushRun(input.params) ||
-    !executionPolicy.nativeToolSurfaceAllowed ||
-    !input.sandbox?.enabled ||
-    !input.sandbox.backendId.trim() ||
-    input.nativeToolSurfaceEnabled !== false ||
-    isCodexDynamicToolExcluded(input.pluginConfig, [
+    executionPolicy.nativeToolSurfaceAllowed &&
+    input.sandbox?.enabled &&
+    input.sandbox.backendId.trim() &&
+    input.nativeToolSurfaceEnabled === false &&
+    !isCodexDynamicToolExcluded(input.pluginConfig, [
       "exec",
       "sandbox_exec",
       "process",
       "sandbox_process",
     ])
   ) {
-    return filteredTools;
+    additions.push(createSandboxExecProjection(execTool));
+    // Core exec already disables backgrounding when process is filtered out.
+    if (processTool) {
+      additions.push(createSandboxProcessProjection(processTool));
+    }
   }
-  const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
-  const processTool = allTools.find(
-    (tool) => normalizeCodexDynamicToolName(tool.name) === "process",
-  );
-  if (!execTool) {
-    return filteredTools;
-  }
-  const sandboxTools = [...filteredTools, createSandboxExecProjection(execTool)];
-  // Core exec already disables backgrounding when process is filtered out.
-  return processTool
-    ? [...sandboxTools, createSandboxProcessProjection(processTool)]
-    : sandboxTools;
-}
-async function addNodeShellDynamicToolsIfNeeded(
-  filteredTools: OpenClawDynamicTool[],
-  allTools: OpenClawDynamicTool[],
-  input: DynamicToolBuildParams,
-  nodePolicy: CodexNativeExecutionPolicy,
-): Promise<OpenClawDynamicTool[]> {
-  if (isCodexMemoryFlushRun(input.params)) {
-    return filteredTools;
-  }
-  const nodeExecIsDefault = nodePolicy.effectiveExecHost === "node";
-  const nodeExecAvailableFromAuto =
-    nodePolicy.requestedExecHost === "auto" && nodePolicy.effectiveExecHost === "gateway";
-  if (!nodeExecIsDefault && !nodeExecAvailableFromAuto) {
-    return filteredTools;
-  }
-  const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
   if (
-    !execTool ||
-    isCodexDynamicToolExcluded(input.pluginConfig, ["exec", CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME]) ||
-    filteredTools.some(
-      (tool) => normalizeCodexDynamicToolName(tool.name) === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
-    )
+    input.nativeToolSurfaceEnabled === true &&
+    input.sandbox?.enabled !== true &&
+    executionPolicy.nativeToolSurfaceAllowed &&
+    executionPolicy.effectiveExecHost === "gateway" &&
+    !isCodexDynamicToolExcluded(input.pluginConfig, [
+      "exec",
+      CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
+    ]) &&
+    !existingNames.has(CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME)
   ) {
-    return filteredTools;
+    const processAliasAvailable = Boolean(
+      processTool &&
+      !isCodexDynamicToolExcluded(input.pluginConfig, [
+        "process",
+        CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
+      ]) &&
+      !existingNames.has(CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME),
+    );
+    const createProjection = resolveCodexScheduledToolProjectionFactory(
+      input.params.hostCapabilities,
+    );
+    if (createProjection) {
+      additions.push(
+        createGatewayExecProjection(createProjection, execTool, {
+          processAliasAvailable,
+          ...(input.sessionPermissionPolicy?.mode === "guarded" ? { ask: "always" } : {}),
+        }),
+      );
+      if (processAliasAvailable && processTool) {
+        additions.push(createGatewayProcessProjection(createProjection, processTool));
+      }
+    }
   }
-  const nodeExec = await createNodeExecAliasDynamicTool(
-    execTool,
-    nodePolicy.node,
-    input.runAbortController.signal,
-    input.nodeExecAvailability,
-  );
-  return nodeExec ? [...filteredTools, nodeExec] : filteredTools;
+  if (
+    (executionPolicy.effectiveExecHost === "node" ||
+      (executionPolicy.requestedExecHost === "auto" &&
+        executionPolicy.effectiveExecHost === "gateway")) &&
+    !isCodexDynamicToolExcluded(input.pluginConfig, ["exec", CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME]) &&
+    !existingNames.has(CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME)
+  ) {
+    const nodeExec = await createNodeExecAliasDynamicTool(
+      execTool,
+      executionPolicy.node,
+      input.runAbortController.signal,
+      input.nodeExecAvailability,
+    );
+    if (nodeExec) {
+      additions.push(nodeExec);
+    }
+  }
+  return additions.length ? [...filteredTools, ...additions] : filteredTools;
 }
 function shouldKeepOpenClawShellDynamicTools(
   input: DynamicToolBuildParams,
@@ -850,9 +776,6 @@ function filterCodexDynamicToolsForAllowlist<T extends OpenClawDynamicTool>(
           : [];
     },
   });
-}
-function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
-  return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
 function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
   return (

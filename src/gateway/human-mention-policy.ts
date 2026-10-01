@@ -12,6 +12,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
@@ -107,12 +108,7 @@ export function createHumanMentionPolicy(params: {
     let profile = displays.get(profileId);
     if (!profile) {
       profile = resolveCurrentUserProfileDisplay(profileId);
-      if (displays.size >= MAX_DIRECTORY_PROFILES) {
-        const oldest = displays.keys().next().value;
-        if (oldest !== undefined) {
-          displays.delete(oldest);
-        }
-      }
+      pruneMapToMaxSize(displays, MAX_DIRECTORY_PROFILES - 1);
       displays.set(profileId, profile);
     }
     return profile.kind === "resolved" ? profile : undefined;

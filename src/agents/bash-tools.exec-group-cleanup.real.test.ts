@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -35,8 +36,8 @@ const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
 });
 child.unref();
 child.once("spawn", () => {
-  const relay = Number(execFileSync("ps", ["-o", "ppid=", "-p", String(process.ppid)], { encoding: "utf8" }).trim());
-  process.stdout.write(JSON.stringify([child.pid, process.ppid, relay]));
+  const grandparent = Number(execFileSync("ps", ["-o", "ppid=", "-p", String(process.ppid)], { encoding: "utf8" }).trim());
+  process.stdout.write(JSON.stringify([child.pid, process.ppid, grandparent]));
 });
 `,
     );
@@ -71,7 +72,9 @@ child.once("spawn", () => {
           const group: number[] = JSON.parse(result.details.aggregated);
           expect(group).toHaveLength(3);
           expect(group.every((pid) => Number.isSafeInteger(pid) && pid > 1)).toBe(true);
-          pids.push(...group);
+          // The direct native owner has a shared caller, not an owned relay above it.
+          const hosts = new Set([process.pid, getSpawnBroker()?.pid]);
+          pids.push(...group.filter((pid) => !hosts.has(pid)));
         }
         // Completed output remains available without retaining the process group.
         expect(pids.filter(isPidAlive)).toEqual([]);

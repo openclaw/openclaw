@@ -20,7 +20,6 @@ export function expectSubagentFollowupReactivation(params: {
     nextRunId: "run-new",
     fallback: params.completedRun,
     runTimeoutSeconds: 0,
-    persistenceFailure: "throw",
     ...(params.task ? { task: params.task } : {}),
   });
   expect(params.broadcastToConnIds).toHaveBeenNthCalledWith(
@@ -35,6 +34,11 @@ export function expectSubagentFollowupReactivation(params: {
       runtimeMs: 10,
     }),
     new Set(["conn-1"]),
-    { agentId: "main", dropIfSlow: true, sessionKeys: [params.childSessionKey] },
+    {
+      agentId: "main",
+      dropIfSlow: true,
+      sessionKeys: [params.childSessionKey],
+      prepareSessionProjection: expect.any(Function),
+    },
   );
 }

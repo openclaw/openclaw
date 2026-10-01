@@ -16,8 +16,10 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
+import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
@@ -29,6 +31,91 @@ import {
   createGatewaySessionEntryReader,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
+
+/** Capture retains published identity while category facts wait for worker reconciliation. */
+export function createSessionRowCapture(
+  lookup: (query: records.Lookup) => records.Row | undefined,
+  needsAcquisition: (row: records.Row) => boolean,
+  acquire: (row: records.Row) => records.Row | undefined,
+) {
+  return (query: records.Lookup) => {
+    const row = lookup(query);
+    return row && row.unresolvedDatabaseFacts !== "category" && needsAcquisition(row)
+      ? (acquire(row) ?? row)
+      : row;
+  };
+}
+
+/** Bind live projection state to the same prepared or resident source-read boundary. */
+export function createSessionRowModelFactsReader(params: {
+  lookup: (query: records.Lookup) => records.Row | undefined;
+  readSourceEntry: (row: records.Row, key: string, prepared: boolean) => records.Row["storedEntry"];
+  state: () => Pick<
+    Parameters<typeof readSessionRowModelFacts>[0],
+    "cfg" | "modelCatalog" | "rowContext"
+  >;
+}) {
+  return (query: records.Lookup, metadataPrepared = false) => {
+    const row = params.lookup(query);
+    if (!row?.entry) {
+      throw new Error("Session changed while preparing search facts; retry the request");
+    }
+    return readSessionRowModelFacts({
+      ...params.state(),
+      ...row,
+      source: {
+        entry: row.storedEntry,
+        readSourceEntry: (key) => params.readSourceEntry(row, key, metadataPrepared),
+      },
+    });
+  };
+}
+
+/** Exact descriptions use the projection's custody and materialization owners in one frame. */
+export function createSessionRowDescriptionReader(owner: {
+  runInOwner: <T>(consume: () => T) => T;
+  prepare: () => boolean;
+  lookup: (query: records.Lookup) => records.Row | undefined;
+  dirty: ReadonlySet<string>;
+  refresh: (ids: string[]) => void;
+  describeArchived: (row: records.Row | undefined) => records.Row | undefined;
+  isCurrent: (row: records.Row) => boolean;
+  materializePrivate: (
+    row: records.Row,
+    repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null,
+  ) => void;
+  preparePresentation: (row: records.MaterializedRow) => void;
+}) {
+  return (
+    query: records.Lookup,
+    captured?: records.Row,
+    repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null,
+  ) =>
+    owner.runInOwner(() => {
+      if (!owner.prepare()) {
+        return undefined;
+      }
+      let row = owner.lookup(query);
+      if (row && isIncognitoSessionKey(row.key)) {
+        owner.materializePrivate(row, repositoryWorkspace);
+      } else {
+        if (row && owner.dirty.has(records.identity(row))) {
+          // Keyed reads refresh only their owner; unrelated bulk work never gates a response.
+          owner.refresh([records.identity(row)]);
+          row = owner.lookup(query);
+        }
+        row = owner.describeArchived(row);
+      }
+      if (captured && !owner.isCurrent(captured)) {
+        return undefined;
+      }
+      if (!records.ready(row)) {
+        return undefined;
+      }
+      owner.preparePresentation(row);
+      return row;
+    });
+}
 
 /** One synchronous refresh slice shares agent policy; each later slice starts fresh. */
 function createSessionRowMaterializationBatch(): typeof readResidentSessionRow {
@@ -73,6 +160,9 @@ export function createSessionRowMaterializer(owner: {
         if (accepted && !databaseFacts) {
           continue;
         }
+        if (!accepted && current?.unresolvedDatabaseFacts === "category") {
+          continue;
+        }
         const row =
           current && (accepted ? current : owner.acquireEntry(current, owner.readEntry(current)));
         if (row && isColdArchivedSessionRow(row) && !accepted) {
@@ -112,7 +202,7 @@ export function createSessionRowMaterializer(owner: {
     accept(
       ids: readonly string[],
       facts: ReadonlyMap<string, records.PreparedSessionRowDatabaseFacts>,
-      materializeArchived = false,
+      options: { archived?: boolean; materialize?: boolean } = {},
     ) {
       if (!owner.isActive()) {
         return;
@@ -126,7 +216,13 @@ export function createSessionRowMaterializer(owner: {
           const row =
             current &&
             owner.acquireEntry(
-              databaseFacts ? { ...current, hasBoard: databaseFacts.hasBoard } : current,
+              databaseFacts
+                ? {
+                    ...current,
+                    hasBoard: databaseFacts.hasBoard,
+                    unresolvedDatabaseFacts: undefined,
+                  }
+                : current,
               databaseFacts?.entry,
             );
           if (owner.revision() !== revision) {
@@ -135,7 +231,7 @@ export function createSessionRowMaterializer(owner: {
           if (row && databaseFacts) {
             row.preparedAcpMeta = databaseFacts.acpMeta;
           }
-          if (row && isColdArchivedSessionRow(row) && !materializeArchived) {
+          if (row && isColdArchivedSessionRow(row) && !options.archived) {
             owner.dirty.delete(id);
             owner.forgetBackfill(id);
           } else if (row) {
@@ -144,7 +240,9 @@ export function createSessionRowMaterializer(owner: {
           }
         }
       });
-      refresh(ids, true);
+      if (options.materialize !== false) {
+        refresh(ids, true);
+      }
     },
   };
 }
@@ -163,6 +261,7 @@ export function readResidentSessionRow(
     links: SessionChildLink[];
     readSourceEntry: (key: string) => records.Row["storedEntry"];
     databaseFacts?: records.PreparedSessionRowDatabaseFacts;
+    repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   },
   activitySummaryEnabledByAgent?: Map<string, boolean>,
 ) {
@@ -181,6 +280,9 @@ export function readResidentSessionRow(
     ...row,
     cfg,
     preparedAcpMeta: params.databaseFacts ? params.databaseFacts.acpMeta : row.preparedAcpMeta,
+    preparedRepositoryWorkspace: params.databaseFacts
+      ? params.databaseFacts.repositoryWorkspace
+      : params.repositoryWorkspace,
     configuredAgentIds: params.configuredAgentIds,
     store: source?.store ?? {},
     storePath: row.storeTarget.storePath,

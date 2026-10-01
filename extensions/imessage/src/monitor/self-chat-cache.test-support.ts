@@ -3,8 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
 type SelfChatCacheDebug = {
-  entryCount: number;
-  insertionOrder: unknown[];
+  insertionOrder: Map<number, string>;
 };
 
 describe("createSelfChatCache", () => {
@@ -92,7 +91,7 @@ describe("createSelfChatCache", () => {
     expect(cache.has({ ...directLookup, text: "burst-1999", createdAt: 1_999 })).toBe(true);
   });
 
-  it("compacts stale insertion order records during ttl-only cleanup", () => {
+  it("discards stale insertion order records during ttl-only cleanup", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
@@ -107,7 +106,7 @@ describe("createSelfChatCache", () => {
     }
 
     const debug = cache as unknown as SelfChatCacheDebug;
-    expect(debug.insertionOrder.length).toBeLessThanOrEqual(debug.entryCount + 1_024);
+    expect(debug.insertionOrder.size).toBeLessThanOrEqual(512);
   });
 
   it("does not collide long texts that differ only in the middle", () => {

@@ -569,6 +569,7 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
     "scripts/check-protocol-since.mts",
     "scripts/lib/native-typescript.mts",
     "scripts/lib/repo-root.mjs",
+    "scripts/lib/ts-guard-utils.mts",
   ]) {
     const target = path.join(checkout, scriptPath);
     mkdirSync(path.dirname(target), { recursive: true });

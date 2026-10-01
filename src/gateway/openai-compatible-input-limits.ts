@@ -1,4 +1,5 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type {
   GatewayHttpChatCompletionsConfig,
   GatewayHttpResponsesConfig,
@@ -13,7 +14,6 @@ import {
   type InputFileLimits,
   type InputImageLimits,
 } from "../media/input-files.js";
-import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
@@ -36,7 +36,7 @@ export function resolveOpenAiChatCompletionsLimits(
     maxTotalImageBytes: DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
     images: {
       allowUrl: imageConfig?.allowUrl ?? false,
-      urlAllowlist: normalizeInputHostnameAllowlist(imageConfig?.urlAllowlist),
+      urlAllowlist: normalizeOptionalTrimmedStringList(imageConfig?.urlAllowlist),
       allowedMimes: normalizeMimeList(imageConfig?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
       maxBytes: imageConfig?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
       maxRedirects: imageConfig?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
@@ -66,11 +66,11 @@ export function resolveResponsesLimits(
     maxUrlParts: resolveIntegerOption(config?.maxUrlParts, DEFAULT_MAX_URL_PARTS, { min: 0 }),
     files: {
       ...fileLimits,
-      urlAllowlist: normalizeInputHostnameAllowlist(files?.urlAllowlist),
+      urlAllowlist: normalizeOptionalTrimmedStringList(files?.urlAllowlist),
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
-      urlAllowlist: normalizeInputHostnameAllowlist(images?.urlAllowlist),
+      urlAllowlist: normalizeOptionalTrimmedStringList(images?.urlAllowlist),
       allowedMimes: normalizeMimeList(images?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
       maxBytes: images?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
       maxRedirects: images?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,

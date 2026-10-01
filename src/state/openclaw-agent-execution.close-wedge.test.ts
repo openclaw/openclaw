@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as backoff from "../infra/backoff.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db.js";
@@ -13,7 +14,7 @@ import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 // retain cleanup custody without permanently refusing later requests (#159438).
 const fault = vi.hoisted(() => ({
   marker: "close-wedge-kill-marker",
-  enabled: new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT),
+  enabled: new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT),
   workers: new Set<Worker>(),
 }));
 
@@ -27,6 +28,17 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
     const prepare = DatabaseSync.prototype.prepare;
     DatabaseSync.prototype.prepare = function (sql) {
       const statement = prepare.call(this, sql);
+      if (/insert into "?agent_database_leases"?/i.test(sql)) {
+        const run = statement.run.bind(statement);
+        statement.run = (...args) => {
+          const fault = new Int32Array(workerData.closeWedgeEnabled);
+          if (Atomics.compareExchange(fault, 0, 3, 0) === 3 || Atomics.load(fault, 0) === 4) {
+            Atomics.add(fault, 2, 1);
+            throw Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
+          }
+          return run(...args);
+        };
+      }
       if (/delete from "?agent_database_leases"?/i.test(sql)) {
         const run = statement.run.bind(statement);
         statement.run = (...args) => {
@@ -90,10 +102,57 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     Atomics.store(new Int32Array(fault.enabled), 0, 0);
+    vi.restoreAllMocks();
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
+);
+
+it.each(["retry", "deadline", "shutdown"] as const)(
+  "keeps contention recoverable while preserving the %s boundary",
+  async (ending) => {
+    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-open-contention-")) };
+    const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
+    const attempts = Atomics.load(new Int32Array(fault.enabled), 2);
+    Atomics.store(new Int32Array(fault.enabled), 0, ending === "deadline" ? 4 : 3);
+    const clock = vi.spyOn(performance, "now");
+    vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
+      if (ending === "shutdown") {
+        await closeOpenClawAgentDatabasesAsync();
+      } else if (ending === "deadline") {
+        clock.mockReturnValue(performance.now() + 2_000);
+      }
+    });
+    try {
+      const preparing = execution.prepare(source);
+      if (ending === "retry") {
+        await preparing;
+      } else {
+        await expect(preparing).rejects.toThrow(ending === "shutdown" ? /closed/ : /locked/);
+      }
+      expect(Atomics.load(new Int32Array(fault.enabled), 2)).toBeGreaterThan(attempts);
+      Atomics.store(new Int32Array(fault.enabled), 0, 0);
+      if (ending !== "shutdown") {
+        execution.assertCurrent();
+        await execution.prepare(source);
+        const operation = vi.fn(async () => "recovered");
+        expect(await execution.runExisting(source, operation)).toBe("recovered");
+        expect(operation).toHaveBeenCalledOnce();
+        const failure = Object.assign(new Error("database is locked"), { errcode: 5 });
+        const rejected = vi.fn(async () => {
+          throw failure;
+        });
+        await expect(execution.runExisting(source, rejected)).rejects.toBe(failure);
+        expect(rejected).toHaveBeenCalledOnce();
+        await closeOpenClawAgentDatabasesAsync();
+      }
+      expect(() => execution.assertCurrent()).toThrow(/closed/);
+    } finally {
+      Atomics.store(new Int32Array(fault.enabled), 0, 0);
+      await execution.release();
+    }
+  },
 );
 
 const source: AgentDatabaseRequestExecutionSource = {

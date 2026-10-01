@@ -114,7 +114,7 @@ it.each(["sessions.patch", "talk.session.create"])(
   },
 );
 
-it("authorizes exact rows independently of bulk validation and fences dirty rows", async () => {
+it("authorizes exact rows independently of bulk validation and fences corrupt subscriptions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const insert = database.db.prepare(`INSERT INTO session_nodes
@@ -184,10 +184,11 @@ it("authorizes exact rows independently of bulk validation and fences dirty rows
         await releaseRow.promise;
         return readFacts(...args);
       });
+      const subscribeSessionMessageEvents = vi.fn();
       const context = bindSessionRowProjection(
         {
           getRuntimeConfig: () => ({}),
-          subscribeSessionMessageEvents: vi.fn(),
+          subscribeSessionMessageEvents,
           logGateway: { warn: vi.fn(), error: vi.fn() },
         } as unknown as GatewayRequestContext,
         () => projection,
@@ -272,9 +273,23 @@ it("authorizes exact rows independently of bulk validation and fences dirty rows
         storePath: current.path,
         factsInvalidated: true,
       });
-      await expect(authorize("agent:main:dirty-0")).rejects.toThrow(
-        "invalid persisted session row",
-      );
+      subscribeSessionMessageEvents.mockClear();
+      await expect(
+        handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "corrupt-subscribe",
+            method: "sessions.messages.subscribe",
+            params: { key: "agent:main:dirty-0" },
+          },
+          client: { ...client, connId: "corrupt-subscribe" },
+          context,
+          respond: vi.fn(),
+          isWebchatConnect: () => false,
+          extraHandlers: sessionSubscriptionHandlers,
+        }),
+      ).rejects.toThrow("invalid persisted session row");
+      expect(subscribeSessionMessageEvents).not.toHaveBeenCalled();
     } finally {
       releaseRow.resolve();
       const current = openOpenClawAgentDatabase({ agentId: "main" });

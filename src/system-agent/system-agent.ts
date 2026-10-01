@@ -1,4 +1,3 @@
-// OpenClaw CLI runner selects JSON, one-shot, or interactive setup-helper mode.
 import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";

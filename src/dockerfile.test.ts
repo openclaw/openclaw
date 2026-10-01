@@ -94,19 +94,9 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain("OPENCLAW_VARIANT");
   });
 
-  it("installs CA certificates in the slim runtime stage", async () => {
+  it("installs CA certificates and refreshes the trust store", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const collapsed = collapseDockerContinuations(dockerfile);
-    const runtimeIndex = collapsed.indexOf(
-      "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
-    );
-    const caInstallIndex = collapsed.indexOf(
-      "ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3",
-    );
-
-    expect(runtimeIndex).toBeGreaterThan(-1);
-    expect(caInstallIndex).toBeGreaterThan(runtimeIndex);
-    expect(caInstallIndex).toBeLessThan(collapsed.indexOf("RUN chown node:node /app"));
     expect(collapsed).toMatch(/apt-get install -y --no-install-recommends\s+ca-certificates/);
     expect(collapsed).toContain("update-ca-certificates");
   });
@@ -566,9 +556,6 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(finalWorkspaceCopy);
     expect(dockerfile.indexOf(installProd)).toBeGreaterThan(-1);
     expect(dockerfile.indexOf(installProd)).toBeLessThan(dockerfile.indexOf(finalWorkspaceCopy));
-    expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .",
-    );
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );

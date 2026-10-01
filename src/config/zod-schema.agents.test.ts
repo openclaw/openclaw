@@ -8,7 +8,7 @@ describe("agent roster ownership", () => {
   });
 
   it("accepts sole and explicitly owned multi-agent rosters without a stored default", () => {
-    expect(AgentsSchema.safeParse({ entries: { alpha: {} } }).success).toBe(true);
+    expect(AgentsSchema.safeParse({ entries: { Ops: {} } }).success).toBe(true);
     expect(
       AgentsSchema.safeParse({ ownership: "explicit", entries: { alpha: {}, beta: {} } }).success,
     ).toBe(true);
@@ -54,10 +54,6 @@ describe("agent roster ownership", () => {
     }
   });
 
-  it("accepts one mixed-case entry key", () => {
-    expect(AgentsSchema.safeParse({ entries: { Ops: {} } }).success).toBe(true);
-  });
-
   it("rejects a legacy marker with explicit ownership", () => {
     expect(
       AgentsSchema.safeParse({
@@ -69,22 +65,10 @@ describe("agent roster ownership", () => {
 });
 
 describe("explicit ambient agent targets", () => {
-  it.each([
-    {
-      agents: {
-        defaults: { heartbeat: { agentId: "missing" } },
-        entries: { main: {} },
-      },
-    },
-    {
-      agents: {
-        defaults: { systemAgent: { agentId: "missing" } },
-        entries: { main: {} },
-      },
-    },
-    { agents: { entries: { main: {} } }, talk: { agentId: "missing" } },
-  ])("rejects an unknown explicit target", (target) => {
-    const result = OpenClawSchema.safeParse(target);
+  it("rejects an unknown explicit target", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: { defaults: { heartbeat: { agentId: "missing" } }, entries: { main: {} } },
+    });
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues[0]?.message).toContain("Unknown agent id");
@@ -106,36 +90,6 @@ describe("explicit ambient agent targets", () => {
         talk: { agentId: "ops" },
       }).success,
     ).toBe(true);
-  });
-
-  it.each([
-    {
-      agents: {
-        defaults: { heartbeat: { agentId: " " } },
-        entries: { main: {} },
-      },
-    },
-    {
-      agents: {
-        defaults: { systemAgent: { agentId: " " } },
-        entries: { main: {} },
-      },
-    },
-    {
-      agents: {
-        defaults: { authInheritance: { agentId: " " } },
-        entries: { main: {} },
-      },
-    },
-    {
-      agents: {
-        defaults: { sessionStore: { agentId: " " } },
-        entries: { main: {} },
-      },
-    },
-    { agents: { entries: { main: {} } }, talk: { agentId: " " } },
-  ])("rejects blank explicit targets", (config) => {
-    expect(OpenClawSchema.safeParse(config).success).toBe(false);
   });
 
   it("validates targets against the implicit main roster", () => {

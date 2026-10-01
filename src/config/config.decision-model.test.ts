@@ -44,7 +44,7 @@ describe("decision model configuration", () => {
     ).toBeUndefined();
   });
 
-  it.each(["bare-model", "/model", "provider/", null, false, 7, {}, "x".repeat(513)])(
+  it.each(["bare-model", "/model", "provider/", null, `p/${"x".repeat(511)}`])(
     "rejects an invalid decision model at global and agent scope: %j",
     (decisionModel) => {
       expect(

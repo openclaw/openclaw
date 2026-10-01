@@ -121,13 +121,7 @@ async function pruneSandboxContainers(config: OpenClawConfig) {
 
 /** Prunes browser bridge containers and closes matching in-process bridge servers. */
 async function pruneSandboxBrowsers(config: OpenClawConfig) {
-  await pruneSandboxRegistryEntries<
-    SandboxBrowserRegistryEntry & {
-      backendId?: string;
-      runtimeLabel?: string;
-      configLabelKind?: string;
-    }
-  >({
+  await pruneSandboxRegistryEntries<SandboxBrowserRegistryEntry>({
     config,
     read: readBrowserRegistry,
     remove: async (entry, shouldRemove) => {
