@@ -144,60 +144,46 @@ describe("CodexAppServerClient", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("keeps the transport and following frames alive when diagnostic logging throws", async () => {
-    vi.spyOn(embeddedAgentLog, "warn").mockImplementationOnce(() => {
-      throw new Error("diagnostic sink failed");
-    });
-    const harness = createHarness();
-    const receive = vi.fn();
-    const closed = vi.fn();
-    harness.client.addNotificationHandler(receive);
-    harness.client.addCloseHandler(closed);
-    const pending = harness.client.request("account/read", {});
-    const result = expect(pending).resolves.toEqual({ account: null });
-    const { id } = JSON.parse(await harness.waitForWrite(0));
-    const warning = {
-      method: "warning",
-      params: {
-        threadId: null,
-        message:
-          "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.",
-      },
-    };
-    const next = { method: "account/updated", params: { authMode: "apiKey" } };
-    harness.process.stdout.write(
-      [warning, next, { id, result: { account: null } }]
-        .map((frame) => JSON.stringify(frame))
-        .join("\n") + "\n",
-    );
+  it.each([false, true])(
+    "keeps frames alive without replay when diagnostic logging fails before observers: %s",
+    async (beforeObserver) => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementationOnce(() => {
+        throw new Error("diagnostic sink failed");
+      });
+      const harness = createHarness();
+      const warning = {
+        method: "warning",
+        params: {
+          threadId: null,
+          message:
+            "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.",
+        },
+      };
+      if (beforeObserver) {
+        harness.send(warning);
+      }
+      const receive = vi.fn();
+      const closed = vi.fn();
+      harness.client.addNotificationHandler(receive);
+      harness.client.addCloseHandler(closed);
+      expect(receive).not.toHaveBeenCalled();
+      expect(harness.client.getCloseError()).toBeUndefined();
+      const pending = harness.client.request("account/read", {});
+      const result = expect(pending).resolves.toEqual({ account: null });
+      const { id } = JSON.parse(await harness.waitForWrite(0));
+      const next = { method: "account/updated", params: { authMode: "apiKey" } };
+      harness.process.stdout.write(
+        [...(beforeObserver ? [] : [warning]), next, { id, result: { account: null } }]
+          .map((frame) => JSON.stringify(frame))
+          .join("\n") + "\n",
+      );
 
-    await result;
-    expect(receive.mock.calls.map(([notification]) => notification)).toEqual([next]);
-    expect(closed).not.toHaveBeenCalled();
-    expect(harness.client.getCloseError()).toBeUndefined();
-  });
-
-  it("does not replay a failed diagnostic-log attempt when an observer registers", () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementationOnce(() => {
-      throw new Error("diagnostic sink failed before observers");
-    });
-    const harness = createHarness();
-    const warning = {
-      method: "warning",
-      params: {
-        threadId: null,
-        message:
-          "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.",
-      },
-    };
-    harness.send(warning);
-    const receive = vi.fn();
-    harness.client.addNotificationHandler(receive);
-
-    expect(receive).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(harness.client.getCloseError()).toBeUndefined();
-  });
+      await result;
+      expect(receive.mock.calls.map(([notification]) => notification)).toEqual([next]);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(warning.params.message);
+      expect(closed).not.toHaveBeenCalled();
+    },
+  );
 
   it("isolates synchronous notification handler failures", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
