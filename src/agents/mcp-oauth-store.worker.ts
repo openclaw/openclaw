@@ -5,8 +5,8 @@ import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-op
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { ensureMcpOAuthPendingSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease-store.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
+import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type {
   WorkerOperationContext,
   WorkerOperationHandlers,

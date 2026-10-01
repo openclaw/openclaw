@@ -1,3 +1,5 @@
+import type { AcpSessionWriteOperations } from "../acp/runtime/session-meta-write.worker-contract.js";
+import type { AuthProfileWorkerOperations } from "../agents/auth-profiles/store.worker-contract.js";
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
 import type { McpOAuthWorkerOperations } from "../agents/mcp-oauth-store.worker.js";
 import type { WorktreeWorkerOperations } from "../agents/worktrees/dispatch.worker.js";
@@ -18,6 +20,13 @@ import type { TelemetryWorkerOperations } from "../infra/telemetry-store.worker.
 import type { ModelCatalogWorkerOperations } from "../model-catalog/remote-store.worker.js";
 import type { NodeWorkerJournalWorkerOperations } from "../node-host/node-worker-journal.worker-contract.js";
 import type { PluginBlobWorkerOperations } from "../plugin-state/plugin-blob-store.worker.js";
+import type { PluginRuntimeWorkerOperations } from "../plugins/state.worker-contract.js";
+import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
+import type {
+  SkillWorkshopWorkerOperations,
+  SkillCuratorOperations,
+} from "../skills/workshop/store.worker-contract.js";
+import type { TranscriptWriteOperations } from "../transcripts/store-write.worker-contract.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
@@ -41,9 +50,28 @@ export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
   PluginBlobWorkerOperations &
   OnboardingRecommendationWriteOperations &
   NodeWorkerJournalWorkerOperations &
-  ChannelIngressWorkerOperations;
+  ChannelIngressWorkerOperations &
+  AcpSessionWriteOperations &
+  SkillUploadWorkerOperations &
+  SkillWorkshopWorkerOperations &
+  SkillCuratorOperations &
+  TranscriptWriteOperations &
+  AuthProfileWorkerOperations &
+  PluginRuntimeWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredStateWorkerOperations>({
+  authProfiles: () =>
+    import("../agents/auth-profiles/store.worker.js").then((m) => m.authProfileOperations),
+  plugins: () => import("../plugins/state.worker.js").then((m) => m.pluginRuntimeOperations),
+  acp: () =>
+    import("../acp/runtime/session-meta-write.worker.js").then((m) => m.acpSessionOperations),
+  skillUploads: () =>
+    import("../skills/lifecycle/upload-store.worker.js").then((m) => m.skillUploadOperations),
+  workshop: () =>
+    import("../skills/workshop/store.worker.js").then((m) => m.skillWorkshopOperations),
+  skills: () => import("../skills/workshop/store.worker.js").then((m) => m.skillCuratorOperations),
+  transcripts: () =>
+    import("../transcripts/store-worker-write.js").then((m) => m.transcriptWriteOperations),
   webPush: () => import("../infra/push-web-store.worker.js").then((m) => m.webPushOperations),
   apns: () => import("../infra/push-apns-store.worker.js").then((m) => m.apnsOperations),
   worktrees: () =>

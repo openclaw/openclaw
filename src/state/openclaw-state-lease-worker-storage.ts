@@ -4,7 +4,7 @@ import {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import type { OpenClawStateWorkerLeaseContext } from "./openclaw-state-lease-context.js";
+import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
 import { startOpenClawStateLeaseTimer } from "./openclaw-state-lease-heartbeat.js";
@@ -13,20 +13,15 @@ import {
   type OpenClawStateLeaseDatabase,
 } from "./openclaw-state-lease-storage.js";
 import type {
+  createOpenClawStateLeaseWorkerOwner,
+  WorkerLeaseScope,
+} from "./openclaw-state-lease-worker-owner.js";
+import type {
   OpenClawStateLeaseAcquisition,
   OpenClawStateLeaseIdentity,
-} from "./openclaw-state-lease-store.js";
-import {
-  withOpenClawStateLeaseWorkerAdmission,
-  withOpenClawStateLeasesWorkerAdmission,
-  type createOpenClawStateLeaseWorkerOwner,
-  type OpenClawStateLeaseWorkerAuthority,
-  type WorkerLeaseScope,
-} from "./openclaw-state-lease-worker-owner.js";
+} from "./openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
-import * as stateWorkerStore from "./openclaw-state-worker-store.js";
 
 export async function acquireLease(
   database: OpenClawStateLeaseDatabase,
@@ -61,7 +56,9 @@ export async function acquireLease(
       });
     }
   };
-  const result = await stateWorkerStore.runOpenClawStateWorkerOperation(
+  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+  assertAdmission();
+  const result = await runOpenClawStateWorkerOperation(
     context,
     (scope) =>
       scope.execute(
@@ -87,12 +84,12 @@ export async function acquireLease(
 
 type LeaseWorkerOwner = ReturnType<typeof createOpenClawStateLeaseWorkerOwner>;
 type LeaseWorkerOperation<T> = (
-  scope: Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">,
+  scope: Pick<SqliteWorkerStore<OpenClawStateLeaseLifecycleOperations>, "execute">,
   identity: OpenClawStateLeaseIdentity,
 ) => Promise<T>;
 
 /** Keep this importer's admission and release code available across package replacement. */
-export async function prepareOpenClawStateLeaseWorkerRuntime(): Promise<void> {
+export async function prepareOpenClawStateLeaseStorageRuntime(): Promise<void> {
   await Promise.all([
     import("./openclaw-state-worker-store.js"),
     import("../infra/sqlite-worker-identity.js"),
@@ -287,48 +284,4 @@ export function createOpenClawStateLeaseWorkerStorage(
     },
   };
   return storage;
-}
-
-/** Retain the actual lease until every admitted worker transaction has settled. */
-export function runWithOpenClawStateLeaseWorker<T>(
-  lease: OpenClawStateWorkerLeaseContext,
-  context: OpenClawStateWorkerContext,
-  operation: LeaseWorkerOperation<T>,
-  authority?: OpenClawStateLeaseWorkerAuthority,
-): Promise<T> {
-  return withOpenClawStateLeaseWorkerAdmission(
-    lease,
-    context.admission.databasePath,
-    admittedWorkerOperation(context, operation),
-    authority,
-  );
-}
-
-/** Share one actor operation while every original lease retains its native settlement. */
-export function runWithOpenClawStateLeasesWorker<T>(
-  leases: readonly OpenClawStateWorkerLeaseContext[],
-  context: OpenClawStateWorkerContext,
-  operation: (
-    scope: Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">,
-    identities: readonly OpenClawStateLeaseIdentity[],
-  ) => Promise<T>,
-  authority?: OpenClawStateLeaseWorkerAuthority,
-): Promise<T> {
-  return withOpenClawStateLeasesWorkerAdmission(
-    leases,
-    context,
-    async (admission) => {
-      const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
-      admission.assertCurrent();
-      return runOpenClawStateWorkerOperation(
-        context,
-        (scope) => operation(scope, admission.identities),
-        {
-          assertCurrent: admission.assertCurrent,
-          createAdmission: admission.createAdmission,
-        },
-      );
-    },
-    authority,
-  );
 }

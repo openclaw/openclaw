@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { resolveStateDir } from "../config/paths.js";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import type { UpdateDoctorWriteAuthority } from "../infra/update-doctor-result.js";
@@ -58,28 +60,50 @@ export async function preserveDoctorOriginalState(params: {
       );
       return;
     }
-    if (!params.root) {
+    const installRoot = params.root;
+    if (!installRoot) {
       throw new Error("The installation could not be identified for the pre-repair capture.");
     }
     const driver = readUpdateRunDriver();
     if (!driver) {
       throw new Error("The Doctor process could not be identified for the pre-repair capture.");
     }
-    const { captureUpdateRecoveryBaseline } =
+    const { captureUpdateRecoveryBaseline, retireExpiredStandaloneDoctorCaptures } =
       await import("../infra/update-recovery-baseline-capture.js");
     assertCurrent();
+    const standaloneRunId = `doctor-${randomUUID()}`;
     const captured = await captureUpdateRecoveryBaseline({
-      runId: `doctor-${randomUUID()}`,
-      installRoot: params.root,
+      runId: standaloneRunId,
+      installRoot,
       env: params.env,
       drivers: [driver],
       assertCurrent,
       signal: params.signal,
+      acquisition: { mode: "maintenance-owner" },
     });
     assertCurrent();
     params.runtime.log(
       `Pre-repair state retained for manual recovery at ${captured.ref.manifestPath}.`,
     );
+    try {
+      const retirement = await retireExpiredStandaloneDoctorCaptures({
+        stateDir: resolvePathViaExistingAncestorSync(resolveStateDir(params.env)),
+        keepRunId: standaloneRunId,
+        assertCurrent,
+      });
+      for (const directory of retirement.retired) {
+        params.runtime.log(
+          `Retired standalone Doctor capture older than 30 days: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
+        );
+      }
+      for (const warning of retirement.warnings) {
+        params.runtime.log(warning);
+      }
+    } catch (error) {
+      params.runtime.log(
+        `Standalone Doctor capture retirement unavailable: ${formatErrorMessage(error)}`,
+      );
+    }
     for (const warning of captured.warnings) {
       params.runtime.log(warning.message);
     }

@@ -1,5 +1,6 @@
 // Branch replacement keeps the live manager and durable identity on the same commit edge.
 import path from "node:path";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -352,7 +353,11 @@ describe("SessionManager branch replacement", () => {
       await ownerChange;
       if (change === "lifecycle") {
         await expect(branch).rejects.toMatchObject({
-          cause: { code: "session-rebound", expectedSessionId: sessionId, sessionKey },
+          cause: {
+            code: "session-rebound",
+            expectedSessionIdHash: redactIdentifier(sessionId),
+            sessionKeyHash: redactIdentifier(sessionKey),
+          },
         });
         expect(loadSessionEntry(scope)).toMatchObject({
           lifecycleRevision: "branch-replacement-revision",

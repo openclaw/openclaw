@@ -46,12 +46,17 @@ async function sha256File(filePath: string): Promise<string> {
   return createHash("sha256").update(contents).digest("hex");
 }
 
-function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
+function runUpdateProcess(
+  root: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+  preload?: string,
+) {
   const configPath = path.join(root, "config", "openclaw.json");
   const stateDir = path.join(root, "state");
   const entryPath = path.resolve("openclaw.mjs");
   return runCliProcessChild({
-    nodeArgs: [entryPath, ...args],
+    nodeArgs: [...(preload ? ["--import", preload] : []), entryPath, ...args],
     env: {
       ...process.env,
       HOME: root,
@@ -60,6 +65,7 @@ function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv =
       HTTP_PROXY: undefined,
       HTTPS_PROXY: undefined,
       NODE_DISABLE_COMPILE_CACHE: "1",
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
       NODE_ENV: undefined,
       NODE_OPTIONS: undefined,
       NO_COLOR: "1",
@@ -154,6 +160,16 @@ process.stdin.resume();
       const runs = path.join(root, "state", "session-sqlite-migration-runs");
       const cache = path.join(root, "cache");
       const temporary = path.join(root, "tmp");
+      const logs = tempDirs.make("openclaw-cleanup-logs-");
+      const loggingPreload = path.join(logs, "logging.mjs");
+      // Diagnostics normally live outside the config/state/cache/scratch snapshot.
+      await fs.writeFile(
+        loggingPreload,
+        `if (!process.versions.bun) await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});
+const { setLoggerOverride } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/logging/logger.ts")).href)});
+setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
+`,
+      );
       await fs.mkdir(path.dirname(config), { recursive: true });
       await fs.mkdir(runs, { recursive: true });
       await fs.mkdir(cache);
@@ -165,6 +181,7 @@ process.stdin.resume();
         root,
         dryRun ? ["update", "--json", "--dry-run", "cleanup"] : ["update", "cleanup", "--json"],
         { XDG_CACHE_HOME: cache, TMPDIR: temporary },
+        loggingPreload,
       );
       expect(result.code, result.stderr).toBe(dryRun ? 0 : 1);
       expect(JSON.parse(result.stdout)).toMatchObject({ status: dryRun ? "preview" : "refused" });

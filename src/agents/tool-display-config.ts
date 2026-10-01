@@ -286,6 +286,8 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     agents_list: displayTool("🧭", "Agents", []),
     memory_search: displayTool("🧠", "Memory Search", ["query"]),
     memory_get: displayTool("📓", "Memory Get", ["path", "from", "lines"]),
+    skills_search: displayTool("🔍", "Skill Search", ["query"]),
+    skills_read: displayTool("📖", "Skill Read", ["name"]),
     web_search: displayTool("🔎", "Web Search", ["query", "count"]),
     web_fetch: displayTool("📄", "Web Fetch", ["url", "extractMode", "maxChars"]),
     code_execution: displayTool("🧮", "Code Execution", ["task"]),

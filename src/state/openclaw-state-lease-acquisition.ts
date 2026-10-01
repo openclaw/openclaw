@@ -11,7 +11,7 @@ import {
   OpenClawStateLeaseError,
 } from "./openclaw-state-lease-error.js";
 import { STATE_LEASE_WRITE_BACKOFF } from "./openclaw-state-lease-storage.js";
-import type { OpenClawStateLeaseAcquisition } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseAcquisition } from "./openclaw-state-lease.types.js";
 
 const log = createSubsystemLogger("state/lease");
 

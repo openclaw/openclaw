@@ -1241,6 +1241,7 @@ src/process/supervisor/cancellation-policy.ts
 src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
 src/process/supervisor/service-child-windows-job-native.ts
+src/process/windows-command-line.ts
 src/process/windows-command.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts

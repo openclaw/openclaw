@@ -11,14 +11,13 @@ import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import {
-  type AcpSessionEntryBinding,
-  type AcpSessionRow,
   buildAcpDatabaseSessionKey,
   legacyAcpDatabaseSessionKeys,
   resolveLegacyFreeAcpSessionKey,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
+import type { AcpSessionEntryBinding, AcpSessionRow } from "./session-meta-read.types.js";
 
 /** Each result stays bound to the entry lifecycle captured by the row reader. */
 export async function readAcpSessionMetaForEntries(

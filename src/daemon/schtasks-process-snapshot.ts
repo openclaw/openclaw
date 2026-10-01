@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 
 export type WindowsProcessSnapshotEntry = {
@@ -26,7 +27,7 @@ export function isCompleteWindowsProcessSnapshot(
       (entry) =>
         getSnapshotProcessId(entry) !== null &&
         typeof entry.CommandLine === "string" &&
-        entry.CommandLine.trim().length > 0,
+        (parseWindowsNativeCommandLine(entry.CommandLine)?.length ?? 0) > 0,
     )
   );
 }
@@ -46,7 +47,13 @@ export function readWindowsProcessSnapshot(
     [
       "-NoProfile",
       "-Command",
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+      [
+        "$ErrorActionPreference='Stop'",
+        "$json = Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+        "$bytes = [Text.Encoding]::UTF8.GetBytes($json)",
+        // Write pipe bytes directly: OutputEncoding calls SetConsoleOutputCP without a console.
+        "[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
+      ].join("; "),
     ],
     {
       env: resolveServiceManagerEnv(),

@@ -1,6 +1,7 @@
 import fs from "node:fs";
-import { createRequire, stripTypeScriptTypes } from "node:module";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 
 /** Private compiler/type inputs; unrelated executable tool dependencies may stay shared. */
 export function materializeDeclarationPackages(root: string, unified: boolean) {
@@ -73,7 +74,7 @@ export function materializeDeclarationPackages(root: string, unified: boolean) {
   fs.writeFileSync(path.join(normalizationCore, "error-coercion.ts"), errorCoercion);
   fs.writeFileSync(
     path.join(normalizationCore, "error-coercion.mjs"),
-    stripTypeScriptTypes(errorCoercion),
+    stripNodeTypeScriptTypes(errorCoercion),
   );
   fs.writeFileSync(
     path.join(normalizationCore, "package.json"),

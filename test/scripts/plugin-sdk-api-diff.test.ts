@@ -21,6 +21,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 import { withTestTimeout } from "../helpers/promise.js";
+import { withRuntimePreload } from "../helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -193,9 +194,8 @@ if (process.argv.includes("--render-root")) {
       {
         cwd: repo,
         env: {
-          ...process.env,
+          ...withRuntimePreload(process.env, renderProbe),
           PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${renderProbe}`.trim(),
           PNPM_MARKER: installClaim,
           PNPM_BLOCKED: blockedMarker,
           PNPM_RELEASE: releaseMarker,

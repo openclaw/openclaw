@@ -1,6 +1,3 @@
-import type { ZodIssue } from "zod";
-import type { AcpSessionWriteOperations } from "../acp/runtime/session-meta-write.types.js";
-import type { AuthProfileRowRead, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import type {
   SandboxRegistryInsert,
   SandboxRegistryWrite,
@@ -33,12 +30,6 @@ import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-env
 import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import type { WorkspaceJournalWorkerOperations } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
-import type {
-  DeferredPluginMigration,
-  DeferredPluginMigrationRecordInput,
-  recordDeferredPluginMigrationsInTransaction,
-  readDeferredPluginMigrationCompletions,
-} from "../infra/deferred-plugin-migrations.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import type { ExecAuthorizationWorkerOperations } from "../infra/exec-approvals-contracts.js";
@@ -57,10 +48,7 @@ import type {
 import type { UpdateRunWriteOperations } from "../infra/update-run-mutation.types.js";
 import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
-import type { PluginBindingApprovalEntry } from "../plugins/conversation-binding-state.types.js";
 import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
-import type { HostedCatalogSnapshotWorkerOperations } from "../plugins/official-external-plugin-catalog-snapshot-store.worker-contract.js";
-import type { PluginSourceAdmissionPublication } from "../plugins/plugin-source-admission.types.js";
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
@@ -69,14 +57,8 @@ import type { SessionStateWorkerOperations } from "../sessions/session-state-eve
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
 import type { SessionUpstreamWorkerOperations } from "../sessions/session-upstream-links.worker-contract.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
-import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker.js";
-import type * as curator from "../skills/workshop/curator.kernel.js";
-import type { listStoredSkillProposalEventsInDatabase } from "../skills/workshop/store-sqlite-event.js";
-import type { SkillWorkshopExecutionOperations } from "../skills/workshop/store.worker-contract.js";
-import type {
-  TranscriptReadOperations,
-  TranscriptWriteOperations,
-} from "../transcripts/store-worker-contract.js";
+import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
+import type { TranscriptReadOperations } from "../transcripts/store-worker-contract.js";
 import type { TuiLastSessionWorkerOperations } from "../tui/tui-last-session.contract.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
@@ -86,7 +68,6 @@ import type {
 } from "./github-publication-read.types.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import type { RegisteredStateWorkerOperations } from "./openclaw-state-worker-registry.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.types.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
@@ -101,13 +82,10 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
   RepositoryWorkspaceWorkerOperations &
   CaptureWorkerOperations &
   TuiLastSessionWorkerOperations &
-  AcpSessionWriteOperations &
   SessionStateWorkerOperations &
   SessionUpstreamWorkerOperations &
-  SkillWorkshopExecutionOperations &
   ExecAuthorizationWorkerOperations &
   OperatorApprovalWorkerOperations &
-  HostedCatalogSnapshotWorkerOperations &
   PluginStateWorkerOperations &
   UserPreferenceWorkerOperations &
   UserProfileWorkerOperations &
@@ -120,8 +98,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
   PlacementSessionToolWorkerOperations &
   WorkerPlacementDispatchStoreOperations &
   TranscriptReadOperations &
-  TranscriptWriteOperations &
-  SkillUploadWorkerOperations &
   OpenClawStateLeaseLifecycleOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
     "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
@@ -185,12 +161,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       output: ReturnType<typeof deviceAuth.clearOriginDeviceTokenInDatabase>;
     };
 
-    "authProfiles.read": { input: { artifactPreserving: boolean }; output: AuthProfileRowRead };
-    "authProfiles.sharedOwnership": { input: { artifactPreserving: boolean }; output: unknown };
-    "authProfiles.personal": {
-      input: { profileId: string; artifactPreserving: boolean };
-      output: UserModelAuthProfile | undefined;
-    };
     "agentProvenance.readBatch": {
       input: { agentIds: readonly string[] };
       output: AgentProvenance[];
@@ -208,50 +178,9 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: SessionGroupCatalogMutation;
       output: SessionGroupCatalogMutationResult;
     };
-    "skills.curator.read": {
-      input: { skillFiles: readonly string[] };
-      output: ReturnType<typeof curator.readSkillCuratorStateInDatabase>;
-    };
-    "skills.usage.record": { input: curator.PreparedSkillUsage; output: void };
-    "workshop.events.list": {
-      input: Parameters<typeof listStoredSkillProposalEventsInDatabase>[1];
-      output: ReturnType<typeof listStoredSkillProposalEventsInDatabase>;
-    };
-    "plugins.conversationBindingApprovals.read": {
-      input: undefined;
-      output: PluginBindingApprovalEntry[];
-    };
-    "plugins.conversationBindingApprovals.upsert": {
-      input: PluginBindingApprovalEntry;
-      output: void;
-    };
     "plugins.metadata.read": {
       input: { selector: PluginMetadataStateSelector; artifactPreservingReadOnly?: boolean };
       output: { value_json: string } | undefined;
-    };
-    "plugins.metadata.sourceAdmission.publish": {
-      input: PluginSourceAdmissionPublication;
-      output: boolean;
-    };
-    "plugins.deferredMigrations.record": {
-      input: Omit<DeferredPluginMigrationRecordInput, "env"> & {
-        identity: OpenClawStateLeaseIdentity;
-      };
-      output:
-        | {
-            kind: "recorded";
-            transitions: ReturnType<typeof recordDeferredPluginMigrationsInTransaction>;
-          }
-        | { kind: "conflict"; pending: readonly DeferredPluginMigration[] }
-        | { kind: "invalid"; issues: ZodIssue[] };
-    };
-    "plugins.deferredMigrations.read": {
-      input: { artifactPreservingReadOnly: boolean };
-      output: readonly DeferredPluginMigration[];
-    };
-    "plugins.deferredMigrations.completions.read": {
-      input: undefined;
-      output: ReturnType<typeof readDeferredPluginMigrationCompletions>;
     };
     "claws.install-schema-versions": {
       input: { artifactPreservingReadOnly: boolean };

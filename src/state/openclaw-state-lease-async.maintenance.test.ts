@@ -7,9 +7,9 @@ import {
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateAsyncLeaseContext } from "./openclaw-state-lease-context.js";
 import type { LeaseHeartbeatCleanup } from "./openclaw-state-lease-heartbeat.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import { withOpenClawStateLeaseWorkerAdmission } from "./openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "./openclaw-state-lease.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 type CreateStorage =

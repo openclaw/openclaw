@@ -34,7 +34,7 @@ function loadSocketModeEnvHttpProxyAgent(): typeof import("undici").EnvHttpProxy
   const requireFromSocketMode = createRequire(
     requireFromBolt.resolve("@slack/socket-mode/package.json"),
   );
-  return (requireFromSocketMode("undici") as typeof import("undici")).EnvHttpProxyAgent;
+  return (requireFromSocketMode("undici/index.js") as typeof import("undici")).EnvHttpProxyAgent;
 }
 
 beforeEach(async () => {
