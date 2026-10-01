@@ -2,6 +2,10 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   enqueueSystemEvent,
   peekSystemEventEntries,
 } from "openclaw/plugin-sdk/system-event-runtime";
@@ -338,6 +342,59 @@ describe("createMSTeamsReactionHandler", () => {
 
       expect(resolveRouteMock).not.toHaveBeenCalled();
       expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it("keeps reactions in the current message-policy session across runtime changes", async () => {
+      setRuntimeConfigSnapshot(routeCfg, routeCfg);
+      const runtime = buildProductionBoundaryRuntime();
+      setMSTeamsRuntime(runtime);
+      const handler = createMSTeamsReactionHandler(buildDeps(routeCfg, runtime));
+      const base = "agent:main:msteams:channel:19:trusted-channel@thread.tacv2";
+      try {
+        for (const policy of ["channel", "thread", "channel"] as const) {
+          resetSystemEventsForTest();
+          const current: OpenClawConfig = {
+            channels: {
+              msteams: {
+                ...routeCfg.channels?.msteams,
+                threadSessionPolicy: "thread",
+                teams: {
+                  trustedTeam: {
+                    threadSessionPolicy: "thread",
+                    channels: {
+                      "19:trusted-channel@thread.tacv2": { threadSessionPolicy: policy },
+                    },
+                  },
+                },
+              },
+            },
+          };
+          setRuntimeConfigSnapshot(current, current);
+          const activity = reactionFrom(
+            {
+              id: "19:trusted-channel@thread.tacv2;messageid=1700000000000",
+              conversationType: "channel",
+            },
+            "trustedTeam",
+          );
+          await invokeReactionEvent(handler, activity, "added");
+          await invokeReactionEvent(
+            handler,
+            {
+              ...activity,
+              reactionsAdded: undefined,
+              reactionsRemoved: [{ type: "like" }],
+            },
+            "removed",
+          );
+          const expected = policy === "channel" ? base : `${base}:thread:1700000000000`;
+          const other = policy === "channel" ? `${base}:thread:1700000000000` : base;
+          expect(peekSystemEventEntries(expected)).toHaveLength(2);
+          expect(peekSystemEventEntries(other)).toEqual([]);
+        }
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
     });
 
     it("enforces reaction admission at the production route and session-event queue", async () => {

@@ -15,5 +15,4 @@ describe("msteams thread session isolation", () => {
       }),
     ).toBe(channelConversationSessionKey);
   });
-
 });
