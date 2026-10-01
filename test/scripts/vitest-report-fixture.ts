@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import {
+  fixtureReceiptClientSource,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const configs = [
@@ -61,6 +65,7 @@ export type ReportFixtureMode =
 /** Tiny native configs shared by regression tests and retained operator proofs. */
 export function createVitestReportFixture(
   root: string,
+  observation: { receipts: FixtureReceiptChannel; signal: AbortSignal },
   evidence = path.join(root, "reports"),
   compileCache = path.join(root, "node-compile-cache"),
 ) {
@@ -207,6 +212,7 @@ ${["missing", "corrupt"].includes(mode) && index === 0 ? `if(!merging)process.on
         (["failure", "batch-failure"].includes(mode) && index === 1) ||
         (["fail-fast", "batch-fail-fast"].includes(mode) && index === 0);
       const body = `import fs from 'node:fs';import {test,expect,describe,afterAll} from 'vitest';
+${["cancel", "batch-cancel"].includes(mode) && index === 0 ? fixtureReceiptClientSource(observation.receipts.endpoint) : ""}
 ${realHomeReplay ? "import {homedir} from 'node:os';" : ""}
 ${["metadata", "coverage-missing"].includes(mode) ? "import {classify} from './covered';" : ""}
 let attempt=0;
@@ -215,7 +221,7 @@ test('${name}/one',${mode === "retry" && index === 0 ? "{retry:1}," : ""}async()
  ${mode === "automatic" ? `expect(fs.existsSync(${JSON.stringify(output)})).toBe(false);` : ""}
  ${realHomeReplay ? `expect(process.env.HOME).toBe(${JSON.stringify(env.HOME)});expect(homedir()).toBe(${JSON.stringify(env.HOME)});` : ""}
  ${["parallel", "batch-parallel", "automatic"].includes(mode) && index === 0 ? `const {waitForFile}=await import(${JSON.stringify(path.join(repoRoot, "test/helpers/process-wait.ts"))});await waitForFile(${JSON.stringify(done)},15000);` : ""}
- ${["cancel", "batch-cancel"].includes(mode) && index === 0 ? `fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));await new Promise(()=>setInterval(()=>{},1000));` : ""}
+ ${["cancel", "batch-cancel"].includes(mode) && index === 0 ? `fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));sendReceipt(${JSON.stringify(ready)},'ready');await new Promise(()=>setInterval(()=>{},1000));` : ""}
  ${["unhandled", "ignored-unhandled"].includes(mode) && index === 1 ? "void Promise.reject(new Error('owned unhandled rejection'));await new Promise(resolve=>setImmediate(resolve));" : ""}
  ${["metadata", "coverage-missing"].includes(mode) ? `expect(classify(${index})).toMatchInlineSnapshot(${JSON.stringify(index === 0 ? '"zero"' : '"one"')});` : mode === "overlap" ? "expect(0, 'independent failure pid='+process.pid).toBe(1);" : mode === "retry" && index === 0 ? "expect(++attempt).toBe(2);" : `expect(1).toBe(${failure ? 2 : 1});`}
  ${index === 1 ? `fs.writeFileSync(${JSON.stringify(done)},'done');` : ""}
@@ -445,10 +451,32 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
     );
     try {
       if (["cancel", "batch-cancel"].includes(mode)) {
-        await waitForPidFile(ready, 15000);
+        const readyWasWritten = () => {
+          const pid = fs.existsSync(ready)
+            ? Number.parseInt(fs.readFileSync(ready, "utf8"), 10)
+            : Number.NaN;
+          return Number.isInteger(pid) && pid > 0;
+        };
+        // The durable PID precedes the receipt; command completion may overtake delivery.
+        const settled = completion.then(
+          () => {
+            if (!readyWasWritten()) {
+              throw new Error(`timeout waiting for pid in ${ready}`);
+            }
+          },
+          (error: unknown) => {
+            if (!readyWasWritten()) {
+              throw error;
+            }
+          },
+        );
+        await withinTest(
+          Promise.race([observation.receipts.waitFor(ready, "ready"), settled]),
+          observation.signal,
+        );
         child.kill("SIGTERM");
       }
-      const result = await completion;
+      const result = await withinTest(completion, observation.signal);
       write(path.join(evidence, "stdout.log"), stdout);
       write(path.join(evidence, "stderr.log"), stderr);
       write(

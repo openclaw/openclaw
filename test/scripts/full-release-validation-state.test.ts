@@ -1,9 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, assert, describe, expect, it } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, describe, expect, it } from "vitest";
 import {
   buildFullReleaseCandidateBinding,
   buildFullReleaseCandidateRequest,
@@ -48,11 +48,17 @@ import {
   verifyReleaseStateArtifacts,
   updateReleaseTransportEpisode,
 } from "../../scripts/full-release-validation-state.mjs";
+import { hasErrnoCode } from "../../src/infra/errno.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
 import {
   fullReleaseCandidateBindingFixture,
   fullReleaseCandidateManifestFixture,
 } from "../helpers/full-release-candidate.js";
-import { waitForChildClose, waitForFile } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = resolve("scripts/full-release-validation-state.mjs");
@@ -2560,6 +2566,53 @@ describe("release state artifacts", () => {
 });
 
 describe("collector subprocess", () => {
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts.close();
+  });
+
+  function collectorClosed(childProcess: ReturnType<typeof spawn>) {
+    return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (complete, reject) => {
+        childProcess.once("error", reject);
+        childProcess.once("close", (code, signal) => complete({ code, signal }));
+      },
+    );
+  }
+
+  async function fixtureReadyBeforeSettlement(readyPath: string, operation: Promise<unknown>) {
+    // The readiness receipt and collector exit are unordered; the fixture writes this
+    // record before replying, so an exit that wins the race still sees readiness.
+    await Promise.race([
+      receipts.waitFor(readyPath, "ready"),
+      operation.then(() => {
+        if (!existsSync(readyPath)) {
+          throw new Error(`timeout waiting for ${readyPath}`);
+        }
+      }),
+    ]);
+  }
+
+  async function stopCollector(childProcess: ReturnType<typeof spawn>, closed: Promise<unknown>) {
+    // Plan cancellation kills its validator, which can leave fake-gh behind. The
+    // test's private process group owns that fixture even after the collector exits.
+    try {
+      if (process.platform !== "win32" && childProcess.pid) {
+        process.kill(-childProcess.pid, "SIGKILL");
+      } else {
+        childProcess.kill("SIGKILL");
+      }
+    } catch (error) {
+      if (!hasErrnoCode(error, "ESRCH")) {
+        throw error;
+      }
+    }
+    await closed;
+  }
+
   it("releases polling sleep listeners before the next GitHub observation", () => {
     const root = tempDirs.make("frv-state-sleep-listeners-");
     const executionPlanPath = join(root, "plan.json");
@@ -3157,7 +3210,10 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     ).toThrow(/release execution plan (artifact binding|child identity) is invalid/u);
   });
 
-  it("writes the admitted execution plan when SIGTERM interrupts a stalled reuse API", async () => {
+  it("writes the admitted execution plan when SIGTERM interrupts a stalled reuse API", async ({
+    onTestFinished,
+    signal,
+  }) => {
     const root = tempDirs.make("frv-plan-signal-");
     const gh = join(root, "gh");
     const ghReady = join(root, "gh-ready");
@@ -3170,7 +3226,13 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     writeFileSync(publicationPath, JSON.stringify(publication));
     writeFileSync(
       gh,
-      `#!${process.execPath}\nrequire("node:fs").writeFileSync(process.env.FRV_GH_READY, "ready");\nsetTimeout(() => {}, 30000);\n`,
+      `#!${process.execPath}
+import { writeFileSync } from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
+writeFileSync(process.env.FRV_GH_READY, "ready");
+sendReceipt(process.env.FRV_GH_READY, "ready");
+setTimeout(() => {}, 30000);
+`,
     );
     chmodSync(gh, 0o755);
     const childProcess = spawn(process.execPath, [SCRIPT, "plan"], {
@@ -3200,19 +3262,27 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
         GITHUB_RUN_ATTEMPT: "1",
         PATH: `${root}:${process.env.PATH}`,
       }),
+      detached: process.platform !== "win32",
       stdio: "ignore",
     });
-    await waitForFile(ghReady, 5_000);
-    const exitPromise = waitForChildClose(childProcess);
-    const started = Date.now();
-    expect(childProcess.kill("SIGTERM")).toBe(true);
-    await expect(exitPromise).resolves.toEqual({ code: 1, signal: null });
-    expect(Date.now() - started).toBeLessThan(2_000);
-    expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
-      ...publication,
-      errors: [expect.objectContaining({ kind: "collector_cancelled" })],
-      parentRunAttempt: 1,
-    });
+    const exitPromise = collectorClosed(childProcess);
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () => (cleanupPromise ??= stopCollector(childProcess, exitPromise));
+    onTestFinished(cleanup);
+    try {
+      await withinTest(fixtureReadyBeforeSettlement(ghReady, exitPromise), signal);
+      const started = Date.now();
+      expect(childProcess.kill("SIGTERM")).toBe(true);
+      await expect(withinTest(exitPromise, signal)).resolves.toEqual({ code: 1, signal: null });
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
+        ...publication,
+        errors: [expect.objectContaining({ kind: "collector_cancelled" })],
+        parentRunAttempt: 1,
+      });
+    } finally {
+      await cleanup();
+    }
   });
 
   it("records target resolution failure even when no target SHA exists", () => {
@@ -3262,7 +3332,10 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     );
   });
 
-  it("writes an immediate terminal handoff with active identity on SIGTERM", async () => {
+  it("writes an immediate terminal handoff with active identity on SIGTERM", async ({
+    onTestFinished,
+    signal,
+  }) => {
     const root = tempDirs.make("frv-state-signal-");
     const gh = join(root, "gh");
     const ghReady = join(root, "gh-ready");
@@ -3282,14 +3355,14 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     );
     writeFileSync(
       gh,
-      `#!/bin/sh
-printf ready > "$FRV_GH_READY"
-case "$*" in
-  "api --paginate repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?per_page=100 --jq .jobs[] | @json")
-    exit 0
-    ;;
-esac
-printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/ci.yml@refs/heads/release-ci/tooling","display_title":"CI full-release-validation-77-1-ci","head_branch":"release-ci/tooling","head_sha":"${SHA}","run_attempt":1,"status":"in_progress","conclusion":null,"created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/runs/101","actor":{"login":"github-actions[bot]"},"triggering_actor":{"login":"github-actions[bot]"},"repository":{"full_name":"openclaw/openclaw"}}'
+      `#!${process.execPath}
+import { writeFileSync } from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
+writeFileSync(process.env.FRV_GH_READY, "ready");
+sendReceipt(process.env.FRV_GH_READY, "ready");
+if (process.argv.slice(2).join(" ") !== "api --paginate repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?per_page=100 --jq .jobs[] | @json") {
+  console.log('{"id":101,"event":"workflow_dispatch","path":".github/workflows/ci.yml@refs/heads/release-ci/tooling","display_title":"CI full-release-validation-77-1-ci","head_branch":"release-ci/tooling","head_sha":"${SHA}","run_attempt":1,"status":"in_progress","conclusion":null,"created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/runs/101","actor":{"login":"github-actions[bot]"},"triggering_actor":{"login":"github-actions[bot]"},"repository":{"full_name":"openclaw/openclaw"}}');
+}
 `,
     );
     chmodSync(gh, 0o755);
@@ -3303,17 +3376,25 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
         PATH: `${root}:${process.env.PATH}`,
         TARGET_SHA: "b".repeat(40),
       }),
+      detached: process.platform !== "win32",
       stdio: "ignore",
     });
-    await waitForFile(ghReady, 5_000);
-    const exitPromise = waitForChildClose(childProcess);
-    expect(childProcess.kill("SIGTERM")).toBe(true);
-    await expect(exitPromise).resolves.toEqual({ code: 1, signal: null });
-    expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
-      activeRunIds: ["101"],
-      cancellation: { requested: true },
-      state: "cancelled_with_children",
-    });
+    const exitPromise = collectorClosed(childProcess);
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () => (cleanupPromise ??= stopCollector(childProcess, exitPromise));
+    onTestFinished(cleanup);
+    try {
+      await withinTest(fixtureReadyBeforeSettlement(ghReady, exitPromise), signal);
+      expect(childProcess.kill("SIGTERM")).toBe(true);
+      await expect(withinTest(exitPromise, signal)).resolves.toEqual({ code: 1, signal: null });
+      expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
+        activeRunIds: ["101"],
+        cancellation: { requested: true },
+        state: "cancelled_with_children",
+      });
+    } finally {
+      await cleanup();
+    }
   });
 
   it("cancels only the exact affected child and never cancels from drain", () => {
