@@ -42,6 +42,19 @@ function bindings() {
   return { utils, eventTarget, blob, formData, registry };
 }
 
+// jsdom 30.1.1 follows the unfocusing steps: blur() focuses the document viewport, so
+// hasFocus() stays true. A fresh document has no focused area; restore that state.
+export function clearJsdomViewportFocus(document: Document): void {
+  const impl = bindings().utils.implForWrapper(document) as {
+    _lastFocusedElement?: unknown;
+    _clearDOMSelector?: () => void;
+  } | null;
+  if (impl && impl._lastFocusedElement === impl) {
+    impl._lastFocusedElement = null;
+    impl._clearDOMSelector?.();
+  }
+}
+
 export function jsdomCustomElementDefinitions(registry: object) {
   const native = bindings().registry;
   return native.is(registry)

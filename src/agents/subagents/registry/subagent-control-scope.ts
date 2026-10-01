@@ -51,13 +51,9 @@ export function resolveSubagentControllerIdentity(params: {
   agentSessionKey?: string;
   agentId?: string;
 }): Omit<ResolvedSubagentController, "controlScope"> {
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  const { alias } = resolveMainSessionAlias(params.cfg);
   const callerRaw = params.agentSessionKey?.trim() || alias;
-  const callerSessionKey = resolveInternalSessionKey({
-    key: callerRaw,
-    alias,
-    mainKey,
-  });
+  const callerSessionKey = resolveInternalSessionKey({ key: callerRaw, alias });
   const controllerAgentId = resolveSessionAgentId({
     config: params.cfg,
     sessionKey: callerSessionKey,

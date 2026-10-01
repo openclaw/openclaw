@@ -81,7 +81,27 @@ export function createSessionHistoryWorkerReaders(
       "historical-eviction-candidates",
       "eviction candidates",
       (input) => ({ kind: "historical-eviction-candidates", ...input }),
-      (value) => value.sessionIds,
+      (value) => {
+        if (!("sessionIds" in value)) {
+          throw new Error(
+            "Session history worker returned archived instead of historical candidates",
+          );
+        }
+        return value.sessionIds;
+      },
+    ),
+    readArchivedEvictionCandidates: reader(
+      "historical-eviction-candidates",
+      "archived eviction candidates",
+      (input) => ({ kind: "historical-eviction-candidates", ...input }),
+      (value) => {
+        if (!("batch" in value)) {
+          throw new Error(
+            "Session history worker returned historical instead of archived candidates",
+          );
+        }
+        return value.batch;
+      },
     ),
     readArchivePruning: reader(
       "session-archive-pruning",

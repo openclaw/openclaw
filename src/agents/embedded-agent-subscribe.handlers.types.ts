@@ -198,9 +198,6 @@ export type EmbeddedAgentSubscribeState = {
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;
   pendingCompactionRetry: number;
-  compactionRetryResolve?: () => void;
-  compactionRetryReject?: (reason?: unknown) => void;
-  compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
   replayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;

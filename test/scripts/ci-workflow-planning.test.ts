@@ -915,6 +915,7 @@ describe("release fast lane", () => {
       "run_sqlite_session_lifecycle",
       "run_qa_smoke_ci",
       "run_docker_seed_e2e",
+      "run_published_driver_update",
     ]) {
       expect(outputs[key], key).toBe("false");
     }
@@ -2772,6 +2773,7 @@ describe("ci workflow guards", () => {
       for (const [name, job] of Object.entries(readCiWorkflow().jobs)) {
         const definition = job as {
           if?: string;
+          uses?: string;
           "runs-on": string;
           strategy?: {
             matrix: string | { include?: Record<string, unknown>[]; [key: string]: unknown };
@@ -2801,9 +2803,16 @@ describe("ci workflow guards", () => {
             );
           }
         }
+        const runners = definition.uses?.startsWith("./.github/workflows/")
+          ? Object.values(readWorkflow(definition.uses.slice(2)).jobs).map(
+              (child) => (child as { "runs-on": string })["runs-on"],
+            )
+          : [definition["runs-on"]];
         for (const row of selectedRows) {
-          if (allSelected || hostedLabels.has(String(evaluate(definition["runs-on"], row)))) {
-            rows.push(name);
+          for (const runner of runners) {
+            if (allSelected || hostedLabels.has(String(evaluate(runner, row)))) {
+              rows.push(name);
+            }
           }
         }
       }
@@ -11009,6 +11018,7 @@ describe("ci workflow guards", () => {
       "android",
       "android-access-native",
       "docker-seed-e2e",
+      "published-driver-update",
       "pr-fail-fast",
     ];
 
@@ -11077,6 +11087,32 @@ describe("ci workflow guards", () => {
       expect(projected, job).toBe(eligible);
     }
   });
+
+  it.each([
+    { eventName: "pull_request", sameRevision: true, result: "success", exitCode: 0 },
+    { eventName: "schedule", sameRevision: true, result: "failure", exitCode: 1 },
+    { eventName: "pull_request", sameRevision: true, result: "skipped", exitCode: 1 },
+    { eventName: "workflow_dispatch", sameRevision: false, result: "skipped", exitCode: 0 },
+  ] as const)(
+    "gates published-driver $eventName sameRevision=$sameRevision result=$result",
+    ({ eventName, sameRevision, result, exitCode }) => {
+      const revision = "a".repeat(40);
+      const gate = runCiGateFixture(
+        renderCiGateEnvironment(
+          {
+            eventName,
+            sha: revision,
+            preflightOutputs: {
+              run_published_driver_update: "true",
+              checkout_revision: sameRevision ? revision : "b".repeat(40),
+            },
+          },
+          { "published-driver-update": result },
+        ),
+      );
+      expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(exitCode);
+    },
+  );
 
   it("reduces iOS screenshots only after every shard's latest attempt succeeded", () => {
     const reducer = readCiWorkflow().jobs["ios-screenshot-evidence"];

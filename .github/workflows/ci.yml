@@ -141,6 +141,8 @@ jobs:
       # docker-seed-e2e-contract-v1: frozen targets without this marker skip the lane.
       run_docker_seed_e2e: ${{ steps.manifest.outputs.run_docker_seed_e2e }}
       docker_seed_lanes: ${{ steps.manifest.outputs.docker_seed_lanes }}
+      # published-driver-update-contract-v1: older frozen targets omit this cell.
+      run_published_driver_update: ${{ steps.manifest.outputs.run_published_driver_update }}
       run_macos: ${{ steps.manifest.outputs.run_macos }}
       run_android: ${{ steps.manifest.outputs.run_android }}
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
@@ -1684,6 +1686,9 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
+    outputs:
+      published_driver_artifact_id: ${{ steps.published_driver_package_upload.outputs.artifact-id }}
+      published_driver_sha256: ${{ steps.published_driver_package.outputs.sha256 }}
     # The measured hosted tail reached 898s before preflight and gate overhead.
     runs-on: &shared_16vcpu_linux_runner ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     # Hosted rows (github backend, hybrid retries, full-release dispatches, fork PRs) run slower.
@@ -1744,6 +1749,26 @@ jobs:
             # Their own build remains the available asset validation surface.
             echo "Selected release candidate predates plugins:assets:check; skipping unavailable check."
           fi
+
+      - name: Package published-driver candidate
+        id: published_driver_package
+        if: needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha
+        run: |
+          node scripts/package-openclaw-for-docker.mjs --skip-build \
+            --allow-unreleased-changelog --output-dir .artifacts/published-driver-package \
+            --output-name openclaw-candidate.tgz
+          echo "sha256=$(sha256sum .artifacts/published-driver-package/openclaw-candidate.tgz | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload published-driver candidate
+        id: published_driver_package_upload
+        if: needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: published-driver-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: .artifacts/published-driver-package/openclaw-candidate.tgz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Smoke test CLI launcher help
         run: node openclaw.mjs --help
@@ -4134,7 +4159,6 @@ jobs:
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true' && contains(fromJSON('["runtime-topology-architecture","dependencies"]'), matrix.group)) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && (github.run_attempt > 1 || !contains(fromJSON('["extension-package-boundary","runtime-topology-architecture","plugin-sdk-api-diff","dependencies"]'), matrix.group))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true' && contains(fromJSON('["runtime-topology-architecture","dependencies"]'), matrix.group)) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && (github.run_attempt > 1 || !contains(fromJSON('["extension-package-boundary","runtime-topology-architecture","plugin-sdk-api-diff","dependencies"]'), matrix.group))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
-    # Cold package validation exceeds 20 min on 4-CPU hosted runners.
     timeout-minutes: ${{ matrix.group == 'extension-package-boundary' && 30 || 20 }}
     strategy:
       fail-fast: false
@@ -4166,10 +4190,8 @@ jobs:
         if: &additional_boundary_sticky_disk_gate matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@94697d49e77d0dd78b77deb85ad3de63a28b4b8a # v1.7.1
         with:
-          # Stable disk keys avoid quota exhaustion; markers detect source/toolchain changes.
           key: ${{ github.repository }}-ext-boundary-v2
           path: /var/tmp/openclaw-ext-boundary
-          # Only protected successful pushes publish. Explicit commit:true refreshes same-size changes.
           commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
 
       - name: Restore extension boundary artifacts from sticky disk
@@ -4183,8 +4205,6 @@ jobs:
             echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Restore an exact-commit transport snapshot here. The preparer still
-          # validates per-owner content, topology, toolchain and output inventories.
           current_fingerprint="${{ steps.extension-boundary-inputs.outputs.fingerprint }}"
           if [ ! -f "$sticky_root/.source-fingerprint" ] || [ "$current_fingerprint" != "$(cat "$sticky_root/.source-fingerprint")" ]; then
             echo "boundary source trees changed since snapshot; building cold"
@@ -4223,8 +4243,9 @@ jobs:
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ""
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
-          # Runner labels are not CPU counts; preserve the CI worker budget.
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 16
+          OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: ${{ needs.preflight.outputs.diff_base_revision }}
+          OPENCLAW_CI_EXTENSION_BOUNDARY_FULL: ${{ vars.OPENCLAW_CI_EXTENSION_BOUNDARY_FULL }}
         shell: bash
         run: |
           set -euo pipefail
@@ -6011,6 +6032,16 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  published-driver-update:
+    permissions:
+      contents: read
+    needs: [preflight, build-artifacts]
+    if: needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha
+    uses: ./.github/workflows/ci-published-driver-update.yml
+    with:
+      candidate_artifact_id: ${{ needs.build-artifacts.outputs.published_driver_artifact_id }}
+      candidate_sha256: ${{ needs.build-artifacts.outputs.published_driver_sha256 }}
+
   docker-seed-e2e:
     permissions:
       contents: read
@@ -6198,6 +6229,7 @@ jobs:
       - android
       - android-access-native
       - docker-seed-e2e
+      - published-driver-update
       - pr-fail-fast
     if: ${{ (github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')) && ((github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && always() && (github.event_name == 'schedule' || !cancelled() || (needs.pr-fail-fast.outputs.failure_run_attempt == format('{0}', github.run_attempt) && needs.pr-fail-fast.outputs.failure_job_id != '') || (github.run_attempt == 1 && needs.pr-fail-fast.result == 'failure')) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)) }}
     # Blacksmith PR failures need critical-path routing within cancellation grace.
@@ -6217,6 +6249,11 @@ jobs:
           appendFileSync(process.env.GITHUB_STEP_SUMMARY, `PR CI stopped after **${name}** failed.\n\n[Originating job](${url}). Remaining jobs were cancelled to avoid wasted compute.\n`);
           process.exitCode = 1;
           EOF
+      - name: Record published-driver dispatch limitation
+        if: always() && needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision != github.sha
+        run: |
+          echo '::notice title=Published-driver update skipped::The selected checkout revision differs from github.sha; this cell only runs in the caller revision and cache scope.'
+          echo 'Published-driver update skipped: the dispatch-fallback checkout revision differs from `github.sha`. This cell only runs in the caller revision and cache scope; this run has no published-driver cell proof for the selected revision.' >> "$GITHUB_STEP_SUMMARY"
       - name: Verify selected CI lanes
         if: always()
         shell: bash
@@ -6260,6 +6297,7 @@ jobs:
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
             android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
+            published-driver-update=${{ needs.published-driver-update.result }}|${{ needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
             pr-fail-fast=${{ github.run_attempt != 1 && 'skipped' || needs.pr-fail-fast.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
         run: |
           set -euo pipefail
@@ -6345,6 +6383,7 @@ jobs:
       - android
       - android-access-native
       - docker-seed-e2e
+      - published-driver-update
       - pr-fail-fast
       - ci-gate
     if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}

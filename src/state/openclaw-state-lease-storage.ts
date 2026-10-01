@@ -19,6 +19,10 @@ import {
   toOpenClawStateLeaseVerificationError,
 } from "./openclaw-state-lease-error.js";
 import {
+  LEASE_CONTENTION_RETRY_MS,
+  LEASE_CONTENTION_RETRY_TIMEOUT_MS,
+} from "./openclaw-state-lease-heartbeat-shared.js";
+import {
   readOpenClawStateLeaseExpiry,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
@@ -85,12 +89,11 @@ export function withLeaseWriteTransaction<T>(
 }
 
 export const STATE_LEASE_WRITE_BACKOFF = {
-  initialMs: 25,
+  initialMs: LEASE_CONTENTION_RETRY_MS,
   maxMs: 250,
   factor: 1.5,
   jitter: 0.25,
 } as const;
-const RELEASE_RETRY_TIMEOUT_MS = 2_000;
 
 export type OpenClawStateLeaseOwnerIdentity = OpenClawStateLeaseIdentity & { leaseLabel: string };
 
@@ -157,7 +160,7 @@ export async function releaseOpenClawStateLeaseBestEffort(
   params: Parameters<typeof releaseOpenClawStateLease>[0],
   execute?: () => Promise<void>,
 ): Promise<void> {
-  const deadline = performance.now() + RELEASE_RETRY_TIMEOUT_MS;
+  const deadline = performance.now() + LEASE_CONTENTION_RETRY_TIMEOUT_MS;
   let attempt = 0;
   while (true) {
     try {

@@ -160,19 +160,23 @@ async function whilePaused(
 ) {
   await initializeSessionReadContext(context);
   const projection = getSessionRowProjection(context)!;
-  const ensure = projection.ensureMaterialized.bind(projection);
+  const prepare = projection.prepareSelection.bind(projection);
   const paused = createDeferredCore();
   const released = createDeferredCore();
-  const readiness = vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-    await ensure();
-    paused.resolve();
-    await released.promise;
-  });
+  const readiness = vi
+    .spyOn(projection, "prepareSelection")
+    .mockImplementationOnce(async (...args) => {
+      const result = await prepare(...args);
+      paused.resolve();
+      await released.promise;
+      return result;
+    });
   const request = start();
   try {
     expect(
       await Promise.race([paused.promise.then(() => "paused"), request.then(() => "responded")]),
     ).toBe("paused");
+    expect(readiness).toHaveBeenCalledOnce();
     await change();
     released.resolve();
     return await request;

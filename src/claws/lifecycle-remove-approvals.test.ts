@@ -273,7 +273,14 @@ describe("Claw exec approvals removal", () => {
           config: {},
           mcpServers: { docs: sourceMcpServer },
         }),
-        listMcpServers: async () => ({ ok: true, path: "fixture", config: {}, mcpServers: {} }),
+        listMcpServers: async () => ({
+          ok: true,
+          path: "fixture",
+          config: {},
+          mcpServers: {},
+          runtimeConfig: {},
+          sourceConfigBeforeMigrations: {},
+        }),
       });
       config = { ...config, mcp: { servers: { docs: sourceMcpServer } } };
       await writeOpenClawConfig(home, config);

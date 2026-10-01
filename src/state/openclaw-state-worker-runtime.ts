@@ -14,10 +14,6 @@ import {
   prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
-import {
-  executeOperatorApprovalCommand,
-  isOperatorApprovalCommand,
-} from "../gateway/operator-approval-store.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
 import { isWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker-contract.js";
 import { executeWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker.js";
@@ -31,7 +27,6 @@ import { executeWorkspaceJournalCommand } from "../gateway/worker-environments/p
 import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
 import { executeWorkerEnvironmentCommand } from "../gateway/worker-environments/store.worker.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
-import { commitExecAuthorizationsInWorker } from "../infra/exec-approvals-authorization.worker.js";
 import { createSqliteAuditRecordKernel } from "../infra/sqlite-audit-record.kernel.js";
 import {
   readStableSqliteFileGeneration,
@@ -105,15 +100,6 @@ export function executeSharedStateCommand(
   });
   if (stateWorkerRegistry.has(command)) {
     return stateWorkerRegistry.execute(command, { open, stateOptions });
-  }
-  if (command.type === "execApprovals.commitAuthorizations" || isOperatorApprovalCommand(command)) {
-    const databaseOptions = {
-      database: open(),
-      ...stateOptions(),
-    };
-    return command.type === "execApprovals.commitAuthorizations"
-      ? commitExecAuthorizationsInWorker(command.input, databaseOptions)
-      : executeOperatorApprovalCommand(command, databaseOptions);
   }
   if (isWorkerInferenceStoreCommand(command)) {
     return executeWorkerInferenceStoreCommand(command, open());
@@ -196,6 +182,9 @@ export function executeSharedStateCommand(
         ) ?? { entry: null, expectedToken: null })
       : read(open().db);
   }
+  if (command.type === "tui.lastSession.clear") {
+    return clearRetiredTuiPointers(new Set(command.input.retiredSessionKeys), stateOptions(), open);
+  }
   const database = open();
   if (command.type === "githubPublication.prepareSessionReceiptDeletion") {
     return readSessionReceiptDeletionIdentitiesInDatabase(database, command.input);
@@ -245,13 +234,6 @@ export function executeSharedStateCommand(
   };
   if (command.type === "tui.lastSession.write") {
     return writeConfigMachineState(command.input.stateKey, command.input.sessionKey, writeOptions);
-  }
-  if (command.type === "tui.lastSession.clear") {
-    return clearRetiredTuiPointers(
-      command.input.stateKeys,
-      new Set(command.input.retiredSessionKeys),
-      writeOptions,
-    );
   }
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);

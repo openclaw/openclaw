@@ -206,6 +206,27 @@ function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   }
 }
 
+/** Recognize explicit required intent only on the authorized core tool bindings. */
+export function requiresCodeModeCompletion(
+  requests: readonly PendingBridgeRequest[],
+  catalogProjection: CodeModeCatalogProjection,
+): boolean {
+  return requests.some((request) => {
+    if (
+      request.method !== "callValue" ||
+      !isRecord(request.args[1]) ||
+      request.args[1].required !== true
+    ) {
+      return false;
+    }
+    const binding =
+      typeof request.args[0] === "string"
+        ? catalogProjection.byCallableName.get(request.args[0])
+        : undefined;
+    return binding?.id === "openclaw:core:exec" || binding?.id === "openclaw:core:agents_wait";
+  });
+}
+
 export async function runBridgeRequest(params: {
   runtime: ToolSearchRuntime;
   catalogProjection: CodeModeCatalogProjection;
@@ -215,6 +236,7 @@ export async function runBridgeRequest(params: {
   reply: CodeModeReplyLease;
   results: CodeModeResultsAccess;
   remainingMs: number;
+  completionRequired?: boolean;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -323,6 +345,13 @@ export async function runBridgeRequest(params: {
         }
         let input = values[1] ?? {};
         if (
+          binding.id === "openclaw:core:exec" &&
+          isRecord(input) &&
+          input.background !== true &&
+          params.completionRequired
+        ) {
+          input = { ...input, required: true };
+        } else if (
           binding.source === "openclaw" &&
           binding.name === "exec" &&
           binding.input?.includes("yieldMs") === true &&
@@ -336,6 +365,14 @@ export async function runBridgeRequest(params: {
             ...input,
             yieldMs: Math.max(1, Math.floor(params.remainingMs) - CODE_MODE_EXEC_YIELD_MARGIN_MS),
           };
+        }
+        if (
+          binding.id === "openclaw:core:agents_wait" &&
+          params.completionRequired &&
+          isRecord(input) &&
+          input.timeoutSeconds === undefined
+        ) {
+          input = { ...input, required: true };
         }
         value = await params.runtime.callExactValue(binding.id, input, {
           recoverySurface: "catalog",

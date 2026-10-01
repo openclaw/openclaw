@@ -65,15 +65,23 @@ describe("Kysely declarations", () => {
       { cwd: root, env, encoding: "utf8" },
     );
     expect(packed.status, packed.stderr).toBe(0);
-    const [inventory] = JSON.parse(packed.stdout) as Array<{
-      filename: string;
-      files: Array<{ path: string }>;
-    }>;
+    const inventoryByName = JSON.parse(packed.stdout) as Record<
+      string,
+      {
+        filename: string;
+        files: Array<{ path: string }>;
+      }
+    >;
+    expect(Object.keys(inventoryByName)).toEqual(["openclaw"]);
+    const inventory = inventoryByName.openclaw;
+    if (!inventory) {
+      throw new Error("npm pack did not return the openclaw inventory");
+    }
     const unpacked = path.join(root, "unpacked");
     fs.mkdirSync(unpacked);
     const extracted = spawnSync(
       "tar",
-      ["-xzf", path.join(root, inventory!.filename), "-C", unpacked],
+      ["-xzf", path.join(root, inventory.filename), "-C", unpacked],
       {
         env,
         encoding: "utf8",
@@ -83,7 +91,7 @@ describe("Kysely declarations", () => {
     const packageRoot = path.join(unpacked, "package");
     expect(
       collectPackageDistImportErrors({
-        files: inventory!.files.map((file) => file.path),
+        files: inventory.files.map((file) => file.path),
         readText: (file: string) => fs.readFileSync(path.join(packageRoot, file), "utf8"),
       }),
     ).toEqual([]);
