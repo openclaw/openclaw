@@ -1960,6 +1960,41 @@ describe("prepareCliRunContext", () => {
     );
   });
 
+  it("binds the recorder-owned admitted request to the CLI prompt-build event", async () => {
+    const { sessionTarget } = fixture.session;
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "latest ask", idempotencyKey: "cli-admitted-request" },
+      target: {
+        ...sessionTarget,
+        sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1 },
+      },
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+    await fixture.prepare({
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      runId: "run-test-cli-current-input",
+      config: { ...createCliBackendConfig() },
+      userTurnTranscriptRecorder: recorder,
+    });
+
+    // Only the recorder-owned admitted request carries current-input identity; the
+    // recorder-less fixture above keeps the legacy event without these fields.
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        currentUserMessage: "latest ask",
+        currentUserMessageId: "cli-admitted-request",
+      }),
+      expect.anything(),
+    );
+  });
+
   it("uses compact current-turn context when a room event resumes a CLI session", async () => {
     await withAuthenticatedHistory("test-cli", async (prepare) => {
       fixture.appendTranscript({
