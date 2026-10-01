@@ -230,8 +230,8 @@ export async function executeTelegramBuiltinCommand(
     shouldSkip?: () => boolean;
   },
 ): Promise<TelegramBuiltinCommandResult> {
-  // Loaded-registry lookup only: Telegram defines no resolveNativeCommandName
-  // hook, and the bundled fallback would jiti-load the plugin source in dev/test.
+  // Loaded-registry lookup only; the bundled fallback would jiti-load the
+  // plugin source in dev/test just to resolve its command-name hook.
   const commandDefinition = findCommandByNativeName(params.commandName, "telegram", {
     includeBundledChannelFallback: false,
   });
