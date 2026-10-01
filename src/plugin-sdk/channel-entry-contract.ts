@@ -468,6 +468,7 @@ export function loadBundledEntryExportSync<T>(
   return record[reference.exportName] as T;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic entry export loaders use caller-supplied export types.
 function createOptionalBundledEntryLoader<T>(
   importMetaUrl: string,
   reference: BundledEntryModuleRef | undefined,
