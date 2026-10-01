@@ -233,6 +233,8 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "database.inspectIdle"
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"
+      | "deviceIdentity.read"
+      | "deviceIdentity.load"
       | keyof CaptureWorkerOperations
       | keyof PluginStateWorkerOperations
       | keyof OpenClawStateLeaseLifecycleOperations;
