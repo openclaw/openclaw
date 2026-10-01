@@ -1,12 +1,14 @@
 // Subagent session reactivation helper.
 // Continues yielded or completed subagent work when a user messages the child session.
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { assertSubagentRegistryWriteSourceCurrent } from "../agents/subagents/registry/subagent-registry-persistence.js";
+import {
+  assertSubagentRegistryWriteSourceCurrent,
+  restoreSubagentRunsFromDisk,
+} from "../agents/subagents/registry/subagent-registry-persistence.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
 } from "../agents/subagents/registry/subagent-registry-read.js";
-import { restoreSubagentRunsFromDisk } from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   isSameSubagentRun,
   isSameSubagentRunOwner,

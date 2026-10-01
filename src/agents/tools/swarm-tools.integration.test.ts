@@ -23,7 +23,7 @@ import {
   runSubagentAnnounceFlow,
 } from "../subagents/announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../subagents/announce/subagent-announce.requester-settle-wake.js";
-import { restoreSubagentRunsFromDisk } from "../subagents/registry/subagent-registry-state.js";
+import { restoreSubagentRunsFromDisk } from "../subagents/registry/subagent-registry-persistence.js";
 import { observeRootWork } from "../subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { resetSubagentRegistryForTests } from "../subagents/registry/subagent-registry.test-helpers.js";
 import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
@@ -49,6 +49,7 @@ vi.mock("../timeout.js", { spy: true });
 vi.mock("../subagents/announce/subagent-announce.js", { spy: true });
 vi.mock("../subagents/announce/subagent-announce.requester-settle-wake.js", { spy: true });
 vi.mock("../subagents/registry/subagent-registry-state.js", { spy: true });
+vi.mock("../subagents/registry/subagent-registry-persistence.js", { spy: true });
 
 const requesterSessionKey = "agent:main:main";
 const config: OpenClawConfig = {

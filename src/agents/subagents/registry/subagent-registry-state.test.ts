@@ -7,6 +7,7 @@ import {
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
@@ -23,7 +24,6 @@ import {
   onSubagentRegistryPersisted,
   prepareSubagentSessionListReadCache,
   publishSubagentRunsAfterAtomicStore,
-  restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
 import { registerSubagentRestoreCacheCases } from "./subagent-registry-state.restore.test-support.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";

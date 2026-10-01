@@ -9,7 +9,7 @@ import type { DomainScope } from "../state/openclaw-state-worker-store.types.js"
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-launch-record.js";
-import type * as RegistryPersistence from "./subagents/registry/subagent-registry-state.js";
+import type * as RegistryState from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 /** Worker commands use a closed discriminant; generic execute callers retain correlated inputs. */
@@ -130,11 +130,11 @@ export async function configureMockSubagentRegistryPersistence(methods: {
   return spy;
 }
 
-export function createSubagentPersistenceMock(
-  methods: Pick<typeof RegistryPersistence, "restoreSubagentRunsFromDisk">,
-  publishCommittedRows: typeof RegistryPersistence.publishSubagentRunsAfterAtomicStore,
+export function createSubagentStateMock(
+  methods: { registryPersistListeners: Set<() => void> },
+  publishCommittedRows: typeof RegistryState.publishSubagentRunsAfterAtomicStore,
 ) {
-  const listeners = new Set<() => void>();
+  const listeners = methods.registryPersistListeners;
   return {
     onSubagentRegistryPersisted: (listener: () => void) => registerListener(listeners, listener),
     // Policy fixtures supply retained rows in memory; worker custody uses the real state owner.
@@ -156,18 +156,11 @@ export function createSubagentPersistenceMock(
           ),
         ),
       );
-    }) satisfies typeof RegistryPersistence.withSubagentRunReadSnapshot,
-    restoreSubagentRunsFromDisk: async (
-      ...args: Parameters<typeof methods.restoreSubagentRunsFromDisk>
-    ) => {
-      const result = await methods.restoreSubagentRunsFromDisk(...args);
-      notifyListeners(listeners, undefined);
-      return result;
-    },
+    }) satisfies typeof RegistryState.withSubagentRunReadSnapshot,
     publishSubagentRunsAfterAtomicStore: ((runs, ids, events, databasePath) => {
       publishCommittedRows(runs, ids, events, databasePath);
       events.push(() => notifyListeners(listeners, undefined));
-    }) satisfies typeof RegistryPersistence.publishSubagentRunsAfterAtomicStore,
+    }) satisfies typeof RegistryState.publishSubagentRunsAfterAtomicStore,
   };
 }
 

@@ -25,6 +25,7 @@ import { setTestEnvValue, withEnvAsync } from "../../../test-utils/env.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import * as registryReads from "./subagent-registry-read-cache.js";
 import * as registryRead from "./subagent-registry-read.js";
 import * as registryState from "./subagent-registry-state.js";
@@ -478,7 +479,7 @@ it("keeps a delivered announcement fenced when its committed native receipt is u
     worker.mockRestore();
     await fixture.settle();
     await closeOpenClawStateDatabaseAsync();
-    await nativeState.restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
   }
 });
 

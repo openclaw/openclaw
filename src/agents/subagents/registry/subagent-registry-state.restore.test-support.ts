@@ -1,12 +1,12 @@
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
 import {
   getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentRunsSnapshotForRead,
-  restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 

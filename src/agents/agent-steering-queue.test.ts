@@ -8,9 +8,11 @@ import {
   planAgentSteeringRelease,
 } from "./agent-steering-queue.js";
 import { resolveSubagentCompletionResultText } from "./subagents/completion/subagent-completion-result.js";
-import type { SubagentRunMutation } from "./subagents/registry/subagent-registry-persistence.js";
 import type { PendingFinalDeliveryPayload } from "./subagents/registry/subagent-registry-read.types.js";
-import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
+import type {
+  SubagentRunMutation,
+  SubagentRunRecord,
+} from "./subagents/registry/subagent-registry.types.js";
 import {
   copySubagentRunRuntimeOwner,
   retainSubagentRunRuntimeOwner,

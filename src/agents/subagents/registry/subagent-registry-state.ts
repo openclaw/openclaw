@@ -15,11 +15,6 @@ import {
   projectSubagentRunForSessionList,
 } from "./subagent-delivery-state.js";
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
-import {
-  immutableSubagentRun,
-  withSubagentRegistryRestore,
-  reconcileRetiredSubagentRegistryWrites,
-} from "./subagent-registry-persistence.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   assertSubagentReadContext,
@@ -54,10 +49,7 @@ import {
   loadSubagentMaintenanceRunsFromSqlite,
 } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  copySubagentRunRuntimeOwner,
-  retainSubagentRunRuntimeOwner,
-} from "./subagent-run-generation.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
@@ -210,6 +202,16 @@ export function publishSubagentRunsAfterAtomicStore(
   });
 }
 
+/** Hydration establishes a notification baseline before synchronous ownership observers run. */
+export function rememberRestoredSubagentRunNotification(entry: SubagentRunRecord): void {
+  const notification = swarmNotification(entry);
+  if (notification) {
+    committedSwarmNotifications.set(entry.runId, notification);
+  } else {
+    committedSwarmNotifications.delete(entry.runId);
+  }
+}
+
 /** Existing resident facts, fenced by the physical source rather than a publisher's scope. */
 export function getSubagentSessionListReadSnapshotIdentity(): object | undefined {
   if (!shouldReadPersistedSubagentRuns()) {
@@ -314,53 +316,12 @@ export function clearSubagentRunsReadCacheForTest(): void {
   persistedSubagentMaintenanceRunsReadCache.state = {};
 }
 
-export async function restoreSubagentRunsFromDisk(params: {
-  runs: Map<string, SubagentRunRecord>;
-  mergeOnly?: boolean;
-  context?: OpenClawStateWorkerContext;
-  assertCurrent?: () => void;
-}) {
-  const context = params.context ?? captureOpenClawStateWorkerContext();
-  return withSubagentRegistryRestore(context, () =>
-    consumeFreshSubagentRuns(persistedSubagentRunsReadCache, context, (restored) => {
-      params.assertCurrent?.();
-      if (!params.mergeOnly) {
-        reconcileRetiredSubagentRegistryWrites(params.runs, restored);
-        for (const runId of params.runs.keys()) {
-          if (!restored.has(runId)) {
-            params.runs.delete(runId);
-          }
-        }
-      }
-      let added = 0;
-      for (const [runId, entry] of restored) {
-        if (params.mergeOnly && params.runs.has(runId)) {
-          continue;
-        }
-        retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
-        params.runs.set(runId, immutableSubagentRun(entry));
-        const notification = swarmNotification(entry);
-        if (notification) {
-          committedSwarmNotifications.set(runId, notification);
-        } else {
-          committedSwarmNotifications.delete(runId);
-        }
-        subagentRuns.commitOwnership(entry);
-        added += 1;
-      }
-      const events: Array<() => void> = [];
-      publishSubagentRunsAfterAtomicStore(
-        params.runs,
-        undefined,
-        events,
-        context.admission.databasePath,
-      );
-      for (const event of events) {
-        event();
-      }
-      return added;
-    }),
-  );
+/** Consume a canonical worker read without crossing a cache-publication invalidation. */
+export function consumeFreshSubagentRegistryRows<T>(
+  context: OpenClawStateWorkerContext,
+  consume: (runs: ReadonlyMap<string, SubagentRunRecord>) => T,
+): Promise<T> {
+  return consumeFreshSubagentRuns(persistedSubagentRunsReadCache, context, consume);
 }
 
 export function getSubagentRunsSnapshotForRead(

@@ -7,9 +7,11 @@ import * as completion from "../agents/subagents/completion/subagent-completion-
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
 import { createSubagentRegistryCompletionRuntime } from "../agents/subagents/registry/subagent-registry-completion-runtime.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { readFullSubagentRuns } from "../agents/subagents/registry/subagent-registry-read-cache.js";
-import { restoreSubagentRunsFromDisk } from "../agents/subagents/registry/subagent-registry-state.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";

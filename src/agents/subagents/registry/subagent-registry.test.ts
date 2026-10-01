@@ -136,19 +136,36 @@ vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
 }));
 
 vi.mock("./subagent-registry-state.js", async (importOriginal) => {
-  const { publishSubagentRunsAfterAtomicStore } =
-    await importOriginal<typeof import("./subagent-registry-state.js")>();
+  const {
+    consumeFreshSubagentRegistryRows,
+    publishSubagentRunsAfterAtomicStore,
+    rememberRestoredSubagentRunNotification,
+  } = await importOriginal<typeof import("./subagent-registry-state.js")>();
   return {
+    consumeFreshSubagentRegistryRows,
+    rememberRestoredSubagentRunNotification,
     clearSubagentRunsReadCacheForTest: mocks.clearSubagentRunsReadCacheForTest,
     getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
     getSubagentRunsSnapshotForController: mocks.getSubagentRunsSnapshotForController,
     getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
     getSubagentMaintenanceRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
-    ...(await import("../../subagent-test-fixtures.test-helpers.js")).createSubagentPersistenceMock(
+    ...(await import("../../subagent-test-fixtures.test-helpers.js")).createSubagentStateMock(
       mocks,
       publishSubagentRunsAfterAtomicStore,
     ),
   };
+});
+
+vi.mock("./subagent-registry-persistence.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./subagent-registry-persistence.js")>();
+  return {
+    ...original,
+    restoreSubagentRunsFromDisk: async (...args) => {
+      const restored = await mocks.restoreSubagentRunsFromDisk(...args);
+      mocks.notifyRegistryPersisted();
+      return restored;
+    },
+  } satisfies typeof original;
 });
 
 vi.mock("../announce/subagent-announce.js", () => ({

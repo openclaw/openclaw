@@ -4,6 +4,8 @@ import type {
 } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
@@ -15,6 +17,45 @@ import type {
   SubagentCompletionDeliveryState,
   SubagentRunReadRecord,
 } from "./subagent-registry-read.types.js";
+import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
+
+export type SubagentRunMutation<T> = {
+  value: T;
+  postimages?: ReadonlyMap<string, SubagentRunRecord | null>;
+  versions?: ReadonlyMap<string, string | null>;
+  rekeys?: ReadonlyMap<string, string>;
+  terminalEvents?: readonly {
+    input: NonNullable<SubagentRegistryWrite["terminalEvents"]>[number];
+    sessionEntryCurrent?: SessionEntryCurrentCheck;
+  }[];
+};
+
+export type SubagentRegistryWriteAuthority = {
+  assertCurrent: () => void;
+  assertDatabase: () => void;
+};
+
+export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> = {
+  runs?: Map<string, SubagentRunRecord>;
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+  pendingKillClaim?: SubagentRunRecord;
+  gatewayRecovery?: {
+    expected: SubagentRunRecord;
+    previousResolver: GatewayContextResolver;
+    resolver: GatewayContextResolver;
+    gateway: NonNullable<ReturnType<GatewayContextResolver>>;
+  };
+  onPublished?: (
+    postimages: ReadonlyMap<string, SubagentRunRecord | null>,
+    value: P["value"],
+  ) => void;
+  commit?: (
+    planned: P,
+    versions: ReadonlyMap<string, string | null>,
+    authority: SubagentRegistryWriteAuthority,
+  ) => Promise<SubagentRunMutation<P["value"]>>;
+};
 
 export type SubagentSessionEffects = {
   isCurrent(): Promise<boolean>;

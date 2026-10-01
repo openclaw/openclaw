@@ -37,6 +37,7 @@ import * as announceCleanup from "./subagent-registry-lifecycle-announce-cleanup
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import { getSubagentRegistryPublicationRevision } from "./subagent-registry-publication.js";
@@ -309,7 +310,7 @@ it.each(["not-committed", "unknown", "successor"] as const)(
       await fixture.settle();
       if (change === "unknown") {
         await closeOpenClawStateDatabaseAsync();
-        await nativeState.restoreSubagentRunsFromDisk({ runs: subagentRuns });
+        await restoreSubagentRunsFromDisk({ runs: subagentRuns });
       }
     }
   },
@@ -404,12 +405,12 @@ it.each([
       let publicationWork: Promise<unknown> | undefined;
       if (publication === "replacement source") {
         await rename(replacementPath, databasePath);
-        publicationWork = nativeState.restoreSubagentRunsFromDisk({ runs: subagentRuns });
+        publicationWork = restoreSubagentRunsFromDisk({ runs: subagentRuns });
       } else if (publication !== "none") {
         publicationWork = (async () => {
           (await prepareSubagentSessionCleanupRevocation(run.childSessionKey))();
           if (publication === "restored same-ID owner") {
-            await nativeState.restoreSubagentRunsFromDisk({ runs: subagentRuns });
+            await restoreSubagentRunsFromDisk({ runs: subagentRuns });
           }
         })();
       }

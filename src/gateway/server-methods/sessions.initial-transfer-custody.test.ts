@@ -14,7 +14,7 @@ import {
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { createRequesterYieldCallback } from "../../agents/openclaw-tools.requester-yield.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
+import * as registryPersistence from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import * as registryState from "../../agents/subagents/registry/subagent-registry-state.js";
 import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
@@ -81,8 +81,8 @@ async function createYieldedChild(withSibling = false) {
       cleanup: "keep",
     });
   }
-  const nativeState = await vi.importActual<typeof registryState>(
-    "../../agents/subagents/registry/subagent-registry-state.js",
+  const nativePersistence = await vi.importActual<typeof registryPersistence>(
+    "../../agents/subagents/registry/subagent-registry-persistence.js",
   );
   const onYield = vi.fn();
   const tool = createSessionsYieldTool({
@@ -100,7 +100,7 @@ async function createYieldedChild(withSibling = false) {
   return {
     entry: expectDefined(subagentRuns.get(runId), "original cohort child"),
     entries: children.map((child) => expectDefined(subagentRuns.get(child.runId), "cohort member")),
-    nativeState,
+    nativePersistence,
     onYield,
     settle: (requesterYielded = true) =>
       settleRequesterAfterSessionSpawns({
@@ -153,9 +153,9 @@ it.each(["unchanged", "replaced", "empty"] as const)(
     await closeOpenClawStateDatabaseAsync();
     const restoreEntered = createDeferred();
     const releaseRestore = createDeferred();
-    const restore = registryState.restoreSubagentRunsFromDisk;
+    const restore = registryPersistence.restoreSubagentRunsFromDisk;
     const restoreSpy = vi
-      .spyOn(registryState, "restoreSubagentRunsFromDisk")
+      .spyOn(registryPersistence, "restoreSubagentRunsFromDisk")
       .mockImplementation(async (...args) => {
         const result = await restore(...args);
         restoreEntered.resolve();
@@ -299,7 +299,7 @@ it.each(["source retirement", "transport failure after commit"] as const)(
   "never repeats the acknowledged cohort release after its %s result",
   async (outcome) => {
     vi.useFakeTimers();
-    const { entry, settle, nativeState } = await createYieldedChild();
+    const { entry, settle, nativePersistence } = await createYieldedChild();
     let writes = 0;
     let closing: Promise<void> | undefined;
     const runWorker = runSubagentStateWorkerOperation;
@@ -346,7 +346,7 @@ it.each(["source retirement", "transport failure after commit"] as const)(
       expect(fixture.wake).not.toHaveBeenCalled();
       await closing;
       await closeOpenClawStateDatabaseAsync();
-      await nativeState.restoreSubagentRunsFromDisk({ runs: subagentRuns });
+      await nativePersistence.restoreSubagentRunsFromDisk({ runs: subagentRuns });
       const restored = expectDefined(subagentRuns.get(entry.runId), "released durable cohort");
       expect(restored).not.toBe(entry);
       expect(restored.requesterTurnRunId).toBeUndefined();
@@ -417,7 +417,7 @@ it.each([
       await closeOpenClawStateDatabaseAsync();
       if (missing) {
         // A durable partial cohort must never become a new, smaller first-stage write.
-        await mutateSubagentRuns(
+        await registryPersistence.mutateSubagentRuns(
           [entries[1]!.runId],
           () => ({
             value: undefined,

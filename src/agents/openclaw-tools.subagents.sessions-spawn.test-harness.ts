@@ -238,12 +238,14 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
       },
     }),
   });
-  const persistence = await import("./subagents/registry/subagent-registry-state.js");
+  const persistence = await import("./subagents/registry/subagent-registry-persistence.js");
   vi.mocked(persistence.restoreSubagentRunsFromDisk).mockResolvedValue(0);
   if (!persistenceStubInstalled) {
     await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
     persistenceStubInstalled = true;
-    const unsubscribe = persistence.onSubagentRegistryPersisted(hoisted.notifyEventWaiters);
+    const { onSubagentRegistryPersisted } =
+      await import("./subagents/registry/subagent-registry-state.js");
+    const unsubscribe = onSubagentRegistryPersisted(hoisted.notifyEventWaiters);
     onTestFinished(() => {
       unsubscribe();
       persistenceStubInstalled = false;
@@ -361,6 +363,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("./subagents/registry/subagent-registry-state.js", { spy: true });
+vi.mock("./subagents/registry/subagent-registry-persistence.js", { spy: true });
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));

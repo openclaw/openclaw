@@ -28,6 +28,7 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
   SubagentRegistryConflictError,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
@@ -36,7 +37,6 @@ import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
-  restoreSubagentRunsFromDisk,
   onSubagentRegistryPersisted,
   getSubagentRunsSnapshotForRead,
   getSubagentMaintenanceRunsSnapshotForRead,

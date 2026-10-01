@@ -551,12 +551,12 @@ export function commitRequesterWake(
       const key = getSubagentRunRuntimeKey(entry);
       const committed = pending.committedWake;
       // A canonical conflict refresh may expose our deletion before its callback publishes.
-      return Boolean(
+      return (
         owners.has(key) &&
         !context.options.runs.has(entry.runId) &&
         committed?.result.applied === true &&
         committed.result.retiredRunIds.includes(entry.runId) &&
-        committed.entries.some(({ subagent }) => isSameSubagentRunOwner(subagent, entry)),
+        committed.entries.some(({ subagent }) => isSameSubagentRunOwner(subagent, entry))
       );
     },
     adoptPublished(members) {

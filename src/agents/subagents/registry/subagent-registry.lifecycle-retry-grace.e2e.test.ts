@@ -313,14 +313,9 @@ describe("subagent registry lifecycle error grace", () => {
   }
 
   function getRequesterWakeCalls() {
-    return getAgentCalls().filter((request) => {
-      const idempotencyKey = (request.params as Record<string, unknown> | undefined)
-        ?.idempotencyKey;
-      return (
-        typeof idempotencyKey === "string" &&
-        idempotencyKey.startsWith("announce:requester-settle:")
-      );
-    });
+    return getAgentCalls().filter((request) =>
+      request.params?.idempotencyKey?.startsWith("announce:requester-settle:"),
+    );
   }
 
   it("yields an owned visible child and delivers its requester final exactly once", async () => {
@@ -512,17 +507,13 @@ describe("subagent registry lifecycle error grace", () => {
     }
     await mutateSubagentRuns([betaBeforeYield.runId], (rows) => {
       const current = expectDefined(rows.get(betaBeforeYield.runId), "beta delivery owner");
+      const postimage = {
+        ...current,
+        delivery: { ...current.delivery, status: "in_progress" as const },
+      };
       return {
         value: undefined,
-        postimages: new Map([
-          [
-            current.runId,
-            {
-              ...current,
-              delivery: { ...current.delivery, status: "in_progress" as const },
-            },
-          ],
-        ]),
+        postimages: new Map([[current.runId, postimage]]),
       };
     });
 
@@ -1052,18 +1043,12 @@ describe("subagent registry lifecycle error grace", () => {
     // requester-settle wake should be emitted after successful delivery.
     await vi.advanceTimersByTimeAsync(30_000);
     await flushAsync();
-    const readIdempotencyKey = (request: GatewayRequest) => {
-      const key = (request.params as Record<string, unknown> | undefined)?.idempotencyKey;
-      return typeof key === "string" ? key : "";
-    };
     expect(
-      getAgentCalls().filter((request) => readIdempotencyKey(request).startsWith("announce:v1:")),
+      getAgentCalls().filter((request) =>
+        request.params?.idempotencyKey?.startsWith("announce:v1:"),
+      ),
     ).toHaveLength(1);
-    expect(
-      getAgentCalls()
-        .map(readIdempotencyKey)
-        .filter((key) => key.startsWith("announce:requester-settle:")),
-    ).toHaveLength(0);
+    expect(getRequesterWakeCalls()).toHaveLength(0);
   });
 
   it("keeps parallel child completion results frozen even when late traffic arrives", async () => {

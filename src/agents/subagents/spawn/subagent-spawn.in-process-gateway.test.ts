@@ -38,7 +38,7 @@ import {
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-state.js";
+import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-persistence.js";
 import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
@@ -54,6 +54,7 @@ vi.mock("../../runtime-plugins.js", () => ({
     vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
 }));
 vi.mock("../registry/subagent-registry-state.js", { spy: true });
+vi.mock("../registry/subagent-registry-persistence.js", { spy: true });
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 let stateDir = "";

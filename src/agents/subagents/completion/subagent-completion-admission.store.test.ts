@@ -22,8 +22,8 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
   mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
 } from "../registry/subagent-registry-persistence.js";
-import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-state.js";
 import {
   loadSubagentRegistryFromSqlite,
   readSubagentRun,

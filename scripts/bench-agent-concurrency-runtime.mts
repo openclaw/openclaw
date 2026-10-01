@@ -2,8 +2,8 @@ import { mock } from "node:test";
 import type {
   SubagentRunMutation,
   SubagentRunMutationOptions,
-} from "../src/agents/subagents/registry/subagent-registry-persistence.js";
-import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+  SubagentRunRecord,
+} from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { callGateway } from "../src/gateway/call.js";
 
 /** Install before the worker imports the registry; keep these bindings across its samples. */

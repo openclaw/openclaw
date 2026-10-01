@@ -60,8 +60,8 @@ export function createPendingLifecycleScheduler(params: {
 
   function schedule(kind: PendingLifecycleKind, scheduleParams: PendingLifecycleParams) {
     const selected = scheduleParams.expectedEntry;
-    const current = getCurrentSubagentRunOwner(params.runs, selected);
-    if (!current || !canComplete(kind, current, selected)) {
+    const currentAtSchedule = getCurrentSubagentRunOwner(params.runs, selected);
+    if (!currentAtSchedule || !canComplete(kind, currentAtSchedule, selected)) {
       return;
     }
     clearKind(scheduleParams.runId);

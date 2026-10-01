@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assertSessionEntryCurrentAdmission } from "../../../config/sessions/session-entry-current-admission.js";
-import type { SessionEntryCurrentCheck } from "../../../config/sessions/session-entry-current.types.js";
-import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   SqliteWorkerError,
@@ -23,7 +21,11 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
+import {
+  consumeFreshSubagentRegistryRows,
+  publishSubagentRunsAfterAtomicStore,
+  rememberRestoredSubagentRunNotification,
+} from "./subagent-registry-state.js";
 import {
   bindSubagentRunRecord,
   parseSubagentRegistryWriteReceipt,
@@ -31,7 +33,12 @@ import {
   subagentRunRecordVersion,
 } from "./subagent-registry.store.codec.js";
 import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  SubagentRegistryWriteAuthority,
+  SubagentRunMutation,
+  SubagentRunMutationOptions,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
 import {
   bindSubagentRunRuntimeKey,
   copySubagentRunRuntimeOwner,
@@ -191,44 +198,6 @@ export class SubagentRegistryCommitReceiptError extends SubagentRegistryWriteErr
     this.name = "SubagentRegistryCommitReceiptError";
   }
 }
-
-export type SubagentRunMutation<T> = {
-  value: T;
-  postimages?: ReadonlyMap<string, SubagentRunRecord | null>;
-  versions?: ReadonlyMap<string, string | null>;
-  rekeys?: ReadonlyMap<string, string>;
-  terminalEvents?: readonly {
-    input: NonNullable<SubagentRegistryWrite["terminalEvents"]>[number];
-    sessionEntryCurrent?: SessionEntryCurrentCheck;
-  }[];
-};
-
-export type SubagentRegistryWriteAuthority = {
-  assertCurrent: () => void;
-  assertDatabase: () => void;
-};
-
-export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> = {
-  runs?: Map<string, SubagentRunRecord>;
-  context?: OpenClawStateWorkerContext;
-  assertCurrent?: () => void;
-  pendingKillClaim?: SubagentRunRecord;
-  gatewayRecovery?: {
-    expected: SubagentRunRecord;
-    previousResolver: GatewayContextResolver;
-    resolver: GatewayContextResolver;
-    gateway: NonNullable<ReturnType<GatewayContextResolver>>;
-  };
-  onPublished?: (
-    postimages: ReadonlyMap<string, SubagentRunRecord | null>,
-    value: P["value"],
-  ) => void;
-  commit?: (
-    planned: P,
-    versions: ReadonlyMap<string, string | null>,
-    authority: SubagentRegistryWriteAuthority,
-  ) => Promise<SubagentRunMutation<P["value"]>>;
-};
 
 function freezeValue(value: unknown): void {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) {
@@ -645,8 +614,52 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
   }
 }
 
+export async function restoreSubagentRunsFromDisk(params: {
+  runs: Map<string, SubagentRunRecord>;
+  mergeOnly?: boolean;
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+}) {
+  const context = params.context ?? captureOpenClawStateWorkerContext();
+  return withSubagentRegistryRestore(context, () =>
+    consumeFreshSubagentRegistryRows(context, (restored) => {
+      params.assertCurrent?.();
+      if (!params.mergeOnly) {
+        reconcileRetiredSubagentRegistryWrites(params.runs, restored);
+        for (const runId of params.runs.keys()) {
+          if (!restored.has(runId)) {
+            params.runs.delete(runId);
+          }
+        }
+      }
+      let added = 0;
+      for (const [runId, entry] of restored) {
+        if (params.mergeOnly && params.runs.has(runId)) {
+          continue;
+        }
+        retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
+        params.runs.set(runId, immutableSubagentRun(entry));
+        rememberRestoredSubagentRunNotification(entry);
+        subagentRuns.commitOwnership(entry);
+        added += 1;
+      }
+      const events: Array<() => void> = [];
+      publishSubagentRunsAfterAtomicStore(
+        params.runs,
+        undefined,
+        events,
+        context.admission.databasePath,
+      );
+      for (const event of events) {
+        event();
+      }
+      return added;
+    }),
+  );
+}
+
 /** Canonical restore is exclusive with both accepted mutations and subsequent admissions. */
-export async function withSubagentRegistryRestore<T>(
+async function withSubagentRegistryRestore<T>(
   context: OpenClawStateWorkerContext,
   restore: () => Promise<T>,
 ): Promise<T> {
@@ -668,7 +681,7 @@ export async function withSubagentRegistryRestore<T>(
 }
 
 /** A source close alone cannot clear an unknown commit; only a canonical read can. */
-export function reconcileRetiredSubagentRegistryWrites(
+function reconcileRetiredSubagentRegistryWrites(
   runs: Map<string, SubagentRunRecord>,
   restored: ReadonlyMap<string, SubagentRunRecord>,
 ): void {

@@ -35,6 +35,7 @@ import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.tes
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
@@ -209,9 +210,7 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
           await registerSubagentRun({ ...registration, task: "successor" });
         } else {
           // The existing startup owner hydrates the persisted row; this is not an absence witness.
-          expect(
-            await registryState.restoreSubagentRunsFromDisk({ runs: subagentRuns }),
-          ).toBeGreaterThan(0);
+          expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBeGreaterThan(0);
         }
         const successor = subagentRuns.get(runId)!;
         expect(successor).not.toBe(original);

@@ -21,14 +21,17 @@ import type {
 } from "../../../sessions/session-lifecycle-events.js";
 import { notifyListeners, registerListener } from "../../../shared/listeners.js";
 import type { MockSubagentRegistryRows } from "../../subagent-test-fixtures.test-helpers.js";
-import type { restoreSubagentRunsFromDisk } from "./subagent-registry-state.js";
+import type { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
 
 export function createSubagentRegistryMockState() {
   const sessionIdentityMutationListeners = new Set<SessionIdentityMutationListener>();
+  const registryPersistListeners = new Set<() => void>();
   const mocks = {
+    registryPersistListeners,
+    notifyRegistryPersisted: () => notifyListeners(registryPersistListeners, undefined),
     callGateway:
       vi.fn<
         (request: {

@@ -496,9 +496,9 @@ it("retains an unknown initial intent until canonical worker restore reconciles 
     expectsCompletionMessage: true,
   });
   const entry = expectDefined(subagentRuns.get(runId), "original uncertain child");
-  const nativeState = await vi.importActual<
-    typeof import("../../agents/subagents/registry/subagent-registry-state.js")
-  >("../../agents/subagents/registry/subagent-registry-state.js");
+  const nativePersistence = await vi.importActual<
+    typeof import("../../agents/subagents/registry/subagent-registry-persistence.js")
+  >("../../agents/subagents/registry/subagent-registry-persistence.js");
   let writes = 0;
   const worker = vi
     .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
@@ -530,7 +530,7 @@ it("retains an unknown initial intent until canonical worker restore reconciles 
   }
   const restoredSql = observeParentSqlite();
   try {
-    await nativeState.restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    await nativePersistence.restoreSubagentRunsFromDisk({ runs: subagentRuns });
   } finally {
     restoredSql.restore();
   }
