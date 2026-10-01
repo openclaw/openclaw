@@ -48,6 +48,11 @@ cannot replace the batch's delivery state; already committed delivery evidence
 remains valid. Restart activation reconciles retained requester-turn bindings
 before resuming child completion.
 
+When a requester consumes a queued child result and then yields for new work,
+the prompt owner acknowledges that result so it cannot replay or block the next
+child batch. Preflight and compaction alone do not count as consumption.
+Unconsumed results and ordinary cancellation keep their existing release behavior.
+
 For a nested requester, settlement persists its paused run together with the
 child wake batch before scheduling the continuation. This also covers a child
 that finishes before the requester yields: successor admission must not depend
