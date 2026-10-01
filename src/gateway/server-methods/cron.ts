@@ -901,15 +901,17 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
       const ack = { ...result, processInstanceId: getGatewayProcessInstanceId() };
       const callerSessionKey = client?.internal?.agentRuntimeIdentity?.sessionKey;
-      // An agent turn holds the main lane and its own session lane until it ends, so a run
-      // that executes there, or announces a current-session result into it, cannot finish
-      // while this request waits.
+      // An agent turn holds the main lane and its own session lane until it ends, so an
+      // agent-turn run that executes there, or announces a current-session result into it,
+      // cannot finish while this request waits. Command and script payloads run as processes.
       const dependentSessionKey =
-        job.sessionTarget === "current"
-          ? resolveCronDeliveryPlan(job).requested
-            ? job.sessionKey
-            : undefined
-          : resolveCronSessionTargetSessionKey(job.sessionTarget);
+        job.payload.kind !== "agentTurn"
+          ? undefined
+          : job.sessionTarget === "current"
+            ? resolveCronDeliveryPlan(job).requested
+              ? job.sessionKey
+              : undefined
+            : resolveCronSessionTargetSessionKey(job.sessionTarget);
       const cfg = context.getRuntimeConfig();
       const runQueuesBehindCaller =
         callerSessionKey !== undefined &&
