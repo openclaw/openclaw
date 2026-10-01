@@ -27,8 +27,10 @@ const cleanups: (() => void)[] = [];
 
 function subscribe(reader: ReturnType<typeof createStoredChatOutboxReader>) {
   let change = Promise.withResolvers<void>();
-  cleanups.push(reader.subscribe(() => change.resolve()));
+  const listener = vi.fn(() => change.resolve());
+  cleanups.push(reader.subscribe(listener));
   return {
+    listener,
     next() {
       change = Promise.withResolvers<void>();
       return change.promise;
@@ -78,8 +80,39 @@ afterEach(async () => {
 });
 
 describe("stored draft projection", () => {
+  it("preserves the summary and stays silent when a durable write leaves badges unchanged", async () => {
+    seedTab({ a: { draft: "tab input", draftRevision: 10, updatedAt: 1 } });
+    const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
+    const reader = createStoredChatOutboxReader();
+    const changes = subscribe(reader);
+    const host = state();
+    reader.read(host);
+    await vi.dynamicImportSettled();
+    expect(list).toHaveBeenCalledTimes(1);
+    await list.mock.results[0]?.value;
+    const initial = reader.read(host);
+    expect(initial.hasSessionDraft(key("a"))).toBe(true);
+    changes.listener.mockClear();
+
+    await writeDraft("a");
+    expect(list).toHaveBeenCalledTimes(2);
+    await list.mock.results[1]?.value;
+    expect(changes.listener).not.toHaveBeenCalled();
+    expect(reader.read(host)).toBe(initial);
+
+    const changed = changes.next();
+    await writeDraft("b");
+    await changed;
+    const summary = reader.read(host);
+    expect(changes.listener).toHaveBeenCalledOnce();
+    expect(summary).not.toBe(initial);
+    expect(summary.hasSessionDraft(key("a"))).toBe(true);
+    expect(summary.hasSessionDraft(key("b"))).toBe(true);
+  });
+
   it("loads unopened attachment drafts, reloads local writes, and drops a replaced owner", async () => {
     await writeDraft("b");
+    const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
     const reader = createStoredChatOutboxReader();
     const changes = subscribe(reader);
     const globalListener = vi.fn();
@@ -95,10 +128,12 @@ describe("stored draft projection", () => {
     await written;
     expect(reader.read(host).hasSessionDraft(key("c"))).toBe(true);
 
-    const switched = changes.next();
+    changes.listener.mockClear();
     host.client = { recoveryScope: "principal-b", recoveryScopeReady: true };
     expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
-    await switched;
+    expect(list).toHaveBeenCalledTimes(3);
+    await list.mock.results[2]?.value;
+    expect(changes.listener).not.toHaveBeenCalled();
     expect(reader.read(host).hasSessionDraft(key("c"))).toBe(false);
   });
 
@@ -134,6 +169,7 @@ describe("stored draft projection", () => {
 
   it("does not open IndexedDB without subscribers or a ready recovery owner", async () => {
     const open = vi.spyOn(indexedDB, "open");
+    const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
     const reader = createStoredChatOutboxReader();
     reader.read(state());
     const other = createStoredChatOutboxReader();
@@ -143,7 +179,10 @@ describe("stored draft projection", () => {
     await vi.dynamicImportSettled();
     expect(open).not.toHaveBeenCalled();
     const attached = subscribe(reader);
-    await attached.changed;
+    await vi.dynamicImportSettled();
+    expect(list).toHaveBeenCalledOnce();
+    await list.mock.results[0]?.value;
+    expect(attached.listener).not.toHaveBeenCalled();
     expect(open).toHaveBeenCalledOnce();
   });
 
@@ -170,8 +209,10 @@ describe("stored draft projection", () => {
       status: "ready",
       presence: new Map([[storedKey("b"), { revision: 10, active: true }]]),
     });
-    await changes.changed;
+    await pending.promise;
     expect(list).toHaveBeenCalledTimes(2);
+    await list.mock.results[1]?.value;
+    expect(changes.listener).not.toHaveBeenCalled();
     expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
   });
 
@@ -182,11 +223,12 @@ describe("stored draft projection", () => {
     const reader = createStoredChatOutboxReader();
     const changes = subscribe(reader);
     const host = state();
-    reader.read(host);
-    await changes.changed;
-    reader.read(host);
+    const initial = reader.read(host);
     await vi.dynamicImportSettled();
     expect(list).toHaveBeenCalledTimes(1);
+    await list.mock.results[0]?.value;
+    expect(changes.listener).not.toHaveBeenCalled();
+    expect(reader.read(host)).toBe(initial);
     const changed = changes.next();
     await writeDraft("b");
     await changed;
@@ -198,4 +240,40 @@ describe("stored draft projection", () => {
     await reattached.changed;
     expect(reader.read(host).hasSessionDraft(key("c"))).toBe(true);
   });
+
+  it.each(["storage-failed", "exception"] as const)(
+    "notifies on %s only when tab-only fallback changes a badge",
+    async (failure) => {
+      await writeDraft("b");
+      const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
+      const reader = createStoredChatOutboxReader();
+      const changes = subscribe(reader);
+      const host = state();
+      reader.read(host);
+      await changes.changed;
+      const initial = reader.read(host);
+      expect(initial.hasSessionDraft(key("b"))).toBe(true);
+      if (failure === "storage-failed") {
+        list.mockResolvedValue({ status: "storage-failed" });
+      } else {
+        list.mockRejectedValue(new Error("Presence load failed"));
+      }
+      changes.listener.mockClear();
+      const changed = changes.next();
+      await writeDraft("c");
+      await changed;
+      const fallback = reader.read(host);
+      expect(changes.listener).toHaveBeenCalledOnce();
+      expect(fallback).not.toBe(initial);
+      expect(fallback.hasSessionDraft(key("b"))).toBe(false);
+      expect(fallback.hasSessionDraft(key("c"))).toBe(false);
+
+      changes.listener.mockClear();
+      await writeDraft("d");
+      expect(list).toHaveBeenCalledTimes(3);
+      await list.mock.results[2]?.value.catch(() => undefined);
+      expect(changes.listener).not.toHaveBeenCalled();
+      expect(reader.read(host)).toBe(fallback);
+    },
+  );
 });

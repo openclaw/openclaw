@@ -31,8 +31,10 @@ type StoredOutboxReaderScope = ChatComposerScope &
 export function createStoredChatOutboxReader() {
   let cached: {
     inputs: readonly unknown[];
-    summary: ReturnType<typeof summarizeStoredChatOutboxes>;
+    summary: ReturnType<typeof summarizeStoredChatOutboxes>["summary"];
+    draftSignature: string;
   } | null = null;
+  let lastState: StoredOutboxReaderScope | undefined;
   const listeners = new Set<() => void>();
   let owner: { gatewayOwner: string; recoveryScope: string } | undefined;
   let presence: ReadonlyMap<string, DurableChatDraftPresence> | undefined;
@@ -59,6 +61,34 @@ export function createStoredChatOutboxReader() {
     generation += 1;
     stale = true;
   };
+  const readInputs = (state: StoredOutboxReaderScope) => [
+    state.settings?.gatewayUrl,
+    state.assistantAgentId,
+    state.agentsList,
+    state.hello,
+    state.client,
+    state.client?.recoveryScope,
+    state.client?.recoveryScopeReady,
+    state.connected,
+    presence,
+  ];
+  const updatePresence = (nextPresence: typeof presence) => {
+    const previous = cached;
+    const inputs = lastState ? readInputs(lastState) : undefined;
+    presence = nextPresence;
+    stale = false;
+    if (
+      previous &&
+      lastState &&
+      inputs?.every((value, index) => Object.is(value, previous.inputs[index])) &&
+      summarizeStoredChatOutboxes(lastState, presence).draftSignature === previous.draftSignature
+    ) {
+      // A durable write can replace tab input without changing any rendered badge.
+      previous.inputs = readInputs(lastState);
+      return;
+    }
+    notify();
+  };
   const loadPresence = async () => {
     if (loading || !stale || !owner || !listeners.size) {
       return;
@@ -82,14 +112,10 @@ export function createStoredChatOutboxReader() {
       if (loadGeneration !== generation) {
         return;
       }
-      presence = result.status === "ready" ? result.presence : undefined;
-      stale = false;
-      notify();
+      updatePresence(result.status === "ready" ? result.presence : undefined);
     } catch {
       if (loadGeneration === generation) {
-        presence = undefined;
-        stale = false;
-        notify();
+        updatePresence(undefined);
       }
     } finally {
       loading = false;
@@ -117,6 +143,7 @@ export function createStoredChatOutboxReader() {
       };
     },
     read(state: StoredOutboxReaderScope) {
+      lastState = state;
       const gatewayOwner = storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner;
       const recoveryScope = observeOutboxRecoveryOwner(state);
       if (owner?.gatewayOwner !== gatewayOwner || owner?.recoveryScope !== recoveryScope) {
@@ -125,24 +152,13 @@ export function createStoredChatOutboxReader() {
         markStale();
       }
       void loadPresence();
-      const inputs = [
-        state.settings?.gatewayUrl,
-        state.assistantAgentId,
-        state.agentsList,
-        state.hello,
-        state.client,
-        state.client?.recoveryScope,
-        state.client?.recoveryScopeReady,
-        state.connected,
-        presence,
-      ];
+      const inputs = readInputs(state);
       const previous = cached;
       if (previous && inputs.every((value, index) => Object.is(value, previous.inputs[index]))) {
         return previous.summary;
       }
-      const summary = summarizeStoredChatOutboxes(state, presence);
-      cached = { inputs, summary };
-      return summary;
+      cached = { inputs, ...summarizeStoredChatOutboxes(state, presence) };
+      return cached.summary;
     },
   };
 }
@@ -268,10 +284,15 @@ function summarizeStoredChatOutboxes(
   const sessionScopeKey = (sessionKey: string) =>
     storedChatOutboxScopeKey(resolveUiConversationIdentity(state, sessionKey));
   return {
-    total,
-    attentionCountForSession: (sessionKey: string) =>
-      attentionCountsByScope.get(sessionScopeKey(sessionKey)) ?? 0,
-    hasSessionDraft: (sessionKey: string) =>
-      Boolean(drafts.get(sessionScopeKey(sessionKey))?.active),
+    draftSignature: JSON.stringify(
+      [...drafts].flatMap(([scopeKey, draft]) => (draft.active ? [scopeKey] : [])).sort(),
+    ),
+    summary: {
+      total,
+      attentionCountForSession: (sessionKey: string) =>
+        attentionCountsByScope.get(sessionScopeKey(sessionKey)) ?? 0,
+      hasSessionDraft: (sessionKey: string) =>
+        Boolean(drafts.get(sessionScopeKey(sessionKey))?.active),
+    },
   };
 }
