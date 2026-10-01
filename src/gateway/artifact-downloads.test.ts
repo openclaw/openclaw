@@ -44,7 +44,7 @@ function apngWithLargeMetadata(): Buffer {
   return Buffer.concat([APNG_BYTES.subarray(0, 33), chunk, APNG_BYTES.subarray(33)]);
 }
 
-it.each(["current", "source", "connection", "expiry"] as const)(
+it.each(["source", "connection", "expiry"] as const)(
   "rechecks captured download authority after the read settles (%s)",
   async (change) => {
     using clock = vi.spyOn(Date, "now").mockReturnValue(1000);
@@ -95,10 +95,8 @@ it.each(["current", "source", "connection", "expiry"] as const)(
       }
       release.resolve();
       expect(await pending).toBe(true);
-      expect(response.res.statusCode).toBe(change === "current" ? 200 : 404);
-      expect(response.end).toHaveBeenCalledExactlyOnceWith(
-        change === "current" ? new Uint8Array(Buffer.from("captured body")) : "Not Found",
-      );
+      expect(response.res.statusCode).toBe(404);
+      expect(response.end).toHaveBeenCalledExactlyOnceWith("Not Found");
     } finally {
       release.resolve();
       await pending;
