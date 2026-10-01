@@ -69,7 +69,7 @@ import {
   captureReplyOperationSessionReader,
   getReplyOperationSessionReader,
 } from "./reply-run-registry.state.js";
-import { bindReplyOperationTyping } from "./reply-run-typing.js";
+import { bindQueuedFollowupTyping, bindReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -394,6 +394,7 @@ export async function runReplyAgent(
 
   if (activeRunQueueAction === "enqueue-followup") {
     bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
+    const typingSettlesWithQueuedItem = bindQueuedFollowupTyping(followupRun, typing);
     const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
@@ -443,6 +444,9 @@ export async function runReplyAgent(
     const queuedBehindActiveRun = isRunActive?.() === true;
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
+      if (typingSettlesWithQueuedItem) {
+        opts?.onTypingHandoff?.();
+      }
       await typingSignals.signalToolStart();
     } else {
       typing.cleanup();

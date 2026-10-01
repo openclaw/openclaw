@@ -25,7 +25,7 @@ import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 import { claimInboundDedupe } from "./inbound-dedupe.js";
 import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./message-received-hooks.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-source.js";
 import { resolveDispatchConversationBinding } from "./session-conversation-binding.js";

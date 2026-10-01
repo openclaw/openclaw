@@ -1,3 +1,4 @@
+import type { FollowupRun } from "./queue/types.js";
 import { runAfterReplyOperationClear, type ReplyOperation } from "./reply-run-registry.js";
 import type { TypingController } from "./typing.js";
 
@@ -28,4 +29,28 @@ export async function refreshReplyOperationTyping(
     return;
   }
   await typing.startTypingLoop();
+}
+
+/**
+ * The queued item, not the dispatch that queued it, ends its wait: settlement covers
+ * execution, cancellation, and removal from the queue. Without a lifecycle nothing
+ * would settle typing, so the dispatch keeps it.
+ */
+export function bindQueuedFollowupTyping(
+  followupRun: FollowupRun,
+  typing: TypingController,
+): boolean {
+  const lifecycle = followupRun.turnAdoptionLifecycle;
+  if (!lifecycle) {
+    return false;
+  }
+  const onSettled = lifecycle.onSettled;
+  lifecycle.onSettled = () => {
+    try {
+      onSettled?.();
+    } finally {
+      typing.cleanup();
+    }
+  };
+  return true;
 }
