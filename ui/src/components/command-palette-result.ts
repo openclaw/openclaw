@@ -1,4 +1,5 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import MarkdownIt, { type Token } from "markdown-it";
 import { escapeRegExp } from "../../../src/shared/regexp.ts";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -19,9 +20,47 @@ function highlightMatch(text: string, query: string) {
   const index = match?.index ?? -1;
   return !match
     ? text
-    : html`
-        ${text.slice(0, index)}<mark>${text.slice(index, index + match[0].length)}</mark>${text.slice(index + match[0].length)}
-      `;
+    : html`${text.slice(0, index)}<mark>${text.slice(index, index + match[0].length)}</mark>${text.slice(index + match[0].length)}`;
+}
+
+// Search rows are options, not documents: no tables, raw HTML, media loads, or
+// nested links. Parse inline syntax, then let Lit escape all text and emit only
+// the small formatting vocabulary that fits the existing two-line preview.
+const snippetParser = new MarkdownIt({ html: false, linkify: false });
+
+function renderSnippet(text: string, query: string) {
+  function renderTokens(tokens: IterableIterator<Token>): Array<string | TemplateResult> {
+    const parts: Array<string | TemplateResult> = [];
+    for (const token of tokens) {
+      if (token.nesting === -1) {
+        break;
+      }
+      if (token.nesting === 1) {
+        const content = renderTokens(tokens);
+        switch (token.type) {
+          case "strong_open":
+            parts.push(html`<strong>${content}</strong>`);
+            break;
+          case "em_open":
+            parts.push(html`<em>${content}</em>`);
+            break;
+          case "s_open":
+            parts.push(html`<s>${content}</s>`);
+            break;
+          default:
+            parts.push(...content);
+        }
+      } else if (token.type === "code_inline") {
+        parts.push(html`<code>${highlightMatch(token.content, query)}</code>`);
+      } else if (token.type === "softbreak" || token.type === "hardbreak") {
+        parts.push(" ");
+      } else {
+        parts.push(highlightMatch(token.content, query));
+      }
+    }
+    return parts;
+  }
+  return renderTokens((snippetParser.parseInline(text, {})[0]?.children ?? []).values());
 }
 
 export function renderCommandPaletteResult(
@@ -57,7 +96,7 @@ export function renderCommandPaletteResult(
         ${session?.updatedAt ? html`<span class="cmd-palette__item-time">${formatRelativeTimestamp(session.updatedAt, { fallback: "" })}</span>` : nothing}
       </span>
       ${session ? html`<span class="cmd-palette__item-meta">${agentName}${owner?.id ? html`<span aria-hidden="true"> · </span>${t("sessionsView.ownedBy", { name: owner.label || owner.id })}` : nothing}</span>` : nothing}
-      ${item.description ? html`<span class="cmd-palette__item-desc">${highlightMatch(item.description, query)}</span>` : nothing}
+      ${item.description ? html`<span class="cmd-palette__item-desc">${session ? renderSnippet(item.description, query) : highlightMatch(item.description, query)}</span>` : nothing}
     </span>
   `;
 }

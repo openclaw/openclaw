@@ -30,6 +30,54 @@ it.each([
   expect(container.querySelector(".cmd-palette__item-title img")).toBeNull();
 });
 
+it("renders basic Markdown in message snippets without interactive or block content", () => {
+  render(
+    renderCommandPaletteResult(
+      {
+        ...item,
+        description:
+          "**Bold *needle***, ~~old~~, `config` [guide](https://example.com) ![diagram](https://example.com/image.png)\n\n| A | B |\n| --- | --- |\n| one | two |",
+      },
+      "needle",
+    ),
+    container,
+  );
+  const snippet = container.querySelector(".cmd-palette__item-desc")!;
+  expect(snippet.querySelector("strong em mark")?.textContent).toBe("needle");
+  expect(snippet.querySelector("s")?.textContent).toBe("old");
+  expect(snippet.querySelector("code")?.textContent).toBe("config");
+  expect(snippet.textContent).toContain("guide");
+  expect(snippet.textContent).toContain("diagram");
+  expect(snippet.querySelector("a, img, table, pre, p")).toBeNull();
+});
+
+it("escapes raw HTML and encoded markup in message snippets", () => {
+  render(
+    renderCommandPaletteResult(
+      { ...item, description: "<img src=x onerror=alert(1)> **&lt;script&gt;**" },
+      "<img",
+    ),
+    container,
+  );
+  const snippet = container.querySelector(".cmd-palette__item-desc")!;
+  expect(snippet.querySelector("img, script")).toBeNull();
+  expect(snippet.querySelector("mark")?.textContent).toBe("<img");
+  expect(snippet.querySelector("strong")?.textContent).toBe("<script>");
+});
+
+it("keeps catalog descriptions literal", () => {
+  render(
+    renderCommandPaletteResult(
+      { ...item, session: undefined, category: "skills", description: "**Literal** description" },
+      "Literal",
+    ),
+    container,
+  );
+  const snippet = container.querySelector(".cmd-palette__item-desc")!;
+  expect(snippet.querySelector("strong")).toBeNull();
+  expect(snippet.textContent).toBe("**Literal** description");
+});
+
 it("uses the explicit session owner, never the creator or a guessed transcript author", () => {
   render(
     renderCommandPaletteResult(
