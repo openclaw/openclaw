@@ -144,7 +144,26 @@ describe("readLatestAssistantReply", () => {
     expect(result).toBe("real worker reply");
   });
 
-  it("skips trailing inter-session input rows for normal latest-reply reads", async () => {
+  it.each([
+    {
+      name: "sessions_send message",
+      provenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:source",
+        sourceTool: "sessions_send",
+      },
+    },
+    {
+      name: "cron run prompt",
+      provenance: {
+        kind: "internal_system",
+        sourceTool: "cron",
+        jobId: "job-1",
+        runId: "run-1",
+        sourceSessionKey: "agent:main:cron:job-1:run:run-1",
+      },
+    },
+  ])("skips a trailing projected $name for latest-reply reads", async ({ provenance }) => {
     callGatewayMock.mockResolvedValue({
       messages: [
         {
@@ -154,12 +173,8 @@ describe("readLatestAssistantReply", () => {
         },
         {
           role: "assistant",
-          content: [{ type: "text", text: "forwarded sessions_send prompt" }],
-          provenance: {
-            kind: "inter_session",
-            sourceSessionKey: "agent:main:source",
-            sourceTool: "sessions_send",
-          },
+          content: [{ type: "text", text: "forwarded input text" }],
+          provenance,
           timestamp: 11,
         },
       ],

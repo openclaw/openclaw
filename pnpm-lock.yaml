@@ -433,8 +433,8 @@ importers:
         specifier: 8.0.6
         version: 8.0.6
       '@copilotkit/aimock':
-        specifier: 1.42.1
-        version: 1.42.1(vitest@5.0.1)
+        specifier: 1.43.0
+        version: 1.43.0(vitest@5.0.1)
       '@lit-labs/signals':
         specifier: 0.3.0
         version: 0.3.0
@@ -1985,8 +1985,8 @@ importers:
   extensions/qa-lab:
     dependencies:
       '@copilotkit/aimock':
-        specifier: 1.42.1
-        version: 1.42.1(vitest@5.0.1)
+        specifier: 1.43.0
+        version: 1.43.0(vitest@5.0.1)
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.6.5)
@@ -3547,8 +3547,8 @@ packages:
   '@codemirror/view@6.43.13':
     resolution: {integrity: sha512-sihaFrUzAsYBQsL9J2t69y8nfMQGwcYmggAZsk+kjPbjYZMyuf2hU8tUNTZ+P+isb6XRr8JE22TZlJxBoVdH1A==}
 
-  '@copilotkit/aimock@1.42.1':
-    resolution: {integrity: sha512-Kc3a4sP89kDENdRypKdmlynnmmYsn96ZYHCPCRdbFd2kw0qg1XufzEWIemS0YP5b/f7ssuFm4Kt8KbGwlx2WkA==}
+  '@copilotkit/aimock@1.43.0':
+    resolution: {integrity: sha512-V8D8cjSMtAR4rHaD2ulp3DR/ZguXQjDNOqwKDNvjb/OJL/KR1I0SDf5xpRCd+TYKjhmf9fM8Xpg3QBKPmV9Kmw==}
     engines: {node: '>=20.15.0'}
     hasBin: true
     peerDependencies:
@@ -11309,7 +11309,7 @@ snapshots:
       style-mod: 4.1.4
       w3c-keyname: 2.2.8
 
-  '@copilotkit/aimock@1.42.1(vitest@5.0.1)':
+  '@copilotkit/aimock@1.43.0(vitest@5.0.1)':
     optionalDependencies:
       vitest: 5.0.1(patch_hash=90ba2969491e095cc2e92a4d38256dfcf64f85078ec29e1762b9429a00b35901)(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(@vitest/browser-playwright@5.0.1)(@vitest/coverage-v8@5.0.1)(@vitest/ui@5.0.1)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.0(@types/node@26.6.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 

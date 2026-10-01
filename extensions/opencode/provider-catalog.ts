@@ -2,7 +2,6 @@ import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createUpstreamProviderCatalog,
-  fetchLiveProviderModelIds,
   listProviderCatalogSnapshotEntries,
   type LiveModelCatalogFetchGuard,
   type ProviderCatalogSnapshot,
@@ -58,6 +57,7 @@ const opencodeZenCatalog = createUpstreamProviderCatalog({
   timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
   ttlMs: OPENCODE_ZEN_MODELS_CACHE_TTL_MS,
   auditContext: "opencode-zen-model-discovery",
+  starterModelAuditContext: "opencode-zen-onboarding-model-discovery",
   isStaticEntryActive: (entry) => entry?.status !== "deprecated",
 });
 
@@ -70,28 +70,11 @@ export async function prepareOpencodeZenModel(params: {
   return snapshot?.get(params.modelId.trim().toLowerCase())?.model;
 }
 
-export const { buildStaticProvider: buildStaticOpencodeZenProviderConfig } = opencodeZenCatalog;
-export const buildOpencodeZenLiveProviderConfig =
-  opencodeZenCatalog.buildLiveProvider.bind(opencodeZenCatalog);
-
-export async function resolveOpencodeZenStarterModel(params: {
-  apiKey: string;
-  preferredModelRef: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
-}): Promise<string | undefined> {
-  const liveModelIds = await fetchLiveProviderModelIds({
-    providerId: PROVIDER_ID,
-    endpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
-    discoveryApiKey: params.apiKey,
-    fetchGuard: params.fetchGuard,
-    signal: params.signal,
-    timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
-    auditContext: "opencode-zen-onboarding-model-discovery",
-  });
-  const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
-  return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
-}
+export const {
+  buildStaticProvider: buildStaticOpencodeZenProviderConfig,
+  buildLiveProvider: buildOpencodeZenLiveProviderConfig,
+  resolveStarterModel: resolveOpencodeZenStarterModel,
+} = opencodeZenCatalog;
 
 export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {
   return listProviderCatalogSnapshotEntries(opencodeZenCatalog.getSnapshot());

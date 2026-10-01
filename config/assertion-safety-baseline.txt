@@ -1168,7 +1168,7 @@ packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
 packages/ai/src/transports/openai-responses-debug.ts	11
-packages/ai/src/transports/openai-responses-params-internal.ts	8
+packages/ai/src/transports/openai-responses-params-internal.ts	5
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	10
@@ -1515,7 +1515,6 @@ src/agents/runtime-plan/tools.ts	3
 src/agents/runtime/proxy.ts	6
 src/agents/sandbox-paths.ts	1
 src/agents/sandbox-tool-policy.ts	1
-src/agents/sandbox/backend.ts	1
 src/agents/sandbox/container-engine.ts	1
 src/agents/sandbox/podman-runtime.ts	1
 src/agents/sandbox/test-args.ts	1
@@ -1786,7 +1785,7 @@ src/claws/package-update.ts	1
 src/claws/packages.ts	1
 src/claws/project-build.ts	4
 src/claws/project.ts	2
-src/claws/provenance.ts	6
+src/claws/provenance.ts	5
 src/claws/reader.ts	3
 src/claws/schema.ts	2
 src/claws/update-capability-changes.ts	7
@@ -2091,7 +2090,7 @@ src/cron/persisted-shape.ts	3
 src/cron/retry-hint.ts	3
 src/cron/run-diagnostics-normalize.ts	2
 src/cron/run-diagnostics.ts	3
-src/cron/runtime-authority.ts	3
+src/cron/runtime-authority.ts	2
 src/cron/schedule-identity.ts	2
 src/cron/service/active-run-cancellation.ts	1
 src/cron/service/jobs.ts	4

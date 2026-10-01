@@ -4,6 +4,7 @@ import { clearExecutablePathCache } from "../infra/executable-path.js";
 import { prepareRuntimePluginsConfig } from "../plugins/config-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { notifyListeners } from "../shared/listeners.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
@@ -538,13 +539,7 @@ export function hasManagedRuntimeConfigWriteOwner(configPath: string): boolean {
 }
 
 export function notifyRuntimeConfigWriteListeners(event: RuntimeConfigWriteNotification): void {
-  for (const listener of runtimeConfigWriteListeners) {
-    try {
-      listener(event);
-    } catch {
-      // Best-effort observer path only; successful writes must still complete.
-    }
-  }
+  notifyListeners(runtimeConfigWriteListeners, event);
 }
 
 export function loadPinnedRuntimeConfig(loadFresh: () => OpenClawConfig): OpenClawConfig {
