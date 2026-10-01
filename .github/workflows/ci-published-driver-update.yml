@@ -51,7 +51,9 @@ jobs:
           artifacts=.artifacts/published-driver-update
           mkdir -p "$artifacts"
           actual_sha256=$(sha256sum "$package")
-          if [ "${actual_sha256%% *}" != "$CANDIDATE_SHA256" ]; then
+          actual_sha256=${actual_sha256%% *}
+          printf 'Candidate SHA-256: expected=%s actual=%s\n' "$CANDIDATE_SHA256" "$actual_sha256"
+          if [ "$actual_sha256" != "$CANDIDATE_SHA256" ]; then
             echo '::error title=Candidate checksum mismatch::Downloaded candidate package does not match its expected SHA-256.'
             exit 1
           fi

@@ -39,10 +39,6 @@ import { persistInterruptedUpdateObservation } from "../infra/update-run-interru
 import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.worker.js";
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  executeProjectRegistryCommand,
-  isProjectRegistryCommand,
-} from "../projects/project-registry.worker.js";
 import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
@@ -317,9 +313,6 @@ export function executeSharedStateCommand(
       ({ db }) => recordBackupRunInDatabase(db, command.input),
       writeOptions,
     );
-  }
-  if (isProjectRegistryCommand(command)) {
-    return executeProjectRegistryCommand(command, writeOptions);
   }
   if (command.type === "config.health.patch") {
     const { configPath, patch, expected, updatedAtMs } = command.input;

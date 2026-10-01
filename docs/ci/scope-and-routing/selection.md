@@ -43,12 +43,18 @@ check and publishes one candidate tarball. The cell downloads that same-run
 artifact by its immutable ID, verifies its SHA-256, and skips host dependency
 installation and candidate compilation. Successful producer artifacts can be
 reused when only the failed consumer job is rerun.
+The checksum gate prints both digests and rejects mismatches before starting
+the update. The download action's `digest-mismatch: error` input configures its
+archive verification policy; that input line is not a reported mismatch.
 
 The cell reserves termination and diagnostic time within its twenty-minute budget.
 Its command deadline returns a failed step with the active phase recorded,
 instead of cancelling the workflow through a job-level timeout. The shared bare
 Docker runner installs the latest stable npm package as the driver and supplies
-a disposable OS account for managed-service ownership. It performs one
+a disposable OS account for managed-service ownership. A private Docker volume
+holds the disposable npm installation and retained runtime on one native
+filesystem, avoiding OverlayFS's forced full-runtime copies. The runner removes
+the volume after its container settles, including failed updates. It performs one
 managed update with two synthetic agents and isolated state, requiring a
 finished update, the running candidate version, HTTP 200 from `/readyz`, no
 canary/identity/lease warnings, and no candidate-startup or authority-check
