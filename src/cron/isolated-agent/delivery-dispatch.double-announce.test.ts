@@ -907,6 +907,24 @@ describe("dispatchCronDelivery", () => {
       expectSessionDeleted();
     });
 
+    it("records a child's AUTOMATION_FAILED report as the run's reported failure", async () => {
+      const params = spawnOnlyJob({ mode: "none" });
+      childSettlesAt(1_000, {
+        disposition: "visible",
+        text: "AUTOMATION_FAILED\nNo shell tool is available in this run.",
+      });
+
+      const state = await dispatchUntilWatchdog(params);
+
+      expect(state).toMatchObject({
+        agentReportedFailure: "No shell tool is available in this run.",
+        outputText: "No shell tool is available in this run.",
+        summary: "No shell tool is available in this run.",
+        deliveryState: { status: "not-requested" },
+      });
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    });
+
     it.each([
       {
         name: "the child never settles",

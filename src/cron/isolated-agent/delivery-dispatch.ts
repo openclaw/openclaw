@@ -84,6 +84,16 @@ export async function dispatchCronDelivery(
   let synthesizedText = params.synthesizedText;
   let deliveryPayloads = params.deliveryPayloads;
   let agentReportedFailure: string | undefined;
+  // A settled descendant answer is the run's terminal answer; classify it like the parent's
+  // own reply so a reported failure is recorded as one and never delivered as a token.
+  const adoptSettledChildReply = (childReply: string) => {
+    agentReportedFailure = readAutomationFailedReport(childReply);
+    const reply = agentReportedFailure ?? childReply;
+    outputText = reply;
+    summary = pickSummaryFromOutput(reply) ?? summary;
+    synthesizedText = reply;
+    deliveryPayloads = [{ text: reply }];
+  };
 
   const deliveryState: CronResolvedDeliveryState = {
     status: params.deliveryRequested ? "not-delivered" : "not-requested",
@@ -558,14 +568,7 @@ export async function dispatchCronDelivery(
         abortSignal: params.abortSignal,
       });
     if (finalReply) {
-      // The settled descendant answer is the run's terminal answer; classify it like the
-      // parent's own reply so a reported failure is never delivered as a token.
-      agentReportedFailure = readAutomationFailedReport(finalReply);
-      const reply = agentReportedFailure ?? finalReply;
-      outputText = reply;
-      summary = pickSummaryFromOutput(reply) ?? summary;
-      synthesizedText = reply;
-      deliveryPayloads = [{ text: reply }];
+      adoptSettledChildReply(finalReply);
     }
     if (spawnOnlyHandoff && !synthesizedText?.trim()) {
       // An accepted spawn is the turn's only completion; retiring it without
@@ -730,10 +733,7 @@ export async function dispatchCronDelivery(
       });
     }
     if (!isSilentReplyText(settled.reply, SILENT_REPLY_TOKEN)) {
-      outputText = settled.reply;
-      summary = pickSummaryFromOutput(settled.reply) ?? summary;
-      synthesizedText = settled.reply;
-      deliveryPayloads = [{ text: settled.reply }];
+      adoptSettledChildReply(settled.reply);
     }
   }
 
