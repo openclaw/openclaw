@@ -38,16 +38,10 @@ export function scopeCodexRunBindingStore(params: {
       ? { ...owner, sessionId: mapped.sessionId }
       : owner;
   };
-  const readMany = params.bindingStore.readMany?.bind(params.bindingStore);
   return {
     ...params.bindingStore,
     read: (identity) => params.bindingStore.read(mapIdentity(identity)),
-    ...(readMany
-      ? {
-          readMany: (identities: readonly CodexAppServerBindingIdentity[]) =>
-            readMany(identities.map(mapIdentity)),
-        }
-      : {}),
+    readMany: (identities) => params.bindingStore.readMany(identities.map(mapIdentity)),
     readNativeSubagentAssignments: (identity, owner) =>
       (
         params.bindingStore.readNativeSubagentAssignments?.(
