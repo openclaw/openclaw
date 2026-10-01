@@ -9,7 +9,8 @@ import type { PluginHookBeforePromptBuildResult, PluginHookRegistration } from "
 type PromptHook = Pick<
   PluginHookRegistration<"before_prompt_build">,
   "handler" | "requiresToolAuthority" | "priority"
->;
+> &
+  Partial<Pick<PluginHookRegistration<"before_prompt_build">, "pluginId">>;
 const event = { prompt: "test", messages: [] };
 function promptRunner(hooks: PromptHook[]) {
   const registry = createEmptyPluginRegistry();
@@ -116,6 +117,24 @@ describe("prompt phase hooks", () => {
     });
     const retained = enrichment.mock.calls[0]?.[1].toolAuthority;
     expect(() => retained?.assertActive()).toThrow("no longer active");
+  });
+
+  it("marks a failed authorized enrichment as dropped model context", async () => {
+    const runner = promptRunner([
+      {
+        pluginId: "failing-enricher",
+        requiresToolAuthority: true,
+        handler: () => {
+          throw new Error("authorized enrichment failed");
+        },
+      },
+    ]);
+
+    const result = await runner.runAuthorizedPromptBuild(event, {}, authority);
+
+    expect(result?.appendContext).toContain("failing-enricher (handler-failed)");
+    expect(result?.systemPrompt).toBeUndefined();
+    expect(result?.toolsAllow).toBeUndefined();
   });
 
   it("rejects stale enrichment and never starts its successor after host authority closes", async () => {

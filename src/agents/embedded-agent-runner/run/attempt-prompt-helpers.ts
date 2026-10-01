@@ -8,6 +8,7 @@ import { pruneMapToMaxSize } from "../../../infra/map-size.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
 import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
+import { buildPromptBuildDropResult } from "../../../plugins/prompt-build-drop.js";
 import type {
   PluginNextTurnInjectionRecord,
   PluginHookAgentContext,
@@ -133,7 +134,11 @@ export async function resolvePromptBuildHookResult(params: {
         )
         .catch((hookErr: unknown) => {
           log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
-          return undefined;
+          // The contribution is gone; say so in the prompt rather than handing
+          // the agent a context that only looks complete (openclaw-beads-201).
+          // The error stays in the warn above: the marker carries a bounded
+          // reason code, never error-derived text.
+          return buildPromptBuildDropResult([{ reason: "dispatch-failed" }]);
         })
     : undefined;
   const decisionPromptBuildFields = promptBuildResult
