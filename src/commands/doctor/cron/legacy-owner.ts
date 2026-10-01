@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../../agents/agent-scope-config.js";
 import { createCronOwnerWriteRefusalError } from "../../../config/io.cron-owner-refusal.js";
@@ -5,7 +6,6 @@ import { migratePersistedImplicitMainRoster } from "../../../config/legacy.roste
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { resolveCronJobsStorePathFromConfig } from "../../../cron/store/paths.js";
-import { tryParseJsonObject } from "../../../cron/store/scalar-codec.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
@@ -43,7 +43,7 @@ export async function repairLegacyCronOwnersBeforeConfigWrite(params: {
     });
   const ownerless =
     state?.rawJobs.some((job) => !hasExplicitOwner(job)) ||
-    state?.ownerRows.some((row) => !hasExplicitOwner(tryParseJsonObject(row.job_json)));
+    state?.ownerRows.some((row) => !hasExplicitOwner(safeParseJsonRecord(row.job_json)));
   if (!ownerless) {
     return [];
   }

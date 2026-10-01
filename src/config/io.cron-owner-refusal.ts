@@ -1,5 +1,5 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { tryParseJsonObject } from "../cron/store/scalar-codec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./types.js";
@@ -87,7 +87,8 @@ async function assertSafe(
   }
   const sqlOnlyOwners =
     state?.ownerRows.filter(
-      (row) => normalizeOptionalString(row.agent_id) && !hasOwner(tryParseJsonObject(row.job_json)),
+      (row) =>
+        normalizeOptionalString(row.agent_id) && !hasOwner(safeParseJsonRecord(row.job_json)),
     ).length ?? 0;
   const requiresRepair =
     unresolved + (provenOwnerAgentId ? projectedDynamicDefaults + sqlOnlyOwners : 0);

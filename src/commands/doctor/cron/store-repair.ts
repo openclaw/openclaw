@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { noteCronJobsStoreCommit } from "../../../cron/store.js";
@@ -13,7 +14,6 @@ import {
   rowToCronJob,
   upsertCronJobRow,
 } from "../../../cron/store/row-codec.js";
-import { tryParseJsonObject } from "../../../cron/store/scalar-codec.js";
 import { getCronStoreKysely } from "../../../cron/store/schema.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
@@ -55,7 +55,7 @@ export async function repairLegacyCronJobOwnersForDoctor(
   const legacyAgentId = normalizeAgentId(legacyDefaultAgentId);
   const changes: Array<{ jobId: string; agentId: string; definition: string }> = [];
   for (const row of rows) {
-    const job = tryParseJsonObject(row.job_json);
+    const job = safeParseJsonRecord(row.job_json);
     if (
       tryResolveCronJobEffectiveAgentId({
         agentId: normalizeOptionalString(job?.agentId),
