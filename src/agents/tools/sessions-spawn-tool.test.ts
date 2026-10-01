@@ -22,7 +22,7 @@ import {
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
-import { registerSessionsSpawnCompletionTests } from "./sessions-spawn-tool.completion.test-support.js";
+import { registerSessionsSpawnSharedTests } from "./sessions-spawn-visible-thinking.test-support.js";
 
 const { hoisted } = await import("./sessions-spawn-tool.mocks.test-support.js");
 
@@ -143,7 +143,7 @@ describe("sessions_spawn tool", () => {
     });
   }
 
-  registerSessionsSpawnCompletionTests({
+  registerSessionsSpawnSharedTests({
     createTool: (options) => createSessionsSpawnTool(options),
     registerAcpBackendForTest,
     mocks: hoisted,
@@ -293,6 +293,7 @@ describe("sessions_spawn tool", () => {
           label: "Issue review",
           group: "Beta feedback",
           model: "anthropic/claude-sonnet-4-6",
+          thinking: "HIGH",
           context: "fork",
           visible: true,
           cleanup: "delete",
@@ -310,6 +311,7 @@ describe("sessions_spawn tool", () => {
         label: "Issue review",
         category: "Beta feedback",
         model: "anthropic/claude-sonnet-4-6",
+        thinkingLevel: "high",
         task: expect.stringContaining("[Subagent Task]\n\ninspect issue"),
         timeoutMs: 120000,
         parentSessionKey: "agent:main:main",
@@ -1228,7 +1230,6 @@ describe("sessions_spawn tool", () => {
       makeTool().execute("visible-unsupported", {
         task: "inspect",
         runtime: "acp",
-        thinking: "high",
         thread: true,
         mode: "session",
         lightContext: true,
@@ -1237,7 +1238,7 @@ describe("sessions_spawn tool", () => {
         visible: true,
       }),
     ).rejects.toThrow(
-      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
+      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
     );
   });
 });
