@@ -78,6 +78,28 @@ function afterFirstCopy(operation: () => void): () => boolean {
   return () => injected;
 }
 
+function createWalActivationFixture() {
+  const fixture = createFixture(Buffer.alloc(0));
+  const sqlite = requireNodeSqlite();
+  const seed = new sqlite.DatabaseSync(fixture.sourcePath);
+  seed.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=7;");
+  seed.close();
+  const activatedPath = path.join(fixture.sourceRoot, "activated.sqlite");
+  const activated = new sqlite.DatabaseSync(activatedPath);
+  activated.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=8;");
+  const family = ["", "-wal", "-shm"].map((suffix) => ({
+    suffix,
+    bytes: fs.readFileSync(activatedPath + suffix),
+  }));
+  activated.close();
+  const injected = afterFirstCopy(() => {
+    for (const { suffix, bytes } of family) {
+      fs.writeFileSync(fixture.sourcePath + suffix, bytes);
+    }
+  });
+  return { family, fixture, injected };
+}
+
 function afterPrivateCopy(stagingRoot: string, operation: (pathname: string) => void): void {
   const open = fs.openSync.bind(fs);
   const close = fs.closeSync.bind(fs);
@@ -148,24 +170,7 @@ function interceptSourceReads(
 
 describe("stable read-only snapshot copies", () => {
   it("rechecks journal state when an inactive WAL family gains sidecars during schema inspection", async () => {
-    const fixture = createFixture(Buffer.alloc(0));
-    const sqlite = requireNodeSqlite();
-    const seed = new sqlite.DatabaseSync(fixture.sourcePath);
-    seed.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=7;");
-    seed.close();
-    const activatedPath = path.join(fixture.sourceRoot, "activated.sqlite");
-    const activated = new sqlite.DatabaseSync(activatedPath);
-    activated.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=8;");
-    const family = ["", "-wal", "-shm"].map((suffix) => ({
-      suffix,
-      bytes: fs.readFileSync(activatedPath + suffix),
-    }));
-    activated.close();
-    const injected = afterFirstCopy(() => {
-      for (const { suffix, bytes } of family) {
-        fs.writeFileSync(fixture.sourcePath + suffix, bytes);
-      }
-    });
+    const { family, fixture, injected } = createWalActivationFixture();
 
     await expect(
       inspectSqliteSchemaHeaderInProcess(fixture.sourcePath, fixture.stagingRoot),
@@ -175,6 +180,28 @@ describe("stable read-only snapshot copies", () => {
     for (const { suffix, bytes } of family.filter((file) => file.suffix !== "-shm")) {
       expect(fs.readFileSync(fixture.sourcePath + suffix)).toEqual(bytes);
     }
+  });
+
+  it("does not start another copy when cleanup of a changed source fails", async () => {
+    const { fixture } = createWalActivationFixture();
+
+    const mkdtemp = fs.mkdtempSync.bind(fs);
+    const allocations = vi
+      .spyOn(fs, "mkdtempSync")
+      .mockImplementation((prefix, options) => mkdtemp(prefix, options));
+    const cleanupError = Object.assign(new Error("snapshot cleanup denied"), {
+      code: "EACCES",
+    });
+    vi.spyOn(fs.promises, "rm").mockRejectedValue(cleanupError);
+
+    const error = await inspectSqliteSchemaHeaderInProcess(
+      fixture.sourcePath,
+      fixture.stagingRoot,
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toContain(cleanupError);
+    expect(allocations).toHaveBeenCalledTimes(1);
   });
 
   it.each([512])("preserves a malformed catalog beside a cold %i-byte journal", (bytes) => {
