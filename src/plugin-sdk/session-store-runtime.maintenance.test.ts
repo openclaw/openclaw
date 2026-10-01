@@ -23,23 +23,13 @@ describe("plugin session store maintenance", () => {
       const scope = { agentId: "main", env };
       const expiredKey = "agent:main:sdk-cleanup-env-expired";
       const retainedKey = "agent:main:retained";
-      const seed = (sessionKey: string, sessionId: string) => {
-        const entry = { sessionId, updatedAt: 1 };
-        return patchSessionEntry({
-          ...scope,
-          sessionKey,
-          fallbackEntry: entry,
-          preserveActivity: true,
-          skipMaintenance: true,
-          requireWriteSuccess: true,
-          update: () => entry,
-        });
-      };
-      await seed(expiredKey, "expired");
+      const seed = (sessionKey: string, sessionId: string) =>
+        replaceSessionEntrySync({ ...scope, sessionKey }, { sessionId, updatedAt: 1 });
+      seed(expiredKey, "expired");
       // A live target exposes an incorrect fallback to the process environment.
       const execution = captureOpenClawAgentDatabaseExecution(scope);
       try {
-        await seed(retainedKey, "retained");
+        seed(retainedKey, "retained");
         await execution.prepare({
           assertCurrent: () => execution.assertCurrent(),
           createAdmission(binding) {
