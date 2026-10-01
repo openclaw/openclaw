@@ -183,6 +183,8 @@ export type AgentCommandOpts = {
   /** Host-owned exact media set for a scoped automatic recovery delivery. */
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
+  /** Host-owned: deliver only authored output; runtime error payloads stay out of the chat. */
+  internalDeliverySuppressErrors?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
@@ -266,7 +268,8 @@ type AgentCommandGatewayOnlyKey =
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
   | "onPostAdmittedRunContext"
-  | "beforeTerminalDelivery";
+  | "beforeTerminalDelivery"
+  | "internalDeliverySuppressErrors";
 
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<

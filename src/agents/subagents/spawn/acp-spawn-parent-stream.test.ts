@@ -1,4 +1,3 @@
-/** Tests ACP child-to-parent stream relay notices and routing. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
@@ -110,16 +109,16 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-1",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-1",
       agentId: "codex",
       deliveryContext,
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
     });
 
+    relay.notifyStarted();
     emitAgentEvent({ runId: "run-1", stream: "assistant", data: { delta: "hello" } });
     emitAgentEvent({ runId: "run-1", stream: "assistant", data: { delta: " from child" } });
-    vi.advanceTimersByTime(15);
+    vi.advanceTimersByTime(2_500);
 
     emitAgentEvent({
       runId: "run-1",
@@ -204,11 +203,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-diagnostic-retry",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:diagnostic-retry",
       childSessionId: "session-diagnostic-retry",
       agentId: "codex",
-      streamFlushMs: 120_000,
-      noOutputNoticeMs: 120_000,
     });
 
     emitAgentEvent({
@@ -243,12 +241,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-cron",
       parentSessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
+      eventRouting: { mainKey: "primary", sessionScope: "global" },
       childSessionKey: "agent:codex:acp:child-cron",
       agentId: "codex",
-      mainKey: "primary",
-      sessionScope: "global",
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
     });
 
     emitAgentEvent({
@@ -258,7 +253,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         delta: "hello from child",
       },
     });
-    vi.advanceTimersByTime(15);
+    vi.advanceTimersByTime(2_500);
 
     const progressEvent = enqueueSystemEventMock.mock.calls.find(
       ([text]) => typeof text === "string" && text.includes("codex: hello from child"),
@@ -282,15 +277,13 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-2",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-2",
       agentId: "codex",
-      streamFlushMs: 1,
-      noOutputNoticeMs: 1_000,
-      noOutputPollMs: 250,
     });
 
-    vi.advanceTimersByTime(1_500);
-    expectTextWithFragment(collectedTexts(), "no prompt submission was observed for 1s");
+    vi.advanceTimersByTime(60_000);
+    expectTextWithFragment(collectedTexts(), "no prompt submission was observed for 60s");
 
     emitAgentEvent({
       runId: "run-2",
@@ -299,7 +292,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         delta: "resumed output",
       },
     });
-    vi.advanceTimersByTime(5);
+    vi.advanceTimersByTime(2_500);
 
     const texts = collectedTexts();
     expectTextWithFragment(texts, "resumed output.");
@@ -321,11 +314,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-prompt-stall",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-prompt-stall",
       agentId: "codex",
-      streamFlushMs: 1,
-      noOutputNoticeMs: 1_000,
-      noOutputPollMs: 250,
     });
 
     emitAgentEvent({
@@ -337,10 +328,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
         proxyEnvKeys: ["HTTPS_PROXY"],
       },
     });
-    vi.advanceTimersByTime(1_500);
+    vi.advanceTimersByTime(60_000);
 
     const texts = collectedTexts();
-    expectTextWithFragment(texts, "prompt was submitted but no ACP runtime event arrived for 1s");
+    expectTextWithFragment(texts, "prompt was submitted but no ACP runtime event arrived for 60s");
     expectTextWithFragment(texts, "proxy env: HTTPS_PROXY");
     expectNoTextWithFragment(texts, "waiting for interactive input");
     relay.dispose();
@@ -350,11 +341,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-runtime-stall",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-runtime-stall",
       agentId: "codex",
-      streamFlushMs: 1,
-      noOutputNoticeMs: 1_000,
-      noOutputPollMs: 250,
     });
 
     emitAgentEvent({
@@ -366,7 +355,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         proxyEnvKeys: [],
       },
     });
-    vi.advanceTimersByTime(750);
+    vi.advanceTimersByTime(45_000);
     emitAgentEvent({
       runId: "run-runtime-stall",
       stream: "acp",
@@ -376,15 +365,15 @@ describe("startAcpSpawnParentStreamRelay", () => {
         text: "connecting to upstream",
       },
     });
-    vi.advanceTimersByTime(750);
+    vi.advanceTimersByTime(45_000);
     expectNoTextWithFragment(collectedTexts(), "has ACP runtime activity");
 
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(15_000);
 
     const texts = collectedTexts();
     expectTextWithFragment(
       texts,
-      "has ACP runtime activity but no visible assistant output for 1s",
+      "has ACP runtime activity but no visible assistant output for 60s",
     );
     expectTextWithFragment(texts, "Last ACP event: status");
     expectNoTextWithFragment(texts, "waiting for interactive input");
@@ -395,15 +384,13 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-3",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-3",
       agentId: "codex",
-      streamFlushMs: 1,
-      noOutputNoticeMs: 0,
-      maxRelayLifetimeMs: 1_000,
     });
 
-    vi.advanceTimersByTime(1_001);
-    expectTextWithFragment(collectedTexts(), "stream relay timed out after 1s");
+    vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+    expectTextWithFragment(collectedTexts(), "stream relay timed out after 21600s");
 
     const before = enqueueSystemEventMock.mock.calls.length;
     emitAgentEvent({
@@ -413,19 +400,19 @@ describe("startAcpSpawnParentStreamRelay", () => {
         delta: "late output",
       },
     });
-    vi.advanceTimersByTime(5);
+    vi.advanceTimersByTime(2_500);
 
     expect(enqueueSystemEventMock.mock.calls).toHaveLength(before);
     relay.dispose();
   });
 
-  it("supports delayed start notices", () => {
+  it("emits a start notice only after explicit acceptance", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-4",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-4",
       agentId: "codex",
-      emitStartNotice: false,
     });
 
     expectNoTextWithFragment(collectedTexts(), "Started codex session");
@@ -436,48 +423,13 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("can keep background relays out of the parent session while still logging", () => {
-    const relay = startAcpSpawnParentStreamRelay({
-      runId: "run-quiet",
-      parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:codex:acp:child-quiet",
-      agentId: "codex",
-      surfaceUpdates: false,
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
-    });
-
-    relay.notifyStarted();
-    emitAgentEvent({
-      runId: "run-quiet",
-      stream: "assistant",
-      data: {
-        delta: "hello from child",
-      },
-    });
-    vi.advanceTimersByTime(15);
-    emitAgentEvent({
-      runId: "run-quiet",
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-      },
-    });
-
-    expect(collectedTexts()).toStrictEqual([]);
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
-    relay.dispose();
-  });
-
   it("relays the latest replaceable assistant snapshot instead of superseded drafts", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-replaceable-assistant",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-replaceable-assistant",
       agentId: "codex",
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
-      emitStartNotice: false,
     });
 
     emitAgentEvent({
@@ -519,13 +471,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-commentary-final",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-commentary-final",
       agentId: "codex",
       cfg: progressModeConfig(),
       deliveryContext: progressCommentaryDeliveryContext,
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
-      emitStartNotice: false,
     });
 
     emitAgentEvent({
@@ -543,7 +493,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         delta: "ready",
       },
     });
-    vi.advanceTimersByTime(15);
+    vi.advanceTimersByTime(2_500);
 
     expect(collectedTexts()).toEqual([
       "codex: Note: Checking the requested response shape only.",
@@ -556,13 +506,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-preamble-item",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-preamble-item",
       agentId: "codex",
       cfg: progressModeConfig(),
       deliveryContext: progressCommentaryDeliveryContext,
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
-      emitStartNotice: false,
     });
 
     emitAgentEvent({
@@ -583,7 +531,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         progressText: "Checking the app-server stream",
       },
     });
-    vi.advanceTimersByTime(15);
+    vi.advanceTimersByTime(2_500);
 
     expect(collectedTexts()).toEqual(["codex: Checking the app-server stream"]);
     relay.dispose();
@@ -593,13 +541,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-preamble-item-replacement",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-preamble-item-replacement",
       agentId: "codex",
       cfg: progressModeConfig(),
       deliveryContext: progressCommentaryDeliveryContext,
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
-      emitStartNotice: false,
     });
 
     emitAgentEvent({
@@ -620,7 +566,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         progressText: "Reading files",
       },
     });
-    vi.advanceTimersByTime(15);
+    vi.advanceTimersByTime(2_500);
 
     expect(collectedTexts()).toEqual(["codex: Reading files"]);
     relay.dispose();
@@ -630,13 +576,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-preamble-item-after-flush",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-preamble-item-after-flush",
       agentId: "codex",
       cfg: progressModeConfig(),
       deliveryContext: progressCommentaryDeliveryContext,
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
-      emitStartNotice: false,
     });
 
     emitAgentEvent({
@@ -648,7 +592,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         progressText: "Checking",
       },
     });
-    vi.advanceTimersByTime(15);
+    vi.advanceTimersByTime(2_500);
     emitAgentEvent({
       runId: "run-preamble-item-after-flush",
       stream: "item",
@@ -658,7 +602,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         progressText: "Checking the app-server stream",
       },
     });
-    vi.advanceTimersByTime(15);
+    vi.advanceTimersByTime(2_500);
 
     expect(collectedTexts()).toEqual(["codex: Checking", "codex: the app-server stream"]);
     relay.dispose();
@@ -745,6 +689,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       const relay = startAcpSpawnParentStreamRelay({
         runId: name,
         parentSessionKey: "agent:main:main",
+        eventRouting: {},
         childSessionKey: "agent:codex:acp:progress-config",
         agentId: "codex",
         cfg: {
@@ -758,9 +703,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
           },
         },
         deliveryContext: { ...progressCommentaryDeliveryContext, channel, accountId },
-        streamFlushMs: 10,
-        noOutputNoticeMs: 120_000,
-        emitStartNotice: false,
       });
       emitAgentEvent({
         runId: name,
@@ -770,7 +712,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
             ? { delta: "Checking progress.", phase: "commentary" }
             : { itemId: "preamble-1", kind: "preamble", progressText: "Checking progress." },
       });
-      vi.advanceTimersByTime(15);
+      vi.advanceTimersByTime(2_500);
       expect(collectedTexts()).toEqual(visible ? ["codex: Checking progress."] : []);
       relay.dispose();
     },
@@ -780,6 +722,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-commentary-status-boundary",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-commentary-status-boundary",
       agentId: "codex",
       cfg: progressModeConfig({
@@ -790,9 +733,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
         },
       }),
       deliveryContext: progressCommentaryDeliveryContext,
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
-      emitStartNotice: false,
     });
 
     emitAgentEvent({
@@ -825,12 +765,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-status-commentary-hidden",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-status-commentary-hidden",
       agentId: "codex",
       cfg: progressModeConfig(),
       deliveryContext: progressCommentaryDeliveryContext,
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
     });
 
     emitAgentEvent({
@@ -853,7 +792,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         text: "available commands updated (7)",
       },
     });
-    vi.advanceTimersByTime(15);
+    vi.advanceTimersByTime(2_500);
 
     const texts = collectedTexts();
     expectNoTextWithFragment(texts, "usage updated");
@@ -865,12 +804,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-status-commentary-default-hidden",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-status-commentary-default-hidden",
       agentId: "codex",
       cfg: progressModeConfig(),
       deliveryContext: progressCommentaryDeliveryContext,
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
     });
 
     emitAgentEvent({
@@ -883,7 +821,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         text: "plan: inspect the runtime handoff first",
       },
     });
-    vi.advanceTimersByTime(15);
+    vi.advanceTimersByTime(2_500);
 
     expectNoTextWithFragment(collectedTexts(), "inspect the runtime handoff");
     relay.dispose();
@@ -893,13 +831,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-commentary-visible-stall",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-commentary-visible-stall",
       agentId: "codex",
       cfg: progressModeConfig(),
       deliveryContext: progressCommentaryDeliveryContext,
-      streamFlushMs: 1,
-      noOutputNoticeMs: 1_000,
-      noOutputPollMs: 250,
     });
 
     emitAgentEvent({
@@ -928,13 +864,13 @@ describe("startAcpSpawnParentStreamRelay", () => {
         phase: "commentary",
       },
     });
-    vi.advanceTimersByTime(5);
-    vi.advanceTimersByTime(1_500);
+    vi.advanceTimersByTime(2_500);
+    vi.advanceTimersByTime(60_000);
 
     const texts = collectedTexts();
     expectTextWithFragment(texts, "codex: checking active files before patching.");
     expectNoTextWithFragment(texts, "has ACP runtime activity but no visible assistant output");
-    expectTextWithFragment(texts, "has produced no visible output for 1s");
+    expectTextWithFragment(texts, "has produced no visible output for 60s");
     relay.dispose();
   });
 
@@ -942,10 +878,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-final",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:child-final",
       agentId: "codex",
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
     });
 
     emitAgentEvent({
@@ -964,7 +899,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         phase: "final_answer",
       },
     });
-    vi.advanceTimersByTime(15);
+    vi.advanceTimersByTime(2_500);
 
     const texts = collectedTexts();
     expectNoTextWithFragment(texts, "checking thread context");
@@ -987,10 +922,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-utf16-safe",
       parentSessionKey: "agent:main:main",
+      eventRouting: {},
       childSessionKey: "agent:codex:acp:utf16-safe",
       agentId: "codex",
-      streamFlushMs: 0,
-      noOutputNoticeMs: 120_000,
     });
 
     emitAgentEvent({
@@ -999,7 +933,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       data: { delta },
     });
 
-    expect(collectedTexts()[1]).toBe(`codex: ${expected}`);
+    expect(collectedTexts()).toEqual([`codex: ${expected}`]);
     relay.dispose();
   });
 });

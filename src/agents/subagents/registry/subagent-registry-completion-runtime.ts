@@ -245,6 +245,9 @@ export function createSubagentRegistryCompletionRuntime(config: {
       // Keep scheduler retries alive until the exact row is fully terminal.
       return hasCompleteSubagentTerminalState(finalized) ? 1 : 0;
     } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
       if (isGatewayRestartDraining() && runs.get(runId) === entry) {
         warn("subagent completion deferred during gateway restart", {
           source: "explicit-failed-mark",
@@ -270,6 +273,5 @@ export function createSubagentRegistryCompletionRuntime(config: {
     pendingLifecycle,
     completeSubagentRunWithRecovery,
     finalizeInterruptedSubagentRun,
-    scheduleSubagentCompletionRetryAfterRestart,
   };
 }

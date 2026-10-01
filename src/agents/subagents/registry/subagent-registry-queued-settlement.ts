@@ -6,8 +6,8 @@ import {
   replaceSubagentRunRecord,
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
-import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createQueuedRegistrationSettlement(params: {
@@ -111,7 +111,7 @@ export function createQueuedRegistrationSettlement(params: {
       let capturing = true;
       let published = false;
       let observedClaim = false;
-      const stopObservingClaim = onSubagentRegistryPersisted(() => {
+      const stopObservingClaim = subscribeSubagentRunChanges("persistence", () => {
         if (exactEntry() && entry.killIntent) {
           observedClaim = true;
         }

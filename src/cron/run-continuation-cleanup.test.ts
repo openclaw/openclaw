@@ -226,7 +226,6 @@ it("refuses correlated announcement publication when its source retires during s
       requesterAgentId: "main",
       requesterIsSubagent: false,
       triggerMessage: "generated lighthouse",
-      steerMessage: "generated lighthouse",
       expectsCompletionMessage: true,
       directIdempotencyKey: "correlated-source-authority",
       sourceRunId: run.runId,

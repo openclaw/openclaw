@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { addSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
@@ -21,6 +20,7 @@ import { buildRequesterSettleWakeIdentity } from "./subagents/registry/subagent-
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const CRON_RUN_KEY = "agent:main:cron:daily-report:run:run-42";
+const sessionDirs = useSessionStoreTempDirs(afterAll, "cron-yield-policy-");
 
 function seedRequiredChild(
   requesterSessionKey = CRON_RUN_KEY,
@@ -327,44 +327,40 @@ describe("requester yield ownership", () => {
   ])(
     "preserves child yield authorization under $policy / $runtime",
     async ({ policy, runtime, allowed }) => {
-      const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cron-yield-policy-"));
-      try {
-        const storePath = path.join(workspace, "sessions.json");
-        const config: OpenClawConfig = {
-          agents: { entries: { main: { default: true, workspace } } },
-          session: { store: storePath },
-          tools: policy,
-        };
-        const inheritedToolAllowlistRef: string[] = [];
-        const parent = createTestOpenClawTools({
-          config,
-          sessionKey: CRON_RUN_KEY,
-          inheritedToolAllowlistRef,
-          runtimeToolAllowlist: runtime,
-          inheritRuntimeToolAllowlist: true,
-        });
-        expect(parent.map((tool) => tool.name)).not.toContain("sessions_yield");
-        expect(inheritedToolAllowlistRef.includes("sessions_yield")).toBe(allowed);
-        const childSessionKey = "agent:main:subagent:policy-child";
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: childSessionKey, storePath },
-          {
-            sessionId: "policy-child",
-            updatedAt: 1000,
-            spawnedBy: CRON_RUN_KEY,
-            spawnDepth: 1,
-            inheritedToolPolicyVersion: 1,
-            inheritedToolAllow: inheritedToolAllowlistRef,
-          },
-        );
-        const child = createTestOpenClawTools({
-          config: { ...config, tools: { profile: "coding" } },
-          sessionKey: childSessionKey,
-        });
-        expect(child.some((tool) => tool.name === "sessions_yield")).toBe(allowed);
-      } finally {
-        await fs.rm(workspace, { recursive: true, force: true });
-      }
+      const workspace = sessionDirs.make();
+      const storePath = path.join(workspace, "sessions.json");
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { default: true, workspace } } },
+        session: { store: storePath },
+        tools: policy,
+      };
+      const inheritedToolAllowlistRef: string[] = [];
+      const parent = createTestOpenClawTools({
+        config,
+        sessionKey: CRON_RUN_KEY,
+        inheritedToolAllowlistRef,
+        runtimeToolAllowlist: runtime,
+        inheritRuntimeToolAllowlist: true,
+      });
+      expect(parent.map((tool) => tool.name)).not.toContain("sessions_yield");
+      expect(inheritedToolAllowlistRef.includes("sessions_yield")).toBe(allowed);
+      const childSessionKey = "agent:main:subagent:policy-child";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: childSessionKey, storePath },
+        {
+          sessionId: "policy-child",
+          updatedAt: 1000,
+          spawnedBy: CRON_RUN_KEY,
+          spawnDepth: 1,
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: inheritedToolAllowlistRef,
+        },
+      );
+      const child = createTestOpenClawTools({
+        config: { ...config, tools: { profile: "coding" } },
+        sessionKey: childSessionKey,
+      });
+      expect(child.some((tool) => tool.name === "sessions_yield")).toBe(allowed);
     },
   );
 

@@ -30,8 +30,8 @@ import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import {
   loadSubagentRegistryFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
-  saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -223,7 +223,7 @@ describe("parent runtime facts from retained completion obligations", () => {
         }),
       );
     }
-    persistSubagentRunsToDiskOrThrow(subagentRuns);
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [...subagentRuns.keys()]);
     const before = loadSubagentRegistryFromSqlite();
     expect(
       scenario === "fallback result"

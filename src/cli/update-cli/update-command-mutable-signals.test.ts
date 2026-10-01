@@ -125,7 +125,9 @@ it.skipIf(process.platform === "win32").for([
         }
         const expected = getUpdateRun(run.runId);
         if (mode === 'migrated') {
-          createUpdateRunProgress(run, {}).deferLedgerWrites();
+          createUpdateRunProgress(run, {}, async () => {
+            throw new Error("Deferred signal fixture must not write progress");
+          }).deferLedgerWrites();
           closeOpenClawStateDatabaseForTest();
           const { DatabaseSync } = await import('node:sqlite');
           const db = new DatabaseSync(root + '/state/openclaw.sqlite');

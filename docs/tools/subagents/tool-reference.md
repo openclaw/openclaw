@@ -32,7 +32,7 @@ still stops it. Codex native `spawn_agent` rejects multi-person turns; use
 
 Starts a sub-agent run on the spawning session's sub-agent queue, with
 [per-session concurrency](/tools/subagents/operations#concurrency). Ordinary one-shot runs
-use `deliver: false` and return through an announce step; collectors, quiet
+use `deliver: false` and return through completion delivery to the requester; collectors, quiet
 runs, and direct thread replies use the
 [completion paths](/tools/subagents/slash-command#spawn-behavior).
 
@@ -440,7 +440,7 @@ and older queued events can be evicted when the queue fills. Exact-incarnation
 access grants cannot enqueue notifications beyond their lifetime. Omitting
 `mode` preserves automatic routing. Its
 `targetDisposition` describes admission, while its `delivery.status` describes
-the later reply announcement. Neither proves completion. At the Gateway,
+the later reply delivery. Neither proves completion. At the Gateway,
 `chat.send` with `queueMode: "steer"` gives guidance at the supported runtime
 boundary; `queueMode: "interrupt"` replaces active execution. The deprecated
 `sessions.steer` RPC retains its documented interrupt behavior. An operator's

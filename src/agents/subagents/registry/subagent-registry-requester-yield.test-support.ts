@@ -1,11 +1,15 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   captureSubagentRunMutationSnapshot,
   publishSubagentRunPostimages,
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
-import type { RequesterInitialTransfer } from "./subagent-registry-requester-yield.js";
+import {
+  markRequesterTurnYieldedInRuns,
+  type RequesterInitialTransfer,
+} from "./subagent-registry-requester-yield.js";
 import { persistSubagentRunsToDiskAsyncOrThrow } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -67,4 +71,19 @@ export function createRequesterInitialTransferFixture(
     }
     afterRelease?.();
   };
+}
+
+/** Mirrors the lifecycle controller: prepare requester cron authority, mark, then release. */
+export async function markRequesterTurnYieldedWithAuthority(
+  params: Omit<Parameters<typeof markRequesterTurnYieldedInRuns>[0], "preparedAuthority">,
+): Promise<number> {
+  const preparedAuthority = prepareRequesterCronAuthority(params);
+  try {
+    return await markRequesterTurnYieldedInRuns({
+      ...params,
+      preparedAuthority: preparedAuthority ?? null,
+    });
+  } finally {
+    await preparedAuthority?.release();
+  }
 }

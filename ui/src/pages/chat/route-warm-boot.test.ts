@@ -4,7 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
-import { loadChatRoute } from "./route-loader.ts";
+import { loadChatRoute, sessionRouteTargetFromLocation } from "./route-loader.ts";
 import {
   createSessionRouteContext,
   createSessionRouteRow,
@@ -12,7 +12,7 @@ import {
   sessionRouteListResult,
 } from "./route-resolution.test-support.ts";
 
-function warmRoute(scope: "per-sender" | "global" = "per-sender") {
+function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "workspace") {
   const fixture = createSessionRouteContext();
   const { context } = fixture;
   const connectedClient = context.gateway.snapshot.client;
@@ -26,6 +26,9 @@ function warmRoute(scope: "per-sender" | "global" = "per-sender") {
     return () => listeners.delete(listener);
   });
   context.agents.state.agentsList = null;
+  Object.defineProperty(context.sessions, "cachedRoutingDefaults", {
+    get: () => (context.gateway.snapshot.phase === "connected" ? undefined : { mainKey, scope }),
+  });
   const cache = createDeferred();
   context.sessions.whenCachedRosterSettled = vi.fn(() => cache.promise);
   return {
@@ -114,6 +117,49 @@ describe("cached session route startup", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
+  it("resolves a cached short route before requesting a Gateway client without agent discovery", async () => {
+    const { context, cache, request, waiting } = warmRoute();
+    const row = createSessionRouteRow({ displayName: "Cached conversation" });
+    const controller = new AbortController();
+    const pending = loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/cached-conversation-12345678", search: "", hash: "" },
+      "chat",
+      controller.signal,
+    );
+    context.sessions.state.result = sessionRouteListResult([row]);
+    context.sessions.state.resultCached = true;
+    cache.resolve();
+    try {
+      expect(
+        await Promise.race([pending, waiting.then(() => "waiting for Gateway")]),
+      ).toMatchObject({
+        kind: "session",
+        sessionKey: row.key,
+        sessionResolutionFromCache: true,
+      });
+      expect(context.agents.state.agentsList).toBeNull();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await pending.catch(() => undefined);
+    }
+  });
+
+  it("keeps a configured main key that resembles a short link literal before hello", () => {
+    const { context } = warmRoute("per-sender", "cached-conversation-12345678");
+    expect(
+      sessionRouteTargetFromLocation(context, {
+        pathname: "/chat/roboclaw/cached-conversation-12345678",
+        search: "",
+        hash: "",
+      })?.target,
+    ).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:roboclaw:cached-conversation-12345678",
+    });
+  });
+
   it("preserves cached session rows while waiting for live routing defaults", async () => {
     const { context, request, connect, waiting } = warmRoute();
     const sessionKey = "agent:roboclaw:thread";
@@ -149,6 +195,7 @@ describe("cached session route startup", () => {
       context.sessions.state.result = sessionRouteListResult(
         scenario === "missing" ? [] : scenario === "ambiguous" ? [row, duplicate] : [row],
       );
+      context.sessions.state.resultCached = true;
       const request = installResolver([row]);
       cache.resolve();
       const completed = vi.fn();

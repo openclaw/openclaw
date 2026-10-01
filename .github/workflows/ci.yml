@@ -4166,8 +4166,8 @@ jobs:
       matrix: ${{ fromJSON(needs.preflight.outputs.check_additional_matrix) }}
     steps:
       - *linux_node_checkout_step
-      - name: Ensure Plugin SDK API diff base commit
-        if: matrix.group == 'plugin-sdk-api-diff' && github.event_name == 'workflow_dispatch'
+      - name: Ensure additional check comparison base
+        if: (matrix.group == 'extension-package-boundary' && github.event_name == 'pull_request') || (matrix.group == 'plugin-sdk-api-diff' && github.event_name == 'workflow_dispatch')
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
@@ -4405,8 +4405,7 @@ jobs:
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
-          # A stale marker must not survive a mid-seed failure: drop readiness
-          # first so a partial payload can never be restored as valid.
+          # Clear readiness; partial seeds are invalid.
           rm -rf "$sticky_root/.snapshot-ready" "$sticky_root/.source-trees" "$sticky_root/.source-fingerprint" "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions" "$sticky_root/.artifacts"
           rsync -aR packages/plugin-sdk/dist "$sticky_root/"
           rsync -aR --exclude='*.lock*' .artifacts/extension-package-boundary "$sticky_root/"

@@ -6,17 +6,17 @@ import {
 } from "../../sessions/session-key-utils.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import type { GatewaySessionListRow } from "./sessions-helpers.js";
-import type { AnnounceTarget } from "./sessions-send-helpers.js";
-import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
+import type { SessionDeliveryTarget } from "./sessions-send-helpers.js";
+import { resolveSessionDeliveryTargetFromKey } from "./sessions-send-helpers.js";
 
-export async function resolveAnnounceTarget(params: {
+export async function resolveSessionsSendReplyTarget(params: {
   sessionKey: string;
   displayKey: string;
   callGateway: AgentToolGatewayRequestCaller;
   agentId?: string;
-}): Promise<AnnounceTarget | null> {
-  const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
-  const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
+}): Promise<SessionDeliveryTarget | null> {
+  const parsed = resolveSessionDeliveryTargetFromKey(params.sessionKey);
+  const parsedDisplay = resolveSessionDeliveryTargetFromKey(params.displayKey);
   const fallback = parsed ?? parsedDisplay ?? null;
   const fallbackThreadId =
     fallback?.threadId ??
@@ -37,27 +37,15 @@ export async function resolveAnnounceTarget(params: {
   }
 
   try {
-    const list = await params.callGateway<{
-      sessions: Array<GatewaySessionListRow>;
-    }>({
-      method: "sessions.list",
-      params: {
-        includeGlobal: true,
-        includeUnknown: true,
-        limit: 200,
-        agentId: params.agentId,
-      },
-    });
-    const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+    const read = (key: string) =>
+      params.callGateway<{ session: GatewaySessionListRow | null }>({
+        method: "sessions.describe",
+        params: { key, agentId: params.agentId },
+      });
+    const described = await read(params.sessionKey);
     const match =
-      sessions.find(
-        (entry) =>
-          entry?.key === params.sessionKey && (!params.agentId || entry.agentId === params.agentId),
-      ) ??
-      sessions.find(
-        (entry) =>
-          entry?.key === params.displayKey && (!params.agentId || entry.agentId === params.agentId),
-      );
+      described.session ??
+      (params.displayKey !== params.sessionKey ? (await read(params.displayKey)).session : null);
 
     const context = match?.deliveryContext;
     const threadId = normalizeOptionalStringifiedId(context?.threadId ?? fallbackThreadId);

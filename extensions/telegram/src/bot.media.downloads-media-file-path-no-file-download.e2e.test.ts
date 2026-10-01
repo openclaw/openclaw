@@ -1,3 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -5,6 +7,7 @@ import {
   runHeldTelegramBufferTimers,
 } from "./bot-media-timers.test-support.js";
 import {
+  mediaHarnessReplySpy,
   readRemoteMediaBufferSpy,
   setNextSavedMediaPath,
   telegramBotDepsForTest,
@@ -620,9 +623,42 @@ describe("telegram media groups", () => {
   it(
     "coalesces forwarded text + forwarded attachment into a single processing turn with default debounce config",
     async () => {
-      const runtimeError = vi.fn();
-      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const forwardWindowMs = 80;
+      const deliveredTurn = createDeferred<MsgContext>();
+      const runtimeError = vi.fn((error: unknown) => deliveredTurn.reject(error));
+      const { handler } = await createBotHandlerWithOptions({ runtimeError });
       const fetchSpy = mockTelegramPngDownload();
+      // The burst deadline reads performance; freeze it so the held window keeps its delay.
+      vi.useFakeTimers({ toFake: ["performance"] });
+      const setTimeoutSpy = holdTelegramMediaTimeouts(forwardWindowMs);
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      // The debouncer discards its flush promise; the delivered turn is the completion signal.
+      const elapseForwardWindow = () => {
+        const timers = resolveActiveScheduledTimersForDelay(
+          setTimeoutSpy,
+          clearTimeoutSpy,
+          forwardWindowMs,
+        );
+        for (const timer of timers) {
+          clearTimeout(timer.handle);
+          timer.callback();
+        }
+        return timers.length;
+      };
+      // Telegram attachment downloads routinely outlast the forward quiet window.
+      readRemoteMediaBufferSpy.mockImplementation(async () => {
+        elapseForwardWindow();
+        return {
+          buffer: Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
+          contentType: "image/png",
+          fileName: "fwd1.png",
+        };
+      });
+      mediaHarnessReplySpy.mockImplementation(async (ctx, opts) => {
+        await opts?.onReplyStart?.();
+        deliveredTurn.resolve(ctx);
+        return undefined;
+      });
 
       try {
         await handler({
@@ -650,16 +686,18 @@ describe("telegram media groups", () => {
           me: { username: "openclaw_bot" },
           getFile: async () => ({ file_path: "photos/fwd1.jpg" }),
         });
+        expect(elapseForwardWindow()).toBe(1);
 
-        await vi.waitFor(() => {
-          expect(replySpy).toHaveBeenCalledTimes(1);
-        });
-
-        expect(runtimeError).not.toHaveBeenCalled();
-        const payload = replyPayload(replySpy);
+        const payload = await deliveredTurn.promise;
         expect(payload.Body).toContain("Look at this");
         expect(payload.MediaPaths).toHaveLength(1);
+        expect(mediaHarnessReplySpy).toHaveBeenCalledTimes(1);
+        expect(runtimeError).not.toHaveBeenCalled();
       } finally {
+        mediaHarnessReplySpy.mockReset();
+        setTimeoutSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
+        vi.useRealTimers();
         fetchSpy.mockRestore();
       }
     },

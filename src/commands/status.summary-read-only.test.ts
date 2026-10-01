@@ -1,8 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { buildStatusCommandOverviewRows } from "../commands/status-overview-rows.ts";
 import { collectStatusLocalSnapshot } from "../commands/status.agent-local.js";
@@ -28,11 +26,12 @@ import {
 } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { formatStatusSummary } from "../tui/tui-status-summary.js";
 
 describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-status-session-stores-");
 
   function registerTelegramFixture() {
     const telegram = createOutboundTestPlugin({
@@ -71,52 +70,44 @@ describe("getStatusSummary read-only session access", () => {
   });
 
   it("does not create the heartbeat session database while checking its route", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-heartbeat-"));
+    const tempDir = tempDirs.make();
     const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
 
-    try {
-      const summary = await getStatusSummary({
-        includeChannelSummary: false,
-        config: { session: { store: databasePath } },
-      });
+    const summary = await getStatusSummary({
+      includeChannelSummary: false,
+      config: { session: { store: databasePath } },
+    });
 
-      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(true);
-      expect(fs.existsSync(databasePath)).toBe(false);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(true);
+    expect(fs.existsSync(databasePath)).toBe(false);
   });
 
   it.each([undefined, "owner"])(
     "resolves the configured owner DM without writing session state for target %s",
     async (target) => {
       registerTelegramFixture();
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-owner-"));
+      const tempDir = tempDirs.make();
       const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
 
-      try {
-        const summary = await getStatusSummary({
-          includeChannelSummary: false,
-          config: {
-            ...(target ? { agents: { defaults: { heartbeat: { target } } } } : {}),
-            commands: { ownerAllowFrom: ["telegram:123"] },
-            channels: { telegram: { allowFrom: ["123"] } },
-            session: { store: databasePath },
-          },
-        });
+      const summary = await getStatusSummary({
+        includeChannelSummary: false,
+        config: {
+          ...(target ? { agents: { defaults: { heartbeat: { target } } } } : {}),
+          commands: { ownerAllowFrom: ["telegram:123"] },
+          channels: { telegram: { allowFrom: ["123"] } },
+          session: { store: databasePath },
+        },
+      });
 
-        expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(false);
-        expect(fs.existsSync(databasePath)).toBe(false);
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
+      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(false);
+      expect(fs.existsSync(databasePath)).toBe(false);
     },
   );
 
   it.each(["sessions.json", "shared.sqlite"])(
     "reports each agent's activity and reads each physical session store once for %s",
     async (fileName) => {
-      const tempDir = tempDirs.make("openclaw-status-session-stores-");
+      const tempDir = tempDirs.make();
       const storePath = path.join(tempDir, fileName);
       const config = {
         agents: {

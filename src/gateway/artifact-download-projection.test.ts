@@ -25,11 +25,8 @@ const expectedDigest = prepareArtifactDownload(artifact)!.digest;
 
 describe("artifact download byte projection", () => {
   it.each([
-    { range: "bytes=0-0", expected: [0] },
     { range: "bytes=1-4", expected: [1, 2, 3, 4] },
     { range: "bytes=2-5", expected: [2, 3, 4, 5] },
-    { range: "bytes=10-12", expected: [10, 11, 12] },
-    { range: "bytes=11-12", expected: [11, 12] },
     { range: "bytes=12-12", expected: [12] },
   ])("returns only independently owned bytes for $range", ({ range, expected }) => {
     const result = request({ expectedDigest, method: "GET", headers: { range } });

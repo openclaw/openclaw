@@ -47,7 +47,9 @@ describe("sessions_yield orchestration", () => {
       const requesterSettlement =
         await import("../subagents/announce/subagent-announce.requester-settle-wake.js");
       const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
-      const { onSubagentRegistryPersisted, persistSubagentRunsToDiskOrThrow } =
+      const { subscribeSubagentRunChanges } =
+        await import("../subagents/registry/subagent-registry-publication.js");
+      const { persistSubagentRunsToDiskOrThrow } =
         await import("../subagents/registry/subagent-registry-state.js");
       const { loadSubagentRegistryFromSqlite } =
         await import("../subagents/registry/subagent-registry.store.sqlite.js");
@@ -115,7 +117,7 @@ describe("sessions_yield orchestration", () => {
       registry.addSubagentRunForTests(child);
       persistSubagentRunsToDiskOrThrow(subagentRuns, [child.runId]);
       const persisted = vi.fn(() => loadSubagentRegistryFromSqlite().get(child.runId));
-      const unsubscribe = onSubagentRegistryPersisted(persisted);
+      const unsubscribe = subscribeSubagentRunChanges("persistence", persisted);
       const createTranscript = transcriptOwner.createAssistantErrorTranscript;
       const factorySpy = vi
         .spyOn(transcriptOwner, "createAssistantErrorTranscript")
@@ -227,20 +229,20 @@ describe("sessions_yield orchestration", () => {
     "preserves child ownership through transient retries ($agentHarnessId, new child: $spawnOnRetry, candidate: $outerCandidate)",
     async ({ spawnOnRetry, agentHarnessId, outerCandidate }) => {
       const registry = await import("../subagents/registry/subagent-registry.js");
-      const { markRequesterTurnYieldedInRuns, settleRequesterTurnAfterSessionSpawns } =
+      const { settleRequesterTurnAfterSessionSpawns } =
         await import("../subagents/registry/subagent-registry-requester-yield.js");
       const { createReplyOperation } = await import("../../auto-reply/reply/reply-run-registry.js");
       const params = { ...createOverflowRunParams(state), runId: "yield-retry-parent" };
       const runs = new Map<string, SubagentRunRecord>();
       const persistOrThrow = vi.fn();
       const schedule = vi.fn();
-      const { createRequesterInitialTransferFixture } =
+      const { createRequesterInitialTransferFixture, markRequesterTurnYieldedWithAuthority } =
         await import("../subagents/registry/subagent-registry-requester-yield.test-support.js");
       const transfer = createRequesterInitialTransferFixture(runs, persistOrThrow);
       const markYield = vi
         .spyOn(registry, "markRequesterTurnYielded")
         .mockImplementation((claim) =>
-          markRequesterTurnYieldedInRuns({ ...claim, runs, transfer }),
+          markRequesterTurnYieldedWithAuthority({ ...claim, runs, transfer }),
         );
       const settle = vi
         .spyOn(registry, "settleRequesterAfterSessionSpawns")

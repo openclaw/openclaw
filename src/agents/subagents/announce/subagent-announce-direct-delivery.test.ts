@@ -113,7 +113,6 @@ describe("late exact requester recovery", () => {
       requesterAgentId: "main",
       targetRequesterSessionKey: sessionKey,
       triggerMessage: "All children settled",
-      steerMessage: "All children settled",
       directOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
       sourceTool: "subagent_settle",
       requesterIsSubagent: false,
