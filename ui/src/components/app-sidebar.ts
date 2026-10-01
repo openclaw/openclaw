@@ -71,6 +71,7 @@ import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarContextController } from "./sidebar-context-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import { SidebarPeopleController } from "./sidebar-people-controller.ts";
+import { SidebarSessionVisibility } from "./sidebar-session-visibility.ts";
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() teamOnlineExpanded = false;
@@ -81,6 +82,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
   private readonly people = new SidebarPeopleController(this);
+  private readonly sessionVisibility = new SidebarSessionVisibility(this);
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -180,6 +182,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   constructor() {
     super();
     void this.subscriptions;
+    void this.sessionVisibility;
   }
 
   override dismissTransientMenus(): boolean {
