@@ -17,7 +17,11 @@ import {
   createChannelHistoryWindow,
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
-import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import {
+  buildAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  resolveThreadSessionKeys,
+} from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -186,10 +190,18 @@ export async function buildDiscordMessageProcessContext(params: {
     (ctx.inboundEventKind === "room_event" ||
       !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
   const recoversHistory = shouldIncludeChannelHistory && isGuildMessage && historyLimit > 0;
+  const historySessionKey = boundSessionKey ?? route.sessionKey;
+  // A runtime ACP target can belong to a different agent than the Discord source route.
+  // Reset and tombstone metadata live in that target's store, not the admission owner's.
+  const historyAgentId = resolveAgentIdFromSessionKey(historySessionKey, route.agentId);
+  const historyStorePath =
+    historyAgentId === route.agentId
+      ? storePath
+      : resolveStorePath(cfg.session?.store, { agentId: historyAgentId });
   const historySessionScope = {
-    agentId: route.agentId,
-    storePath,
-    sessionKey: boundSessionKey ?? route.sessionKey,
+    agentId: historyAgentId,
+    storePath: historyStorePath,
+    sessionKey: historySessionKey,
     readConsistency: "latest" as const,
   };
   const historySession = recoversHistory
