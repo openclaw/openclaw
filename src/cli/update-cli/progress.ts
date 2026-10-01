@@ -6,7 +6,7 @@ import { formatDurationPrecise } from "../../infra/format-time/format-duration.t
 import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
-import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { getUpdateRun, getUpdateRunAsync } from "../../infra/update-run-ledger.js";
 import {
   toPublicUpdateRun,
   updateStepDiagnostics,
@@ -51,7 +51,7 @@ export type UpdateDisplayProgress = {
 type ProgressController = {
   progress: UpdateDisplayProgress;
   stop: () => void;
-  suspend: () => void;
+  suspend: () => Promise<void>;
   resume: () => void;
   dispose: () => void;
 };
@@ -70,7 +70,13 @@ export function createUpdateProgress(
   run?: UpdateCommandOptions["run"],
 ): ProgressController {
   if (!enabled) {
-    return { progress: {}, stop: () => {}, suspend: () => {}, resume: () => {}, dispose: () => {} };
+    return {
+      progress: {},
+      stop: () => {},
+      suspend: async () => {},
+      resume: () => {},
+      dispose: () => {},
+    };
   }
 
   let currentSpinner: ReturnType<typeof spinner> | null = null;
@@ -78,6 +84,11 @@ export function createUpdateProgress(
   let stepNotice: ReturnType<typeof setInterval> | undefined;
   let currentPhase: UpdateRunPhase | undefined;
   let observation: "active" | "suspended" | "disposed" = "active";
+  let generation = 0;
+  let reading = false;
+  let readSettled = Promise.resolve();
+  let paused = false;
+  let latestRecord: UpdateRunRecord | undefined;
   const seenPhases = new Set<UpdateRunPhase>();
   const stop = () => {
     if (stepNotice) {
@@ -95,8 +106,7 @@ export function createUpdateProgress(
   };
   // Candidate migrations can advance the ledger beyond this process's reader.
   // Step callbacks and final cleanup must respect the same fence as the timer.
-  const read = () =>
-    observation === "active" && run ? readDisplayRecord(run.runId, run.env, "progress") : undefined;
+  const read = () => (observation === "active" && run ? latestRecord : undefined);
   const renderRecord = (record: UpdateRunRecord | undefined) => {
     // Doctor's unbound spinner does not observe ledger phases, even after a write.
     if (observation !== "active" || !run || !record) {
@@ -128,6 +138,7 @@ export function createUpdateProgress(
     } finally {
       if (terminal) {
         observation = "disposed";
+        generation += 1;
         clearTimer();
         if (run && activeUpdateProgress.get(run.runId)?.finish === finalize) {
           activeUpdateProgress.delete(run.runId);
@@ -136,23 +147,52 @@ export function createUpdateProgress(
       stop();
     }
   };
-  const poll = () => {
+  const poll = async () => {
     timer = undefined;
-    const record = read();
-    renderRecord(record);
-    if (record?.status === "running") {
-      // The CLI owns this poll only for its active operation; fresh-process
-      // finalization and gateway verification write the same ledger row.
-      timer = setTimeout(poll, UPDATE_PROGRESS_POLL_MS);
-      timer.unref?.();
+    if (reading || observation !== "active" || paused || !run) {
+      return;
+    }
+    reading = true;
+    const startedGeneration = generation;
+    try {
+      const pending = getUpdateRunAsync(run.runId, { env: run.env });
+      // Join observation without promoting diagnostic lookup errors to update
+      // failures. Activation separately drains the canonical database owner.
+      readSettled = pending.then(
+        () => {},
+        () => {},
+      );
+      const record = await pending;
+      if (startedGeneration === generation) {
+        latestRecord = record;
+        renderRecord(record);
+      }
+    } catch (error) {
+      if (startedGeneration === generation) {
+        latestRecord = undefined;
+        defaultRuntime.error(`Update progress history unavailable: ${formatErrorMessage(error)}`);
+      }
+    } finally {
+      reading = false;
+      if (
+        observation === "active" &&
+        !paused &&
+        (latestRecord?.status === "running" ||
+          (startedGeneration !== generation && latestRecord === undefined))
+      ) {
+        // Schedule after settlement: even a slow read cannot overlap its successor.
+        timer = setTimeout(() => void poll(), UPDATE_PROGRESS_POLL_MS);
+        timer.unref?.();
+      }
     }
   };
   if (run) {
-    // Register only after initial observation so failed setup leaves no callback.
-    poll();
+    void poll();
     activeUpdateProgress.set(run.runId, {
       finish: finalize,
       pause: () => {
+        paused = true;
+        generation += 1;
         clearTimer();
         stop();
       },
@@ -160,6 +200,10 @@ export function createUpdateProgress(
   }
   const progress: UpdateDisplayProgress = {
     onStepStart: (step, record) => {
+      if (record) {
+        generation += 1;
+        latestRecord = record;
+      }
       finalize(record ?? read(), false);
       const label = currentPhase ? `${currentPhase} — ${step.name}` : step.name;
       if (process.stdout.isTTY) {
@@ -177,6 +221,10 @@ export function createUpdateProgress(
       }
     },
     onStepComplete: (step, record) => {
+      if (record) {
+        generation += 1;
+        latestRecord = record;
+      }
       finalize(record ?? read(), false);
       printStep(step);
     },
@@ -188,15 +236,19 @@ export function createUpdateProgress(
     suspend: () => {
       if (observation === "active") {
         observation = "suspended";
+        generation += 1;
+        latestRecord = undefined;
         currentPhase = undefined;
         clearTimer();
         stop();
       }
+      // Activation must join the old reader, not merely discard its display result.
+      return readSettled;
     },
     resume: () => {
       if (observation === "suspended") {
         observation = "active";
-        poll();
+        void poll();
       }
     },
     dispose: () => finalize(read(), true),

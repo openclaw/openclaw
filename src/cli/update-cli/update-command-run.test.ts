@@ -10,6 +10,7 @@ import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtim
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
+import { createRetainedOperation } from "../../infra/retained-operation.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -23,9 +24,15 @@ import {
 } from "../../infra/update-run-recovery.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+  isOpenClawStateDatabaseOpen,
+} from "../../state/openclaw-state-db-cache.js";
 import * as existingStateWrite from "../../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import * as readWorker from "../../state/openclaw-state-read-worker.js";
 import { createUpdateProgress } from "./progress.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -56,6 +63,67 @@ const sourceImportArgs = resolveRuntimeWorkerUrl(
   : [];
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+it.each([false, true])(
+  "joins failed progress lookup and drains retained custody per run (cleanup failure=%s)",
+  async (cleanupFails) => {
+    const env = { OPENCLAW_STATE_DIR: dirs.make("update-progress-custody-") };
+    const unrelatedEnv = { OPENCLAW_STATE_DIR: dirs.make("update-progress-unrelated-") };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    createUpdateRun({ trigger: "cli" }, { env: unrelatedEnv });
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const unrelatedPath = resolveOpenClawStateSqlitePath(unrelatedEnv);
+    const originalCapture = readWorker.captureOpenClawStateReadSource;
+    const lookupError = new Error("controlled history lookup failure");
+    const cleanupError = new Error("controlled reader cleanup failure");
+    let retainCustody = cleanupFails;
+    vi.spyOn(readWorker, "captureOpenClawStateReadSource").mockImplementation((...args) => {
+      const source = originalCapture(...args);
+      return {
+        ...source,
+        createTransport: (...transportArgs) => {
+          const transport = source.createTransport(...transportArgs);
+          return {
+            ...transport,
+            startRead: () => {
+              const failed = createRetainedOperation<never>(() => {});
+              failed.reject(lookupError);
+              return failed.operation;
+            },
+            startClose: () => {
+              if (!retainCustody) {
+                return transport.startClose();
+              }
+              const failed = createRetainedOperation<void>(() => {});
+              failed.reject(cleanupError);
+              return failed.operation;
+            },
+          };
+        },
+      };
+    });
+    const presentation = createUpdateProgress(true, run);
+    try {
+      await expect(presentation.suspend()).resolves.toBeUndefined();
+      const closing = closeOpenClawStateDatabaseByPathAsync(databasePath);
+      if (cleanupFails) {
+        await expect(closing).rejects.toThrow("controlled reader cleanup failure");
+        expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(true);
+        retainCustody = false;
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      } else {
+        await closing;
+      }
+      expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(false);
+      expect(isOpenClawStateDatabaseOpen(unrelatedPath)).toBe(true);
+    } finally {
+      retainCustody = false;
+      presentation.dispose();
+      await closeOpenClawStateDatabaseAsync();
+      vi.restoreAllMocks();
+    }
+  },
+);
+
 it.each([
   { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 0 },
   { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 86 },
@@ -170,7 +238,7 @@ it("persists fingerprint warnings before closing a rolled-back run", async () =>
   }
 });
 
-it("presents committed steps without reopening the ledger for display", () => {
+it("presents committed steps without reopening the ledger for display", async () => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("update-progress-committed-") };
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
   const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -243,6 +311,7 @@ it("presents committed steps without reopening the ledger for display", () => {
   } finally {
     try {
       presentation?.dispose();
+      await closeOpenClawStateDatabaseAsync();
     } finally {
       if (tty) {
         Object.defineProperty(process.stdout, "isTTY", tty);

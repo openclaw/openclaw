@@ -44,5 +44,5 @@ export type MutableUpdateExecutionParams = {
     admitExecutor: (fence: UpdateRecoveryFence) => void,
     installTarget?: ResolvedGlobalInstallTarget,
   ) => Promise<void>;
-  onActivation?: () => void;
+  onActivation?: () => void | Promise<void>;
 };
