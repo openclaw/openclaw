@@ -1,7 +1,22 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 // Tests CLI entrypoint argument handling and startup behavior.
 import { describe, expect, it, vi } from "vitest";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
 import { withEnvAsync } from "./test-utils/env.js";
+
+describe("entry bootstrap import boundary", () => {
+  it("keeps CLI-only lifecycle modules lazy until after the version fast path", () => {
+    const source = readFileSync(fileURLToPath(new URL("./entry.ts", import.meta.url)), "utf8");
+
+    expect(source).not.toContain('from "./cli/one-shot-exit.js";');
+    expect(source).not.toContain('from "./cli/respawn-policy.js";');
+    expect(source).not.toContain('from "./cli/runtime-cleanup-scope.js";');
+    expect(source).toContain('import("./cli/one-shot-exit.js")');
+    expect(source).toContain('import("./cli/respawn-policy.js")');
+    expect(source).toContain('import("./cli/runtime-cleanup-scope.js")');
+  });
+});
 
 describe("entry root help fast path", () => {
   it("respects the startup help fast path kill switch", async () => {
