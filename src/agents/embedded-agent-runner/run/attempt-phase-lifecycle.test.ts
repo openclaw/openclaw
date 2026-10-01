@@ -1,8 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessage,
   readActiveTranscriptEntryAnchor,
@@ -11,8 +9,8 @@ import {
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -42,17 +40,13 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-attempt-terminal-anchor-");
 
 describe("embedded attempt phase lifecycle state", () => {
   beforeEach(() => {
     hoisted.runAgentEndSideEffects.mockReset();
     hoisted.shouldWaitForCompletionRequiredAsyncTasks.mockReset().mockReturnValue(false);
     hoisted.waitForCompletionRequiredAsyncTasks.mockReset();
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
   });
 
   it("re-reads compaction timeout state after the retry wait", async () => {
@@ -315,7 +309,7 @@ describe("embedded attempt phase lifecycle state", () => {
   it.each(["complete", "missing admission", "missing terminal"] as const)(
     "handles %s candidate anchors without skipping later lifecycle work",
     async (boundary) => {
-      const dir = tempDirs.make("openclaw-attempt-terminal-anchor-");
+      const dir = tempDirs.make();
       const target = {
         agentId: "main",
         sessionId: "session-1",
@@ -534,7 +528,7 @@ describe("embedded attempt phase lifecycle state", () => {
   it.each(["blocked writes", "interrupted tool result"] as const)(
     "selects review evidence after the pre-turn boundary with %s",
     async (tail) => {
-      const dir = tempDirs.make("openclaw-attempt-review-boundary-");
+      const dir = tempDirs.make();
       const target = {
         agentId: "main",
         sessionId: "review-boundary",
@@ -635,7 +629,7 @@ describe("embedded attempt phase lifecycle state", () => {
     "eligible completion",
     "abort while queued",
   ] as const)("settles %s behind a held agent writer", async (scenario) => {
-    const dir = fs.realpathSync(tempDirs.make("openclaw-after-turn-admission-"));
+    const dir = tempDirs.make();
     const target = {
       agentId: "main",
       sessionId: "after-turn",

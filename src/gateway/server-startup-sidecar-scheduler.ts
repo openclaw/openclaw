@@ -67,11 +67,10 @@ export function scheduleGatewayGenerationTimer(params: {
   onError: (err: unknown) => void;
   shouldRun?: () => boolean;
 }): GatewayPostReadySidecarHandle {
-  const { scheduler } = params;
-  const controller = new AbortController();
-  const signal = AbortSignal.any([controller.signal, scheduler.signal]);
+  const scope = params.scheduler.scope();
+  const { signal } = scope;
   const isStopped = () => signal.aborted || params.shouldRun?.() === false;
-  const job = scheduler.schedule({
+  scope.schedule({
     id: params.origin,
     delayMs: params.delayMs,
     run: () => {
@@ -94,10 +93,5 @@ export function scheduleGatewayGenerationTimer(params: {
       });
     },
   });
-  return {
-    stop: () => {
-      controller.abort();
-      return job.stop();
-    },
-  };
+  return scope;
 }

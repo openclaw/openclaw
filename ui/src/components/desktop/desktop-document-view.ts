@@ -4,7 +4,6 @@ import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { strokeIcon } from "../icons-tools.ts";
 import { icons } from "../icons.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
-import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import {
   renderDesktopPanelContent,
   renderDesktopSizing,
@@ -26,14 +25,12 @@ const KEYBOARD_GLYPH = strokeIcon(svg`
   <path d="M8 17h8" />
 `);
 
-type DesktopDocumentViewOptions = {
-  state: DesktopPanelState;
+type DesktopDocumentViewOptions = Omit<
+  Parameters<typeof renderDesktopPanelContent>[0],
+  "connection"
+> & {
   controlling: boolean;
   sizing: DesktopSizingOptions;
-  notice: TemplateResult | typeof nothing;
-  picker: TemplateResult;
-  credentials: TemplateResult;
-  recovery: TemplateResult;
   keyboardInputValue: string;
   pictureInPictureControl: TemplateResult;
   audioControl?: TemplateResult;

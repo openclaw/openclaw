@@ -61,6 +61,7 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) forkDisabled = false;
   @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
+  @property({ attribute: false }) snoozeAllowed = false;
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];

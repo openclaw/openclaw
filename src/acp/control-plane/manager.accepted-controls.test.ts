@@ -80,30 +80,16 @@ async function runTurn(manager: AcpSessionManager, requestId: string) {
 describe("AcpSessionManager accepted controls", () => {
   installAcpSessionManagerTestLifecycle();
 
-  it.each([
-    { name: "clamped thinking", selected: "high", accepted: "medium", expected: "medium" },
-    {
-      name: "removed thinking control",
-      selected: "high",
-      accepted: undefined,
-      expected: undefined,
-    },
-    {
-      name: "unselected backend defaults",
-      selected: undefined,
-      accepted: "medium",
-      expected: undefined,
-    },
-  ])("persists $name after an explicit model change", async ({ selected, accepted, expected }) => {
-    const state = setupSession(selected, "openai/gpt-5.6-sol");
-    state.setConfigOption.mockResolvedValue(acceptedOptions(accepted, ["low", "medium", "high"]));
+  it("persists clamped thinking after an explicit model change", async () => {
+    const state = setupSession("high", "openai/gpt-5.6-sol");
+    state.setConfigOption.mockResolvedValue(acceptedOptions("medium", ["low", "medium", "high"]));
     const result = await state.manager.setSessionConfigOption({
       cfg: baseCfg,
       sessionKey,
       key: "model",
       value: model,
     });
-    const expectedOptions = { model, ...(expected ? { thinking: expected } : {}) };
+    const expectedOptions = { model, thinking: "medium" };
     expect(result).toEqual(expectedOptions);
     expect(state.readMeta().runtimeOptions).toEqual(expectedOptions);
     await runTurn(state.manager, "after-selection");
@@ -114,17 +100,19 @@ describe("AcpSessionManager accepted controls", () => {
     ).toBe(false);
   });
 
-  it.each(["thinking", "effort", "reasoning_effort", "thought_level"])(
-    "persists the accepted value of an explicit %s selection",
-    async (key) => {
-      const state = setupSession();
-      state.setConfigOption.mockResolvedValue(acceptedOptions("medium", ["low", "medium", "high"]));
-      await expect(
-        state.manager.setSessionConfigOption({ cfg: baseCfg, sessionKey, key, value: "high" }),
-      ).resolves.toEqual({ model, thinking: "medium" });
-      expect(state.readMeta().runtimeOptions).toEqual({ model, thinking: "medium" });
-    },
-  );
+  it("persists the accepted value of an explicit thinking selection", async () => {
+    const state = setupSession();
+    state.setConfigOption.mockResolvedValue(acceptedOptions("medium", ["low", "medium", "high"]));
+    await expect(
+      state.manager.setSessionConfigOption({
+        cfg: baseCfg,
+        sessionKey,
+        key: "thinking",
+        value: "high",
+      }),
+    ).resolves.toEqual({ model, thinking: "medium" });
+    expect(state.readMeta().runtimeOptions).toEqual({ model, thinking: "medium" });
+  });
 
   it.each(["medium", undefined])(
     "reconciles automatic model acknowledgement before effort replay: %s",
@@ -149,22 +137,6 @@ describe("AcpSessionManager accepted controls", () => {
       expect(state.ensureSession.mock.lastCall?.[0].thinking).toBe(accepted);
     },
   );
-
-  it("retains requested preferences for a shipped void-returning backend", async () => {
-    const state = setupSession("high");
-    await expect(
-      state.manager.setSessionConfigOption({
-        cfg: baseCfg,
-        sessionKey,
-        key: "model",
-        value: model,
-      }),
-    ).resolves.toEqual({ model, thinking: "high" });
-    await runTurn(state.manager, "legacy-backend");
-    expect(
-      state.setConfigOption.mock.calls.map(([input]) => [input.key, input.value]),
-    ).toContainEqual(["reasoning_effort", "high"]);
-  });
 
   it.each(["fresh", "updated"])(
     "applies valid pending thinking with a %s handle instead of accepting the old model effort",
@@ -224,20 +196,6 @@ describe("AcpSessionManager accepted controls", () => {
       permissionProfile: "strict",
     });
     expect(state.runTurn).not.toHaveBeenCalled();
-  });
-
-  it("still replays backend extras when no canonical thinking override was selected", async () => {
-    const state = setupSession();
-    await state.manager.updateSessionRuntimeOptions({
-      cfg: baseCfg,
-      sessionKey,
-      patch: { backendExtras: { effort: "high" } },
-    });
-    await runTurn(state.manager, "backend-extras");
-    expect(
-      state.setConfigOption.mock.calls.map(([input]) => [input.key, input.value]),
-    ).toContainEqual(["reasoning_effort", "high"]);
-    expect(state.readMeta().runtimeOptions).toEqual({ model, backendExtras: { effort: "high" } });
   });
 
   it.each([

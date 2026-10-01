@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
@@ -61,42 +61,28 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
           aria-label=${t("nativeLinkMenu.label")}
           style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
-        <wa-dropdown-item
-          class="session-menu__item"
-          value="inline"
-          data-shortcut="s"
-          aria-keyshortcuts="S"
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true"
-            >${icons.panelRightOpen}</span
-          >
-          <span class="session-menu__text">${t("nativeLinkMenu.openInline")}</span>
-          ${menuShortcutHint("s")}
-        </wa-dropdown-item>
-        <wa-dropdown-item
-          class="session-menu__item"
-          value="external"
-          data-new-tab-action
-          data-shortcut="b"
-          aria-keyshortcuts="B"
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true"
-            >${icons.externalLink}</span
-          >
-          <span class="session-menu__text">${t("nativeLinkMenu.openExternal")}</span>
-          ${menuShortcutHint("b")}
-        </wa-dropdown-item>
-        <div class="session-menu__separator" role="separator"></div>
-        <wa-dropdown-item
-          class="session-menu__item"
-          value="copy"
-          data-shortcut="c"
-          aria-keyshortcuts="C"
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
-          <span class="session-menu__text">${t("nativeLinkMenu.copy")}</span>
-          ${menuShortcutHint("c")}
-        </wa-dropdown-item>
+        ${(
+          [
+            ["inline", "s", "openInline", icons.panelRightOpen],
+            ["external", "b", "openExternal", icons.externalLink],
+            ["copy", "c", "copy", icons.copy],
+          ] as const
+        ).map(
+          ([action, shortcut, label, icon]) => html`
+            ${action === "copy" ? html`<div class="session-menu__separator" role="separator"></div>` : nothing}
+            <wa-dropdown-item
+              class="session-menu__item"
+              value=${action}
+              ?data-new-tab-action=${action === "external"}
+              data-shortcut=${shortcut}
+              aria-keyshortcuts=${shortcut.toUpperCase()}
+            >
+              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
+              <span class="session-menu__text">${t(`nativeLinkMenu.${label}`)}</span>
+              ${menuShortcutHint(shortcut)}
+            </wa-dropdown-item>
+          `,
+        )}
       </wa-dropdown>
     `;
   }

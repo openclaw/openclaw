@@ -283,7 +283,7 @@ suite.define(() => {
           );
       const assertCatalogMenu = async (entryPoint: string) => {
         await expect.poll(() => catalogMenu().count()).toBe(1);
-        await expect.poll(menuValues).toEqual(["viewer", "terminal"]);
+        await expect.poll(menuValues).toEqual(["viewer", "import", "terminal"]);
         await expect
           .poll(() => catalogMenu().locator('[value="terminal"]').getAttribute("disabled"))
           .toBeNull();

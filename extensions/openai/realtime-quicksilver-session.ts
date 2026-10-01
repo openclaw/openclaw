@@ -11,6 +11,7 @@ import type {
   RealtimeVoiceGatewayControl,
   RealtimeVoiceProviderCapabilities,
 } from "openclaw/plugin-sdk/realtime-voice";
+import type { RealtimeVoiceAgentConsultTranscriptEntry } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
 import WebSocket, { type RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
@@ -37,7 +38,6 @@ import {
   createOpenAIQuicksilverRequestIds,
   hangupOpenAIRealtimeCall,
   type OpenAIQuicksilverAuth,
-  type OpenAIQuicksilverInitialItem,
   type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
 import {
@@ -59,7 +59,7 @@ const OPENAI_QUICKSILVER_MAX_SDP_BYTES = 256 * 1024;
 const OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS = 30_000;
 
 type OpenAIQuicksilverSessionRequest = {
-  initialItems?: OpenAIQuicksilverInitialItem[];
+  initialItems?: RealtimeVoiceAgentConsultTranscriptEntry[];
   ownerConnId?: string;
 } & (
   | (RealtimeVoiceBrowserSessionCreateRequest & {
@@ -97,6 +97,15 @@ type PendingOffer = {
   timer: NodeJS.Timeout;
 };
 
+export type OpenAIQuicksilverBrowserSessionBroker = {
+  capabilities: Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };
+  createBrowserSession: (
+    request: OpenAIQuicksilverSessionRequest,
+    auth: OpenAIQuicksilverAuth,
+  ) => Promise<RealtimeVoiceBrowserSession>;
+  cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
+};
+
 export function createOpenAIQuicksilverBrowserSessionBroker(
   params: {
     getConfig: () => OpenClawConfig | undefined;
@@ -106,24 +115,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     onCleanupComplete?: () => void;
   },
   context: OpenAIRealtimeHost,
-): {
-  broker: {
-    capabilities: Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };
-    createBrowserSession: (
-      request: OpenAIQuicksilverSessionRequest,
-      auth: OpenAIQuicksilverAuth,
-    ) => Promise<RealtimeVoiceBrowserSession>;
-    cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
-  };
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-  cleanup: () => Promise<void>;
-  getSessionCounts: () => {
-    pending: number;
-    inFlight: number;
-    active: number;
-    reservations: number;
-  };
-} {
+) {
   const pendingOffers = new Map<string, PendingOffer>();
   const inFlightOffers = new Map<
     string,
@@ -203,7 +195,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     }
   };
 
-  const broker = {
+  const broker: OpenAIQuicksilverBrowserSessionBroker = {
     capabilities: OPENAI_QUICKSILVER_CAPABILITIES,
     createBrowserSession: async (
       request: OpenAIQuicksilverSessionRequest,

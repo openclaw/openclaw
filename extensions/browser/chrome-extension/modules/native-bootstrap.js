@@ -143,6 +143,7 @@ export function createNativeBootstrapController({ chromeApi = chrome, getPairing
     if (!failureCode) {
       await chromeApi.storage.local.remove([FAILURE_KEY]);
     }
+    return { status: state, ...(failureCode ? { code: failureCode } : {}) };
   }
 
   async function attempt() {
@@ -178,24 +179,22 @@ export function createNativeBootstrapController({ chromeApi = chrome, getPairing
         }
         if (error === NATIVE_MESSAGE_TIMEOUT || isHostMissing(error)) {
           const code = error === NATIVE_MESSAGE_TIMEOUT ? "native_host_timeout" : "host_not_found";
-          await writeState("retrying", code);
-          return { status: "retrying", code };
+          return await writeState("retrying", code);
         }
-        await writeState("manual_required", "native_host_error");
-        return { status: "manual_required", code: "native_host_error" };
+        return await writeState("manual_required", "native_host_error");
       }
       if (!isCurrent()) {
         return { status: "superseded" };
       }
       const parsed = nativeResponse(response, nonce);
       if (parsed.kind === "malformed") {
-        await writeState("manual_required", "malformed_response");
-        return { status: "manual_required", code: "malformed_response" };
+        return await writeState("manual_required", "malformed_response");
       }
       if (parsed.kind === "failure") {
-        const retrying = parsed.code === "pairing_unavailable";
-        await writeState(retrying ? "retrying" : "manual_required", parsed.code);
-        return { status: retrying ? "retrying" : "manual_required", code: parsed.code };
+        return await writeState(
+          parsed.code === "pairing_unavailable" ? "retrying" : "manual_required",
+          parsed.code,
+        );
       }
       const current = await getPairing();
       if (current?.relayUrl || !isCurrent()) {
@@ -214,8 +213,7 @@ export function createNativeBootstrapController({ chromeApi = chrome, getPairing
         if (applied?.existing) {
           return { status: "existing" };
         }
-        await writeState("manual_required", "pairing_rejected");
-        return { status: "manual_required", code: "pairing_rejected" };
+        return await writeState("manual_required", "pairing_rejected");
       }
       await writeState("ready");
       return { status: "paired" };

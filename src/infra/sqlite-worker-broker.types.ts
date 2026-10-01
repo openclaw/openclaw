@@ -82,6 +82,7 @@ export type Actor = {
   cleanupState?: "pending" | "complete";
   closing?: Promise<void>;
   retirementRequested?: boolean;
+  settlement?: Promise<void>;
   retirement?: Promise<void>;
   onReferencesDrained?: () => void;
   stateContext?: SqliteWorkerStateContext;

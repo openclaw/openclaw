@@ -38,12 +38,6 @@ type AzureSpeechProviderConfig = {
   timeoutMs?: number;
 };
 
-type AzureSpeechProviderOverrides = {
-  voice?: string;
-  lang?: string;
-  outputFormat?: string;
-};
-
 function readAzureSpeechEnvApiKey(): string | undefined {
   return (
     trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
@@ -56,10 +50,6 @@ function readAzureSpeechEnvRegion(): string | undefined {
   return (
     trimToUndefined(process.env.AZURE_SPEECH_REGION) ?? trimToUndefined(process.env.SPEECH_REGION)
   );
-}
-
-function readAzureSpeechEnvEndpoint(): string | undefined {
-  return trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT);
 }
 
 function resolveAzureSpeechConfigRecord(
@@ -79,7 +69,8 @@ function normalizeAzureSpeechProviderConfig(
 ): AzureSpeechProviderConfig {
   const raw = resolveAzureSpeechConfigRecord(rawConfig);
   const region = trimToUndefined(raw?.region) ?? readAzureSpeechEnvRegion();
-  const endpoint = trimToUndefined(raw?.endpoint) ?? readAzureSpeechEnvEndpoint();
+  const endpoint =
+    trimToUndefined(raw?.endpoint) ?? trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT);
   const baseUrl = normalizeAzureSpeechBaseUrl({
     baseUrl: trimToUndefined(raw?.baseUrl),
     endpoint,
@@ -122,19 +113,6 @@ function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeec
     voiceNoteOutputFormat:
       trimToUndefined(config.voiceNoteOutputFormat) ?? defaults.voiceNoteOutputFormat,
     timeoutMs: asFiniteNumber(config.timeoutMs) ?? defaults.timeoutMs,
-  };
-}
-
-function readAzureSpeechOverrides(
-  overrides: SpeechProviderOverrides | undefined,
-): AzureSpeechProviderOverrides {
-  if (!overrides) {
-    return {};
-  }
-  return {
-    voice: trimToUndefined(overrides.voice ?? overrides.voiceId),
-    lang: trimToUndefined(overrides.lang ?? overrides.languageCode),
-    outputFormat: trimToUndefined(overrides.outputFormat),
   };
 }
 
@@ -185,7 +163,10 @@ async function resolveAzureSpeechTtsRequest(
   outputFormatOverride?: string,
 ) {
   const config = readAzureSpeechProviderConfig(req.providerConfig);
-  const overrides = readAzureSpeechOverrides(req.providerOverrides);
+  const overrides = req.providerOverrides;
+  const voice = trimToUndefined(overrides?.voice ?? overrides?.voiceId);
+  const lang = trimToUndefined(overrides?.lang ?? overrides?.languageCode);
+  const outputFormat = trimToUndefined(overrides?.outputFormat);
   const apiKey = resolveApiKey(config.apiKey);
   if (!apiKey) {
     throw new Error("Azure Speech API key missing");
@@ -198,11 +179,11 @@ async function resolveAzureSpeechTtsRequest(
     baseUrl: config.baseUrl,
     endpoint: config.endpoint,
     region: config.region,
-    voice: overrides.voice ?? config.voice,
-    lang: overrides.lang ?? config.lang,
+    voice: voice ?? config.voice,
+    lang: lang ?? config.lang,
     outputFormat:
       outputFormatOverride ??
-      overrides.outputFormat ??
+      outputFormat ??
       (req.target === "voice-note" ? config.voiceNoteOutputFormat : config.outputFormat),
     timeoutMs: config.timeoutMs ?? req.timeoutMs,
     maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),

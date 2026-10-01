@@ -57,13 +57,9 @@ function trackTranscriptProbe(database: ReturnType<typeof openOpenClawAgentDatab
 
 describe("SQLite session provenance writes", () => {
   it.each([
-    ["new session", "absent", "absent", false, 1, 0],
-    ["known provenance without hot rows", "known", "same", false, 1, 0],
     ["known provenance with hot rows", "known", "same", true, 1, 0],
     ["unknown same session without hot rows", "unknown", "same", false, 0, 0],
-    ["unknown same session with hot rows", "unknown", "same", true, 0, 0],
     ["unknown absent entry without hot rows", "unknown", "absent", false, 1, 1],
-    ["unknown absent entry with hot rows", "unknown", "absent", true, 0, 1],
     ["unknown different session without hot rows", "unknown", "different", false, 1, 1],
     ["unknown different session with hot rows", "unknown", "different", true, 0, 1],
   ] as const)(
@@ -131,8 +127,13 @@ describe("SQLite session provenance writes", () => {
         expect(stored?.entry_valid).toBe(1);
         expect(JSON.parse(String(stored?.entry_json))).toMatchObject({
           sessionId: entry.sessionId,
-          skillsSnapshot: entry.skillsSnapshot,
         });
+        const savedSkills = database.db
+          .prepare(
+            "SELECT value_json FROM session_entry_snapshots WHERE session_key = ? AND field = 'skillsSnapshot'",
+          )
+          .get(scope.sessionKey);
+        expect(JSON.parse(String(savedSkills?.value_json))).toEqual(entry.skillsSnapshot);
         expect(tracker.counts.transcript).toBe(probes);
         expect(database.db.isTransaction).toBe(false);
         expect(

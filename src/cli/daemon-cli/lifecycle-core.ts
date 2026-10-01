@@ -4,7 +4,10 @@ import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import { readGatewayServiceLoadState } from "../../daemon/service-load-state.js";
-import { collectGatewayServiceStartRepairIssues } from "../../daemon/service-start-repair.js";
+import {
+  collectGatewayServiceStartRepairIssues,
+  formatGatewayServiceStartRepairIssues,
+} from "../../daemon/service-start-repair.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
 import type {
   GatewayServiceStartRepairIssue,
@@ -38,14 +41,10 @@ import {
   emitDaemonScheduledRestart,
 } from "./response.js";
 import { filterContainerGenericHints, resolveDaemonInstallBlockMessage } from "./shared.js";
+import type { DaemonLifecycleOptions } from "./types.js";
 
-type DaemonLifecycleOptions = {
-  json?: boolean;
-  force?: boolean;
-  wait?: string;
+type ServiceLifecycleOptions = DaemonLifecycleOptions & {
   restartIntent?: GatewayRestartIntent;
-  preserveDefinition?: boolean;
-  disable?: boolean;
 };
 
 type StartPostCheckContext = {
@@ -157,7 +156,7 @@ async function blockInvalidServiceAction(
 export async function runServiceUninstall(params: {
   serviceNoun: string;
   service: GatewayService;
-  opts?: DaemonLifecycleOptions;
+  opts?: ServiceLifecycleOptions;
   stopBeforeUninstall: boolean;
   assertNotLoadedAfterUninstall: boolean;
 }) {
@@ -219,7 +218,7 @@ export async function runServiceStart(params: {
   serviceNoun: string;
   service: GatewayService;
   renderStartHints: () => string[];
-  opts?: DaemonLifecycleOptions;
+  opts?: ServiceLifecycleOptions;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult<"started"> | null>;
   repairLoadedService?: (
     ctx: ServiceStartRepairContext,
@@ -305,9 +304,7 @@ export async function runServiceStart(params: {
       if (startResult.issues.length > 0) {
         // Only services with a repair callback can rebuild their definition during restart.
         const repairAction = params.repairLoadedService ? "restart" : "install --force";
-        const warning = `${params.serviceNoun} service already running, but its installed service definition needs repair: ${startResult.issues
-          .map((issue) => issue.message)
-          .join("; ")}; run \`${serviceCommand} ${repairAction}\` to apply.`;
+        const warning = `${params.serviceNoun} service already running, but its installed service definition needs repair: ${formatGatewayServiceStartRepairIssues(startResult.issues)}; run \`${serviceCommand} ${repairAction}\` to apply.`;
         warnings.push(warning);
         if (!json) {
           defaultRuntime.log(warning);
@@ -349,9 +346,7 @@ export async function runServiceStart(params: {
         return;
       }
       fail(
-        `${params.serviceNoun} service needs repair before it can start: ${startResult.issues
-          .map((issue) => issue.message)
-          .join("; ")}`,
+        `${params.serviceNoun} service needs repair before it can start: ${formatGatewayServiceStartRepairIssues(startResult.issues)}`,
         [`${serviceCommand} install --force`],
       );
       return;
@@ -366,7 +361,7 @@ export async function runServiceStart(params: {
 export async function runServiceStop(params: {
   serviceNoun: string;
   service: GatewayService;
-  opts?: DaemonLifecycleOptions;
+  opts?: ServiceLifecycleOptions;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult<"stopped"> | null>;
   stopWhenNotLoaded?: boolean;
 }) {
@@ -447,7 +442,7 @@ export async function runServiceRestart(params: {
   serviceNoun: string;
   service: GatewayService;
   renderStartHints: () => string[];
-  opts?: DaemonLifecycleOptions;
+  opts?: ServiceLifecycleOptions;
   checkTokenDrift?: boolean;
   expectedPort?: number;
   beforeServiceMutation?: () => void;
@@ -563,9 +558,7 @@ export async function runServiceRestart(params: {
         if (!handledRepair) {
           clearPreparedRestartIntent();
           fail(
-            `${params.serviceNoun} service needs repair before restart: ${issues
-              .map((issue) => issue.message)
-              .join("; ")}`,
+            `${params.serviceNoun} service needs repair before restart: ${formatGatewayServiceStartRepairIssues(issues)}`,
             [formatCliCommand("openclaw gateway install --force")],
           );
           return false;
@@ -588,7 +581,6 @@ export async function runServiceRestart(params: {
   }
 
   if (loaded && !handledRecovery && params.checkTokenDrift) {
-    // Check for token drift before restart (service token vs config token)
     try {
       const command = await params.service.readCommand(process.env);
       const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;

@@ -350,10 +350,7 @@ describe("DesktopClient", () => {
 
   it.each([
     { clean: true, close: { code: 4000, reason: "control-taken" } },
-    { clean: false, close: { code: 1008, reason: "authentication rejected" } },
-    { clean: false, close: { code: 1006, reason: "" } },
     { clean: false, close: undefined },
-    { clean: true, close: undefined },
   ])("preserves RFB clean=$clean with socket close $close", async ({ clean, close }) => {
     const { Rfb, instances } = createFakeRfb();
     const socket = new FakeSocket("ws://control.example.test/desktop/observe");

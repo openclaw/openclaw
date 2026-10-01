@@ -8,6 +8,7 @@ import { chromium } from "playwright";
 import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
 import type { Vitest } from "vitest/node";
+import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import {
   filterFilesByPatterns,
   intersectIncludePatterns,
@@ -212,6 +213,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   return defineProject({
     root: here,
     plugins: [
+      mermaidClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
       createRedactingReporterPlugin(),
@@ -232,6 +234,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@awesome.me/webawesome/dist/components/popover/popover.js",
         "@awesome.me/webawesome/dist/components/popup/popup.js",
         "@awesome.me/webawesome/dist/components/select/select.js",
+        "@awesome.me/webawesome/dist/components/tooltip/tooltip.js",
         "@codemirror/commands",
         "@codemirror/state",
         "@codemirror/view",
@@ -239,6 +242,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@lit/task",
         "@noble/ed25519",
         "@noble/hashes/sha2.js",
+        "@noble/hashes/utils.js",
         "@openclaw/normalization-core > libphonenumber-js/min",
         "@openclaw/normalization-core > libphonenumber-js/min/metadata",
         "@openclaw/uirouter",
@@ -253,12 +257,14 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "json5",
         "lit/async-directive.js",
         "lit/directive.js",
+        "lit/directives/guard.js",
         "lit/directives/if-defined.js",
         "lit/directives/keyed.js",
         "lit/directives/ref.js",
         "lit/directives/repeat.js",
         "lit/directives/style-map.js",
         "lit/directives/unsafe-html.js",
+        "lit/directives/until.js",
         "lit/static-html.js",
         "markdown-it",
         "mdast-util-from-markdown",

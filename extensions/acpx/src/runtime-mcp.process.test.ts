@@ -14,8 +14,41 @@ import { AcpxRuntime } from "./runtime.js";
 
 const peer = fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url));
 
+async function withRuntime(
+  label: string,
+  run: (
+    runtime: AcpxRuntime,
+    store: ReturnType<typeof createFileSessionStore>,
+    directory: string,
+  ) => Promise<void>,
+  options: {
+    args?: string[];
+    processLifecycle?: ConstructorParameters<typeof AcpxRuntime>[0]["processLifecycle"];
+  } = {},
+) {
+  await withOpenClawTestState({ label }, async (state) => {
+    const directory = path.join(state.root, "peer");
+    await fs.mkdir(directory);
+    const store = createFileSessionStore({ stateDir: state.root });
+    const runtime = new AcpxRuntime({
+      cwd: state.root,
+      sessionStore: store,
+      agentRegistry: createAgentRegistry({
+        overrides: { fixture: [process.execPath, peer, directory, ...(options.args ?? [])] },
+      }),
+      permissionMode: "deny-all",
+      timeoutMs: 5000,
+      processLifecycle: options.processLifecycle,
+    });
+    try {
+      await run(runtime, store, directory);
+    } finally {
+      await runtime.shutdown();
+    }
+  });
+}
+
 it.each([
-  "session",
   "bridge",
   "catalog",
   "openclaw-direct",
@@ -123,19 +156,7 @@ it.each([
 });
 
 it("finishes an admitted discard after reset retires its pending snapshot", async () => {
-  await withOpenClawTestState({ label: "acpx-discard-snapshot" }, async (state) => {
-    const directory = path.join(state.root, "peer");
-    await fs.mkdir(directory);
-    const store = createFileSessionStore({ stateDir: state.root });
-    const runtime = new AcpxRuntime({
-      cwd: state.root,
-      sessionStore: store,
-      agentRegistry: createAgentRegistry({
-        overrides: { fixture: [process.execPath, peer, directory] },
-      }),
-      permissionMode: "deny-all",
-      timeoutMs: 5000,
-    });
+  await withRuntime("acpx-discard-snapshot", async (runtime, store) => {
     const target = { sessionKey: "discard-snapshot", agentId: "main" };
     await runtime.prepareFreshSession(target);
     const handle = await runtime.ensureSession({ ...target, agent: "fixture", mode: "persistent" });
@@ -165,57 +186,52 @@ it("finishes an admitted discard after reset retires its pending snapshot", asyn
       await Promise.allSettled([closing]);
       loadSpy.mockRestore();
       shutdown.mockRestore();
-      await runtime.shutdown();
     }
   });
 });
 
 it("cleans up real initialization that completes after reset", async () => {
-  await withOpenClawTestState({ label: "acpx-superseded-initialization" }, async (state) => {
-    const directory = path.join(state.root, "peer");
-    await fs.mkdir(directory);
-    const store = createFileSessionStore({ stateDir: state.root });
-    let exited = false;
-    const runtime = new AcpxRuntime({
-      cwd: state.root,
-      sessionStore: store,
-      agentRegistry: createAgentRegistry({
-        overrides: { fixture: [process.execPath, peer, directory] },
-      }),
-      permissionMode: "deny-all",
-      timeoutMs: 5000,
+  let exited = false;
+  await withRuntime(
+    "acpx-superseded-initialization",
+    async (runtime, store, directory) => {
+      const saveStarted = createDeferred<void>();
+      const releaseSave = createDeferred<void>();
+      const save = store.save.bind(store);
+      const saveSpy = vi.spyOn(store, "save").mockImplementationOnce(async (record) => {
+        saveStarted.resolve();
+        await releaseSave.promise;
+        await save(record);
+      });
+      const target = { sessionKey: "superseded-initialization", agentId: "main" };
+      const initializing = runtime.ensureSession({
+        ...target,
+        agent: "fixture",
+        mode: "persistent",
+      });
+      void initializing.catch(() => {});
+      try {
+        await saveStarted.promise;
+        expect(exited).toBe(false);
+        await runtime.prepareFreshSession(target);
+        releaseSave.resolve();
+        await expect(initializing).rejects.toThrow("superseded by reset");
+        expect(exited).toBe(true);
+        expect(await fs.readdir(directory)).toEqual([]);
+      } finally {
+        releaseSave.resolve();
+        await Promise.allSettled([initializing]);
+        saveSpy.mockRestore();
+      }
+    },
+    {
       processLifecycle: {
         onExit: () => {
           exited = true;
         },
       },
-    });
-    const saveStarted = createDeferred<void>();
-    const releaseSave = createDeferred<void>();
-    const save = store.save.bind(store);
-    const saveSpy = vi.spyOn(store, "save").mockImplementationOnce(async (record) => {
-      saveStarted.resolve();
-      await releaseSave.promise;
-      await save(record);
-    });
-    const target = { sessionKey: "superseded-initialization", agentId: "main" };
-    const initializing = runtime.ensureSession({ ...target, agent: "fixture", mode: "persistent" });
-    void initializing.catch(() => {});
-    try {
-      await saveStarted.promise;
-      expect(exited).toBe(false);
-      await runtime.prepareFreshSession(target);
-      releaseSave.resolve();
-      await expect(initializing).rejects.toThrow("superseded by reset");
-      expect(exited).toBe(true);
-      expect(await fs.readdir(directory)).toEqual([]);
-    } finally {
-      releaseSave.resolve();
-      await Promise.allSettled([initializing]);
-      saveSpy.mockRestore();
-      await runtime.shutdown();
-    }
-  });
+    },
+  );
 });
 
 it.each([false, true])(
@@ -229,133 +245,110 @@ it.each([false, true])(
         void releasePrompt.promise.then(() => response.end("released"));
       },
       async (promptGateUrl) => {
-        await withOpenClawTestState({ label: "acpx-oneshot-custody" }, async (state) => {
-          const directory = path.join(state.root, "peer");
-          await fs.mkdir(directory);
-          const store = createFileSessionStore({ stateDir: state.root });
-          const runtime = new AcpxRuntime({
-            cwd: state.root,
-            sessionStore: store,
-            agentRegistry: createAgentRegistry({
-              overrides: {
-                fixture: [process.execPath, peer, directory, `--prompt-gate-url=${promptGateUrl}`],
-              },
-            }),
-            permissionMode: "deny-all",
-            timeoutMs: 5000,
-          });
-          const target = {
-            sessionKey: "shared-oneshot",
-            agentId: "main",
-            agent: "fixture",
-            mode: "oneshot" as const,
-          };
-          await runtime.prepareFreshSession(target);
-          const first = await runtime.ensureSession(target);
-          const shutdown = vi.spyOn(BaseAcpxRuntime.prototype, "shutdown");
-          const saveStarted = createDeferred<void>();
-          const releaseSave = createDeferred<void>();
-          const save = store.save.bind(store);
-          let held = false;
-          let promptAdmitted = false;
-          const saveSpy = vi.spyOn(store, "save").mockImplementation(async (record) => {
-            if (
-              promptAdmitted &&
-              !held &&
-              record.acpxRecordId === first.acpxRecordId &&
-              record.messages.length > 0
-            ) {
-              held = true;
-              saveStarted.resolve();
-              await releaseSave.promise;
-            }
-            await save(record);
-          });
-          const turn = runtime.startTurn({
-            handle: first,
-            text: "first turn",
-            mode: "prompt",
-            requestId: "first",
-          });
-          const events = (async () => {
-            for await (const ignoredEventValue of turn.events) {
-              // Drain the real adapter while its persistence checkpoint is held.
-              void ignoredEventValue;
-            }
-          })();
-          void events.catch(() => {});
-          let turnFinished = false;
-          void turn.result.then(
-            () => {
-              turnFinished = true;
-            },
-            () => {
-              turnFinished = true;
-            },
-          );
-          let second: typeof first | undefined;
-          let cancellation: Promise<void> | undefined;
-          try {
-            await turn.promptStarted;
-            promptAdmitted = true;
-            // Terminal persistence owns ACPX's record lock; these controls need a live prompt.
-            await Promise.all([promptBlocked.promise, saveStarted.promise]);
-            second = await runtime.ensureSession(target);
-            expect(second.acpxRecordId).not.toBe(first.acpxRecordId);
-            expect((await runtime.getStatus({ handle: first })).backendSessionId).toBe(
-              first.backendSessionId,
-            );
-            cancellation = runtime.cancel({ handle: first, reason: "only first" });
-            void cancellation.catch(() => {});
-            await cancellation;
-            await runtime.close({
-              handle: first,
-              reason: "first complete",
-              discardPersistentState,
+        await withRuntime(
+          "acpx-oneshot-custody",
+          async (runtime, store) => {
+            const target = {
+              sessionKey: "shared-oneshot",
+              agentId: "main",
+              agent: "fixture",
+              mode: "oneshot" as const,
+            };
+            await runtime.prepareFreshSession(target);
+            const first = await runtime.ensureSession(target);
+            const shutdown = vi.spyOn(BaseAcpxRuntime.prototype, "shutdown");
+            const saveStarted = createDeferred<void>();
+            const releaseSave = createDeferred<void>();
+            const save = store.save.bind(store);
+            let held = false;
+            let promptAdmitted = false;
+            const saveSpy = vi.spyOn(store, "save").mockImplementation(async (record) => {
+              if (
+                promptAdmitted &&
+                !held &&
+                record.acpxRecordId === first.acpxRecordId &&
+                record.messages.length > 0
+              ) {
+                held = true;
+                saveStarted.resolve();
+                await releaseSave.promise;
+              }
+              await save(record);
             });
-            expect(turnFinished).toBe(false);
-            expect(shutdown).not.toHaveBeenCalled();
-            releaseSave.resolve();
-            releasePrompt.resolve();
-            await Promise.all([events, turn.result]);
-            expect((await runtime.getStatus({ handle: second })).backendSessionId).toBe(
-              second.backendSessionId,
+            const turn = runtime.startTurn({
+              handle: first,
+              text: "first turn",
+              mode: "prompt",
+              requestId: "first",
+            });
+            const events = (async () => {
+              for await (const ignoredEventValue of turn.events) {
+                // Drain the real adapter while its persistence checkpoint is held.
+                void ignoredEventValue;
+              }
+            })();
+            void events.catch(() => {});
+            let turnFinished = false;
+            void turn.result.then(
+              () => {
+                turnFinished = true;
+              },
+              () => {
+                turnFinished = true;
+              },
             );
-            await runtime.close({ handle: second, reason: "second complete" });
-            expect(shutdown).toHaveBeenCalledOnce();
-            await shutdown.mock.results[0]!.value;
-          } finally {
-            releaseSave.resolve();
-            releasePrompt.resolve();
-            await Promise.allSettled([
-              events,
-              turn.result,
-              ...(cancellation ? [cancellation] : []),
-            ]);
-            saveSpy.mockRestore();
-            shutdown.mockRestore();
-            await runtime.shutdown();
-          }
-        });
+            let second: typeof first | undefined;
+            let cancellation: Promise<void> | undefined;
+            try {
+              await turn.promptStarted;
+              promptAdmitted = true;
+              // Terminal persistence owns ACPX's record lock; these controls need a live prompt.
+              await Promise.all([promptBlocked.promise, saveStarted.promise]);
+              second = await runtime.ensureSession(target);
+              expect(second.acpxRecordId).not.toBe(first.acpxRecordId);
+              expect((await runtime.getStatus({ handle: first })).backendSessionId).toBe(
+                first.backendSessionId,
+              );
+              cancellation = runtime.cancel({ handle: first, reason: "only first" });
+              void cancellation.catch(() => {});
+              await cancellation;
+              await runtime.close({
+                handle: first,
+                reason: "first complete",
+                discardPersistentState,
+              });
+              expect(turnFinished).toBe(false);
+              expect(shutdown).not.toHaveBeenCalled();
+              releaseSave.resolve();
+              releasePrompt.resolve();
+              await Promise.all([events, turn.result]);
+              expect((await runtime.getStatus({ handle: second })).backendSessionId).toBe(
+                second.backendSessionId,
+              );
+              await runtime.close({ handle: second, reason: "second complete" });
+              expect(shutdown).toHaveBeenCalledOnce();
+              await shutdown.mock.results[0]!.value;
+            } finally {
+              releaseSave.resolve();
+              releasePrompt.resolve();
+              await Promise.allSettled([
+                events,
+                turn.result,
+                ...(cancellation ? [cancellation] : []),
+              ]);
+              saveSpy.mockRestore();
+              shutdown.mockRestore();
+            }
+          },
+          { args: [`--prompt-gate-url=${promptGateUrl}`] },
+        );
       },
     );
   },
 );
 
 it("creates a fresh oneshot while an old physical record write is still pending", async () => {
-  await withOpenClawTestState({ label: "acpx-oneshot-write-isolation" }, async (state) => {
-    const directory = path.join(state.root, "peer");
-    await fs.mkdir(directory);
-    const store = createFileSessionStore({ stateDir: state.root });
-    const runtime = new AcpxRuntime({
-      cwd: state.root,
-      sessionStore: store,
-      agentRegistry: createAgentRegistry({
-        overrides: { fixture: [process.execPath, peer, directory] },
-      }),
-      permissionMode: "deny-all",
-      timeoutMs: 5000,
-    });
+  await withRuntime("acpx-oneshot-write-isolation", async (runtime, store) => {
     const target = {
       sessionKey: "oneshot-write-isolation",
       agentId: "main",
@@ -418,7 +411,6 @@ it("creates a fresh oneshot while an old physical record write is still pending"
       releaseSave.resolve();
       await Promise.allSettled([events, turn.result, ...(creating ? [creating] : [])]);
       saveSpy.mockRestore();
-      await runtime.shutdown();
     }
   });
 });

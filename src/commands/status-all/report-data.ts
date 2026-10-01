@@ -190,7 +190,7 @@ export async function buildStatusAllReportData(params: {
     configPath,
     summary,
     secretDiagnosticsCount: params.overview.secretDiagnostics.length,
-    updateRows: buildStatusUpdateRows(diagnosis.sentinel?.payload),
+    updateRows: await buildStatusUpdateRows(diagnosis.sentinel?.payload),
     agentStatus: params.overview.agentStatus,
   });
 

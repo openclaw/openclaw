@@ -257,6 +257,7 @@ describe("CronService.remove session cleanup", () => {
     await expect(cron.remove(job.id)).resolves.toEqual({
       ok: true,
       removed: true,
+      activeRunCancellationRequested: true,
       sessionCleanup: "pending",
     });
     expect(read(sessionKey)).toMatchObject({

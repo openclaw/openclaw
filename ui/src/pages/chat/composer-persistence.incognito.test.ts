@@ -202,7 +202,9 @@ describe("Incognito composer persistence", () => {
     const state = createState();
     const persistence = startPersistence(state);
     const reader = createStoredChatOutboxReader();
-    const stopReader = reader.subscribe(() => reader.read(state));
+    const stopReader = reader.subscribe(() =>
+      reader.read({ ...state, client: state.client ?? null, connected: state.connected ?? false }),
+    );
     const unsubscribe = subscribeStoredChatOutboxChanges(() => {
       state.selectedChatSessionIncognito = true;
       persistence.persistChangedState();
@@ -215,7 +217,11 @@ describe("Incognito composer persistence", () => {
         sessionStorage.getItem(storageKeyForGateway(state.settings?.gatewayUrl)),
       ).not.toContain("private notification draft");
       expect(state.chatMessage).toBe("private notification draft");
-      expect(reader.read(state).hasSessionDraft(state.sessionKey)).toBe(false);
+      expect(
+        reader
+          .read({ ...state, client: state.client ?? null, connected: state.connected ?? false })
+          .hasSessionDraft(state.sessionKey),
+      ).toBe(false);
     } finally {
       stopReader();
       unsubscribe();

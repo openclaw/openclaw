@@ -1,4 +1,3 @@
-// Resolves plugin install override paths and package specs.
 import path from "node:path";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isRecord, resolveUserPath } from "../utils.js";

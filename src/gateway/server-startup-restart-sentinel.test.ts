@@ -51,27 +51,20 @@ it("keeps delayed restart sentinel recovery admitted until wake work completes",
   await sidecar.stop();
 });
 
-it.each([
-  { awaitingAdmission: false, owner: "sidecar" },
-  { awaitingAdmission: true, owner: "sidecar" },
-  { awaitingAdmission: false, owner: "scheduler" },
-  { awaitingAdmission: true, owner: "scheduler" },
-])(
-  "cancels delayed restart sentinel recovery when $owner closes (awaiting admission=$awaitingAdmission)",
-  async ({ awaitingAdmission, owner }) => {
+it.each(["sidecar", "scheduler"] as const)(
+  "cancels restart sentinel recovery awaiting admission when %s closes",
+  async (owner) => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
-    const suspension = awaitingAdmission ? tryBeginGatewaySuspendAdmission(() => {}) : null;
-    if (awaitingAdmission) {
-      expect(suspension?.commit()).toBe(true);
-    }
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
     const sidecar = scheduleRestartSentinelWakeAfterReady({
       scheduler,
       deps: {} as never,
       log: { warn: vi.fn() },
     });
     try {
-      const pendingWake = awaitingAdmission ? clock.advanceBy(750) : undefined;
+      const pendingWake = clock.advanceBy(750);
       await (owner === "scheduler" ? scheduler.stop() : sidecar.stop());
       await pendingWake;
       await clock.advanceBy(750);

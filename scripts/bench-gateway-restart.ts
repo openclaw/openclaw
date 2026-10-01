@@ -701,42 +701,20 @@ function resolveSampleExitFailure(exit: StopChildResult): GatewayRestartFailureC
 }
 
 function computeResourceSlope(iterations: RestartIteration[]): ResourceSlope {
+  const traceSlope = (field: string) =>
+    slope(
+      iterations.map((iteration) =>
+        traceValue(iteration, `restart.ready.${field}`, `restart.ready.memory.ready.${field}`),
+      ),
+    );
   return {
-    activeHandlesCountPerRestart: slope(
-      iterations.map((iteration) =>
-        traceValue(
-          iteration,
-          "restart.ready.activeHandlesCount",
-          "restart.ready.memory.ready.activeHandlesCount",
-        ),
-      ),
-    ),
-    activeRequestsCountPerRestart: slope(
-      iterations.map((iteration) =>
-        traceValue(
-          iteration,
-          "restart.ready.activeRequestsCount",
-          "restart.ready.memory.ready.activeRequestsCount",
-        ),
-      ),
-    ),
-    activeTimersCountPerRestart: slope(
-      iterations.map((iteration) =>
-        traceValue(
-          iteration,
-          "restart.ready.activeTimersCount",
-          "restart.ready.memory.ready.activeTimersCount",
-        ),
-      ),
-    ),
+    activeHandlesCountPerRestart: traceSlope("activeHandlesCount"),
+    activeRequestsCountPerRestart: traceSlope("activeRequestsCount"),
+    activeTimersCountPerRestart: traceSlope("activeTimersCount"),
     fdCountPerRestart: slope(
       iterations.map((iteration) => lastSnapshotValue(iteration, "fdCount")),
     ),
-    heapUsedMbPerRestart: slope(
-      iterations.map((iteration) =>
-        traceValue(iteration, "restart.ready.heapUsedMb", "restart.ready.memory.ready.heapUsedMb"),
-      ),
-    ),
+    heapUsedMbPerRestart: traceSlope("heapUsedMb"),
     rssMbPerRestart: slope(
       iterations.map(
         (iteration) =>
@@ -944,29 +922,19 @@ async function runGatewaySample(options: {
       const iterationDeadlineAt = resolvePhaseDeadlineAt(signalSentAt, options.timeoutMs);
       events.push({ iteration: index, ms: iteration.signalSentMs, type: "restart-signal-sent" });
 
-      const healthzPromise = waitForRestartProbe({
-        deadlineAt: iterationDeadlineAt,
-        events,
-        isDone: () => hasRestartReadySignal(iteration),
-        isProcessDone: () => childExited,
-        iteration: index,
-        path: "/healthz",
-        port,
-        sampleStartAt,
-        signalSentAt,
-      });
-      const readyzPromise = waitForRestartProbe({
-        deadlineAt: iterationDeadlineAt,
-        events,
-        isDone: () => hasRestartReadySignal(iteration),
-        isProcessDone: () => childExited,
-        iteration: index,
-        path: "/readyz",
-        port,
-        sampleStartAt,
-        signalSentAt,
-      });
-      const [healthz, readyz] = await Promise.all([healthzPromise, readyzPromise]);
+      const probe = (probePath: string) =>
+        waitForRestartProbe({
+          deadlineAt: iterationDeadlineAt,
+          events,
+          isDone: () => hasRestartReadySignal(iteration),
+          isProcessDone: () => childExited,
+          iteration: index,
+          path: probePath,
+          port,
+          sampleStartAt,
+          signalSentAt,
+        });
+      const [healthz, readyz] = await Promise.all([probe("/healthz"), probe("/readyz")]);
       iteration.healthz = healthz;
       iteration.readyz = readyz;
       iteration.resourceSnapshots.push(snapshotResources(child, sampleStartAt, "after-next-ready"));

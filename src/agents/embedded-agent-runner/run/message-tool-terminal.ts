@@ -43,15 +43,7 @@ function isDeliveredMessageToolOnlySourceReply(
     typeof toolArgs.channel !== "string"
       ? { ...toolArgs, provider: params.currentProvider }
       : toolArgs;
-  const pendingSend = extractMessagingToolSend(toolName, extractionArgs, {
-    config: params.config,
-    currentChannelId: params.currentChannelId,
-    currentMessagingTarget: params.currentMessagingTarget,
-    currentThreadId: params.currentThreadId,
-    currentMessageId: params.currentMessageId,
-    replyToMode: params.replyToMode,
-    hasRepliedRef: params.hasRepliedRef,
-  });
+  const pendingSend = extractMessagingToolSend(toolName, extractionArgs, params);
   const confirmedSend =
     pendingSend && extractMessagingToolSendResult(pendingSend, params.context.result);
   const deliveryFact = readEmbeddedMessageDeliveryFact(
@@ -67,14 +59,8 @@ function isDeliveredMessageToolOnlySourceReply(
     hookResult: params.context.result,
     isError,
     allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+      ...params,
       send: confirmedSend,
-      config: params.config,
-      currentProvider: params.currentProvider,
-      currentAccountId: params.currentAccountId,
-      currentChannelId: params.currentChannelId,
-      currentMessagingTarget: params.currentMessagingTarget,
-      currentThreadId: params.currentThreadId,
-      sessionKey: params.sessionKey,
       deliveredPayload: params.context.result,
     }),
     ...(deliveryFact

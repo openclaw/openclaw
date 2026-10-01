@@ -35,7 +35,7 @@ describe("memory embedding cache", () => {
         enabled: true,
         provider: { id: "openai", model: "text-embedding-3-small" },
         providerKey: "provider-key",
-        entries: [
+        entries: () => [
           { hash: "a", embedding: [0.1, 0.2] },
           { hash: "b", embedding: [0.3, 0.4] },
           { hash: "a", embedding: largeEmbedding },
@@ -193,7 +193,7 @@ describe("memory embedding cache", () => {
           enabled: true,
           provider: { id: identity.provider, model: identity.model },
           providerKey: identity.providerKey,
-          entries: [
+          entries: () => [
             { hash: "new", embedding: regenerated },
             ...missing.map(({ chunk }) => ({ hash: chunk.hash, embedding: regenerated })),
           ],
@@ -255,7 +255,7 @@ describe("memory embedding cache", () => {
         enabled: true,
         provider,
         providerKey: "fixture",
-        entries: [
+        entries: () => [
           { hash: "a", embedding: [1] },
           { hash: "b", embedding: [2] },
         ],
@@ -271,7 +271,7 @@ describe("memory embedding cache", () => {
         provider,
         providerKey: "fixture",
         maxEntries: 2,
-        entries: [
+        entries: () => [
           { hash: "a", embedding: [3] },
           { hash: "a", embedding: [4] },
         ],
@@ -300,7 +300,7 @@ describe("memory embedding cache", () => {
         enabled: true,
         provider: { id: "local", model: "hf:owner/default.gguf" },
         providerKey: "provider-key-current",
-        entries: [
+        entries: () => [
           { hash: "overlap", embedding: [1, 2] },
           { hash: "empty", embedding: [] },
           { hash: "invalid", embedding: [] },
@@ -315,17 +315,18 @@ describe("memory embedding cache", () => {
         enabled: true,
         provider: { id: "local", model: "/cache/default.gguf" },
         providerKey: "provider-key-alias",
-        entries: ["alias", "overlap", "empty", "invalid"].map((hash) => ({
-          hash,
-          embedding: [0.1, 0.2],
-        })),
+        entries: () =>
+          ["alias", "overlap", "empty", "invalid"].map((hash) => ({
+            hash,
+            embedding: [0.1, 0.2],
+          })),
       });
       upsertMemoryEmbeddingCache({
         db,
         enabled: true,
         provider: { id: "local", model: "/other/default.gguf" },
         providerKey: "provider-key-arbitrary",
-        entries: [{ hash: "arbitrary", embedding: [0.3, 0.4] }],
+        entries: () => [{ hash: "arbitrary", embedding: [0.3, 0.4] }],
       });
 
       const cached = loadMemoryEmbeddingCache({
@@ -381,10 +382,11 @@ describe("memory embedding cache", () => {
             enabled: true,
             provider: { id: identity.provider, model: identity.model },
             providerKey: identity.providerKey,
-            entries: (index === 0 ? hashes.slice(0, canonicalHits) : hashes).map((hash) => ({
-              hash,
-              embedding: [index + 1],
-            })),
+            entries: () =>
+              (index === 0 ? hashes.slice(0, canonicalHits) : hashes).map((hash) => ({
+                hash,
+                embedding: [index + 1],
+              })),
           });
         }
         const reads: Array<{ bindings: number; rows: number }> = [];
@@ -432,7 +434,7 @@ describe("memory embedding cache", () => {
         enabled: true,
         provider: { id: identity.provider, model: identity.model },
         providerKey: identity.providerKey,
-        entries: [
+        entries: () => [
           { hash: "first", embedding: [1, 2] },
           { hash: "second", embedding: [3, 4] },
         ],

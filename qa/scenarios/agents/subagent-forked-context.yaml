@@ -153,7 +153,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "(async () => { const summary = await readSessionTranscriptSummary(env, sessionKey); const recorded = parentCompletionRequest.plannedToolName ? summary.successfulToolCallEvents?.some((event) => event.name === deliveryWireTool && event.toolCallId === deliveryTranscriptId) : summary.finalText === `${config.childResultPrefix} ${config.contextNeedle}`; return recorded ? true : undefined; })()"
+                      expr: "(async () => { const summary = await readSessionTranscriptSummary(env, sessionKey, { includeCodeModeControl: true }); const recorded = parentCompletionRequest.plannedToolName ? summary.successfulToolCallEvents?.some((event) => event.name === deliveryWireTool && event.toolCallId === deliveryTranscriptId) : summary.finalText === `${config.childResultPrefix} ${config.contextNeedle}`; return recorded ? true : undefined; })()"
                   - expr: liveTurnTimeoutMs(env, 10000)
                   - 100
       detailsExpr: "({ reply: outbound.text, childSessionKey: acceptedChild?.childSessionKey ?? null, childRequestCursor: inheritedChildRequest?.request.cursor ?? null, parentCompletionCursor: parentCompletionRequest?.cursor ?? null, inheritedParentHistory: Boolean(inheritedChildRequest), parentResultRecorded: env.mock ? parentResultRecorded : null })"

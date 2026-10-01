@@ -246,9 +246,9 @@ export function validateCellContainerProfile(profile: CellContainerProfile): voi
   }
 }
 
-function buildCellContainerArgs(
-  profile: CellContainerProfile,
+export function buildCellContainerArgs(
   operation: "run" | "create",
+  profile: CellContainerProfile,
   options: CellContainerArgOptions,
 ): string[] {
   validateCellContainerProfile(profile);
@@ -317,18 +317,4 @@ function buildCellContainerArgs(
     "--port",
     String(FLEET_GATEWAY_PORT),
   ];
-}
-
-export function buildCellRunArgs(
-  profile: CellContainerProfile,
-  options: CellContainerArgOptions,
-): string[] {
-  return buildCellContainerArgs(profile, "run", options);
-}
-
-export function buildCellCreateArgs(
-  profile: CellContainerProfile,
-  options: CellContainerArgOptions,
-): string[] {
-  return buildCellContainerArgs(profile, "create", options);
 }

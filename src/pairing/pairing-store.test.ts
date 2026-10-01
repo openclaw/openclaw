@@ -46,7 +46,6 @@ type PairingTestDatabase = Pick<
 
 let fixtureRoot = "";
 let caseId = 0;
-type RandomIntSync = (minOrMax: number, max?: number) => number;
 
 beforeAll(() => {
   fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pairing-"));
@@ -84,31 +83,6 @@ function requireFirstPairingRequest(
     throw new Error("expected pairing request");
   }
   return request;
-}
-
-async function withMockRandomInt(params: {
-  initialValue?: number;
-  sequence?: number[];
-  fallbackValue?: number;
-  run: () => Promise<void>;
-}) {
-  const spy = vi.spyOn(crypto, "randomInt") as unknown as {
-    mockImplementation: (impl: RandomIntSync) => void;
-    mockReturnValue: (value: number) => void;
-    mockRestore: () => void;
-  };
-  try {
-    if (params.initialValue !== undefined) {
-      spy.mockReturnValue(params.initialValue);
-    }
-    if (params.sequence) {
-      let index = 0;
-      spy.mockImplementation(() => params.sequence?.[index++] ?? params.fallbackValue ?? 1);
-    }
-    await params.run();
-  } finally {
-    spy.mockRestore();
-  }
 }
 
 function writeAllowFromFixture(params: {
@@ -334,56 +308,23 @@ describe("pairing store", () => {
 
   it("regenerates colliding codes and reports exhaustion without leaking codes", async () => {
     const { env } = createTestEnv();
-    await withMockRandomInt({
-      initialValue: 0,
-      run: async () => {
-        const first = await upsertChannelPairingRequest({
-          channel: "telegram",
-          id: "123",
-          accountId: DEFAULT_ACCOUNT_ID,
-          env,
-        });
-        expect(first.code).toBe("AAAAAAAA");
+    const request = { channel: "telegram", accountId: DEFAULT_ACCOUNT_ID, env };
+    const randomInt = vi.spyOn(crypto, "randomInt").mockImplementation(() => 0);
+    const first = await upsertChannelPairingRequest({ ...request, id: "123" });
+    expect(first.code).toBe("AAAAAAAA");
 
-        await withMockRandomInt({
-          sequence: Array(8).fill(0).concat(Array(8).fill(1)),
-          fallbackValue: 1,
-          run: async () => {
-            await expect(
-              upsertChannelPairingRequest({
-                channel: "telegram",
-                id: "456",
-                accountId: DEFAULT_ACCOUNT_ID,
-                env,
-              }),
-            ).resolves.toMatchObject({ code: "BBBBBBBB" });
-          },
-        });
-      },
+    let draws = 0;
+    randomInt.mockImplementation(() => (draws++ < 8 ? 0 : 1));
+    await expect(upsertChannelPairingRequest({ ...request, id: "456" })).resolves.toMatchObject({
+      code: "BBBBBBBB",
     });
 
-    const second = createTestEnv();
-    await withMockRandomInt({
-      initialValue: 0,
-      run: async () => {
-        await upsertChannelPairingRequest({
-          channel: "telegram",
-          id: "123",
-          accountId: DEFAULT_ACCOUNT_ID,
-          env: second.env,
-        });
-        await expect(
-          upsertChannelPairingRequest({
-            channel: "telegram",
-            id: "456",
-            accountId: DEFAULT_ACCOUNT_ID,
-            env: second.env,
-          }),
-        ).rejects.toThrow(
-          "failed to generate unique pairing code after 500 attempts; existing code count: 1",
-        );
-      },
-    });
+    const second = { ...request, env: createTestEnv().env };
+    randomInt.mockImplementation(() => 0);
+    await upsertChannelPairingRequest({ ...second, id: "123" });
+    await expect(upsertChannelPairingRequest({ ...second, id: "456" })).rejects.toThrow(
+      "failed to generate unique pairing code after 500 attempts; existing code count: 1",
+    );
   });
 
   it("keeps allowFrom and pending requests isolated by account", async () => {

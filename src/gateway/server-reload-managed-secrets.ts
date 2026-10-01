@@ -368,6 +368,7 @@ export function createManagedReloadSecretHandlers(options: {
             state: params.sharedGatewaySessionGenerationState,
             clients: params.clients,
             expectedGeneration: previousSharedGatewaySessionGeneration,
+            transition: { previous: prepared.config, next: previousRuntimeConfig },
           });
         }
       };
@@ -424,6 +425,7 @@ export function createManagedReloadSecretHandlers(options: {
                         state: params.sharedGatewaySessionGenerationState,
                         clients: params.clients,
                         expectedGeneration: nextSharedGatewaySessionGeneration,
+                        transition: { previous: previousRuntimeConfig, next: prepared.config },
                       });
                     }
                   }
@@ -501,6 +503,7 @@ export function createManagedReloadSecretHandlers(options: {
       if (publishedSharedGatewaySessionGeneration) {
         params.sharedGatewaySessionGenerationState.finalize(
           publishedSharedGatewaySessionGeneration,
+          { previous: previousRuntimeConfig, next: prepared.config },
         );
       }
       return applicationStatus;

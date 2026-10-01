@@ -111,13 +111,9 @@ async function collectWebFetchProxyDiagnostic(params: {
 }
 
 /** Emits a managed-loopback failure or the web_fetch proxy diagnostic when relevant. */
-export async function noteWebFetchProxyDiagnostic(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  service?: Pick<GatewayService, "readCommand">;
-  probeDirectConnectivity?: () => Promise<DirectConnectivity>;
-  noteFn?: typeof note;
-}): Promise<void> {
+export async function noteWebFetchProxyDiagnostic(
+  params: Parameters<typeof collectWebFetchProxyDiagnostic>[0] & { noteFn?: typeof note },
+): Promise<void> {
   if (params.cfg.gateway?.mode === "remote") {
     return;
   }

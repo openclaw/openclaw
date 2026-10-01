@@ -1,6 +1,5 @@
-import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
-import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { asRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type, type TProperties } from "typebox";
@@ -32,32 +31,18 @@ export async function requireScopedCard(
 type WorkboardToolCardParams = {
   record: Record<string, unknown>;
   id: string;
-  token?: string;
   scope: WorkboardMutationScope;
 };
-type WorkboardToolCardParamsReader = (rawParams: unknown) => Promise<WorkboardToolCardParams>;
 type WorkboardCardMutation = (
   id: string,
   record: Record<string, unknown>,
   scope: WorkboardToolCardParams["scope"],
 ) => Promise<WorkboardCard>;
 
-function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolCardParams {
-  const record = asRecord(rawParams);
-  const id = readStringParam(record, "id", { required: true });
-  const token = readStringValue(record.token);
-  return {
-    record,
-    id,
-    token,
-    scope: { ownerId, token },
-  };
-}
-
 // Card payloads stay nested under `card`: the host grades a tool call from
 // reserved keys on `details` (`status`, `ok`, `error`, ...), so a flat card
 // would report every mutation of a blocked card as a failed tool call.
-export function redactedCardResult(card: WorkboardCard) {
+function redactedCardResult(card: WorkboardCard) {
   return jsonResult({ card: redactClaimToken(card) });
 }
 
@@ -66,32 +51,25 @@ export function createWorkboardCardMutations(store: WorkboardStore, ownerId: str
     rawParams: unknown,
     requireClaim = false,
   ): Promise<WorkboardToolCardParams> => {
-    const input = readCardToolParams(rawParams, ownerId);
-    const card = await requireScopedCard(store, input.id, ownerId, input.token);
+    const record = asRecord(rawParams);
+    const id = readStringParam(record, "id", { required: true });
+    const token = readStringValue(record.token);
+    const card = await requireScopedCard(store, id, ownerId, token);
     if (requireClaim && !card.metadata?.claim) {
       throw new Error("card must be claimed before lifecycle completion.");
     }
-    return input;
+    return { record, id, scope: { ownerId, token } };
   };
-  const readScopedCardToolParams = (rawParams: unknown) => readParams(rawParams);
-  const readClaimedCardToolParams = (rawParams: unknown) => readParams(rawParams, true);
-  const runCardMutation = async (
-    rawParams: unknown,
-    readMutationParams: WorkboardToolCardParamsReader,
-    mutate: WorkboardCardMutation,
-  ) => {
-    const { record, id, scope } = await readMutationParams(rawParams);
-    return redactedCardResult(await mutate(id, record, scope));
-  };
-  const runScopedCardMutation = (rawParams: unknown, mutate: WorkboardCardMutation) =>
-    runCardMutation(rawParams, readScopedCardToolParams, mutate);
-  const runClaimedCardMutation = (rawParams: unknown, mutate: WorkboardCardMutation) =>
-    runCardMutation(rawParams, readClaimedCardToolParams, mutate);
+  const cardMutation =
+    (mutate: WorkboardCardMutation, requireClaim = false) =>
+    async (_toolCallId: string, rawParams: unknown) => {
+      const { record, id, scope } = await readParams(rawParams, requireClaim);
+      return redactedCardResult(await mutate(id, record, scope));
+    };
   return {
-    readScopedCardToolParams,
-    readClaimedCardToolParams,
-    runScopedCardMutation,
-    runClaimedCardMutation,
+    readScopedCardToolParams: (rawParams: unknown) => readParams(rawParams),
+    scopedCardMutation: (mutate: WorkboardCardMutation) => cardMutation(mutate),
+    claimedCardMutation: (mutate: WorkboardCardMutation) => cardMutation(mutate, true),
   };
 }
 
@@ -115,28 +93,4 @@ export function workspaceField() {
       branch: Type.Optional(Type.String({ description: "Suggested branch." })),
     }),
   );
-}
-
-export function createWorkboardMoveTool(params: {
-  store: WorkboardStore;
-  readScopedCardToolParams: WorkboardToolCardParamsReader;
-}): AnyAgentTool {
-  return {
-    name: "workboard_move",
-    label: "Workboard Move",
-    description:
-      "Move a Workboard card to another status. Claimed cards require matching claim scope.",
-    parameters: strictObject({
-      id: cardIdField(),
-      status: Type.Union(
-        WORKBOARD_STATUSES.map((status) => Type.Literal(status)),
-        { description: "Target Workboard status." },
-      ),
-      token: claimTokenField("Claim token for claimed cards."),
-    }),
-    execute: async (_toolCallId, rawParams) => {
-      const { record, id, scope } = await params.readScopedCardToolParams(rawParams);
-      return redactedCardResult(await params.store.move(id, record.status, undefined, scope));
-    },
-  };
 }

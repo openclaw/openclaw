@@ -16,7 +16,7 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
-import { executeManagedImageRecordCommand } from "../../gateway/managed-image-record-store.kernel.js";
+import { managedImageRecordOperations } from "../../gateway/managed-image-record-store.kernel.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   beginSessionWorkAdmission,
@@ -62,6 +62,7 @@ async function createCompletionFixture(state: OpenClawTestState) {
   const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
   const job = makeCronJob({ id: "report-job", sessionTarget: "current", sessionKey });
   const params: DispatchCronDeliveryParams = {
+    deliveryAttemptFence: null,
     cfgWithAgentDefaults: cfg,
     deps: createCliDeps(),
     job,
@@ -109,9 +110,9 @@ async function createCompletionFixture(state: OpenClawTestState) {
     }
     updates += 1;
     // Observe records at publication, before a wrongly late write could make the test pass.
-    const entries = executeManagedImageRecordCommand(
-      { type: "managedImages.entries", input: { sessionKey } },
-      database,
+    const entries = managedImageRecordOperations["managedImages.entries"](
+      { sessionKey },
+      { open: () => database, stateOptions: () => ({ path: database.path, env: state.env }) },
     );
     for (const { record } of entries) {
       const pending = resolveManagedOutgoingMediaArtifactDownload({
@@ -210,6 +211,52 @@ describe("current-session completion delivery", () => {
 });
 
 describe("current-session completion media", () => {
+  it("refuses publication when occurrence authority ends during media preparation", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const fixture = await createCompletionFixture(state);
+      let current = true;
+      const beforeAttempt = vi.fn(async () => {});
+      fixture.params.deliveryAttemptFence = {
+        beforeAttempt,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("completion occurrence expired");
+          }
+        },
+      };
+      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+      const spy = vi
+        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (
+              request.stage === "commit" &&
+              isRecord(request.facts) &&
+              request.facts.type === "managedImages.insert"
+            ) {
+              current = false;
+            }
+            admit(request, grant);
+          }, attachment),
+        );
+      try {
+        const [completion] = await Promise.allSettled([fixture.commit()]);
+        expect(current).toBe(false);
+        expect(completion).toMatchObject({
+          status: "rejected",
+          reason: expect.objectContaining({ message: "completion occurrence expired" }),
+        });
+        expect(beforeAttempt).toHaveBeenCalledOnce();
+        expect(await fixture.messages()).toEqual([]);
+        expect(await fixture.records()).toEqual([]);
+        expect(fixture.updates()).toBe(0);
+      } finally {
+        spy.mockRestore();
+        await fixture.dispose();
+      }
+    });
+  });
+
   it.each(["ordinary", "promotion-failure"] as const)(
     "publishes downloadable media and replays the original message after %s",
     async (mode) => {

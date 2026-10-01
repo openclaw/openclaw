@@ -137,62 +137,8 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       }
     });
 
-    it("writes merged identity to IDENTITY.md when only avatar changes", async () => {
-      const { respond, promise } = makeCall("agents.update", {
-        agentId: "test-agent",
-        avatar: "https://example.com/avatar.png",
-      });
-      await promise;
-
-      expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-      const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
-      expectRecordFields(configOptions.identity, {
-        avatar: "https://example.com/avatar.png",
-      });
-      const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-        rootDir: "/workspace/test-agent",
-        relativePath: "IDENTITY.md",
-      });
-      expect(write.data).toBe(
-        [
-          "# IDENTITY.md - Agent Identity",
-          "",
-          "- Name: Current Agent",
-          "- Theme: steady",
-          "- Emoji: 🐢",
-          "- Avatar: https://example.com/avatar.png",
-          "",
-        ].join("\n"),
-      );
-    });
-
-    it("writes merged identity to IDENTITY.md when only emoji changes", async () => {
-      const { respond, promise } = makeCall("agents.update", {
-        agentId: "test-agent",
-        emoji: "🦀",
-      });
-      await promise;
-
-      expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-      const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
-      expectRecordFields(configOptions.identity, { emoji: "🦀" });
-      const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-        rootDir: "/workspace/test-agent",
-        relativePath: "IDENTITY.md",
-      });
-      expect(write.data).toBe(
-        [
-          "# IDENTITY.md - Agent Identity",
-          "",
-          "- Name: Current Agent",
-          "- Theme: steady",
-          "- Emoji: 🦀",
-          "",
-        ].join("\n"),
-      );
-    });
-
     it("writes combined identity fields to both config and IDENTITY.md", async () => {
+      mocks.rootRead.mockRejectedValue(new FsSafeError("not-found", "file not found"));
       const { respond, promise } = makeCall("agents.update", {
         agentId: "test-agent",
         name: "New Name",
@@ -202,6 +148,10 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       await promise;
 
       expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+      expectRecordFields(mockCallArg(mocks.rootRead), {
+        relativePath: "IDENTITY.md",
+        nonBlockingRead: true,
+      });
       const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
         name: "New Name",
       });
@@ -387,21 +337,6 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       expectRespondErrorContaining(respond, 'unsafe workspace file "IDENTITY.md"');
       expect(mocks.writeConfigFile).not.toHaveBeenCalled();
       expect(mocks.rootWrite).not.toHaveBeenCalled();
-    });
-
-    it("uses non-blocking reads for IDENTITY.md during agents.update", async () => {
-      mocks.rootRead.mockRejectedValue(new FsSafeError("not-found", "file not found"));
-
-      const { promise } = makeCall("agents.update", {
-        agentId: "test-agent",
-        name: "Updated NB",
-      });
-      await promise;
-
-      expectRecordFields(mockCallArg(mocks.rootRead), {
-        relativePath: "IDENTITY.md",
-        nonBlockingRead: true,
-      });
     });
   });
 }

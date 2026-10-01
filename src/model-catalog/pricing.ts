@@ -26,9 +26,11 @@ import { planEffectiveModelCatalogRows } from "./index.js";
 import type { RemoteModelCatalogPrice, RemoteModelCatalogUpstreamPrice } from "./remote-bundle.js";
 import { isRemoteModelCatalogRefreshEnabled } from "./remote-config.js";
 import {
+  getActiveRemoteModelCatalog,
   getRemoteModelCatalogPricing,
   getRemoteModelCatalogUpstreamPricing,
   prepareRemoteModelCatalogStartupSnapshot,
+  type ActiveRemoteModelCatalog,
 } from "./remote-overlay.js";
 
 type PricingValue = ModelCatalogCost;
@@ -50,7 +52,35 @@ export type PricingContext = {
 };
 
 const EMPTY_CONFIG: OpenClawConfig = {};
-const pricingContextByConfig = new WeakMap<OpenClawConfig, PricingContext>();
+const pricingContextByConfig = new WeakMap<
+  OpenClawConfig,
+  { absent?: PricingContext; catalogs: WeakMap<ActiveRemoteModelCatalog, PricingContext> }
+>();
+
+function readPricingContext(
+  config: OpenClawConfig,
+  catalog: ActiveRemoteModelCatalog | undefined,
+): PricingContext | undefined {
+  const contexts = pricingContextByConfig.get(config);
+  return catalog ? contexts?.catalogs.get(catalog) : contexts?.absent;
+}
+
+function retainPricingContext(
+  config: OpenClawConfig,
+  catalog: ActiveRemoteModelCatalog | undefined,
+  context: PricingContext,
+): void {
+  let contexts = pricingContextByConfig.get(config);
+  if (!contexts) {
+    contexts = { catalogs: new WeakMap() };
+    pricingContextByConfig.set(config, contexts);
+  }
+  if (catalog) {
+    contexts.catalogs.set(catalog, context);
+  } else {
+    contexts.absent = context;
+  }
+}
 
 function activeManifestRegistry(
   snapshot: PluginMetadataSnapshot,
@@ -169,9 +199,10 @@ function buildPricingContext(
   };
 }
 
-/** Reuses the static pricing policy captured for this config. */
+/** Reuses policy and prices for the config's exact accepted catalog generation. */
 export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG): PricingContext {
-  const existing = pricingContextByConfig.get(config);
+  const catalog = getActiveRemoteModelCatalog(config, false);
+  const existing = readPricingContext(config, catalog);
   if (existing) {
     return existing;
   }
@@ -186,7 +217,7 @@ export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG
     snapshot = undefined;
   }
   const context = buildPricingContext(config, snapshot);
-  pricingContextByConfig.set(config, context);
+  retainPricingContext(config, getActiveRemoteModelCatalog(config, false), context);
   return context;
 }
 
@@ -194,7 +225,7 @@ export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG
 export async function prepareModelPricingContext(
   config: OpenClawConfig = EMPTY_CONFIG,
 ): Promise<void> {
-  if (pricingContextByConfig.has(config)) {
+  if (readPricingContext(config, getActiveRemoteModelCatalog(config, false))) {
     return;
   }
   const env = cloneEnvWithPlatformSemantics(process.env);
@@ -228,11 +259,12 @@ export async function prepareModelPricingContext(
         await prepareRemoteModelCatalogStartupSnapshot({ env });
       }
       assertCurrent();
-      // A synchronous reader may have captured this config while preparation awaited I/O.
-      if (!pricingContextByConfig.has(config)) {
+      const catalog = getActiveRemoteModelCatalog(config, false);
+      // A synchronous reader may have prepared this exact pair while metadata awaited I/O.
+      if (!readPricingContext(config, catalog)) {
         const context = buildPricingContext(config, snapshot);
         assertCurrent();
-        pricingContextByConfig.set(config, context);
+        retainPricingContext(config, catalog, context);
       }
     });
   } finally {

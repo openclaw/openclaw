@@ -116,11 +116,7 @@ class BaseInteraction {
     this.response.state = nextState;
   }
 
-  /**
-   * True once a follow-up message has been delivered. Follow-ups are visible to
-   * the user but never advance `responseState`, so this is the only record that
-   * the interaction has already produced output.
-   */
+  // Follow-ups produce visible output without advancing responseState.
   get hasSentFollowUp(): boolean {
     return this.sentFollowUp;
   }
@@ -181,17 +177,8 @@ class BaseInteraction {
     return await this.enqueueResponse(() => this.performReplyEdit(payload));
   }
 
-  /**
-   * Edits the deferred placeholder only if this interaction is still an
-   * unanswered spinner when the queue reaches this operation.
-   *
-   * Both conditions are re-read inside the queue. A follow-up that was still in
-   * flight when the caller decided to report will have settled — and recorded
-   * itself in `sentFollowUp` — by the time this runs, so the decision cannot be
-   * made against state that is about to change.
-   *
-   * Resolves true when the edit was sent.
-   */
+  // Recheck inside the queue: an in-flight follow-up may answer the spinner
+  // before this edit runs.
   async editDeferredPlaceholderIfUnanswered(payload: MessagePayload): Promise<boolean> {
     return await this.enqueueResponse(async () => {
       if (this.responseState !== "deferred" || this.sentFollowUp) {

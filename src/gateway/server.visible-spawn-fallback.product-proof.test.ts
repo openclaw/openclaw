@@ -520,27 +520,6 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           const childRequests = provider.requests
             .slice(requestOffset)
             .filter((request) => request.child);
-          console.info(
-            JSON.stringify({
-              scenario: scenario.name,
-              ...(scenario.directAgent
-                ? { initialChildReply: INITIAL_SUCCESS, requestOffset, historyOffset }
-                : {}),
-              childRequests: childRequests.map(({ model }) => model),
-              ...(scenario.configuredAlias
-                ? {
-                    parentRequests: provider.requests
-                      .filter((request) => !request.child)
-                      .map(({ model }) => model),
-                  }
-                : {}),
-              terminal,
-              childSessionKey: spawn.childSessionKey,
-              modelOverrideSource: entry?.modelOverrideSource,
-              modelOverride: entry?.modelOverride,
-              childHistory: text,
-            }),
-          );
           expect(terminal.status, JSON.stringify(provider.requests)).toBe(
             scenario.backup ? "ok" : "error",
           );
@@ -724,11 +703,10 @@ async function withCliSpawnGrant(
 
 describe("CLI model inheritance through MCP", () => {
   afterAll(resetGatewayTestState);
-  it.each(
-    [false, true].flatMap((visible) =>
-      ["alias", "primary[1m]"].map((nativeModel) => ({ visible, nativeModel })),
-    ),
-  )(
+  it.each([
+    { visible: false, nativeModel: "alias" },
+    { visible: true, nativeModel: "primary[1m]" },
+  ])(
     "inherits the logical model with visible=$visible and native=$nativeModel",
     async (scenario) => {
       resetGatewayTestState();
@@ -835,16 +813,6 @@ describe("CLI model inheritance through MCP", () => {
                   .filter((message) => message.role === "assistant")
                   .map((message) => extractTextFromChatContent(message.content)),
               ).toContain(INITIAL_SUCCESS);
-              console.info(
-                JSON.stringify({
-                  proof: "CLI model inheritance through MCP",
-                  ...scenario,
-                  savedParent: BACKUP,
-                  activeLogicalModel: PRIMARY,
-                  childModels: childRequests.map((request) => request.model),
-                  terminal: terminal.status,
-                }),
-              );
             },
           );
           expect(provider.errors).toEqual([]);

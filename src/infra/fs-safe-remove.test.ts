@@ -184,6 +184,80 @@ describe("removePathWithinRoot", () => {
     await expectRejectCode(fs.stat(path.join(root, "tree")), "ENOENT");
   });
 
+  it.each([undefined, 8, 15])(
+    "checks authority once per mutation and retains refusal at call %s",
+    async (refuseAt) => {
+      const root = await tempDirs.make("openclaw-fs-safe-authority-cost-");
+      const tree = path.join(root, "tree");
+      await fs.mkdir(path.join(tree, "a", "b"), { recursive: true });
+      for (let index = 0; index < 10; index += 1) {
+        await fs.writeFile(path.join(tree, "a", "b", `${index}.txt`), "retained");
+      }
+      await createRebindableDirectoryAlias({
+        aliasPath: path.join(tree, "link"),
+        targetPath: path.join(tree, "a"),
+      });
+      let calls = 0;
+      let lastObservedMutations = -1;
+      let authorized = false;
+      let mutations = 0;
+      const refusal = new Error("owner revoked");
+      __setFsSafeTestHooksForTest({
+        beforeRootFallbackMutation() {
+          authorized = false;
+        },
+      });
+      const unlink = fs.unlink.bind(fs);
+      const rmdir = fs.rmdir.bind(fs);
+      const assertAuthorized = () => {
+        expect(authorized).toBe(true);
+        mutations += 1;
+      };
+      vi.spyOn(fs, "unlink").mockImplementation(async (...args) => {
+        assertAuthorized();
+        await unlink(...args);
+      });
+      vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+        assertAuthorized();
+        await rmdir(...args);
+      });
+      const removal = removePathWithinRoot({
+        rootDir: root,
+        relativePath: "tree",
+        recursive: true,
+        symlinks: "unlink",
+        assertBeforeMutation() {
+          calls += 1;
+          lastObservedMutations = mutations;
+          if (calls === refuseAt) {
+            throw refusal;
+          }
+          authorized = true;
+        },
+      });
+      if (refuseAt === undefined) {
+        await removal;
+        expect(mutations).toBe(14);
+        expect(calls).toBeLessThanOrEqual(mutations + 2);
+        expect(lastObservedMutations).toBe(mutations);
+        await expectRejectCode(fs.lstat(tree), "ENOENT");
+      } else {
+        await expect(removal).rejects.toBe(refusal);
+        expect(calls).toBe(refuseAt);
+        expect(mutations).toBe(refuseAt - 2);
+        expect((await fs.lstat(tree)).isDirectory()).toBe(true);
+        if (refuseAt === 8) {
+          expect((await fs.readdir(path.join(tree, "a", "b"))).toSorted()).toEqual([
+            "6.txt",
+            "7.txt",
+            "8.txt",
+            "9.txt",
+          ]);
+        }
+      }
+    },
+  );
+
   it.each([
     { kind: "file", force: undefined },
     { kind: "file", force: false },

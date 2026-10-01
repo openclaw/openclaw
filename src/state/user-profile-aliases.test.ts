@@ -18,16 +18,18 @@ import {
   listUserProfilesSync,
   readUserProfileEmailBindings,
 } from "./user-profile-identity.read.js";
+import {
+  linkEmail,
+  setAvatar,
+  setDisplayName,
+  syncGitHubIdentity,
+} from "./user-profile-writes.worker.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
   ensureProfileForEmail,
-  linkEmail,
   readUserProfileAliases,
   resolveUserProfileId,
-  setAvatar,
-  setDisplayName,
-  syncGitHubIdentity,
 } from "./user-profiles.js";
 
 const roots = createTempDirTracker();

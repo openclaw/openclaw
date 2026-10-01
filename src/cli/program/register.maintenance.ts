@@ -1,4 +1,3 @@
-// Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
 import type { Command } from "commander";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { defaultRuntime, ExitError } from "../../runtime.js";
@@ -46,7 +45,6 @@ function exitDoctorError(error: unknown, json: boolean): never {
   exitCliAfterOutput(defaultRuntime, 2);
 }
 
-/** Register maintenance commands that inspect or mutate local OpenClaw state. */
 export function registerMaintenanceCommands(
   program: Command,
   ctx?: Pick<ProgramContext, "doctorDatabasePreflight">,
@@ -336,12 +334,7 @@ export function registerMaintenanceCommands(
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { resetCommand } = await import("../../commands/reset.js");
-        await resetCommand(defaultRuntime, {
-          scope: opts.scope,
-          yes: Boolean(opts.yes),
-          nonInteractive: Boolean(opts.nonInteractive),
-          dryRun: Boolean(opts.dryRun),
-        });
+        await resetCommand(defaultRuntime, opts);
       });
     });
 
@@ -360,16 +353,7 @@ export function registerMaintenanceCommands(
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { uninstallCommand } = await import("../../commands/uninstall.js");
-        await uninstallCommand(defaultRuntime, {
-          service: Boolean(opts.service),
-          state: Boolean(opts.state),
-          workspace: Boolean(opts.workspace),
-          app: Boolean(opts.app),
-          all: Boolean(opts.all),
-          yes: Boolean(opts.yes),
-          nonInteractive: Boolean(opts.nonInteractive),
-          dryRun: Boolean(opts.dryRun),
-        });
+        await uninstallCommand(defaultRuntime, opts);
       });
     });
 }

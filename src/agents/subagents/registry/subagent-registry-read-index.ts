@@ -18,7 +18,7 @@ export function createSubagentSessionListReadIndex(
   let replaced = false;
   const changedChildren = new Set<string>();
   const pending = new Set<string>();
-  const dispose = subscribeSubagentRunChanges((ids) => {
+  const dispose = subscribeSubagentRunChanges("projection", ({ runIds: ids }) => {
     if (!ids) {
       replaced = true;
     } else {

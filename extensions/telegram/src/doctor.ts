@@ -415,17 +415,9 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       ],
     };
   }
-  const resolveUserId = async (raw: string): Promise<string | null> => {
-    const trimmed = normalizeOptionalString(raw) ?? "";
-    if (!trimmed) {
+  const resolveUserId = async (normalized: string): Promise<string | null> => {
+    if (/\s/.test(normalized)) {
       return null;
-    }
-    const normalized = normalizeTelegramAllowFromEntry(trimmed);
-    if (!normalized || normalized === "*") {
-      return null;
-    }
-    if (isNumericTelegramSenderUserId(normalized) || /\s/.test(normalized)) {
-      return isNumericTelegramSenderUserId(normalized) ? normalized : null;
     }
     const username = normalized.startsWith("@") ? normalized : `@${normalized}`;
     for (const accountId of resolverAccountIds) {
@@ -470,7 +462,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
         out.push(normalized);
         continue;
       }
-      const resolved = await resolveUserId(String(entry));
+      const resolved = await resolveUserId(normalized);
       if (resolved) {
         out.push(resolved);
         replaced.push({ from: normalizeOptionalString(String(entry)) ?? "", to: resolved });

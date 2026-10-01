@@ -9,6 +9,19 @@ import {
 } from "./reply-policy.js";
 
 describe("createReplyToDeliveryPolicy", () => {
+  it("preserves an explicit payload reply after consuming the implicit reply", () => {
+    const policy = createReplyToDeliveryPolicy({
+      reply: { source: "implicit", replyToId: "source", mode: "first" },
+    });
+    policy.applyReplyToConsumption({ replyToId: "source" }, { consumeImplicitReply: true });
+
+    expect(policy.resolveCurrentReplyTo({ text: "later" })).toEqual({});
+    expect(policy.resolveCurrentReplyTo({ text: "explicit", replyToId: "chosen" })).toEqual({
+      replyToId: "chosen",
+      source: "explicit",
+    });
+  });
+
   it.each(["first", "batched"] as const)(
     "does not restore an ambient target after %s consumption",
     (mode) => {

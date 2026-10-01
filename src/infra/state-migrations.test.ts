@@ -224,7 +224,9 @@ legacyChannelStateMigrationEntries.entries = [
       resolvePlans: ({ oauthDir }) => {
         let entries: fsSync.Dirent[];
         try {
-          entries = fsSync.readdirSync(oauthDir, { withFileTypes: true });
+          entries = fsSync
+            .readdirSync(oauthDir, { withFileTypes: true })
+            .toSorted((left, right) => left.name.localeCompare(right.name));
         } catch {
           return [];
         }
@@ -232,18 +234,16 @@ legacyChannelStateMigrationEntries.entries = [
           if (!entry.isFile() || !/^(creds|pre-key-1)\.json$/u.test(entry.name)) {
             return [];
           }
-          const sourcePath = path.join(oauthDir, entry.name);
           const targetPath = path.join(oauthDir, "mobileauth", "default", entry.name);
-          return fsSync.existsSync(targetPath)
-            ? []
-            : [
-                {
-                  kind: "move" as const,
-                  label: `MobileAuth auth ${entry.name}`,
-                  sourcePath,
-                  targetPath,
-                },
-              ];
+          if (fsSync.existsSync(targetPath)) {
+            return [];
+          }
+          return {
+            kind: "move" as const,
+            label: `MobileAuth auth ${entry.name}`,
+            sourcePath: path.join(oauthDir, entry.name),
+            targetPath,
+          };
         });
       },
     }),

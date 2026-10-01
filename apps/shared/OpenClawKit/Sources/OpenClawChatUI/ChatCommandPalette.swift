@@ -265,7 +265,7 @@ struct ChatCommandPalette: View {
     private func searchThreads() async {
         guard !Task.isCancelled else { return }
         let request = self.request
-        let generation = self.search.begin(request)
+        let generation = self.search.begin(request, owner: self.viewModel.sidebarData)
         guard !request.query.isEmpty else { return }
         do {
             try await Task.sleep(for: .milliseconds(250))

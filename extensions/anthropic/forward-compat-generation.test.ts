@@ -19,17 +19,17 @@ function resolveModel(modelId: string, provider = "anthropic") {
 describe("unreleased Claude generations", () => {
   it.each([
     ["claude-opus-6", "claude-opus-5-5", true],
-    ["claude-sonnet-6", "claude-sonnet-5", false],
+    ["claude-sonnet-6", "claude-sonnet-5-5", true],
     ["claude-opus-5-1", undefined, false],
     ["claude-haiku-5-1", "claude-opus-5-5", true],
   ] as const)(
     "resolves %s onto the newest known contract",
-    (modelId, canonicalModelId, mandatory) => {
+    (modelId, canonicalModelId, remapsMinimal) => {
       const model = resolveModel(modelId);
       expect(model).toBeDefined();
       expect(model?.params?.canonicalModelId).toBe(canonicalModelId);
       expect(model?.thinkingLevelMap).toEqual({
-        ...(mandatory ? { minimal: "low" } : {}),
+        ...(remapsMinimal ? { minimal: "low" } : {}),
         xhigh: "xhigh",
         max: "max",
       });
@@ -46,6 +46,8 @@ describe("unreleased Claude generations", () => {
       "claude-opus-5-5",
       "claude-opus-5",
       "claude-opus-4-8",
+      "claude-sonnet-5-5",
+      "claude-sonnet-5",
       "claude-fable-5",
       "claude-fable-5-1",
     ]) {
@@ -90,6 +92,7 @@ describe("unreleased Claude generations", () => {
     for (const id of [
       "claude-opus-5-5",
       "claude-opus-5",
+      "claude-sonnet-5-5",
       "claude-sonnet-5",
       "claude-fable-5",
       "claude-fable-5-1",
@@ -98,7 +101,7 @@ describe("unreleased Claude generations", () => {
     }
     // The Claude CLI provider rows are intentionally unflagged: those runs use
     // the CLI harness where OpenClaw code mode does not apply.
-    for (const id of ["claude-opus-5-5", "claude-opus-5"]) {
+    for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]) {
       const model = resolveModel(id, "claude-cli");
       expect(model?.id).toBe(id);
       expect(model?.compat).toBeUndefined();

@@ -17,11 +17,6 @@ final class CanvasFileWatcher: @unchecked Sendable {
             onChange: onChange)
     }
 
-    func start() {
-        self.startEventStream()
-        self.setPollingEnabled(true)
-    }
-
     func startEventStream() {
         self.watcher.start()
     }

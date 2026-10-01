@@ -6,16 +6,12 @@ import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
+import type { WorkerConnectionService } from "./worker-connection-dispatch.js";
 
-type WorkerAdmissionService = {
-  admitWorker(
-    admission: WorkerConnectParams["admission"],
-  ): Promise<
-    | { ok: true; identity: WorkerConnectionIdentity }
-    | { ok: false; reason: WorkerProtocolCloseReason }
-  >;
-  validateWorkerConnection(identity: WorkerConnectionIdentity): WorkerProtocolCloseReason | null;
-};
+type WorkerAdmissionService = Pick<
+  WorkerConnectionService,
+  "admitWorker" | "validateWorkerConnection"
+>;
 
 type WorkerAdmissionBoundaryResult =
   | { ok: true; identity: WorkerConnectionIdentity }

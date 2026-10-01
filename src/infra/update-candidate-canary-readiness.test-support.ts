@@ -2,15 +2,22 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import * as timerPromises from "node:timers/promises";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import * as logger from "../logger.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import {
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "./net/proxy/active-proxy-state.js";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
+import {
+  observeUpdateCandidateStartup,
+  waitForUpdateCandidateReadiness,
+} from "./update-candidate-canary-readiness.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import { FakeChild, stubHealthyGateway } from "./update-candidate-canary.test-support.js";
 import * as rehearsals from "./update-candidate-rehearsal.js";
@@ -46,6 +53,182 @@ export function registerCanaryReadinessBudgetTests(
     snapshot: Mock;
   },
 ) {
+  it.each(["late-deadline", "cancelled-sleep"] as const)(
+    "preserves uncertain startup warning identity across %s",
+    async (ordering) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(0);
+      const response = createDeferredCore<Response>();
+      const fetching = createDeferredCore();
+      const receipt = createDeferredCore();
+      const sleeping = createDeferredCore();
+      const enteredSleep = createDeferredCore();
+      const sleep = vi.spyOn(timerPromises, "setTimeout").mockImplementation(() => {
+        enteredSleep.resolve();
+        return sleeping.promise;
+      });
+      const caller = new AbortController();
+      const uncertain = new CommandProcessCleanupError();
+      const cancellation = new Error("caller cancelled during readiness sleep");
+      let current = true;
+      const startup = observeUpdateCandidateStartup({ env: {}, stateDir: root() });
+      const onWarning = vi.fn(() => receipt.promise);
+      const fetch = vi.fn(() => {
+        fetching.resolve();
+        return response.promise;
+      });
+      vi.stubGlobal("fetch", fetch);
+      const pending = waitForUpdateCandidateReadiness({
+        port: 18789,
+        workDeadline: 900,
+        started: 0,
+        signal: caller.signal,
+        processExitSignal: new AbortController().signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("candidate authority revoked");
+          }
+        },
+        hasExited: () => false,
+        getExitReason: () => undefined,
+        startupProgress: startup.milestones,
+        onWarning,
+        onEndpoint: () => {},
+        capture: () => {},
+        env: {},
+        stateDir: root(),
+      });
+      const observed = pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await fetching.promise;
+        await vi.advanceTimersByTimeAsync(300);
+        startup.onLine("openclaw-update-canary-progress: config.snapshot");
+        if (ordering === "cancelled-sleep") {
+          await vi.advanceTimersByTimeAsync(550);
+          response.resolve(Response.json({ status: "starting" }, { status: 503 }));
+          await enteredSleep.promise;
+          expect(sleep).toHaveBeenCalledWith(100, undefined, { signal: caller.signal });
+          await vi.advanceTimersByTimeAsync(50);
+        } else {
+          await vi.advanceTimersByTimeAsync(600);
+        }
+        expect(onWarning).toHaveBeenCalledOnce();
+        receipt.reject(uncertain);
+        await vi.advanceTimersByTimeAsync(0);
+        if (ordering === "late-deadline") {
+          current = false;
+          await vi.advanceTimersByTimeAsync(300);
+          response.resolve(Response.json({ status: "started" }));
+        } else {
+          caller.abort(cancellation);
+          sleeping.reject(caller.signal.reason);
+        }
+        const failure = await observed;
+        if (ordering === "cancelled-sleep") {
+          expect(failure).toBeInstanceOf(AggregateError);
+          expect(failure).toHaveProperty("cause", cancellation);
+          const errors = collectNestedErrorCandidates(failure);
+          expect(errors).toContain(cancellation);
+          expect(errors).toContain(uncertain);
+        } else {
+          expect(failure).toBe(uncertain);
+        }
+        expect(fetch).toHaveBeenCalledOnce();
+      } finally {
+        caller.abort(new Error("readiness test cleanup"));
+        response.resolve(Response.json({ status: "started" }));
+        receipt.resolve();
+        sleeping.resolve();
+        await pending.catch(() => undefined);
+        await observed;
+        sleep.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["write-failed", "authority-revoked"] as const)(
+    "joins a startup warning before more probes when %s",
+    async (outcome) => {
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const fetching = createDeferredCore();
+      const response = createDeferredCore<Response>();
+      const receipt = createDeferredCore();
+      let current = true;
+      let gateway: FakeChild | undefined;
+      const spawnNormally = mocks.spawn.getMockImplementation()!;
+      mocks.spawn.mockImplementation((command, args, options) => {
+        const child = spawnNormally(command, args, options);
+        if (args.includes("--update-canary")) {
+          gateway = child;
+        }
+        return child;
+      });
+      const fetch = vi.fn(async (url: string) => {
+        if (url.endsWith("/startupz")) {
+          fetching.resolve();
+          return response.promise;
+        }
+        return Response.json({ ready: true });
+      });
+      vi.stubGlobal("fetch", fetch);
+      const onProgress = vi.fn((step: { step: string }) => {
+        if (step.step === "warning:candidate-gateway-startup") {
+          return receipt.promise;
+        }
+        return undefined;
+      });
+      const pending = validateUpdateCandidateCanary({
+        root: root(),
+        stateDir: root(),
+        config: {},
+        env: {},
+        timeoutMs: 1_000,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("candidate authority revoked");
+          }
+        },
+        onStep: (step) => {
+          if (step.name === "candidate-recovery") {
+            vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+          }
+        },
+        onProgress,
+      });
+      await fetching.promise;
+      await vi.advanceTimersByTimeAsync(300);
+      gateway!.stderr.write("openclaw-update-canary-progress: config.snapshot\n");
+      await vi.advanceTimersByTimeAsync(600);
+      expect(onProgress).toHaveBeenCalledWith(
+        expect.objectContaining({ step: "warning:candidate-gateway-startup" }),
+      );
+      response.resolve(Response.json({ status: "started" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetch.mock.calls.some(([url]) => url.endsWith("/readyz"))).toBe(false);
+      if (outcome === "write-failed") {
+        receipt.reject(new Error("startup warning storage unavailable"));
+      } else {
+        current = false;
+        receipt.resolve();
+      }
+      const result = await pending;
+      expect(result).toMatchObject({ status: "error", phase: "startup" });
+      expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain(
+        outcome === "write-failed"
+          ? "startup warning storage unavailable"
+          : "candidate authority revoked",
+      );
+      expect(fetch.mock.calls.some(([url]) => url.endsWith("/readyz"))).toBe(false);
+      expect(gateway!.exitCode).toBe(0);
+    },
+  );
+
   it.each([
     "ready",
     "stalled",

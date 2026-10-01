@@ -233,10 +233,8 @@ import WatchKit
     }
 
     var activeExecApproval: WatchExecApprovalRecord? {
-        if let selectedKey = Self.execApprovalOwnerKey(
-            approvalId: self.selectedExecApprovalID ?? "",
-            gatewayStableID: self.selectedExecApprovalGatewayStableID),
-            let selected = execApprovals.first(where: { $0.id == selectedKey })
+        if let selectedKey = self.selectedExecApprovalOwnerKey,
+           let selected = execApprovals.first(where: { $0.id == selectedKey })
         {
             return selected
         }
@@ -406,9 +404,7 @@ import WatchKit
             sourceSentAtMs: message.sentAtMs,
             resetResolutionAttemptID: message.resetResolutionAttemptId)
         else { return }
-        guard let approvalOwnerKey = Self.execApprovalOwnerKey(
-            approvalId: message.approval.id,
-            gatewayStableID: message.approval.gatewayStableID)
+        guard let approvalOwnerKey = message.approval.ownerKey
         else { return }
         guard let notificationIdentifier = Self.execApprovalNotificationIdentifier(for: message.approval) else {
             return
@@ -484,16 +480,9 @@ import WatchKit
         }
 
         let existingRecords = self.execApprovals
-        var existingRecordsByOwner: [ExecApprovalOwnerKey: WatchExecApprovalRecord] = [:]
-        for record in existingRecords {
-            guard let key = Self.execApprovalOwnerKey(
-                approvalId: record.approvalID,
-                gatewayStableID: record.approval.gatewayStableID)
-            else {
-                continue
-            }
-            existingRecordsByOwner[key] = record
-        }
+        let existingRecordsByOwner = Dictionary(
+            existingRecords.compactMap { record in record.approval.ownerKey.map { ($0, record) } },
+            uniquingKeysWith: { _, latest in latest })
         self.pruneExecApprovalTerminalTombstones(now: Date())
         let incomingApprovals = message.approvals.filter { approval in
             WatchApprovalID.exact(approval.id) != nil
@@ -503,16 +492,10 @@ import WatchKit
                     approvalId: approval.id,
                     gatewayStableID: approval.gatewayStableID)
         }
-        let incomingApprovalKeys = Set(incomingApprovals.compactMap { approval in
-            Self.execApprovalOwnerKey(
-                approvalId: approval.id,
-                gatewayStableID: approval.gatewayStableID)
-        })
+        let incomingApprovalKeys = Set(incomingApprovals.compactMap(\.ownerKey))
         let retainedNewerRecords = existingRecords.filter { record in
-            guard let recordKey = Self.execApprovalOwnerKey(
-                approvalId: record.approvalID,
-                gatewayStableID: record.approval.gatewayStableID),
-                recordKey.gatewayID == WatchGatewayID.key(snapshotGatewayID)
+            guard let recordKey = record.approval.ownerKey,
+                  recordKey.gatewayID == WatchGatewayID.key(snapshotGatewayID)
             else {
                 return true
             }
@@ -535,10 +518,7 @@ import WatchKit
             return false
         }
         let mergedIncomingRecords = incomingApprovals.map { approval in
-            let approvalKey = Self.execApprovalOwnerKey(
-                approvalId: approval.id,
-                gatewayStableID: approval.gatewayStableID)
-            let existingRecord = approvalKey.flatMap { existingRecordsByOwner[$0] }
+            let existingRecord = approval.ownerKey.flatMap { existingRecordsByOwner[$0] }
             guard Self.snapshotCanReplace(
                 record: existingRecord,
                 snapshotSentAtMs: message.sentAtMs)
@@ -766,7 +746,7 @@ extension WatchInboxStore {
         approvalId: String,
         gatewayStableID: String?) -> String?
     {
-        guard let key = Self.execApprovalOwnerKey(
+        guard let key = ExecApprovalOwnerKey(
             approvalId: approvalId,
             gatewayStableID: gatewayStableID)
         else {
@@ -781,7 +761,7 @@ extension WatchInboxStore {
     }
 
     func selectExecApproval(id: String, gatewayStableID: String?) {
-        guard let exactKey = Self.execApprovalOwnerKey(
+        guard let exactKey = ExecApprovalOwnerKey(
             approvalId: id,
             gatewayStableID: gatewayStableID),
             let record = self.execApprovals.first(where: { $0.id == exactKey })
@@ -797,7 +777,7 @@ extension WatchInboxStore {
         decision: WatchExecApprovalDecision) -> String?
     {
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
-        guard let ownerKey = Self.execApprovalOwnerKey(
+        guard let ownerKey = ExecApprovalOwnerKey(
             approvalId: approvalId,
             gatewayStableID: gatewayStableID),
             !self.isExecApprovalTerminal(
@@ -827,7 +807,7 @@ extension WatchInboxStore {
         decision: WatchExecApprovalDecision,
         result: WatchReplySendResult)
     {
-        guard let ownerKey = Self.execApprovalOwnerKey(
+        guard let ownerKey = ExecApprovalOwnerKey(
             approvalId: approvalId,
             gatewayStableID: gatewayStableID),
             let index = execApprovals.firstIndex(where: { $0.id == ownerKey }),
@@ -867,41 +847,29 @@ extension WatchInboxStore {
         sourceSentAtMs: Int64?,
         resetResolutionAttemptID: String? = nil) -> Bool
     {
-        guard let ownerKey = Self.execApprovalOwnerKey(
-            approvalId: approval.id,
-            gatewayStableID: approval.gatewayStableID)
-        else { return false }
-        if let index = execApprovals.firstIndex(where: { $0.id == ownerKey }) {
-            guard Self.snapshotCanReplace(
-                record: self.execApprovals[index],
-                snapshotSentAtMs: sourceSentAtMs)
-            else { return false }
-            let resetResolvingState = if let resetResolutionAttemptID,
-                                         let activeResolutionAttemptID =
-                                         self.execApprovals[index].activeResolutionAttemptID
-            {
-                WatchOpaqueUTF8Key(resetResolutionAttemptID) == WatchOpaqueUTF8Key(activeResolutionAttemptID)
-            } else {
-                false
-            }
-            self.execApprovals[index] = self.mergedExecApprovalRecord(
-                approval: approval,
-                transport: transport,
-                sourceSentAtMs: sourceSentAtMs,
-                existingRecord: self.execApprovals[index],
-                resetResolvingState: resetResolvingState)
-        } else {
-            self.execApprovals.append(
-                self.mergedExecApprovalRecord(
-                    approval: approval,
-                    transport: transport,
-                    sourceSentAtMs: sourceSentAtMs,
-                    existingRecord: nil))
-        }
-        if Self.execApprovalOwnerKey(
-            approvalId: self.selectedExecApprovalID ?? "",
-            gatewayStableID: self.selectedExecApprovalGatewayStableID) == nil
+        guard let ownerKey = approval.ownerKey else { return false }
+        let index = self.execApprovals.firstIndex(where: { $0.id == ownerKey })
+        let existingRecord = index.map { self.execApprovals[$0] }
+        guard Self.snapshotCanReplace(record: existingRecord, snapshotSentAtMs: sourceSentAtMs) else { return false }
+        let resetResolvingState = if let resetResolutionAttemptID,
+                                     let activeResolutionAttemptID = existingRecord?.activeResolutionAttemptID
         {
+            WatchOpaqueUTF8Key(resetResolutionAttemptID) == WatchOpaqueUTF8Key(activeResolutionAttemptID)
+        } else {
+            false
+        }
+        let record = self.mergedExecApprovalRecord(
+            approval: approval,
+            transport: transport,
+            sourceSentAtMs: sourceSentAtMs,
+            existingRecord: existingRecord,
+            resetResolvingState: resetResolvingState)
+        if let index {
+            self.execApprovals[index] = record
+        } else {
+            self.execApprovals.append(record)
+        }
+        if self.selectedExecApprovalOwnerKey == nil {
             self.selectedExecApprovalID = approval.id
             self.selectedExecApprovalGatewayStableID = approval.gatewayStableID
         }
@@ -963,11 +931,7 @@ extension WatchInboxStore {
             return false
         }
         let hasLiveRecord = self.execApprovals.contains { record in
-            Self.execApprovalOwnerKey(
-                approvalId: record.approvalID,
-                gatewayStableID: record.approval.gatewayStableID) == Self.execApprovalOwnerKey(
-                approvalId: message.approval.id,
-                gatewayStableID: message.approval.gatewayStableID)
+            record.approval.ownerKey == message.approval.ownerKey
         }
         guard !hasLiveRecord else { return false }
         guard let promptSentAtMs = message.sentAtMs else {
@@ -978,15 +942,12 @@ extension WatchInboxStore {
     }
 
     private func removeExecApproval(id: String, gatewayStableID: String?) {
-        guard let exactKey = Self.execApprovalOwnerKey(
+        guard let exactKey = ExecApprovalOwnerKey(
             approvalId: id,
             gatewayStableID: gatewayStableID)
         else { return }
         self.removeExecApprovals { $0.id == exactKey }
-        if Self.execApprovalOwnerKey(
-            approvalId: self.selectedExecApprovalID ?? "",
-            gatewayStableID: self.selectedExecApprovalGatewayStableID) == exactKey
-        {
+        if self.selectedExecApprovalOwnerKey == exactKey {
             self.selectedExecApprovalID = self.sortedExecApprovals.first?.approvalID
             self.selectedExecApprovalGatewayStableID = self.sortedExecApprovals.first?.approval.gatewayStableID
         }
@@ -1077,9 +1038,7 @@ extension WatchInboxStore {
                 }
                 if isPreexistingApprovalPayload,
                    let approval = payload.approvalPrompt,
-                   let approvalOwnerKey = Self.execApprovalOwnerKey(
-                       approvalId: approval.id,
-                       gatewayStableID: approval.gatewayStableID),
+                   let approvalOwnerKey = approval.ownerKey,
                    !self.execApprovals.contains(where: { $0.id == approvalOwnerKey })
                 {
                     continue
@@ -1174,13 +1133,9 @@ extension WatchInboxStore {
         excluding approval: WatchExecApprovalItem) -> Bool
     {
         let identifierKey = WatchOpaqueUTF8Key(identifier)
-        let excludedKey = Self.execApprovalOwnerKey(
-            approvalId: approval.id,
-            gatewayStableID: approval.gatewayStableID)
+        let excludedKey = approval.ownerKey
         return self.execApprovals.contains { record in
-            let recordKey = Self.execApprovalOwnerKey(
-                approvalId: record.approvalID,
-                gatewayStableID: record.approval.gatewayStableID)
+            let recordKey = record.approval.ownerKey
             guard recordKey != excludedKey,
                   let candidate = Self.legacyExecApprovalNotificationIdentifier(for: record.approval)
             else { return false }
@@ -1223,22 +1178,14 @@ extension WatchInboxStore {
         return "watch.execApproval.\(gatewayStableID.utf8.count):\(gatewayStableID)\(approvalID)"
     }
 
-    private static func execApprovalOwnerKey(
-        approvalId: String,
-        gatewayStableID: String?) -> ExecApprovalOwnerKey?
-    {
-        guard let approvalKey = WatchApprovalID.key(approvalId),
-              let gatewayKey = WatchGatewayID.key(gatewayStableID)
-        else {
-            return nil
-        }
-        return ExecApprovalOwnerKey(
-            gatewayID: gatewayKey,
-            approvalID: approvalKey)
+    private var selectedExecApprovalOwnerKey: ExecApprovalOwnerKey? {
+        ExecApprovalOwnerKey(
+            approvalId: self.selectedExecApprovalID ?? "",
+            gatewayStableID: self.selectedExecApprovalGatewayStableID)
     }
 
     private func isExecApprovalTerminal(approvalId: String, gatewayStableID: String?) -> Bool {
-        guard let key = Self.execApprovalOwnerKey(
+        guard let key = ExecApprovalOwnerKey(
             approvalId: approvalId,
             gatewayStableID: gatewayStableID)
         else {
@@ -1259,7 +1206,7 @@ extension WatchInboxStore {
     {
         guard let exactApprovalID = WatchApprovalID.exact(approvalId),
               let exactGatewayID = WatchGatewayID.exact(gatewayStableID),
-              let key = Self.execApprovalOwnerKey(
+              let key = ExecApprovalOwnerKey(
                   approvalId: approvalId,
                   gatewayStableID: gatewayStableID)
         else {
@@ -1311,10 +1258,8 @@ extension WatchInboxStore {
     }
 
     private func ensureValidExecApprovalSelection() {
-        if let selectedKey = Self.execApprovalOwnerKey(
-            approvalId: self.selectedExecApprovalID ?? "",
-            gatewayStableID: self.selectedExecApprovalGatewayStableID),
-            self.execApprovals.contains(where: { $0.id == selectedKey })
+        if let selectedKey = self.selectedExecApprovalOwnerKey,
+           self.execApprovals.contains(where: { $0.id == selectedKey })
         {
             return
         }

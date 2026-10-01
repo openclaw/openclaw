@@ -1,4 +1,3 @@
-/** Bridges Gateway exec approval events into ACP request_permission payloads and outcomes. */
 import type {
   PermissionOption,
   RequestPermissionRequest,
@@ -75,7 +74,6 @@ export function parseGatewayExecApprovalEventData(
   };
 }
 
-/** Parses structured Gateway approval-request payloads into ACP relay state. */
 export function parseGatewayExecApprovalRequestEventPayload(
   payload: Record<string, unknown>,
 ): GatewayExecApprovalEvent | null {
@@ -94,7 +92,6 @@ export function parseGatewayExecApprovalRequestEventPayload(
   };
 }
 
-/** Builds the ACP request_permission payload shown to a client. */
 export function buildAcpPermissionRequest(params: {
   sessionId: string;
   event: GatewayExecApprovalEvent;
@@ -135,7 +132,6 @@ export function buildAcpPermissionRequest(params: {
   };
 }
 
-/** Maps an ACP permission response back to the Gateway exec approval decision. */
 export function resolveGatewayDecisionFromPermissionOutcome(
   response: RequestPermissionResponse | undefined,
   options: readonly PermissionOption[],

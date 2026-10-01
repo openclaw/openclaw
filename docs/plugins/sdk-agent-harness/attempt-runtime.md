@@ -33,6 +33,12 @@ backends retain and revalidate each item's assertion, including before retries;
 omit revoked items without cancelling independently accepted work or poisoning
 later authorized controls.
 
+When supplied, call `options.onQueueSettled()` once after that input commits,
+is canceled, or is terminally rejected. `onQueueAccepted(true)` only reports
+admission. A backend that returns early for `waitForTranscriptCommit: false`
+retains the settlement callback until its exact input finishes; core uses it
+to release the selected sender's retained source authority.
+
 Optional V2 `claimPendingUserInputAnswer(text, options, assertCurrent, authorityKind)`
 and `cancelPendingUserInput(resolvedBy, assertCurrent, authorityKind)` methods
 require the same assertion and authority kind. Carry it through question registration and persistence to the final
@@ -154,6 +160,16 @@ Supply `messages` as an array or an async loader, which runs only when a `before
 hook needs history. Heartbeat-only contributions do not read conversation history.
 The production-private `resolveAgentHarnessHistoryLimits` helper applies the shared
 Codex and Agents API transcript read budget.
+
+Agents API retains the first successfully prepared, bounded hook history for
+retries of the same logical run and native session. Prompt hooks still run on
+each attempt with the current input and live host authority; their history stays
+at the original before-turn snapshot. Accepted steering therefore does not force
+a new transcript read through the original message's now-stale admission.
+This snapshot is data, not renewed transcript-read permission: later transcript
+changes are observed by the next logical run, and a changed recorder, session,
+run identity, or history budget requires a fresh read. Session reset and run
+cancellation retain their existing authority checks.
 
 The `developerInstructions.build` callback receives `toolsAllow` and
 `hasToolRestrictions`. Omitted policy or a trimmed `*` entry is unrestricted;

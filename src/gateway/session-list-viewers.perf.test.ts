@@ -341,6 +341,7 @@ test("preserves viewer pages across publications while bounding shared predicate
     ];
     try {
       for (let revision = 0; revision < 2; revision++) {
+        await projection.ensureMaterialized();
         // The first viewer primes only viewer-independent membership.
         await listProjectedSessions({ projection, client: clients[0], opts });
         predicate.mockClear();

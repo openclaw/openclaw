@@ -14,7 +14,6 @@ import {
   execApprovalAllowlistMissingTarget,
   execApprovalAllowlistRequirementKey,
   formatExecApprovalAllowlistEntry,
-  formatExecApprovalAllowlistRequirement,
   readExecApprovalAllowlistRequirements,
   syntheticExecApprovalAgentEntry,
 } from "./exec-approval-rules.js";
@@ -291,7 +290,7 @@ function execApprovalsRuleFindings(
         findings.push({
           checkId: CHECK_IDS.policyExecApprovalsAllowlistMissing,
           severity: "error",
-          message: `exec approvals allowlist is missing expected pattern '${formatExecApprovalAllowlistRequirement(entry)}'.`,
+          message: `exec approvals allowlist is missing expected pattern '${formatExecApprovalAllowlistEntry(entry)}'.`,
           source: "policy",
           path: params.fileDisplayName ?? params.displayName,
           target,

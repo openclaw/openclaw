@@ -132,9 +132,13 @@ describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
 
   it("releases the send queue after a socket operation timeout", async () => {
     vi.useFakeTimers();
+    const started = Promise.withResolvers<void>();
     const sendMessage = vi
       .fn<(jid: string, content: AnyMessageContent) => Promise<WAMessage | undefined>>()
-      .mockImplementationOnce(async () => await new Promise(() => {}))
+      .mockImplementationOnce(async () => {
+        started.resolve();
+        return await new Promise(() => {});
+      })
       .mockResolvedValueOnce({ key: { id: "msg-2" } } as WAMessage);
     const sock = {
       sendMessage,
@@ -149,7 +153,7 @@ describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
       name: "WhatsAppSocketOperationTimeoutError",
       operation: "sendMessage",
     });
-    await Promise.resolve();
+    await started.promise;
     expect(sendMessage).toHaveBeenCalledTimes(1);
 
     const second = createWhatsAppSocketOperationTimeoutAdapter(sock, 1_000).sendMessage(

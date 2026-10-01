@@ -1,4 +1,3 @@
-// Filterable select list component supports filtered keyboard selection.
 import {
   type Component,
   type Focusable,
@@ -72,11 +71,6 @@ export class FilterableSelectList implements Component, Focusable {
     this.input.focused = value;
   }
 
-  private applyFilter(): void {
-    const filtered = fuzzyFilter(this.allItems, this.input.getValue(), (entry) => entry.searchText);
-    this.selectList = this.createSelectList(filtered);
-  }
-
   private createSelectList(items: typeof this.allItems): SelectList {
     return new SelectList(
       items.map((entry) => entry.item),
@@ -94,16 +88,13 @@ export class FilterableSelectList implements Component, Focusable {
     const lines: string[] = [];
     const safeWidth = Math.max(0, width);
 
-    // Filter input row
     const filterLabel = this.theme.filterLabel("Filter: ");
     const inputLines = this.input.render(Math.max(0, safeWidth - visibleWidth(filterLabel)));
     const inputText = inputLines[0] ?? "";
     lines.push(truncateToWidth(filterLabel + inputText, safeWidth, ""));
 
-    // Separator
     lines.push(chalk.dim("─".repeat(safeWidth)));
 
-    // Select list
     const listLines = this.selectList.render(safeWidth);
     lines.push(...listLines.map((line) => truncateToWidth(line, safeWidth, "")));
 
@@ -122,7 +113,6 @@ export class FilterableSelectList implements Component, Focusable {
       return;
     }
 
-    // Enter selects
     if (matchesKey(keyData, "enter")) {
       const selected = this.selectList.getSelectedItem();
       if (selected) {
@@ -131,13 +121,14 @@ export class FilterableSelectList implements Component, Focusable {
       return;
     }
 
-    // All other input goes to filter
     const prevValue = this.input.getValue();
     this.input.handleInput(keyData);
     const newValue = this.input.getValue();
 
     if (newValue !== prevValue) {
-      this.applyFilter();
+      this.selectList = this.createSelectList(
+        fuzzyFilter(this.allItems, newValue, (entry) => entry.searchText),
+      );
     }
   }
 }

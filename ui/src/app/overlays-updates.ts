@@ -715,9 +715,7 @@ export function createApplicationUpdateOverlays(
         updateHoldInFlight = false;
       }
     },
-    async reportUpdateFailure(this: void, attemptId: string) {
-      await updateFailureReporter.report(attemptId);
-    },
+    reportUpdateFailure: updateFailureReporter.report,
     dispose() {
       disposed = true;
       updateFailureReporter.invalidate();

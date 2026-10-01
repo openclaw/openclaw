@@ -4,8 +4,8 @@ import { html, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleChatGatewayEvent } from "../chat-gateway.ts";
 import type { ChatState } from "../chat-state-contract.ts";
+import { renderMessageGroup } from "./chat-message-group.ts";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
-import { renderMessageGroup } from "./chat-message.ts";
 
 const container = document.createElement("div");
 afterEach(() => render(html``, container));

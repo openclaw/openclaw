@@ -2,6 +2,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 // Reports a checkout whose dist was built from a different commit than HEAD.
 import { isTruthyEnvValue } from "../infra/env.js";
 import { gitCommitPrefixesMatch, resolveCommitHash } from "../infra/git-commit.js";
+import { readInstallOwner } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { readBuiltRuntimeCommit } from "../infra/update-git-runtime.js";
 
@@ -18,7 +19,7 @@ export async function collectStaleRuntimeBuildFindings(
     return [];
   }
   const root = params.root ?? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-  if (!root) {
+  if (!root || (await readInstallOwner(root))) {
     return [];
   }
   const builtCommit = await readBuiltRuntimeCommit(root);

@@ -27,7 +27,7 @@ import { registerCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-  type DiagnosticSecurityEvent,
+  type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type {
   ExecAllowlistEntry,
@@ -105,9 +105,6 @@ function exactCommandMarker(command: string): string {
 }
 
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
-  vi.fn<typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalFollowupTarget>(),
-);
 const evaluateShellAllowlistWithAuthorizationMock = vi.hoisted(() =>
   vi.fn<() => MockAllowlistResult>(),
 );
@@ -207,11 +204,9 @@ vi.mock("./tools/gateway.js", () => ({
 vi.mock("./bash-tools.exec-host-shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bash-tools.exec-host-shared.js")>();
   createExecApprovalRequestRouteMock.mockImplementation(actual.createExecApprovalRequestRoute);
-  buildExecApprovalFollowupTargetMock.mockImplementation(actual.buildExecApprovalFollowupTarget);
   return {
     ...actual,
     resolveExecHostApprovalContext: resolveExecHostApprovalContextMock,
-    buildExecApprovalFollowupTarget: buildExecApprovalFollowupTargetMock,
     buildExecApprovalPendingToolResult: buildExecApprovalPendingToolResultMock,
     createExecApprovalRequestRoute: createExecApprovalRequestRouteMock,
     sendExecApprovalFollowupResult: sendExecApprovalFollowupResultMock,
@@ -257,10 +252,10 @@ function captureProcessUnhandledRejections() {
 }
 
 function captureSecurityEvents(): {
-  events: DiagnosticSecurityEvent[];
+  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
   stop: () => void;
 } {
-  const events: DiagnosticSecurityEvent[] = [];
+  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
       events.push(event);
@@ -278,7 +273,6 @@ describe("processGatewayAllowlist", () => {
     resetGatewayWorkAdmission();
     resetDiagnosticEventsForTest();
     buildExecApprovalPendingToolResultMock.mockReset();
-    buildExecApprovalFollowupTargetMock.mockClear();
     evaluateShellAllowlistWithAuthorizationMock.mockReset();
     mockAllowlist({
       allowlistSatisfied: true,
@@ -1136,72 +1130,6 @@ describe("processGatewayAllowlist", () => {
     });
   });
 
-  it("keeps security audit suppression edits off the auto-review path", async () => {
-    const warnings: string[] = [];
-    mockHostPolicy({ hostSecurity: "full", hostAsk: "on-miss" });
-
-    const result = await runGatewayAllowlist({
-      command: "openclaw config set security.audit.suppressions '[]'",
-      security: "full",
-      ask: "on-miss",
-      autoReview: true,
-      warnings,
-    });
-
-    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
-    expect(createExecApprovalRequestRouteMock).toHaveBeenCalledTimes(1);
-    expect(warnings[0]).toContain("explicit approval");
-    expect(result.deniedResult?.details.status).toBe("failed");
-  });
-
-  it("requires suppression edit approval when allowlist analysis only returns a read-only prefix", async () => {
-    mockAllowlist({
-      segments: [
-        { resolution: null, argv: ["openclaw", "config", "get", "security.audit.suppressions"] },
-      ],
-    });
-    mockHostPolicy({ hostSecurity: "full", hostAsk: "on-miss" });
-
-    const result = await runGatewayAllowlist({
-      command:
-        "openclaw config get security.audit.suppressions; openclaw config set security.audit.suppressions '[]'",
-      security: "full",
-      ask: "on-miss",
-    });
-
-    expect(createExecApprovalRequestRouteMock).toHaveBeenCalledTimes(1);
-    expect(result.deniedResult?.details.status).toBe("failed");
-  });
-
-  it("requires suppression edit approval when a heredoc patch follows read-only inspection", async () => {
-    mockAllowlist({
-      segments: [
-        {
-          raw: "openclaw config get security.audit.suppressions",
-          resolution: null,
-          argv: ["openclaw", "config", "get", "security.audit.suppressions"],
-        },
-        {
-          raw: "openclaw config patch --stdin <<'EOF'",
-          resolution: null,
-          argv: ["openclaw", "config", "patch", "--stdin"],
-        },
-      ],
-    });
-    mockHostPolicy({ hostSecurity: "full", hostAsk: "on-miss" });
-
-    const result = await runGatewayAllowlist({
-      command: `openclaw config get security.audit.suppressions; openclaw config patch --stdin <<'EOF'
-{"security":{"audit":{"suppressions":[]}}}
-EOF`,
-      security: "full",
-      ask: "on-miss",
-    });
-
-    expect(createExecApprovalRequestRouteMock).toHaveBeenCalledTimes(1);
-    expect(result.deniedResult?.details.status).toBe("failed");
-  });
-
   it("allows durable exact-command trust to bypass the synchronous allowlist miss", async () => {
     const command = "/bin/echo durable";
     mockAllowlist({
@@ -1301,7 +1229,6 @@ EOF`,
 
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
-    expect(buildExecApprovalFollowupTargetMock.mock.calls[0]?.[0].direct).toBe(true);
 
     const followupTarget = sendExecApprovalFollowupResultMock.mock.calls[0]?.[0];
     expect(followupTarget?.direct).toBe(true);

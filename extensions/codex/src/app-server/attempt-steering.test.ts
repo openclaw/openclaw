@@ -77,11 +77,16 @@ describe("Codex app-server steering queue", () => {
       });
       const queue = createQueue(harness.client, { signal: controller.signal, beforeSubmit });
       const onQueueAccepted = vi.fn();
-      const delivery = queue.queue("durable steer", { debounceMs: 0, onQueueAccepted }, () => {
-        if (!sourceCurrent) {
-          throw new Error("source claim replaced");
-        }
-      });
+      const onQueueSettled = vi.fn();
+      const delivery = queue.queue(
+        "durable steer",
+        { debounceMs: 0, onQueueAccepted, onQueueSettled },
+        () => {
+          if (!sourceCurrent) {
+            throw new Error("source claim replaced");
+          }
+        },
+      );
       const settled = delivery.then(
         () => undefined,
         (error: unknown) => error,
@@ -90,6 +95,7 @@ describe("Codex app-server steering queue", () => {
         await committing.promise;
         expect(harness.writes).toEqual([]);
         expect(onQueueAccepted).not.toHaveBeenCalled();
+        expect(onQueueSettled).not.toHaveBeenCalled();
         if (outcome === "revoked") {
           sourceCurrent = false;
         } else if (outcome === "aborted") {
@@ -111,6 +117,7 @@ describe("Codex app-server steering queue", () => {
           expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
         }
         expect(beforeSubmit).toHaveBeenCalledOnce();
+        expect(onQueueSettled).toHaveBeenCalledOnce();
       } finally {
         releaseCommit.resolve();
         queue.cancel();

@@ -1,6 +1,9 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
@@ -196,7 +199,13 @@ describe("native Codex skill delivery", () => {
       };
       const result = await runCodexAppServerAttempt(params, {
         pluginConfig: {
-          appServer: { command: native.command, args: ["app-server"], homeScope: "user" },
+          appServer: {
+            command: native.command,
+            args: ["app-server"],
+            homeScope: "user",
+            sandbox: "read-only",
+            approvalPolicy: "never",
+          },
         },
         nativeHookRelay: { enabled: false },
         clientFactory: async (options) => {
@@ -222,6 +231,166 @@ describe("native Codex skill delivery", () => {
     }
   }, 45_000);
 
+  it("delivers and refreshes persona through an external WebSocket Harness", async () => {
+    const root = await fs.realpath(tempDir);
+    const native = await createCodexNativeTestState(root);
+    for (const [name, value] of Object.entries(native.env)) {
+      if (value !== undefined) {
+        vi.stubEnv(name, value);
+      }
+    }
+    const fixture = await startResponsesFixture();
+    const modelId = "persona-carrier-model";
+    await writeCodexFixtureConfig({
+      root,
+      codexHome: native.codexHome,
+      modelId,
+      port: fixture.port,
+      contextWindow: 200_000,
+    });
+    // The OS assigns the port while the native listener owns it throughout.
+    // An external client must not accidentally qualify for the stdio relay.
+    const harness = spawn(native.command, ["app-server", "--listen", "ws://127.0.0.1:0"], {
+      cwd: native.cwd,
+      env: native.env,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const url = await new Promise<string>((resolve, reject) => {
+        let stderr = "";
+        startupTimer = setTimeout(
+          () => reject(new Error("Native WebSocket startup timed out")),
+          15_000,
+        );
+        harness.once("error", reject);
+        harness.once("exit", (code) =>
+          reject(new Error(`Native WebSocket exited: ${code} ${stderr}`)),
+        );
+        harness.stderr.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString();
+          const match = stderr.match(/listening on:\s*(ws:\/\/127\.0\.0\.1:\d+)/);
+          if (match?.[1]) {
+            clearTimeout(startupTimer);
+            resolve(match[1]);
+          }
+        });
+      });
+      const soulPath = path.join(native.cwd, "SOUL.md");
+      const firstSoul = "SYNTHETIC_REMOTE_PERSONA_FIRST";
+      const editedSoul = "SYNTHETIC_REMOTE_PERSONA_EDITED";
+      const sharedUser = "SYNTHETIC_SHARED_USER";
+      const personalUser = "SYNTHETIC_PERSONAL_USER";
+      const personalPath = path.join(native.cwd, "users", "alice", "USER.md");
+      await fs.writeFile(path.join(native.cwd, "USER.md"), sharedUser);
+      registerInternalHook("agent:bootstrap", (event) => {
+        // Supply the same authenticated-selection metadata as the personal loader.
+        const context = event.context as {
+          bootstrapFiles: Array<{
+            name: string;
+            path: string;
+            content?: string;
+            missing: boolean;
+            personalUser?: true;
+          }>;
+        };
+        context.bootstrapFiles.push({
+          name: "USER.md",
+          path: personalPath,
+          content: personalUser,
+          missing: false,
+          personalUser: true,
+        });
+      });
+      const threadIds = new Set<string>();
+      for (const [index, soul] of [firstSoul, editedSoul, undefined].entries()) {
+        if (soul) {
+          await fs.writeFile(soulPath, soul);
+        } else {
+          await fs.unlink(soulPath);
+        }
+        const params = createNativeRunParams(path.join(root, "remote-persona.jsonl"), native.cwd);
+        params.disableTools = false;
+        params.runId = `remote-persona-${index}`;
+        params.modelId = modelId;
+        params.model = { ...params.model, id: modelId };
+        params.prompt = `Ordinary remote turn ${index}.`;
+        params.trigger = "user";
+        params.timeoutMs = 20_000;
+        const result = await runCodexAppServerAttempt(params, {
+          pluginConfig: {
+            appServer: {
+              transport: "websocket",
+              url,
+              sandbox: "read-only",
+              approvalPolicy: "never",
+            },
+          },
+          nativeHookRelay: { enabled: false },
+          clientFactory: async (options) => {
+            if (!client) {
+              client = await createIsolatedCodexAppServerClient(options);
+              client.addNotificationHandler((notification) => {
+                if (notification.method === "turn/started" && isJsonObject(notification.params)) {
+                  const threadId = notification.params.threadId;
+                  if (typeof threadId === "string") {
+                    threadIds.add(threadId);
+                  }
+                }
+              });
+            }
+            return client;
+          },
+        });
+        expect(result.terminal).toEqual({ kind: "ok" });
+        // No personal overlay may enter native history or configuration, both of
+        // which can be inherited by native children (including full-history forks).
+        expect(JSON.stringify(fixture.requests)).not.toContain(personalUser);
+        expect(result.systemPromptReport?.injectedWorkspaceFiles).toContainEqual(
+          expect.objectContaining({ path: personalPath, injectedChars: 0, truncated: false }),
+        );
+        const text = developerMessageText(fixture.requests.at(-1));
+        expect(text).toContain(sharedUser);
+        expect(text).toContain("Synthetic model-owned Default policy.");
+        if (soul) {
+          expect(text).toContain(soul);
+          if (index === 1) {
+            expect(text.lastIndexOf(editedSoul)).toBeGreaterThan(text.lastIndexOf(firstSoul));
+          }
+        } else {
+          // Resume replaces the current section; historical turns may still
+          // contain old text, so inspect the latest policy handoff.
+          const latestDeveloper = fixture.requests.at(-1)?.input;
+          expect(Array.isArray(latestDeveloper)).toBe(true);
+          const handoffs = Array.isArray(latestDeveloper)
+            ? latestDeveloper.filter(
+                (item) =>
+                  isJsonObject(item) &&
+                  item.role === "developer" &&
+                  JSON.stringify(item).includes("complete current OpenClaw"),
+              )
+            : [];
+          expect(handoffs.length).toBeGreaterThan(0);
+          expect(JSON.stringify(handoffs.at(-1))).not.toContain(editedSoul);
+          expect(JSON.stringify(handoffs.at(-1))).not.toContain(firstSoul);
+        }
+      }
+      expect(threadIds.size).toBe(1);
+    } finally {
+      clearTimeout(startupTimer);
+      if (client) {
+        await client.closeAndWait();
+      }
+      if (harness.exitCode === null && harness.signalCode === null) {
+        const closed = once(harness, "close");
+        harness.kill("SIGTERM");
+        await closed;
+      }
+      await fixture.close();
+    }
+  }, 90_000);
+
   it.each([
     {
       label: "an edited catalog",
@@ -231,7 +400,7 @@ describe("native Codex skill delivery", () => {
     {
       label: "a withdrawn catalog",
       refreshed: undefined,
-      current: "skills catalog is empty",
+      current: "refreshable thread instructions are empty",
     },
   ])(
     "keeps $label visible to the model after native compaction rebuilds the incognito thread",
@@ -276,7 +445,13 @@ describe("native Codex skill delivery", () => {
           params.skillsSnapshot = catalog ? { prompt: catalog, skills: [] } : undefined;
           const result = await runCodexAppServerAttempt(params, {
             pluginConfig: {
-              appServer: { command: native.command, args: ["app-server"], homeScope: "user" },
+              appServer: {
+                command: native.command,
+                args: ["app-server"],
+                homeScope: "user",
+                sandbox: "read-only",
+                approvalPolicy: "never",
+              },
             },
             nativeHookRelay: { enabled: false },
             clientFactory: async (options) => {

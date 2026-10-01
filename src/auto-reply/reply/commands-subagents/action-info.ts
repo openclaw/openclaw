@@ -1,4 +1,3 @@
-// Formats detailed subagent run information for the info action.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeRunStatusText } from "../../../agents/run-status-text.js";
 import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
@@ -65,7 +64,6 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   const taskSummaryText = sanitizeRunStatusText(run.delivery?.lastError, {
     errorContext: true,
   });
-  const taskErrorText = sanitizeRunStatusText(run.execution.outcome?.error, { errorContext: true });
 
   const lines = [
     "ℹ️ Subagent info",
@@ -85,7 +83,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     `Outcome: ${outcome}`,
     progressText ? `Progress: ${progressText}` : undefined,
     taskSummaryText ? `Task summary: ${taskSummaryText}` : undefined,
-    taskErrorText ? `Task error: ${taskErrorText}` : undefined,
+    outcomeError ? `Task error: ${outcomeError}` : undefined,
     run.delivery ? `Delivery: ${run.delivery.status}` : undefined,
     run.delivery?.discardReason ? `Delivery disposition: ${run.delivery.discardReason}` : undefined,
     run.delivery?.discardedAt

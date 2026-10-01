@@ -9,6 +9,7 @@ import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, flushLogger, resetLogger } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
+import type { RedactPattern } from "./redact-pattern-runtime.js";
 import { getDefaultRedactPatterns } from "./redact.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
@@ -37,7 +38,7 @@ afterAll(async () => await paths.cleanup());
 async function logFromPlugin(
   message: string,
   meta?: Record<string, unknown>,
-  patterns?: string[],
+  patterns?: readonly RedactPattern[],
   write?: (logger: ReturnType<typeof getChildLogger>) => void,
 ) {
   const file = paths.nextPath();
@@ -46,7 +47,8 @@ async function logFromPlugin(
     file,
     consoleStyle: "json",
     consoleLevel: "info",
-    redactPatterns: patterns,
+    // Logging config carries pattern text only; the default policy's matchers are not configurable.
+    redactPatterns: patterns?.filter((pattern): pattern is string => typeof pattern === "string"),
   });
   const output = vi.fn();
   loggingState.rawConsole = { log: output, info: output, warn: output, error: output };

@@ -15,7 +15,8 @@ import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-r
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
-import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
+import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import type { ChatMetadataRuntimeDeps } from "./chat-metadata-facts.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";

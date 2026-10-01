@@ -1,6 +1,13 @@
 import type { AsyncLocalStorage } from "node:async_hooks";
-import type { Worker, Transferable, WorkerOptions } from "node:worker_threads";
+import type { Transferable, WorkerOptions } from "node:worker_threads";
 import type { Deferred } from "../shared/deferred.js";
+import type { RetainedOperation, RetainedOutcome } from "./retained-operation.js";
+import type { RetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
+import type {
+  NativeWorkerResourceDescriptor,
+  RetainedNativeWorker,
+  WorkerLifecycle,
+} from "./worker-native-lifecycle.types.js";
 import type { WorkerComputePermit } from "./worker-task-capacity.js";
 import type { WorkerNativeSectionState } from "./worker-task-native-sections.js";
 
@@ -25,6 +32,15 @@ export type WorkerTaskPoolOptions<Output> = {
   validateResult?: (value: Output) => void;
   /** Reports failed stops synchronously; returned rejections never delay retirement. */
   onRetirementFailure?: (error: unknown) => void | Promise<void>;
+};
+
+export type WorkerTaskPoolOwnerOptions = {
+  retainedTransport?: true;
+  /** Its domain retains generation cleanup, including resource fences before pool close. */
+  nativeSource?: RetainedNativeWorkerSource;
+  /** Native child custody stays outside a disposable task Worker. */
+  nativeResource?: NativeWorkerResourceDescriptor;
+  decodeResourceError?: (error: unknown) => Error;
 };
 
 export type WorkerTaskResponse = {
@@ -64,6 +80,16 @@ export type WorkerTaskOptions<Input> = {
   onExecutionSettled?: (settlement: WorkerTaskExecutionSettlement) => void;
 };
 
+/** Internal codecs may answer a worker while their caller cannot run Promise reactions. */
+export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> &
+  (
+    | { onRequest?: WorkerTaskOptions<Input>["onRequest"]; onRequestSync?: never }
+    | {
+        onRequest?: never;
+        onRequestSync?: (value: unknown, context: WorkerTaskRequestContext) => WorkerTaskResponse;
+      }
+  );
+
 /** Internal custody: a result alone does not release its slot or notify execution settlement. */
 export type OwnedWorkerTask<Output> = {
   result: Promise<Output>;
@@ -71,10 +97,14 @@ export type OwnedWorkerTask<Output> = {
   close(options?: { retire?: true }): Promise<void>;
 };
 
+export type RetainedWorkerTask<Output> = RetainedOperation<Output> & {
+  release(options?: { retire?: true }): RetainedOperation<void>;
+};
+
 type TaskOwner = {
   closed: boolean;
   retire: boolean;
-  closing?: Promise<void>;
+  closing?: RetainedOperation<void>;
   complete?: () => void;
 };
 
@@ -85,7 +115,9 @@ type WorkerHostExchange = {
   sent: boolean;
 };
 
-export type Task<Input, Output> = Deferred<Output> & {
+export type Task<Input, Output> = Omit<Deferred<Output>, "resolve"> & {
+  resolve(value: Output): void;
+  read(): RetainedOutcome<Output>;
   id: number;
   runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   controller: AbortController;
@@ -94,8 +126,9 @@ export type Task<Input, Output> = Deferred<Output> & {
   executionNotified: boolean;
   exchangeSequence: number;
   input?: WorkerTaskInput<Input>;
-  options: WorkerTaskOptions<Input>;
+  options: OwnedWorkerTaskOptions<Input>;
   timer?: NodeJS.Timeout;
+  deadline?: number;
   abort: () => void;
   done: boolean;
   slot?: Slot<Input, Output>;
@@ -112,11 +145,13 @@ export type Task<Input, Output> = Deferred<Output> & {
 };
 export type Slot<Input, Output> = {
   nativeSections: WorkerNativeSectionState;
-  worker?: Worker;
+  worker?: WorkerLifecycle;
+  native?: RetainedNativeWorker;
+  creating?: boolean;
   releaseResources?: () => Promise<void>;
   task?: Task<Input, Output>;
   idleTimer?: NodeJS.Timeout;
-  retiring?: Promise<void>;
+  retiring?: RetainedOperation<void>;
   /** The retirement owner has joined this exact slot's native termination barrier. */
   retired?: true;
   retirementFailed?: boolean;

@@ -8,7 +8,6 @@ import type {
   OfficialExternalPluginCatalogManifest,
   OfficialExternalPluginCatalogInstallCandidate,
   OfficialExternalPluginCatalogFeed,
-  OfficialExternalPluginCatalogFeedSigningKey,
   OfficialExternalPluginCatalogFeedVerification,
   OfficialExternalPluginCatalogProfileConfig,
 } from "./official-external-plugin-catalog.types.js";
@@ -31,9 +30,6 @@ const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_ID = "clawhub-official";
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF = "public-clawhub";
 
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF = "public-npm";
-
-const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS: readonly OfficialExternalPluginCatalogFeedSigningKey[] =
-  [];
 
 export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG: OfficialExternalPluginCatalogProfileConfig =
   {
@@ -143,13 +139,6 @@ export function resolveOfficialExternalPluginCatalogProfileConfig(
 ): Required<OfficialExternalPluginCatalogProfileConfig> {
   const configuredDefaultFeed =
     config?.feeds?.[DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE];
-  const bundledVerification =
-    DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS.length > 0
-      ? {
-          mode: "signed" as const,
-          keys: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS,
-        }
-      : undefined;
   const defaultFeed = DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.feeds?.[
     DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
   ] ?? {
@@ -161,7 +150,6 @@ export function resolveOfficialExternalPluginCatalogProfileConfig(
       ...config?.feeds,
       [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE]: {
         ...defaultFeed,
-        ...(bundledVerification ? { verification: bundledVerification } : {}),
         ...configuredDefaultFeed,
       },
     },

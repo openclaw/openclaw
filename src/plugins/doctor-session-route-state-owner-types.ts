@@ -1,4 +1,4 @@
-// Defines and normalizes doctor session route state ownership for plugin repairs.
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 export type DoctorSessionRouteStateOwner = {
@@ -10,46 +10,34 @@ export type DoctorSessionRouteStateOwner = {
   authProfilePrefixes?: readonly string[];
 };
 
-function isDoctorSessionRouteStateOwner(value: unknown): value is DoctorSessionRouteStateOwner {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as {
-    id?: unknown;
-    label?: unknown;
-    providerIds?: unknown;
-    runtimeIds?: unknown;
-    cliSessionKeys?: unknown;
-    authProfilePrefixes?: unknown;
-  };
-  return (
-    typeof candidate.id === "string" &&
-    typeof candidate.label === "string" &&
-    candidate.id.trim().length > 0 &&
-    candidate.label.trim().length > 0 &&
-    (candidate.providerIds === undefined ||
-      normalizeTrimmedStringList(candidate.providerIds).length > 0) &&
-    (candidate.runtimeIds === undefined ||
-      normalizeTrimmedStringList(candidate.runtimeIds).length > 0) &&
-    (candidate.cliSessionKeys === undefined ||
-      normalizeTrimmedStringList(candidate.cliSessionKeys).length > 0) &&
-    (candidate.authProfilePrefixes === undefined ||
-      normalizeTrimmedStringList(candidate.authProfilePrefixes).length > 0)
-  );
-}
-
 export function coerceDoctorSessionRouteStateOwners(
   value: unknown,
 ): DoctorSessionRouteStateOwner[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter(isDoctorSessionRouteStateOwner).map((owner) => ({
-    id: owner.id.trim(),
-    label: owner.label.trim(),
-    providerIds: normalizeTrimmedStringList(owner.providerIds),
-    runtimeIds: normalizeTrimmedStringList(owner.runtimeIds),
-    cliSessionKeys: normalizeTrimmedStringList(owner.cliSessionKeys),
-    authProfilePrefixes: normalizeTrimmedStringList(owner.authProfilePrefixes),
-  }));
+  return value.flatMap((entry) => {
+    const candidate = asOptionalObjectRecord(entry);
+    if (typeof candidate?.id !== "string" || typeof candidate.label !== "string") {
+      return [];
+    }
+    const id = candidate.id.trim();
+    const label = candidate.label.trim();
+    if (!id || !label) {
+      return [];
+    }
+    const owner = {
+      id,
+      label,
+      providerIds: normalizeTrimmedStringList(candidate.providerIds),
+      runtimeIds: normalizeTrimmedStringList(candidate.runtimeIds),
+      cliSessionKeys: normalizeTrimmedStringList(candidate.cliSessionKeys),
+      authProfilePrefixes: normalizeTrimmedStringList(candidate.authProfilePrefixes),
+    };
+    return (["providerIds", "runtimeIds", "cliSessionKeys", "authProfilePrefixes"] as const).every(
+      (key) => candidate[key] === undefined || owner[key].length > 0,
+    )
+      ? [owner]
+      : [];
+  });
 }

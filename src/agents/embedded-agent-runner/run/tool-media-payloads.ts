@@ -1,6 +1,3 @@
-/**
- * Merges media payloads discovered from attempt tool results.
- */
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
@@ -143,11 +140,8 @@ function mergeSelectedToolMedia(
     return appendOwnedMedia(payloads);
   }
 
-  if (payloadIndex >= 0) {
-    const payload = payloads.at(payloadIndex);
-    if (!payload) {
-      return payloads;
-    }
+  const payload = payloads[payloadIndex];
+  if (payload) {
     if (
       mergeableMediaUrls.length === 0 &&
       (shouldSplitHostOwnedMedia || shouldSplitAutoDeliveryMedia)
@@ -221,13 +215,9 @@ export function createPendingToolMediaCarry() {
       const projected = allBatches.map((batch) =>
         Object.assign({}, batch, {
           hadMedia: Boolean(batch.toolMediaUrls?.length || batch.toolAutoDeliveryMediaUrls?.length),
-          toolMediaUrls: [
-            ...new Set(
-              batch.toolMediaUrls
-                ?.map((url) => url.trim())
-                .filter((url) => selectedUrls.has(url)) ?? [],
-            ),
-          ],
+          toolMediaUrls: normalizeUniqueTrimmedStringList(batch.toolMediaUrls).filter((url) =>
+            selectedUrls.has(url),
+          ),
         }),
       );
       const owners = new Map<string, ToolMediaBatch>();

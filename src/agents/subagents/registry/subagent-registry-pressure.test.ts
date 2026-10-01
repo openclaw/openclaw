@@ -43,7 +43,7 @@ describe("subagent suspended delivery pressure", () => {
       await sweeper.sweepOnce();
       await sweeper.sweepOnce();
     }
-    sweeper.reset();
+    await sweeper.reset();
     await sweeper.sweepOnce();
     await sweeper.sweepOnce();
     expect(warn.mock.calls).toEqual(

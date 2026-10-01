@@ -28,9 +28,6 @@ type ExtensionMemoryBuildParams = {
   timeoutMs?: number;
 };
 
-/**
- * Resolves the extension memory build timeout from environment.
- */
 function resolveExtensionMemoryBuildTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   return readPositiveEnvInt(
     "OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS",
@@ -103,9 +100,6 @@ export function hasBuiltExtensionMemoryEntries(params: ExtensionMemoryBuildParam
   return requiredExtensionIds.every((id) => builtIds.has(id));
 }
 
-/**
- * Builds memory extension entries when required outputs are missing.
- */
 export function ensureExtensionMemoryBuild(params: ExtensionMemoryBuildParams = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   if (hasBuiltExtensionMemoryEntries(params)) {

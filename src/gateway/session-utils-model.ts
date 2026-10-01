@@ -14,6 +14,7 @@ import {
   type ModelCatalogEntry,
   modelSupportsInput,
 } from "../agents/model-catalog.js";
+import { normalizeCatalogRouteBaseUrl } from "../agents/model-compat-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import {
@@ -353,17 +354,7 @@ export function getSessionDefaults(
 }
 
 function normalizeGatewayModelCapabilityBaseUrl(value: string | undefined): string | undefined {
-  const baseUrl = normalizeOptionalString(value);
-  if (!baseUrl) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(baseUrl);
-    parsed.pathname = parsed.pathname.replace(/\/+$/u, "") || "/";
-    return parsed.toString();
-  } catch {
-    return baseUrl.replace(/\/+$/u, "");
-  }
+  return normalizeCatalogRouteBaseUrl(normalizeOptionalString(value));
 }
 
 function isGatewayModelExplicitlyConfiguredTextOnly(params: {
@@ -414,9 +405,6 @@ function resolveGatewayProviderStaticModel(params: {
     return undefined;
   }
 
-  if (isGatewayModelExplicitlyConfiguredTextOnly(params)) {
-    return undefined;
-  }
   const configuredProvider = findNormalizedProviderValue(
     params.snapshot.config.models?.providers,
     params.provider,
@@ -425,6 +413,9 @@ function resolveGatewayProviderStaticModel(params: {
   const configuredModel = configuredProvider?.models?.find(
     (model) => normalizeLowercaseStringOrEmpty(model.id) === normalizedModelId,
   );
+  if (configuredModel?.input !== undefined && !configuredModel.input.includes("image")) {
+    return undefined;
+  }
   const configuredApi = configuredModel?.api ?? configuredProvider?.api;
   if (configuredApi && configuredApi !== staticEntry.api) {
     return undefined;

@@ -165,7 +165,7 @@ export function parseCronRunLogEntryObject(
   }
 
   // Diagnostics are redacted at authoring; this read/migration path only normalizes stored shape.
-  const entry: CronRunLogEntry = {
+  return {
     ts: entryObj.ts,
     jobId: entryObj.jobId,
     action: "finished",
@@ -189,22 +189,15 @@ export function parseCronRunLogEntryObject(
     model: entryObj.model,
     provider: entryObj.provider,
     usage: entryObj.usage,
+    delivered: entryObj.delivered,
+    deliveryStatus: entryObj.deliveryStatus,
+    deliveryError: entryObj.deliveryError,
+    deliverySuppressionReason: entryObj.deliverySuppressionReason,
+    failureNotificationDelivery: entryObj.failureNotificationDelivery,
+    delivery: entryObj.delivery,
+    sessionId: entryObj.sessionId,
+    sessionKey: entryObj.sessionKey,
   };
-  for (const field of [
-    "delivered",
-    "deliveryStatus",
-    "deliveryError",
-    "deliverySuppressionReason",
-    "failureNotificationDelivery",
-    "delivery",
-    "sessionId",
-    "sessionKey",
-  ] as const) {
-    if (entryObj[field] !== undefined) {
-      Object.assign(entry, { [field]: entryObj[field] });
-    }
-  }
-  return entry;
 }
 
 /** Encodes Cron-owned outcome fields for retained history. */
@@ -285,6 +278,18 @@ export function resolveCronRunRecordTimestamp(
   return record.endedAt ?? record.lastEventAt ?? record.createdAt;
 }
 
+/** Shared newest-first order for history pages, retention, and recovery. */
+export function compareCronRunRecordsNewestFirst(
+  left: CronRunRecord,
+  right: CronRunRecord,
+): number {
+  return (
+    resolveCronRunRecordTimestamp(right) - resolveCronRunRecordTimestamp(left) ||
+    right.createdAt - left.createdAt ||
+    right.id.localeCompare(left.id)
+  );
+}
+
 /** Reads internal trigger recovery data without adding it to run-history responses. */
 export function cronRunRecordToTriggerEval(
   record: Pick<CronRunRecord, "detail">,
@@ -344,7 +349,7 @@ export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEnt
   const wireDetail = { ...record.detail };
   delete wireDetail.storeKey;
   // Cron detail is canonical write-time state; history reads do not rederive error reasons.
-  const entry = parseCronRunLogEntryObject(
+  return parseCronRunLogEntryObject(
     {
       // Released rows stored these only on the history row; current detail wins
       // when operator cancellation and the underlying execution have different outcomes.
@@ -359,15 +364,4 @@ export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEnt
     },
     { jobId: record.jobId },
   );
-  if (!entry) {
-    return null;
-  }
-  // The parsed entry is private; materialize the legacy reader’s absent indexed fields on it.
-  return Object.assign(entry, {
-    delivered: entry.delivered,
-    deliveryStatus: entry.deliveryStatus,
-    deliveryError: entry.deliveryError,
-    sessionId: entry.sessionId,
-    sessionKey: entry.sessionKey,
-  });
 }

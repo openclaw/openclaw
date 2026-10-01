@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import ignore from "ignore";
 import { afterEach, describe, expect, it } from "vitest";
@@ -593,10 +594,24 @@ describe("security review workflow trust boundaries", () => {
     );
 
     rmSync(join(workspace, "scripts/lib/bounded-response.mjs"));
-    const missingModule = runSelectedEntry(workspace, entry);
+    const entryUrl = pathToFileURL(join(workspace, "scripts/github", entry)).href;
+    const missingModule = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `await import(${JSON.stringify(entryUrl)}).catch(error => {
+          console.error(JSON.stringify({ code: error.code, message: error.message }));
+          process.exitCode = 1;
+        });`,
+      ],
+      { cwd: workspace, env: {}, encoding: "utf8" },
+    );
     expect(missingModule.status).toBe(1);
-    expect(missingModule.stderr).toContain("ERR_MODULE_NOT_FOUND");
-    expect(missingModule.stderr).toContain("bounded-response.mjs");
+    expect(JSON.parse(missingModule.stderr)).toMatchObject({
+      code: "ERR_MODULE_NOT_FOUND",
+      message: expect.stringContaining("bounded-response.mjs"),
+    });
   });
 
   it.skipIf(process.platform === "win32")(

@@ -7,6 +7,8 @@ import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
+// Tolerate brief network pauses while resuming stalls well before the command deadline.
+const CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS = 2 * 60_000;
 
 export type CrabboxWorkerNodeEnrollment = Awaited<
   ReturnType<
@@ -163,11 +165,8 @@ setPhase("preparation");
     if (bytes !== artifact.bytes || hash.digest("hex") !== artifact.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
   };
   const downloadAbort = new AbortController();
-  const downloadAttempt = async (artifact, token, archive, reportPhase) => {
+  const downloadAttempt = async (artifact, token, archive, offset, reportPhase) => {
     reportPhase("download connection");
-    let offset = 0;
-    try { offset = (await fsp.stat(archive)).size; }
-    catch (error) { if (error.code !== "ENOENT") throw error; }
     // A reset after the final bytes needs verification, not an unsatisfiable range.
     if (offset >= artifact.bytes) {
       await verifyArchive(fs.createReadStream(archive), artifact);
@@ -181,7 +180,7 @@ setPhase("preparation");
     if (pin && !/^[a-f0-9]{64}$/.test(pin)) throw new Error("Cloud worker bootstrap TLS fingerprint is invalid");
     const transport = url.protocol === "https:" ? https : http;
     const request = transport.request(url, {
-      agent: false, headers: { authorization: "Bearer " + token, ...(offset ? { range: "bytes=" + offset + "-" } : {}) }, signal: AbortSignal.any([downloadAbort.signal, AbortSignal.timeout(600000)]),
+      agent: false, headers: { authorization: "Bearer " + token, ...(offset ? { range: "bytes=" + offset + "-" } : {}) }, signal: downloadAbort.signal,
       ...(pin ? { rejectUnauthorized: false, session: Buffer.alloc(0) } : {}),
     });
     // The response/body readers still reject; keep errors observed between their awaits.
@@ -189,6 +188,7 @@ setPhase("preparation");
     request.once("response", (response) => response.on("error", () => {}));
     // Observe transport progress without changing when the pinned request may send credentials.
     request.once("socket", (socket) => {
+      socket.setTimeout(${CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS}, () => request.destroy(Object.assign(new Error("Cloud worker bootstrap download stalled"), { code: "ETIMEDOUT" })));
       socket.once("connect", () => { reportPhase(url.protocol === "https:" ? "download TLS" : "download HTTP response"); });
       socket.once("secureConnect", () => { if (!pin) reportPhase("download HTTP response"); });
     });
@@ -252,25 +252,35 @@ setPhase("preparation");
     const progress = (next) => { downloadPhase = next; reportPhase(next); };
     let attempt = 1;
     let retries = 0;
+    let noProgressFailures = 0;
+    let offset = 0;
     const partial = archive + ".partial";
     try {
       for (;;) {
         try {
           if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())), undefined, { signal: downloadAbort.signal });
           downloadAbort.signal.throwIfAborted();
-          await downloadAttempt(artifact, token, partial, progress);
+          await downloadAttempt(artifact, token, partial, offset, progress);
           fs.renameSync(partial, archive);
           return;
         } catch (error) {
           if (downloadAbort.signal.aborted) throw downloadAbort.signal.reason;
           const busy = error.code === "TRANSFER_IN_PROGRESS";
           const transient = busy || ["ARTIFACT_RANGE_MISMATCH", "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504].includes(error.statusCode);
-          if (!transient || (!busy && attempt === 3)) {
-            throw Object.assign(new Error(error.message + " (download attempt " + attempt + "/3)", { cause: error }), { code: error.code });
+          if (transient && !busy) {
+            let retainedBytes = 0;
+            try { retainedBytes = (await fsp.stat(partial)).size; }
+            catch (statError) { if (statError.code !== "ENOENT") throw statError; }
+            // Count retained progress, not bytes replayed by a proxy that ignores Range.
+            noProgressFailures = retainedBytes > offset ? 0 : noProgressFailures + 1;
+            offset = retainedBytes;
+          }
+          if (!transient || noProgressFailures === 3) {
+            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === 3 ? "; 3 consecutive no-progress failures" : "") + ")", { cause: error }), { code: error.code });
           }
           if (!busy) attempt++;
           retries++;
-          console.error("Cloud worker bootstrap " + downloadPhase + " failed (" + (error.code || "HTTP_" + error.statusCode) + "); retrying download attempt " + attempt + "/3");
+          console.error("Cloud worker bootstrap " + downloadPhase + " failed (" + (error.code || "HTTP_" + error.statusCode) + "); retrying download attempt " + attempt + " (" + noProgressFailures + "/3 consecutive no-progress failures)");
         }
       }
     } catch (error) {

@@ -543,8 +543,9 @@ export async function preflightOpenClawDatabaseSchemas(
             ? resolveStateDir(options.env)
             : undefined,
         };
-        // Unprepared agents use the slot's reader, including header-only Doctor checks.
-        if (!schemaInspection) {
+        // Native read-only opens can change source SHM read marks. Explicit
+        // artifact preservation must use the WAL-aware private snapshot below.
+        if (!schemaInspection && options.preserveSourceArtifacts !== true) {
           schemaInspection = await inspectSchema(schemaInput, options.signal);
         }
         if (!schemaInspection) {

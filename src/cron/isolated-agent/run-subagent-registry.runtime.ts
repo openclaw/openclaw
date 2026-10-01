@@ -5,7 +5,10 @@ import {
   hasDescendantRunAwaitingSettleFromRuns,
   listDescendantRunsForRequesterFromRuns,
 } from "../../agents/subagents/registry/subagent-registry-queries.js";
-import { withSubagentRunReadSnapshot } from "../../agents/subagents/registry/subagent-registry-state.js";
+import {
+  prepareSubagentRunsSnapshotForSessions,
+  withSubagentRunReadSnapshot,
+} from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "../../agents/subagents/registry/subagent-session-read-scope.js";
 
@@ -25,6 +28,7 @@ function withCronDescendantRuns<T>(
       };
     },
     (_selection, runs) => consume(new Map(runs)),
+    { sessionKeys: [sessionKey], descendants: true },
   );
 }
 
@@ -49,4 +53,22 @@ export function hasUnsettledCronDescendants(sessionKey: string): Promise<boolean
   return withCronDescendantRuns(sessionKey, (runs) =>
     hasDescendantRunAwaitingSettleFromRuns(runs, sessionKey),
   );
+}
+
+/** Retain live parent policy alongside the worker's durable deletion comparison. */
+export async function prepareCronDescendantDeletion(sessionKeys: readonly string[]) {
+  const prepared = await prepareSubagentRunsSnapshotForSessions(subagentRuns, sessionKeys);
+  return {
+    basis: prepared.basis,
+    dispose: () => prepared.dispose(),
+    hasUnsettled(sessionKey: string) {
+      const current = prepared.consume((runs) =>
+        hasDescendantRunAwaitingSettleFromRuns(new Map(runs), sessionKey),
+      );
+      if (!current.ready) {
+        throw new Error("Cron descendant state changed during deletion preparation");
+      }
+      return current.value;
+    },
+  };
 }
