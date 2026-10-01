@@ -948,6 +948,12 @@ extension OpenClawChatViewModel {
                     outbox: outbox,
                     reason: "Run failed to start (\(response.status)).")
             }
+            if !response.runId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               ["started", "in_flight", "ok"].contains(response.status)
+            {
+                // Durable commands have no session incarnation; never borrow the visible chat's.
+                response.onAcceptedRun?(nil)
+            }
             return await self.finishAcceptedOutboxCommand(command, outbox: outbox)
         } catch is OpenClawChatTransportSendError {
             // The transport proved this payload never reached its request

@@ -4,6 +4,26 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayTransportTests {
+    @Test @MainActor func `send acknowledgement observer never crosses the wire`() throws {
+        var observedSessions: [String?] = []
+        let response = OpenClawChatSendResponse(
+            runId: "remote-run", status: "timeout", summary: "aborted",
+            onAcceptedRun: { observedSessions.append($0) })
+        let data = try JSONEncoder().encode(response)
+        let payload = try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
+        #expect(payload == ["runId": "remote-run", "status": "timeout", "summary": "aborted"])
+        let decoded = try JSONDecoder().decode(OpenClawChatSendResponse.self, from: data)
+        #expect(decoded.runId == response.runId)
+        #expect(decoded.isAbortedRun)
+        #expect(decoded.onAcceptedRun == nil)
+        let withoutSummary = try JSONDecoder().decode(
+            OpenClawChatSendResponse.self, from: Data(#"{"runId":"run","status":"started"}"#.utf8))
+        #expect(withoutSummary.summary == nil)
+        #expect(withoutSummary.onAcceptedRun == nil)
+        response.onAcceptedRun?("session-a")
+        #expect(observedSessions == ["session-a"])
+    }
+
     @Test(arguments: [OpenClawChatSessionTargetPolicy.preserveBareKeys, .scopeBareKeysToSelectedAgent])
     func `shared operations preserve platform targeting through the transport protocol`(
         policy: OpenClawChatSessionTargetPolicy) async throws

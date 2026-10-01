@@ -862,6 +862,7 @@ extension OpenClawChatViewModel {
 
     private func deliverLiveSend(_ attempt: LiveSendAttempt) async -> OpenClawChatSubmissionOutcome {
         let sessionKey = attempt.draft.session.key
+        let acceptedRunSessionID = self.sessionId
         var durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation?
         var requestStarted = false
         do {
@@ -941,6 +942,12 @@ extension OpenClawChatViewModel {
                     await self.handleLiveSendFailure(URLError(.badServerResponse), attempt: attempt)
                     return .uncertain(reason: "The Gateway did not confirm acceptance. Check the chat before retrying.")
                 }
+            }
+            if !response.runId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               ["started", "in_flight", "ok"].contains(response.status) || response.isAbortedRun
+            {
+                // The receipt keeps its captured session even if presentation changed during send.
+                response.onAcceptedRun?(acceptedRunSessionID)
             }
             await self.handleLiveSendResponse(response, attempt: attempt)
             // The ACK belongs to the captured target even if presentation was
