@@ -275,7 +275,7 @@ function readOptionalIntegerField(
   if (!Number.isSafeInteger(value)) {
     throw new Error(`${opts.label} must be an integer at least ${opts.min}.`);
   }
-  return opts.max === undefined ? value : Math.min(value, opts.max);
+  return value;
 }
 
 function normalizeQaBusPollInput(input: Record<string, unknown>): QaBusPollInput {

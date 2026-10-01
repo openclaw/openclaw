@@ -6,6 +6,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import {
   listCacheFiles,
   portableRelativePath,
@@ -24,12 +25,14 @@ import {
 import {
   applyLocalTsgoPolicy,
   ensureRepoNodeModulesLink,
+  isConstrainedCiCheckHost,
   isLocalCheckEnabled,
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mts";
+import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveTsgoTimeoutMs } from "./run-tsgo.mts";
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -208,8 +211,22 @@ export async function runNodeStepsInParallel(steps: NodeStep[]) {
   }
 }
 
+function canPairCiDeclarations(env: NodeJS.ProcessEnv) {
+  return (
+    process.platform === "linux" &&
+    (env.CI === "true" || env.GITHUB_ACTIONS === "true") &&
+    !env.OPENCLAW_LOCAL_CHECK?.trim() &&
+    !env.OPENCLAW_LOCAL_CHECK_MODE?.trim() &&
+    !isConstrainedCiCheckHost({
+      logicalCpuCount: os.availableParallelism(),
+      totalMemoryBytes: os.totalmem(),
+      memoryCapacityBytes: readProcessMemoryCapacity({}).capacityBytes,
+    })
+  );
+}
+
 /**
- * Chooses serial or parallel artifact execution based on local check policy.
+ * Keeps local checks serial and admits bounded declaration pairs on roomy Linux CI.
  */
 export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = process.env) {
   if (!isLocalCheckEnabled(env)) {
@@ -217,17 +234,32 @@ export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = p
     return;
   }
 
-  for (const step of steps) {
-    await runNodeStep(step.label, step.args, step.timeoutMs, step);
+  const concurrency = canPairCiDeclarations(env) ? 2 : 1;
+  for (let offset = 0; offset < steps.length; offset += concurrency) {
+    await runNodeStepsInParallel(steps.slice(offset, offset + concurrency));
   }
 }
 
 async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process.argv.slice(2)) {
   const mode = parseMode(argv);
-  const { env: compilerEnv } = applyLocalTsgoPolicy([], resolveLocalCheckEnv(process.env), {
-    logicalCpuCount: os.availableParallelism(),
-    totalMemoryBytes: os.totalmem(),
-  });
+  await ensureKyselyTypes(repoRoot);
+  const env = resolveLocalCheckEnv(process.env);
+  const paired = canPairCiDeclarations(env);
+  const { env: compilerEnv } = applyLocalTsgoPolicy(
+    [],
+    paired ? { ...env, OPENCLAW_LOCAL_CHECK: "0" } : env,
+    {
+      logicalCpuCount: os.availableParallelism(),
+      totalMemoryBytes: os.totalmem(),
+    },
+  );
+  if (paired) {
+    // Two children share at least eight CPUs and 24 GiB; avoid laptop GC limits.
+    compilerEnv.GOMAXPROCS = String(
+      Math.min(4, parsePositiveInt(env.GOMAXPROCS?.trim() || "4", "GOMAXPROCS")),
+    );
+    compilerEnv.GOMEMLIMIT ||= "8GiB";
+  }
   const compilerTimeoutMs = resolveTsgoTimeoutMs(compilerEnv);
   const sdk = {
     id: "plugin-sdk",
@@ -282,11 +314,12 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         // Prime config/toolchain/topology before starting even an uncached owner.
         before.signature(unit.config, args, [], unit.outputRoot);
         if (
-          before.matches(
+          before.matchesReceipt(
             previous,
             unit.config,
             args,
             [...unit.required, inputReceipt],
+            inputReceipt,
             unit.outputRoot,
           )
         ) {

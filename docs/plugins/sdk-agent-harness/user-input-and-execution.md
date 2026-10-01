@@ -132,8 +132,16 @@ admission. It rejects ambiguous participant identity; direct the model to
 guard, which the relay rechecks after awaited preparation immediately before allow;
 a returned reason becomes a model-visible refusal.
 The participant check uses existing native model admission, including its default
-optional mode. When native admission is disabled or unavailable, the thread disables
-native delegation; `sessions_spawn` remains available.
+optional mode. When native admission is disabled or unavailable, solo Codex turns
+keep native delegation, and another person's input queues as a follow-up when native
+spawn remains available. Threads whose effective policy already disables native
+delegation still permit cross-profile steering.
+If a fallback attempt already includes several people and native spawn remains available without hook admission, Codex refuses the attempt and asks the sender to send the request again as a new message so it runs as its own turn.
+
+Backend handles can declare `supportsCrossProfileSteering: false` when steering
+must stay with the turn owner's operator profile; omitting the field permits
+cross-profile steering. The reply admission owner applies this restriction before
+message injection, including question answers delivered through that path.
 
 For independently retained native work, call the optional
 `retainSourceAuthority()` while the host capability is active. When an operator
@@ -158,6 +166,15 @@ reconstructs saved user attachments under that same host authority and current
 media policy. Include its returned text and images in the native context budget;
 do not append them as an unbounded suffix. See the
 [runtime media contract](/plugins/sdk-runtime) for limits and older-host behavior.
+
+For transfer into a native environment, optional `resolveInputAttachmentMedia()`
+returns a frozen, detached copy of the current admitted input's original media
+facts, including images removed from `params.media` by inline projection. It
+resolves deferred transcript media under the captured attempt's live authority;
+it does not change transcript content or grant file-reading permission. Keep
+source validation and transfer with the harness's existing attachment owner.
+Older hosts without this capability provide only the current attempt's
+`params.media`; do not reconstruct missing sources from prompt text or history.
 
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`

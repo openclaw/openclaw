@@ -99,20 +99,25 @@ it.each(
     const read = registryRead.withSubagentRunReadSnapshot;
     const reader = vi
       .spyOn(registryState, "withSubagentRunReadSnapshot")
-      .mockImplementation((runs, select, consume) =>
-        read(runs, select, (selection, selected) => {
-          if (
-            armed &&
-            phase === "descendant drain" &&
-            selection.sessionKeys.includes(key("root")) &&
-            ++armedReads === 2
-          ) {
-            armed = false;
-            failedReads += 1;
-            throw new Error(failure);
-          }
-          return consume(selection, selected);
-        }),
+      .mockImplementation((runs, select, consume, readScope) =>
+        read(
+          runs,
+          select,
+          (selection, selected) => {
+            if (
+              armed &&
+              phase === "descendant drain" &&
+              selection.sessionKeys.includes(key("root")) &&
+              ++armedReads === 2
+            ) {
+              armed = false;
+              failedReads += 1;
+              throw new Error(failure);
+            }
+            return consume(selection, selected);
+          },
+          readScope,
+        ),
       );
     const patch = killSession.persistSubagentAbortedLastRun;
     const writer = vi
@@ -226,14 +231,19 @@ it.each([false, true])(
     const failure = "transient root discovery failure";
     const reader = vi
       .spyOn(registryState, "withSubagentRunReadSnapshot")
-      .mockImplementation((runs, select, consume) =>
-        read(runs, select, (selection, selected) => {
-          if (armed && selection.sessionKeys.includes(key("root")) && ++reads === 2) {
-            failedReads += 1;
-            throw new Error(failure);
-          }
-          return consume(selection, selected);
-        }),
+      .mockImplementation((runs, select, consume, readScope) =>
+        read(
+          runs,
+          select,
+          (selection, selected) => {
+            if (armed && selection.sessionKeys.includes(key("root")) && ++reads === 2) {
+              failedReads += 1;
+              throw new Error(failure);
+            }
+            return consume(selection, selected);
+          },
+          readScope,
+        ),
       );
     const pending = killAllControlledSubagentRuns({
       cfg: getRuntimeConfig(),

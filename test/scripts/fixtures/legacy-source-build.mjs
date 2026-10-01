@@ -195,7 +195,11 @@ const modules = new Map([
   [
     "src/daemon/managed-gateway-bindings",
     exportsFromSelf("readBinding as readManagedGatewayBindingState") +
-      `export const discoverManagedGatewayBindings = async () => ${JSON.stringify(mode === "sibling" ? [{ profile: "sibling", env: { OPENCLAW_PROFILE: "sibling" } }] : [])};`,
+      `export { describeManagedGatewayBinding } from ${JSON.stringify(pathToFileURL(path.join(source, "src/daemon/managed-gateway-bindings.ts")).href + "?original")};
+      export const discoverManagedGatewayBindings = async (env, options) => [
+        ...(options?.includeInvoking ? [{env}] : []),
+        ...${JSON.stringify(mode === "sibling" ? [{ env: { OPENCLAW_PROFILE: "sibling" } }] : [])}
+      ];`,
   ],
 ]);
 if (

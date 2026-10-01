@@ -134,9 +134,8 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
   constructor() {
     super();
     new SubscriptionsController(this)
-      .watch(
+      .watchStore(
         () => this.context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
         undefined,
         () => this.performUpdate(),
       )
@@ -144,18 +143,9 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
         () => this.context?.chatSubmissions,
         (submissions, notify) => submissions.subscribeCreate(notify),
       )
-      .watch(
-        () => this.context?.placementStartup,
-        (startup, notify) => startup.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.nativeConversation,
-        (bridge, notify) => bridge.subscribe(notify),
-      );
+      .watchStore(() => this.context?.placementStartup)
+      .watchStore(() => this.context?.gateway)
+      .watchStore(() => this.context?.nativeConversation);
     this.addController(
       new SessionPrefetchController(
         this,

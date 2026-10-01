@@ -103,7 +103,7 @@ async function mergeCachedHealthRuntimeState(params: {
   const deliveryQueues = await buildDeliveryQueueHealthSummary(
     _cachedDeliveryQueues?.ingressPressure ?? [],
   );
-  const contextEngines = buildContextEngineHealthSummary();
+  const contextEngines = await buildContextEngineHealthSummary();
   // A reset sampler has no current window; never revive the cached reading.
   const eventLoop = params.getEventLoopHealth?.();
   return {

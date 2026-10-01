@@ -143,3 +143,51 @@ it("joins captured domain cleanup before retiring its pool and execution generat
     "generation released",
   ]);
 });
+
+it.each(["workerPlacements.changeSnapshot", "cron.activeReceiptOwners"] as const)(
+  "captures and charges selectors before queued dispatch (%s)",
+  async (type) => {
+    const { pathname, options } = source();
+    const selector = "选择🦞".repeat(512);
+    const command =
+      type === "workerPlacements.changeSnapshot"
+        ? { type, profileIds: [selector, selector] }
+        : { type, agentId: selector };
+    const expected = structuredClone(command);
+    const transport = captureOpenClawStateReadSource().createTransport(command);
+    if (command.type === "workerPlacements.changeSnapshot") {
+      command.profileIds.splice(0);
+    } else {
+      command.agentId = "different agent before preparation";
+    }
+    const dispatch = createDeferredCore();
+    const task = queueTask(dispatch.promise);
+    const read = transport.startRead(
+      {
+        context: captureOpenClawStateWorkerContext(options),
+        location: pathname,
+        checkFreshAdmission: false,
+      },
+      { signal: new AbortController().signal, assertCurrent: () => {} },
+    ).result;
+    try {
+      const submitted = await task.submitted;
+      dispatch.resolve();
+      expect.soft((await task.captured).command).toEqual(expected);
+      expect
+        .soft(submitted.inputBytes)
+        .toBeGreaterThanOrEqual(
+          Buffer.byteLength(selector) * (type === "workerPlacements.changeSnapshot" ? 2 : 1),
+        );
+    } finally {
+      dispatch.resolve();
+      task.result.resolve(
+        type === "workerPlacements.changeSnapshot"
+          ? { ok: true, type, sourceAdmitted: true, placements: [] }
+          : { ok: true, type, sourceAdmitted: true, owners: [] },
+      );
+      await read;
+      await transport.startClose().result;
+    }
+  },
+);

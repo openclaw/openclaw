@@ -53,10 +53,9 @@ function formatOption(
       return `${styleText("green", S_CHECKBOX_SELECTED)} ${styleText("dim", withHint)}`;
     case "submitted":
       return styleText("dim", label);
-    case "inactive":
+    default:
       return `${styleText("dim", S_CHECKBOX_INACTIVE)} ${styleText("dim", withHint)}`;
   }
-  return withHint;
 }
 
 /** Prompts for migration selection values and reconciles all/none/recommended shortcuts. */

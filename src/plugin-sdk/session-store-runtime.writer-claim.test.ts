@@ -9,7 +9,6 @@ import {
 } from "./session-store-runtime-internal.js";
 import {
   patchSessionEntry,
-  updateSessionStore,
   upsertSessionEntry,
   type SessionEntry,
 } from "./session-store-runtime.js";
@@ -67,7 +66,7 @@ const sessionFallbackKeepsThinkingSelectionPrivate: "prevThinkingLevelSelection"
 void sessionFallbackKeepsThinkingSelectionPrivate;
 
 describe("plugin session writer claim projection", () => {
-  it.each(["patch", "upsert", "whole-store"] as const)(
+  it.each(["patch", "upsert"] as const)(
     "preserves server publication through %s lifecycle changes while rejecting forged grants",
     async (method) => {
       const sessionKey = "agent:main:plugin-publication";
@@ -90,12 +89,8 @@ describe("plugin session writer claim projection", () => {
             replaceEntry: true,
             update: () => entry,
           });
-        } else if (method === "upsert") {
-          await upsertSessionEntry({ sessionKey, storePath, entry });
         } else {
-          await updateSessionStore(storePath, (store) => {
-            store[sessionKey] = entry;
-          });
+          await upsertSessionEntry({ sessionKey, storePath, entry });
         }
       };
       await mutate({

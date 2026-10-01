@@ -1,4 +1,3 @@
-// Cron status/list/add command registration and create-payload normalization.
 import {
   normalizeOptionalString,
   readNonBlankString,
@@ -27,6 +26,7 @@ import {
   parseCronNoOutputTimeoutOption,
   parseCronStringList,
   parseCronStringOption,
+  parseCronThinkingOption,
   printCronJson,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -236,7 +236,7 @@ export function registerCronAddCommand(cron: Command) {
                 message,
                 model: normalizeOptionalString(opts.model),
                 fallbacks: parseCronStringList(opts.fallbacks),
-                thinking: normalizeOptionalString(opts.thinking),
+                thinking: parseCronThinkingOption(opts.thinking),
                 timeoutSeconds,
                 lightContext: opts.lightContext === true ? true : undefined,
                 toolsAllow,

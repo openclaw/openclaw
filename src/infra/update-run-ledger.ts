@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import {
-  UPDATE_RUN_DRIVER_LIMIT,
-  UPDATE_RUN_PHASES,
-} from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { UPDATE_RUN_DRIVER_LIMIT } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
@@ -27,6 +24,7 @@ import {
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
+import type { UpdateRunPatch as RunPatch } from "./update-run-mutation.types.js";
 import {
   decodeRun,
   hasStoredUpdateRecovery,
@@ -44,6 +42,7 @@ import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { readRecoveries } from "./update-run-recovery-store.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
+  applyUpdateRunPhase,
   applyUpdateRunStep,
   mutateRun,
   mutateRunInTransaction,
@@ -70,10 +69,6 @@ export {
 export { finishUpdateRun, recordUpdateRunDiagnostics } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
-type RunPatch = Partial<
-  Pick<UpdateRunRecord, "origin" | "target" | "before" | "after" | "trigger">
->;
-
 export function createUpdateRun(
   input: RunPatch & {
     runId?: string;
@@ -293,49 +288,7 @@ export function recordUpdateRunPhase(
 ): UpdateRunRecord {
   return mutateRun(
     runId,
-    (record) => {
-      if (record.status !== "running") {
-        return;
-      }
-      if (patch.origin) {
-        record.origin = { ...record.origin, ...patch.origin };
-      }
-      if (patch.target) {
-        record.target = { ...record.target, ...patch.target };
-      }
-      if (patch.before) {
-        record.before = { ...record.before, ...patch.before };
-      }
-      if (patch.after) {
-        record.after = { ...record.after, ...patch.after };
-      }
-      if (patch.trigger) {
-        record.trigger = patch.trigger;
-      }
-      const repairsVerification = phase === "repairing" && record.phase === "verifying";
-      const advances = UPDATE_RUN_PHASES.indexOf(phase) > UPDATE_RUN_PHASES.indexOf(record.phase);
-      // Post-activation repair may only return to verification; stale staging
-      // writers must not reopen activation while the live candidate is repaired.
-      const resumesVerification =
-        record.phase === "repairing" && record.steps.some((step) => step.step === "verifying");
-      if (
-        phase !== "finished" &&
-        (repairsVerification || (advances && (!resumesVerification || phase === "verifying")))
-      ) {
-        const now = Date.now();
-        upsertStep(record, { step: record.phase, status: "completed", endedAtMs: now });
-        record.phase = phase;
-        upsertStep(record, {
-          step: phase,
-          status: "in_progress",
-          startedAtMs: now,
-          endedAtMs: undefined,
-        });
-      }
-      if (patch.step) {
-        upsertStep(record, patch.step);
-      }
-    },
+    (record) => applyUpdateRunPhase(record, phase, patch),
     options,
     captureBefore,
   );

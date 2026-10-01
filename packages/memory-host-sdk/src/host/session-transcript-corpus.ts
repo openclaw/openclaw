@@ -18,6 +18,7 @@ import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   parseUsageCountedSessionIdFromFileName,
+  readSessionEntrySummariesInWorker,
   readTranscriptContentRevisionSync,
   resolveSessionAgentId,
   resolveSessionTranscriptsDirForAgent,
@@ -384,20 +385,12 @@ function projectSessionTranscriptCorpusEntries(
   scope: ReturnType<typeof resolveSessionTranscriptCorpusScope>,
   options: SessionTranscriptCorpusOptions,
   artifacts: readonly SessionTranscriptCorpusArtifact[],
+  sessionEntries: readonly SessionEntrySummary[],
 ): SessionTranscriptCorpusEntry[] {
   const { cfg, env, normalizedAgentId, storePath, isSharedFixedStore } = scope;
   const includeContentRevision = options.includeContentRevision !== false;
   const activeEntriesBySessionId = new Map<string, SessionTranscriptCorpusEntry>();
   const entryOwnersBySessionId = new Map<string, string>();
-  const listEntries =
-    options.readOnly === true ? listSessionEntriesReadOnly : listSessionEntriesCore;
-  const sessionEntries = listEntries({
-    agentId: normalizedAgentId,
-    env,
-    hydrateSkillPromptRefs: false,
-    projection: "list",
-    storePath,
-  });
   const retainedInstances = options.includeRetainedSqlite
     ? listSessionTranscriptInstances({
         agentId: normalizedAgentId,
@@ -535,7 +528,27 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
       }
     }
   }
-  return projectSessionTranscriptCorpusEntries(scope, options, artifacts);
+  return projectSessionTranscriptCorpusEntries(
+    scope,
+    options,
+    artifacts,
+    readCorpusSessionEntries(scope, options),
+  );
+}
+
+function readCorpusSessionEntries(
+  scope: ReturnType<typeof resolveSessionTranscriptCorpusScope>,
+  options: SessionTranscriptCorpusOptions,
+): SessionEntrySummary[] {
+  const listEntries =
+    options.readOnly === true ? listSessionEntriesReadOnly : listSessionEntriesCore;
+  return listEntries({
+    agentId: scope.normalizedAgentId,
+    env: scope.env,
+    hydrateSkillPromptRefs: false,
+    projection: "list",
+    storePath: scope.storePath,
+  });
 }
 
 /**
@@ -589,5 +602,13 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
   }
   // Read current session ownership only after the filesystem awaits, while retaining
   // the caller's resolved store and alias configuration for this complete projection.
-  return projectSessionTranscriptCorpusEntries(scope, capturedOptions, artifacts);
+  const sessionEntries =
+    capturedOptions.readOnly === true
+      ? await readSessionEntrySummariesInWorker({
+          agentId: scope.normalizedAgentId,
+          env: scope.env,
+          storePath: scope.storePath,
+        })
+      : readCorpusSessionEntries(scope, capturedOptions);
+  return projectSessionTranscriptCorpusEntries(scope, capturedOptions, artifacts, sessionEntries);
 }

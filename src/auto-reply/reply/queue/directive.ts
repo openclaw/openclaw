@@ -1,5 +1,4 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import {
@@ -57,10 +56,7 @@ function parseQueueDirectiveArgs(raw: string): {
     if (!token) {
       break;
     }
-    const lowered = normalizeOptionalLowercaseString(token);
-    if (!lowered) {
-      break;
-    }
+    const lowered = token.toLowerCase();
     if (lowered === "default" || lowered === "reset" || lowered === "clear") {
       queueReset = true;
       consumed = i;

@@ -44,6 +44,7 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
+import { adoptSubagentRunForRequesterTurnInRuns } from "./subagent-registry-requester-yield.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
@@ -58,6 +59,7 @@ import {
   retireSupersededSubagentRun as retireSupersededSubagentRunForSweep,
 } from "./subagent-registry-sweeper.js";
 import type { RegisterSubagentRunOptions, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isRequesterCompletionCohortCurrent } from "./subagent-requester-settle-identity.js";
 import {
   resolveSubagentRunOrphanReason,
   resolveSubagentSessionCompletion,
@@ -292,7 +294,8 @@ function resumeFinalizedSubagentRun(
   if (
     entry.requesterSettleWake &&
     typeof entry.execution.endedAt === "number" &&
-    !yieldedWakeWaitingForDelivery
+    (!yieldedWakeWaitingForDelivery ||
+      (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake.pauseNotice))
   ) {
     resumeRequesterSettleWake(runId, entry, source);
     return;
@@ -332,19 +335,14 @@ function resumeFinalizedSubagentRun(
   }
 
   if (typeof entry.execution.endedAt === "number" && entry.execution.endedAt > 0) {
-    if (entry.killReconciliation) {
-      // Without a pending requester wake, the sweeper owns provisional cancellation cleanup.
+    // Without a pending requester wake, the sweeper owns provisional cancellation cleanup.
+    if (
+      entry.killReconciliation ||
+      contextCleanup.suppressAnnounceForSteerRestart(entry) ||
+      startSubagentAnnounceCleanupFlow(runId, entry)
+    ) {
       resumedRuns.add(runId);
-      return;
     }
-    if (contextCleanup.suppressAnnounceForSteerRestart(entry)) {
-      resumedRuns.add(runId);
-      return;
-    }
-    if (!startSubagentAnnounceCleanupFlow(runId, entry)) {
-      return;
-    }
-    resumedRuns.add(runId);
     return;
   }
 
@@ -421,6 +419,38 @@ function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: n
 }
 
 function retireSupersededSubagentRun(runId: string, entry: SubagentRunRecord): Promise<void> {
+  const wake = entry.requesterSettleWake;
+  const cohort = [...getSubagentRunsForChildSession(entry.childSessionKey)].filter((candidate) =>
+    entry.requesterTurnRunId
+      ? candidate.requesterTurnRunId === entry.requesterTurnRunId
+      : wake?.batchRunIds?.includes(candidate.runId) &&
+        candidate.requesterSettleWake?.rearmGeneration === wake.rearmGeneration,
+  );
+  const isCurrent = () =>
+    subagentRuns.get(runId) === entry &&
+    isRequesterCompletionCohortCurrent(entry, cohort, getLatestLiveSubagentRunByChildSessionKey);
+  if (
+    isCurrent() &&
+    entry.expectsCompletionMessage === true &&
+    entry.suppressCompletionDelivery !== true &&
+    !entry.killIntent &&
+    !entry.killReconciliation &&
+    cohort.includes(entry)
+  ) {
+    // A newer task owns session effects, but this cohort still owes the older result.
+    if (entry.cleanupCompletedAt !== undefined) {
+      resumeRequesterSettleWake(runId, entry);
+      return Promise.resolve();
+    }
+    return completeCleanupBookkeeping({
+      runId,
+      entry,
+      cleanup: entry.cleanup,
+      completedAt: Date.now(),
+      preserveTranscript: true,
+      isCurrent,
+    });
+  }
   return retireSupersededSubagentRunForSweep({
     runId,
     entry,
@@ -466,6 +496,7 @@ const subagentListener = createSubagentRegistryListener({
   pendingLifecycle,
   onAgentEvent,
   persist: persistSubagentRuns,
+  resumeRequesterSettleWake,
   refreshFrozenResultFromSession,
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
   warn: (message, meta) => log.warn(message, meta),
@@ -635,6 +666,7 @@ const publicApi = createSubagentRegistryPublicApi({
   runs: subagentRuns,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
+  persistAsyncOrThrow: persistSubagentRunsAsyncOrThrow,
   restoreOnce: (context) => subagentRestorer.restoreOnce(undefined, true, context),
   startAnnounceCleanup: startSubagentAnnounceCleanupFlow,
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
@@ -667,8 +699,36 @@ export function activateSubagentRegistry(resolveGatewayContext: GatewayContextRe
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
+export const markSubagentMessageWait = publicApi.markSubagentMessageWait;
 export const listUnsettledRequesterChildren = publicApi.listUnsettledRequesterChildren;
 export type { UnsettledRequesterChild } from "./subagent-registry-requester-yield.js";
+
+export function adoptSubagentRunForRequesterTurn(
+  params: Omit<Parameters<typeof adoptSubagentRunForRequesterTurnInRuns>[0], "runs" | "persist">,
+) {
+  if (subagentLifecycleController.newerGenerationOwnsSession(params.expected)) {
+    return Promise.resolve(undefined);
+  }
+  return adoptSubagentRunForRequesterTurnInRuns({
+    ...params,
+    runs: subagentRuns,
+    persist: persistSubagentRunsAsyncOrThrow,
+    assertPublicationCurrent: () =>
+      subagentRuns.runWithCompletionAuthority(params.expected, () => {
+        params.assertPublicationCurrent?.();
+        if (subagentLifecycleController.newerGenerationOwnsSession(params.expected)) {
+          throw new Error("Steered completion no longer owns its execution");
+        }
+      }),
+    assertCurrent: () =>
+      subagentRuns.runWithCompletionAuthority(params.expected, () => {
+        params.assertCurrent();
+        if (subagentLifecycleController.newerGenerationOwnsSession(params.expected)) {
+          throw new Error("Steered completion no longer owns its execution");
+        }
+      }),
+  });
+}
 
 /** Attaches presentation to an existing wake without changing completion ownership. */
 export function attachRequesterProgressPresentation(params: {

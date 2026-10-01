@@ -1,9 +1,5 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ToolResultContentSource } from "../../../packages/agent-core/src/types.js";
-/**
- * Shared types for preparing and executing CLI-backed agent runs.
- */
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
@@ -35,13 +31,14 @@ import type {
   AgentRunLifecycle,
 } from "../command/shared-types.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
-import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
   CurrentInboundPromptContext,
   ResolvedToolPromptFinalizer,
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
+import type { AgentExecutionAuthBinding } from "../execution-auth-binding.js";
+import type { FailoverReason } from "../failover/signal.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { ReplyExpectation } from "../reply-completion.js";
@@ -49,6 +46,7 @@ import type { RootedExecutionRequest } from "../rooted-run-params.js";
 import type { EmbeddedRunTrigger } from "../run-trigger.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import type { CliSessionBindingFacts } from "./session-binding.types.js";
 
 export type NodeClaudePlacement = { nodeId: string; cwd?: string };
 
@@ -136,16 +134,7 @@ export type RunCliAgentParams = {
   /** Atomically arm a cache-preserving fork before retrying a stalled resumed session. */
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
-  onSuccessfulAuthBinding?: (binding: {
-    authProfileId?: string;
-    authFingerprint?: string;
-    runtimeOwnerFingerprint?: string;
-    runtimeOwnerKind?: "cli-runtime" | "plugin-harness" | "aws-sdk";
-    runtimeOwnerId?: string;
-    runtimeArtifactFingerprint?: string;
-    runtimeArtifactId?: string;
-    skipLocalCredential?: true;
-  }) => void;
+  onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   bootstrapContextMode?: BootstrapContextMode;
   chatId?: string;
@@ -229,12 +218,6 @@ export type CliReusableSession =
       mode: "invalidate";
       invalidatedReason: "system-prompt" | "missing-transcript" | "orphaned-tool-use";
     };
-
-export type CliSessionBindingFacts = {
-  extraSystemPromptStatic?: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  requireExplicitMessageTarget?: boolean;
-};
 
 export function captureCliRunStartTime() {
   return { started: Date.now(), startedMonotonicMs: performance.now() };

@@ -31,6 +31,48 @@ describe("runMessageAction plugin dispatch", () => {
   describe("alias-based plugin action dispatch", () => {
     const { handleAction, plugin: actionHubPlugin } = useActionHubPluginFixture();
 
+    it.each([
+      { action: "thread-create" as const, dryRun: false, blocked: true },
+      { action: "channel-info" as const, dryRun: false, blocked: false },
+      { action: "thread-create" as const, dryRun: true, blocked: false },
+    ])(
+      "fences writes while permitting authorized reads and dry runs ($action, dryRun=$dryRun)",
+      async ({ action, dryRun, blocked }) => {
+        const beforeDeliveryAttempt = vi.fn(async () => {
+          throw new Error("occurrence delivery fence unavailable");
+        });
+        const pending = runMessageAction({
+          cfg: createEnabledMessageActionConfig("actionhub"),
+          action,
+          params: { channel: "actionhub", target: "actionhub:current", name: "report" },
+          dryRun,
+          defaultAccountId: "default",
+          messageActionAuthorization: {
+            requesterAccountId: "default",
+            toolContext: {
+              currentChannelId: "channel:current",
+              currentChannelProvider: "actionhub",
+              currentChatType: "channel",
+            },
+            deliveryAttempt: { beforeAttempt: beforeDeliveryAttempt, assertCurrent: () => {} },
+            scheduled: {
+              policy: { version: 1, mode: "trusted" },
+              assertCurrent: () => {},
+            },
+          },
+        });
+        if (blocked) {
+          await expect(pending).rejects.toThrow("occurrence delivery fence unavailable");
+          expect(beforeDeliveryAttempt).toHaveBeenCalledOnce();
+          expect(handleAction).not.toHaveBeenCalled();
+        } else {
+          await expect(pending).resolves.toMatchObject({ dryRun });
+          expect(beforeDeliveryAttempt).not.toHaveBeenCalled();
+          expect(handleAction).toHaveBeenCalledTimes(dryRun ? 0 : 1);
+        }
+      },
+    );
+
     it("uses the selected operation-local plugin for target resolution", async () => {
       const resolveTarget = vi.fn(async ({ input }: { input: string }) => ({
         to: `user:${input}`,

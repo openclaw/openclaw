@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
@@ -22,7 +23,10 @@ import {
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
-import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
+import {
+  shouldPrepareExtensionPackageBoundaryArtifacts,
+  shouldPrepareOxlintArtifacts,
+} from "./run-oxlint.mts";
 
 const DEFAULT_EXTENSION_CHUNK_SIZE = 8;
 const LARGE_CI_EXTENSION_CHUNK_SIZE = 16;
@@ -351,6 +355,14 @@ export async function main(
   const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE === "1" ? randomUUID() : undefined;
   let completed = 0;
   const run = async () => {
+    // Children skip preparation; generate shared types once before any core stripe starts.
+    if (
+      selectedShards.some((shard) =>
+        shouldPrepareOxlintArtifacts([...shard.args, ...shardArgs.oxlintArgs]),
+      )
+    ) {
+      await ensureKyselyTypes(process.cwd());
+    }
     if (needsArtifacts) {
       const code = await runManagedCommand({
         bin: process.execPath,

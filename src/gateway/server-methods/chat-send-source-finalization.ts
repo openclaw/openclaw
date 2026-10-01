@@ -40,7 +40,8 @@ import {
   publishAssistantTranscriptRewrite,
   rewriteSourceReplyTranscriptMirrors,
   type SourceReplyContentState,
-  type SourceReplyTranscriptMirrorMetadata,
+  type SourceReplyTranscriptMirror,
+  type SourceReplyTranscriptRewrite,
 } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -294,9 +295,7 @@ async function finalizeChatSendAgentReplyPayloads(
             backedManagedOutgoingContent: false,
           };
           contentStates[replyIndex] = state;
-          if (state.broadcastContent.length > 0) {
-            broadcastContent.push(...state.broadcastContent);
-          }
+          broadcastContent.push(...state.broadcastContent);
         }
         return {
           finalInputsByIndex: inputsByIndex,
@@ -313,15 +312,8 @@ async function finalizeChatSendAgentReplyPayloads(
     return { kind: "dropped", reason: "no-visible-content" };
   }
 
-  const sourceReplyPersistenceRequests: Array<{
-    idempotencyKey: string;
-    metadata: SourceReplyTranscriptMirrorMetadata;
-    state: SourceReplyContentState;
-  }> = [];
-  const sourceReplyMirrorCandidates: Array<{
-    idempotencyKey: string;
-    metadata: SourceReplyTranscriptMirrorMetadata;
-  }> = [];
+  const sourceReplyPersistenceRequests: SourceReplyTranscriptRewrite[] = [];
+  const sourceReplyMirrorCandidates: SourceReplyTranscriptMirror[] = [];
   for (const [replyIndex, sourceReplyPayload] of agentRunReplyPayloads.entries()) {
     const state = sourceReplyContentStates[replyIndex];
     if (!state) {

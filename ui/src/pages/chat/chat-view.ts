@@ -139,12 +139,10 @@ export type ChatProps = Omit<
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
     swarm?: Parameters<typeof renderChatSwarmProgress>[0];
-    focusMode?: boolean;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
     onRefresh: () => void;
-    onToggleFocusMode?: () => void;
     onDismissError?: () => void;
     agentsList: {
       agents: Array<{
@@ -155,8 +153,6 @@ export type ChatProps = Omit<
       defaultId?: string;
     } | null;
     onSessionSelect?: (sessionKey: string) => void;
-    onRevealWorkspaceFile?: (path: string) => void;
-    header?: TemplateResult | typeof nothing;
     sessionSuggestions?: readonly SessionSuggestion[];
     sessionSuggestionRole?: SessionSharingRole;
     sessionSuggestionBusyIds?: ReadonlySet<string>;
@@ -168,6 +164,7 @@ export type ChatProps = Omit<
     ) => void;
     pullRequests?: ControlUiSessionPullRequest[];
     pullRequestsGateway?: ApplicationGateway;
+    pullRequestsSessionId?: string;
     pullRequestsBranch?: ControlUiSessionBranch;
     pullRequestsStatus?: ControlUiSessionPullRequestSnapshot["status"];
     onOpenSessionDiff?: () => void;
@@ -414,6 +411,8 @@ export function renderChat(props: ChatProps) {
     ${renderChatPullRequests({
       pullRequests: props.pullRequests ?? [],
       gateway: props.pullRequestsGateway,
+      sessionId: props.pullRequestsSessionId,
+      basePath: props.basePath,
       sessionKey: scopedSessionArtifactKey(props.sessionKey, props.currentAgentId ?? undefined),
       presented: props.presented ?? true,
       branch: props.pullRequestsBranch,
@@ -612,7 +611,8 @@ export function renderChat(props: ChatProps) {
           ? nothing
           : html`<openclaw-chat-comment-controller
               .paneId=${props.paneId}
-              .props=${{ ...props, disabled: !canCompose }}
+              .props=${props}
+              .disabled=${!canCompose}
               .sessionKey=${props.sessionKey}
               .presented=${props.presented ?? true}
             ></openclaw-chat-comment-controller>`
@@ -622,7 +622,7 @@ export function renderChat(props: ChatProps) {
           <div class="chat-split-container">
             <div class="chat-main">
               <div class="chat-main__conversation-column">
-                ${props.header ?? nothing} ${renderChatTopbarNotices(props)}
+                ${renderChatTopbarNotices(props)}
                 <openclaw-plugin-contributions
                   .kind=${"header"}
                   .sessionKey=${props.sessionKey}

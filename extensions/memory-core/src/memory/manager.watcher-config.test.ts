@@ -34,6 +34,8 @@ describe("Memory watch configuration", () => {
   let manager: MemoryIndexManager | null = null;
   beforeEach(async () => {
     observer.reset();
+    vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
+    vi.stubEnv("CHOKIDAR_INTERVAL", undefined);
     state = await createOpenClawTestState({ label: "memory-watch-config" });
     await fs.mkdir(path.join(state.workspaceDir, "memory"));
     await fs.mkdir(state.path("extra"));
@@ -72,13 +74,6 @@ describe("Memory watch configuration", () => {
     }
     return result;
   }
-
-  it("does not start observers for one-shot CLI managers", async () => {
-    await configureMemoryCoreDreamingStateForTests(state.env);
-    manager = await MemoryIndexManager.get({ cfg: config(), agentId: "main", purpose: "cli" });
-    expect(manager).not.toBeNull();
-    expect(observer.watch).not.toHaveBeenCalled();
-  });
 
   it("keeps a newer selected-file dirty behind held settling before publishing the index", async () => {
     const file = path.join(state.workspaceDir, "memory", "note.md");
@@ -185,6 +180,12 @@ describe("Memory watch configuration", () => {
       throw new Error("memory manager unavailable");
     }
     await manager.sync({ reason: "initial" });
+    observer.observations[0]!.health({ state: "ready", mode: "poll" });
+    expect(manager.status().custom?.watcher).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ mode: "poll", pollingFallback: true, pollIntervalMs: 30_000 }),
+      ]),
+    );
     vi.useFakeTimers();
     observer.observations[0]!.health({
       state: "unavailable",

@@ -156,6 +156,24 @@ enum GatewayEnvironment {
     }
 
     static func check() async -> GatewayEnvironmentStatus {
+        if BundledRuntime.isBundledApp {
+            do {
+                _ = try BundledRuntime.resolve(bundle: .main)
+                return GatewayEnvironmentStatus(
+                    kind: .ok,
+                    nodeVersion: nil,
+                    gatewayVersion: self.appVersionString(),
+                    requiredGateway: self.appVersionString(),
+                    message: "Bundled Bun runtime; Gateway \(self.appVersionString() ?? "unknown")")
+            } catch {
+                return GatewayEnvironmentStatus(
+                    kind: .error(error.localizedDescription),
+                    nodeVersion: nil,
+                    gatewayVersion: nil,
+                    requiredGateway: self.appVersionString(),
+                    message: error.localizedDescription)
+            }
+        }
         let searchPaths = await CommandResolver.preferredPathsAsync()
         return await self.resolveEnvironment(searchPaths: searchPaths)
     }

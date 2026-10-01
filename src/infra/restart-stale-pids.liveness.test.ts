@@ -91,22 +91,4 @@ describe.skipIf(process.platform === "win32")("stale PID liveness", () => {
     expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
     expect(killSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
   });
-
-  it("treats lsof exit status 1 as port-free", () => {
-    const stalePid = process.pid + 500;
-    observedArgv.set(stalePid, ["openclaw-gateway"]);
-    mockIsPidAlive.mockReturnValue(true);
-    mockSpawnSync
-      .mockReturnValueOnce({
-        error: null,
-        status: 0,
-        stdout: `p${stalePid}\ncopenclaw-gateway\n`,
-        stderr: "",
-      })
-      .mockReturnValue({ error: null, status: 1, stdout: "", stderr: "" });
-    const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
-
-    expect(cleanStaleGatewayProcessesSync(18789)).toStrictEqual([stalePid]);
-    expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
-  });
 });

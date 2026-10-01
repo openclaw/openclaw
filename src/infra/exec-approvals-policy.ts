@@ -89,6 +89,10 @@ function removeParsedSegmentText(
   return remaining;
 }
 
+/**
+ * @deprecated Legacy plugin SDK predicate only; OpenClaw execution uses ordinary
+ * exec policy. Preserve the shipped result until infra-runtime is retired.
+ */
 export function commandRequiresSecurityAuditSuppressionApproval(params: {
   command: string;
   cwd?: string;

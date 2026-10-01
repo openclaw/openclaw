@@ -247,7 +247,7 @@ describe("removePathWithinRoot", () => {
         expect(mutations).toBe(refuseAt - 2);
         expect((await fs.lstat(tree)).isDirectory()).toBe(true);
         if (refuseAt === 8) {
-          expect(await fs.readdir(path.join(tree, "a", "b"))).toEqual([
+          expect((await fs.readdir(path.join(tree, "a", "b"))).toSorted()).toEqual([
             "6.txt",
             "7.txt",
             "8.txt",

@@ -1,4 +1,3 @@
-/** Silent-reply and heartbeat tokens plus helpers for suppressing token-only model output. */
 import { escapeRegExp } from "../shared/regexp.js";
 
 /** Token that marks a heartbeat response as an acknowledgement with no user notification. */
@@ -287,20 +286,11 @@ export function isSilentReplyPrefixText(
   const normalized = trimmed.toUpperCase();
   // Guard against suppressing natural-language "No..." text while still
   // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
-  if (trimmed !== normalized) {
+  if (trimmed !== normalized || normalized.length < 2 || !tokenUpper.startsWith(normalized)) {
     return false;
-  }
-  if (normalized.length < 2) {
-    return false;
-  }
-  if (!tokenUpper.startsWith(normalized)) {
-    return false;
-  }
-  if (normalized.includes("_")) {
-    return true;
   }
   // Full-token match is safe for any token.
-  if (normalized === tokenUpper) {
+  if (normalized.includes("_") || normalized === tokenUpper) {
     return true;
   }
   // For custom tokens containing non-letter characters (digits, hyphens),

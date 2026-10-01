@@ -325,6 +325,32 @@ describe("exact model reference selection", () => {
     });
   });
 
+  it.each([
+    { pattern: "alpha:low:high", thinkingLevel: "high", warning: undefined },
+    {
+      pattern: "alpha:invalid:high",
+      thinkingLevel: undefined,
+      warning:
+        'Invalid thinking level "invalid" in pattern "alpha:invalid". Using default instead.',
+    },
+    {
+      pattern: "alpha:high:invalid",
+      thinkingLevel: undefined,
+      warning:
+        'Invalid thinking level "invalid" in pattern "alpha:high:invalid". Using default instead.',
+    },
+  ])(
+    "preserves recursive thinking suffix precedence for $pattern",
+    ({ pattern, thinkingLevel, warning }) => {
+      const available = model("custom", "alpha");
+      expect(parseModelPattern(pattern, [available])).toEqual({
+        model: available,
+        thinkingLevel,
+        warning,
+      });
+    },
+  );
+
   it("keeps a literal raw colon id before inferring a qualified thinking suffix", () => {
     const qualified = model("custom", "alpha");
     const literal = model("gateway", "custom/alpha:high");

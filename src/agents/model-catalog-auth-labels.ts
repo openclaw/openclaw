@@ -13,7 +13,7 @@ import {
 } from "./auth-profiles.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./model-selection.js";
 
@@ -63,7 +63,7 @@ export function formatModelCatalogAuthLabel(
       return true;
     }
     const mode = store.profiles[id]?.type ?? cfg.auth?.profiles?.[id]?.mode;
-    return !isStoredAuthProfileType(mode) || mode === "api_key";
+    return mode !== "oauth" && mode !== "token";
   });
   if (!order.length) {
     return label.fallback;
@@ -98,10 +98,6 @@ export function formatModelCatalogAuthLabel(
     return `${label.profiles[profileId]}${flags.length ? ` (${flags.join(", ")})` : ""}`;
   });
   return `${profiles.join(", ")} (${label.source})`;
-}
-
-function isStoredAuthProfileType(value: unknown): value is AuthProfileCredential["type"] {
-  return value === "api_key" || value === "oauth" || value === "token";
 }
 
 function captureProfileLabel(

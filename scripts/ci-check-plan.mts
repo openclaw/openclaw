@@ -18,7 +18,12 @@ type CheckRow = {
   core_type_graph_names_json?: string;
   core_type_concurrency?: number;
 };
-type StripeRow = { stripe: number; lint_selection_json?: string; type_graph_names_json?: string };
+type StripeRow = {
+  stripe: number;
+  lint_selection_json?: string;
+  type_graph_names_json?: string;
+  root_type_stripe?: string;
+};
 type Matrix<Row> = { include: Row[] };
 
 export type CiCheckPlanInput = {
@@ -47,7 +52,11 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     runs("prod-types") || runs("test-types")
       ? await (
           await import("./run-tsgo-core-test-shards.mts")
-        ).createChangedCiTypeCheckPlan(input.changedPaths, { cwd: process.cwd() })
+        ).createChangedCiTypeCheckPlan(input.changedPaths, {
+          cwd: process.cwd(),
+          coreBoundaryOwner:
+            input.typeGraphBoundaryOwner === "additional-checks" ? "additional-checks" : undefined,
+        })
       : null;
   // Full selection needs no discovery, but a boundary without another admitted owner stays here.
   if (
@@ -66,7 +75,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     !hosted && !input.changedCoreTestPaths
       ? ["extensions-test", "test-root", "scripts"]
       : ["extensions-test", "scripts", "test-root"];
-  const other = otherOrder.flatMap((name) => graphs.filter((graph) => graph.name === name));
+  let other = otherOrder.flatMap((name) => graphs.filter((graph) => graph.name === name));
   if (production.length + coreTests.length + other.length !== graphs.length) {
     throw new Error("Every selected compiler graph must have a CI execution owner");
   }
@@ -78,7 +87,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     throw new Error("Selected compiler graphs have no preflight check template");
   }
   const assignedCore = new Set<string>();
-  const coreRows =
+  const coreRows: StripeRow[] =
     typePlan && hosted
       ? input.coreTypeMatrix.include.flatMap((row) => {
           const configs = new Set(
@@ -95,6 +104,14 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
       : [];
   if (hosted && assignedCore.size !== coreTests.length) {
     throw new Error("Selected core compiler graphs have no preflight stripe template");
+  }
+  // Reuse admitted rows only; small selections keep their serial central owner.
+  // Each root partition runs after its row's concurrent core compilers settle.
+  if (coreRows.length >= 4 && other.some(({ name }) => name === "test-root")) {
+    for (const [index, row] of coreRows.slice(-4).entries()) {
+      row.root_type_stripe = `${index + 1}/4`;
+    }
+    other = other.filter(({ name }) => name !== "test-root");
   }
   const checkRows = input.checkMatrix.include.flatMap((row) => {
     if (row.task === "prod-types") {

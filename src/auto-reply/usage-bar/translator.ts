@@ -70,11 +70,7 @@ function inv(value: unknown): unknown {
 }
 
 function norm(value: unknown): number {
-  const n = Number(value);
-  if (value === null || value === undefined || !Number.isFinite(n)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(100, n)) / 100;
+  return Math.max(0, Math.min(100, coerceFiniteValue(value) ?? 0)) / 100;
 }
 
 function meter(value: unknown, width: number, scale: unknown): string {

@@ -1,4 +1,3 @@
-/** Doctor repair for broken session transcript branches and legacy OpenAI Codex metadata. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
@@ -209,7 +208,8 @@ export async function noteSessionTranscriptHealth(options?: {
   };
   // Public doctor owns the operator-facing SQLite import; the targeted
   // --session-sqlite subcommand remains the diagnostic/proof surface.
-  const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
+  const { hasRetainedDoctorSessionSources, runDoctorSessionSqlite } =
+    await import("./doctor-session-sqlite.js");
   let reservedKeyReport: ReservedIncognitoKeyRepairReport = { found: 0, repaired: 0 };
   let deliveryReport: SessionDeliveryStateRepairReport = {
     found: 0,
@@ -331,7 +331,8 @@ export async function noteSessionTranscriptHealth(options?: {
         config: params.cfg ?? {},
         env: params.env,
         maintenanceAuthority,
-        ...(maintenanceAuthority
+        // The hook also tells the writer that completion certification has a consumer.
+        ...(maintenanceAuthority && hasRetainedDoctorSessionSources(report)
           ? {
               beforeCompletion: async (
                 completedPluginIds: readonly string[],

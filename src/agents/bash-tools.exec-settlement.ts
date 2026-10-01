@@ -38,8 +38,6 @@ export async function settleExecProcessExit({
     }
     if (shouldNotify) {
       markProcessExited();
-    }
-    if (shouldNotify) {
       notifyOnExit(session, finalOutcome.status);
     }
   } catch (error) {

@@ -117,19 +117,34 @@ describe("ModelRegistry source composition", () => {
         generated: {
           ...generated,
           baseUrl,
-          compat: { maxTokensField: "max_completion_tokens" },
+          compat: {
+            maxTokensField: "max_completion_tokens",
+            openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
+            vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
+          },
           models: [
             { id: "shared" },
             { id: "generated-only" },
-            { id: "model-override", compat: { maxTokensField: "max_tokens" } },
+            {
+              id: "model-override",
+              compat: {
+                maxTokensField: "max_tokens",
+                openRouterRouting: { order: ["model-route"] },
+                vercelGatewayRouting: { order: ["model-route"] },
+              },
+            },
           ],
         },
       });
       expect(registry.find(provider, "generated-only")?.compat).toEqual({
         maxTokensField: "max_completion_tokens",
+        openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
+        vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
       });
       expect(registry.find(provider, "model-override")?.compat).toEqual({
         maxTokensField: "max_tokens",
+        openRouterRouting: { order: ["model-route"], allow_fallbacks: false },
+        vercelGatewayRouting: { order: ["model-route"], only: ["shared-route"] },
       });
       expect(registry.find(provider, "authored-only")?.compat).toEqual({
         maxTokensField: "max_tokens",
@@ -137,7 +152,11 @@ describe("ModelRegistry source composition", () => {
       });
       expect(registry.find(provider, "shared")?.compat).toEqual(
         baseUrl === rootUrl
-          ? { maxTokensField: "max_completion_tokens" }
+          ? {
+              maxTokensField: "max_completion_tokens",
+              openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
+              vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
+            }
           : { maxTokensField: "max_tokens", supportsDeveloperRole: false },
       );
     },

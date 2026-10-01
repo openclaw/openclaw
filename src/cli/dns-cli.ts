@@ -1,4 +1,3 @@
-// DNS setup helper for wide-area discovery using Tailscale addresses and CoreDNS.
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

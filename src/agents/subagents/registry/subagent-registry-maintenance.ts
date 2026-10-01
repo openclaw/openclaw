@@ -29,7 +29,6 @@ function shouldPreserveForMaintenance(entry: SubagentRunMaintenanceRecord): bool
   );
 }
 
-/** Lists child session keys protected from session-store maintenance pruning. */
 function protectedSubagentSessionKeys(runs: Iterable<SubagentRunMaintenanceRecord>): string[] {
   const keys = new Set<string>();
   for (const entry of runs) {

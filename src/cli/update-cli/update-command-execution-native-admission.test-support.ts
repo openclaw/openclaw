@@ -250,13 +250,12 @@ export function registerNativeAdmissionTests({
           ...(scenario.unreadableFirst
             ? [
                 {
-                  profile: "unreadable",
                   env: { OPENCLAW_PROFILE: "unreadable" },
                   scope: "user" as const,
                 },
               ]
             : []),
-          { profile: consumerEnv.OPENCLAW_PROFILE, env: consumerEnv, scope: "user" },
+          { env: consumerEnv, scope: "user" },
         ]);
         let running = scenario.running && !scenario.late && !scenario.startsDuringStop;
         let selectedRunning = scenario.selectedRunning ?? false;
@@ -379,7 +378,13 @@ export function registerNativeAdmissionTests({
           expect(execution?.result.steps).toEqual(
             expect.arrayContaining([
               expect.objectContaining({
-                stderrTail: expect.stringContaining(consumerEnv.OPENCLAW_PROFILE),
+                stderrTail: expect.stringContaining(
+                  scenario.consumer === "same-profile-other-service"
+                    ? process.platform === "win32"
+                      ? "OpenClaw Other"
+                      : "openclaw-other"
+                    : consumerEnv.OPENCLAW_PROFILE,
+                ),
               }),
             ]),
           );

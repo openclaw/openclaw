@@ -1,223 +1,26 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { getRuntimeConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
+import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import {
-  resolveGatewayOperatorRoleActor,
-  resolveOperatorRolePolicyForAssignment,
-} from "../../gateway/operator-role-policy.js";
-import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
-import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
-import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
-import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
+  mergeAcceptedSessionSpawnsForRun,
+  type AcceptedSessionSpawn,
+} from "../accepted-session-spawn.js";
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
-import { captureRequesterFollowupAuthority } from "../subagents/requester-cron-authority.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
+import { runWithGatewayToolCleanupContext } from "./in-process-gateway.js";
+import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
-import { startSessionsSendAgentRun } from "./sessions-send-tool.delivery.js";
+import {
+  startSessionsSendAgentRun,
+  trySessionsSendActiveRunDelivery,
+} from "./sessions-send-tool.delivery.js";
 import { jsonResult } from "./tool-results.js";
-
-class FollowupAccessChangedError extends Error {}
-
-/** Prepare current facts through their worker owner; no stored identity becomes authority. */
-export async function prepareSessionsSendFollowup(params: {
-  runId: string;
-  requesterTurnRunId?: string;
-  withRequesterAuthority?: <T>(run: () => T) => T;
-  requesterAgentId: string;
-  requesterSessionKey: string;
-  targetAgentId: string;
-  targetSessionKey: string;
-}): Promise<FollowupRequest | undefined> {
-  const caller = getGatewayToolCallerIdentity();
-  if (!caller) {
-    return undefined;
-  }
-  const assertInvocation = captureGatewayToolCallerAssertion();
-  assertInvocation?.();
-  if (
-    caller.agentId !== params.requesterAgentId ||
-    caller.sessionKey !== params.requesterSessionKey
-  ) {
-    throw new Error("Followup result requester differs from its admitted tool caller.");
-  }
-  const captured = await captureOperatorToolGatewayContinuationContext();
-  if (!captured) {
-    throw new Error("Followup completion requires in-process caller custody.");
-  }
-  const facts: Awaited<ReturnType<typeof prepareSessionMutationFacts>>[] = [];
-  const revoked = new AbortController();
-  const signal = AbortSignal.any([captured.signal, revoked.signal]);
-  let stopAccessWatch: (() => void) | undefined;
-  let released = false;
-  let observationReleased = false;
-  let authorityReleased = true;
-  let requesterAuthority: ReturnType<typeof captureRequesterFollowupAuthority>;
-  const releaseResources = () => {
-    if (released || !observationReleased || !authorityReleased) {
-      return;
-    }
-    released = true;
-    stopAccessWatch?.();
-    for (const read of facts) {
-      read.release();
-    }
-    captured.release();
-  };
-  const release = () => {
-    if (observationReleased) {
-      return;
-    }
-    observationReleased = true;
-    requesterAuthority?.release();
-    releaseResources();
-  };
-  try {
-    assertInvocation?.();
-    const cfg = getRuntimeConfig();
-    const client = captured.run(() => getPluginRuntimeGatewayRequestScope()?.client);
-    const actor = resolveGatewayOperatorRoleActor(client ?? null);
-    if (!client || !actor) {
-      throw new Error("Followup has no retained original caller policy.");
-    }
-    const policyClient = {
-      ...client,
-      connect: { ...client.connect, scopes: [...(client.connect.scopes ?? [])] },
-      internal: { ...client.internal, operatorRoleActor: { ...actor } },
-    };
-    const profile =
-      actor.kind === "operator"
-        ? await prepareUserProfileRoleAuthority(actor.profileId)
-        : undefined;
-    if (actor.kind === "operator" && (!profile || profile.profileId !== actor.profileId)) {
-      throw new FollowupAccessChangedError("Followup requester profile is unavailable.");
-    }
-    assertInvocation?.();
-    for (const target of [
-      { agentId: params.requesterAgentId, sessionKey: params.requesterSessionKey },
-      { agentId: params.targetAgentId, sessionKey: params.targetSessionKey },
-    ]) {
-      facts.push(await prepareSessionMutationFacts({ cfg, ...target }));
-      assertInvocation?.();
-      captured.assertCurrent();
-    }
-    const assertCurrent = () => {
-      signal.throwIfAborted();
-      if (released) {
-        throw new Error("Followup completion custody was released.");
-      }
-      captured.assertCurrent();
-      if (profile && !profile.isCurrent()) {
-        throw new FollowupAccessChangedError("Followup requester identity changed.");
-      }
-      const currentConfig = getRuntimeConfig();
-      // The prepared reader owns canonical routing, physical store and incarnation fencing.
-      for (const read of facts) {
-        const currentFacts = read.readCurrent(currentConfig);
-        const current = currentFacts.target;
-        if (!current?.entry || current.entry.archivedAt !== undefined) {
-          throw new FollowupAccessChangedError("Followup conversation was archived.");
-        }
-        const denied = authorizePreparedSessionMutation(
-          {
-            cfg: currentConfig,
-            client: policyClient,
-            sessionKey: read.storageTarget.canonicalKey,
-            agentId: read.storageTarget.agentId,
-          },
-          currentFacts,
-          {
-            policy:
-              actor.kind === "system"
-                ? undefined
-                : resolveOperatorRolePolicyForAssignment(
-                    actor.profileId,
-                    profile?.role ?? null,
-                    currentConfig,
-                  ),
-            aliases: new Set(profile?.aliases ?? []),
-          },
-        );
-        if (denied) {
-          throw new FollowupAccessChangedError("Followup session access was revoked.");
-        }
-      }
-    };
-    assertCurrent();
-    const watchedKeys = new Set(
-      facts.flatMap((read) => {
-        const target = read.readCurrent(cfg).target;
-        return [target.canonicalKey, target.storeKey, ...target.storeKeys];
-      }),
-    );
-    stopAccessWatch = sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change && !watchedKeys.has(change.sessionKey)) {
-        return;
-      }
-      try {
-        assertCurrent();
-      } catch (error) {
-        // Pending metadata remains fenced. A committed denial is irreversible for this capture.
-        if (error instanceof FollowupAccessChangedError) {
-          revoked.abort(error);
-        }
-      }
-    });
-    const requesterSessionId = facts[0]!.readCurrent(getRuntimeConfig()).target.entry.sessionId;
-    if (params.requesterTurnRunId && params.withRequesterAuthority) {
-      const requesterTurnRunId = params.requesterTurnRunId;
-      requesterAuthority = params.withRequesterAuthority(() =>
-        captureRequesterFollowupAuthority({
-          requesterTurnRunId,
-          requesterAgentId: params.requesterAgentId,
-          requesterSessionKey: params.requesterSessionKey,
-          requesterSessionId,
-          sourceSessionKey: params.targetSessionKey,
-          release: () => {
-            authorityReleased = true;
-            releaseResources();
-          },
-          isCurrent: () => {
-            try {
-              assertCurrent();
-              return true;
-            } catch {
-              return false;
-            }
-          },
-        }),
-      );
-      // The observer and the admitted parent share the prepared custody. Either
-      // can finish first; release its readers only after both owners are done.
-      authorityReleased = requesterAuthority === undefined;
-    }
-    return {
-      runId: params.runId,
-      requesterSessionKey: params.requesterSessionKey,
-      requesterSessionId,
-      requesterAuthority,
-      requesterAgentId: params.requesterAgentId,
-      targetSessionKey: params.targetSessionKey,
-      targetAgentId: params.targetAgentId,
-      custody: {
-        signal,
-        assertCurrent,
-        release,
-        run<T>(work: () => T): T {
-          assertCurrent();
-          return captured.run(work);
-        },
-      },
-    };
-  } catch (error) {
-    release();
-    throw error;
-  }
-}
 
 /** Reconcile only the original admission; an uncertain ACK never starts a replacement. */
 export async function startSessionsSendFollowup(
@@ -235,7 +38,7 @@ export async function startSessionsSendFollowup(
     if (completion?.accepted && request) {
       // The live owner proves acceptance even when its transport ACK was lost.
       // Preserve that one result obligation; never dispatch another target run.
-      startSessionsSendReplyFlow({
+      await startSessionsSendReplyFlow({
         ...replyContext,
         runId: request.runId,
         completion,
@@ -263,11 +66,216 @@ export async function startSessionsSendFollowup(
     if (!completion) {
       request?.custody.release();
     }
-    return { start, completion };
-  }
-  if (request && !completion) {
+  } else if (request && !completion) {
     request.custody.release();
     throw new Error("Gateway did not retain followup result custody; inspect the accepted run.");
   }
   return { start, completion };
+}
+
+/** Dispatch and acceptance share one owner for watched completion and state-watch installation. */
+export async function dispatchSessionsSendFollowup(
+  params: Parameters<typeof startSessionsSendAgentRun>[0],
+  replyContext: Parameters<typeof startSessionsSendFollowup>[2],
+  options: {
+    ownChild: boolean;
+    nativeChild: boolean;
+    watch: boolean;
+    requesterSessionKey: string;
+    requesterAgentId: string;
+    requesterTurnRunId?: string;
+    withRequesterAuthority?: <T>(run: () => T) => T;
+  },
+) {
+  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
+  const completionChild = options.watch
+    ? getLatestLiveSubagentRunByChildSessionKey(params.sessionStoreTarget.canonicalKey)
+    : undefined;
+  const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
+  const watchedTurn =
+    options.watch &&
+    params.allowActiveRunQueueDelivery &&
+    !params.expectedSessionId &&
+    options.nativeChild &&
+    !isCronRunSessionKey(options.requesterSessionKey) &&
+    sameRequester &&
+    (options.ownChild ||
+      (completionChild?.requesterSessionKey === options.requesterSessionKey &&
+        completionChild.requesterAgentId === options.requesterAgentId &&
+        completionChild.expectsCompletionMessage === true))
+      ? options.requesterTurnRunId
+      : undefined;
+  const active = await trySessionsSendActiveRunDelivery(params, options.ownChild);
+  const request =
+    !("ok" in active) &&
+    (watchedTurn || (replyContext.replyMode === "one-way" && options.ownChild)) &&
+    sameRequester
+      ? await prepareSessionsSendFollowup({
+          runId: params.runId,
+          requesterTurnRunId: options.requesterTurnRunId,
+          withRequesterAuthority: options.withRequesterAuthority,
+          requesterAgentId: options.requesterAgentId,
+          requesterSessionKey: options.requesterSessionKey,
+          targetAgentId: params.sendParams.agentId,
+          targetSessionKey: params.sessionStoreTarget.canonicalKey,
+        })
+      : undefined;
+  let admissionOpen = true;
+  const assertCurrent = () => {
+    assertCallerCurrent?.();
+    request?.custody.assertCurrent();
+  };
+  const { start, completion } =
+    "ok" in active
+      ? { start: active, completion: undefined }
+      : await startSessionsSendFollowup(
+          watchedTurn ? undefined : request,
+          {
+            ...params,
+            ...active,
+            ...(watchedTurn
+              ? {
+                  retainAcceptance: true,
+                  assertDispatchCurrent: () => {
+                    if (!admissionOpen) {
+                      throw new Error("Watched followup admission was closed.");
+                    }
+                    assertCurrent();
+                  },
+                }
+              : {}),
+          },
+          replyContext,
+        );
+  try {
+    if (start.ok && watchedTurn) {
+      const { registerSubagentRun, adoptSubagentRunForRequesterTurn } =
+        await import("../subagents/registry/subagent-registry.js");
+      // Acceptance already owns the input; retained custody owns recording its result obligation.
+      const assertCompletionCurrent = () =>
+        request ? request.custody.assertCurrent() : assertCurrent();
+      const claim = async () => {
+        assertCompletionCurrent();
+        const childSessionKey = start.a2aSessionKey ?? params.sessionStoreTarget.canonicalKey;
+        let accepted: AcceptedSessionSpawn | undefined;
+        if (start.targetDisposition === "steered") {
+          const expected = start.steeredRunId
+            ? getLatestLiveSubagentRunByChildSessionKey(
+                childSessionKey,
+                (entry) => entry.runId === start.steeredRunId,
+              )
+            : undefined;
+          if (expected) {
+            accepted = await adoptSubagentRunForRequesterTurn({
+              expected,
+              requesterSessionKey: options.requesterSessionKey,
+              requesterAgentId: options.requesterAgentId,
+              requesterTurnRunId: watchedTurn,
+              assertCurrent: assertCompletionCurrent,
+            });
+          }
+          if (!accepted) {
+            throw new Error(
+              "Steering was admitted, but its completion could not be claimed. Inspect the target before retrying.",
+            );
+          }
+        } else {
+          await registerSubagentRun(
+            {
+              runId: start.runId,
+              childSessionKey,
+              requesterSessionKey: options.requesterSessionKey,
+              requesterDisplayKey: options.requesterSessionKey,
+              requesterAgentId: options.requesterAgentId,
+              requesterTurnRunId: watchedTurn,
+              requesterOrigin: replyContext.requesterOrigin,
+              task: replyContext.message,
+              cleanup: "keep",
+              spawnMode: "session",
+              expectsCompletionMessage: true,
+            },
+            {
+              assertCurrent: assertCompletionCurrent,
+              assertPublicationCurrent: () => request?.custody.assertCurrent(),
+              persistence: "worker",
+            },
+          );
+          accepted = { runId: start.runId, childSessionKey, expectsCompletionMessage: true };
+        }
+        return accepted;
+      };
+      const accepted = await (request ? request.custody.run(claim) : claim());
+      assertCurrent();
+      if (instance) {
+        mergeAcceptedSessionSpawnsForRun(instance, [accepted]);
+      }
+    }
+  } catch (error) {
+    let failure = error;
+    if (start.ok && watchedTurn) {
+      const runId = start.targetDisposition === "steered" ? start.steeredRunId : start.runId;
+      if (runId && instance) {
+        try {
+          const { reconcileRequesterTurnClaimForRun } =
+            await import("../subagents/registry/subagent-registry-requester-claim.js");
+          await runWithGatewayToolCleanupContext(() =>
+            reconcileRequesterTurnClaimForRun({
+              runId,
+              requesterSessionKey: options.requesterSessionKey,
+              requesterAgentId: options.requesterAgentId,
+              requesterRunInstance: instance,
+            }),
+          );
+        } catch (reconciliationError) {
+          failure = new AggregateError(
+            [error, reconciliationError],
+            "Accepted child completion could not be reconciled with its requester.",
+          );
+        }
+      }
+    }
+    return {
+      start: {
+        ok: false as const,
+        result: jsonResult({
+          runId: start.ok ? start.runId : params.runId,
+          status: "error",
+          error: formatErrorMessage(failure),
+          sentBeforeError: true,
+          sessionKey: replyContext.displayKey,
+        }),
+      },
+      completion,
+      registryCompletion: false,
+      watchField: {},
+    };
+  } finally {
+    admissionOpen = false;
+    if (watchedTurn) {
+      request?.custody.release();
+    }
+  }
+  const targetSessionKey = start.ok
+    ? (start.a2aSessionKey ?? params.sessionStoreTarget.canonicalKey)
+    : undefined;
+  const watched =
+    start.ok &&
+    options.watch &&
+    !params.expectedSessionId &&
+    replyContext.requesterSessionKey &&
+    targetSessionKey &&
+    replyContext.requesterSessionKey !== targetSessionKey
+      ? registerSessionStateWatch({
+          watcherSessionKey: replyContext.requesterSessionKey,
+          targetSessionKey,
+          targetAgentId: params.sendParams.agentId,
+        })
+      : false;
+  return {
+    start,
+    completion,
+    registryCompletion: Boolean(start.ok && watchedTurn),
+    watchField: options.watch ? { watched } : {},
+  };
 }

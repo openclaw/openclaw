@@ -1,4 +1,3 @@
-// Normalizes typing indicator modes from config and directives.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TypingMode } from "../../config/types.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";

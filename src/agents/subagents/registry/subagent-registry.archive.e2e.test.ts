@@ -378,7 +378,7 @@ describe("subagent registry archive behavior", () => {
       }
       return {};
     });
-    vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
+    vi.mocked(ensureContextEnginesInitialized).mockResolvedValue(undefined);
     vi.mocked(resolveContextEngine).mockResolvedValue({
       info: { id: "test", name: "Test", version: "0.0.1" },
       ingest: async () => ({ ingested: false }),

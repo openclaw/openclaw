@@ -341,16 +341,6 @@ type AttemptRuntimeModelContext = NonNullable<
 >;
 
 /**
- * Adapts the RuntimePlan model context to the legacy provider-runtime model
- * shape used by transcript-policy fallbacks.
- */
-function asProviderRuntimeModel(
-  model: AttemptRuntimeModelContext["model"],
-): ProviderRuntimeModel | undefined {
-  return typeof model?.id === "string" ? (model as ProviderRuntimeModel) : undefined;
-}
-
-/**
  * Resolves the transcript policy for an embedded attempt. RuntimePlan owns the
  * policy when present; otherwise the older provider/config/env resolver remains
  * the compatibility path for callers that have not produced a runtime plan yet.
@@ -372,7 +362,10 @@ export function resolveAttemptTranscriptPolicy(params: {
       config: params.config,
       workspaceDir: params.runtimePlanModelContext.workspaceDir,
       env: params.env ?? process.env,
-      model: asProviderRuntimeModel(params.runtimePlanModelContext.model),
+      model:
+        typeof params.runtimePlanModelContext.model?.id === "string"
+          ? (params.runtimePlanModelContext.model as ProviderRuntimeModel)
+          : undefined,
     })
   );
 }

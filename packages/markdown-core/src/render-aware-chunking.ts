@@ -232,7 +232,7 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   }
 
   const normalizedLimit = resolveIntegerOption(limit, 1, { min: 1 });
-  if (normalizedLimit <= 0 || ir.text.length <= normalizedLimit) {
+  if (ir.text.length <= normalizedLimit) {
     return [ir];
   }
 

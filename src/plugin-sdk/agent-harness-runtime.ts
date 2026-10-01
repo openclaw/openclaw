@@ -430,7 +430,6 @@ export async function loadCodexBundleMcpThreadConfig(
 }
 
 export { decodeHeaderEnvPlaceholder } from "../agents/bundle-mcp-adapter.js";
-export { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 
 /** Lazily load the strict MCP proxy client with core-owned framing, startup, and shutdown. */
 export const mcpStdioRuntime = Object.freeze({

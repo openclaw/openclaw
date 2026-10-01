@@ -85,7 +85,6 @@ export async function completeReplyAgentRun(input: {
       });
     }
 
-    // Inject post-compaction workspace context for the next agent turn
     if (sessionKey) {
       const contextContent = await readPostCompactionContext(followupRun.run.workspaceDir, {
         cfg,
@@ -198,16 +197,14 @@ export async function completeReplyAgentRun(input: {
     const pendingText = sourceReplyPolicy.suppressDelivery
       ? ""
       : (recoverablePendingFinalText ?? "");
-    const heartbeatAckMaxChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-    const resolvedPendingText = isHeartbeat
-      ? (() => {
-          const stripped = stripHeartbeatToken(pendingText, {
-            mode: "heartbeat",
-            maxAckChars: heartbeatAckMaxChars,
-          });
-          return stripped.shouldSkip ? "" : stripped.text || pendingText;
-        })()
-      : pendingText;
+    let resolvedPendingText = pendingText;
+    if (isHeartbeat) {
+      const stripped = stripHeartbeatToken(pendingText, {
+        mode: "heartbeat",
+        maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+      });
+      resolvedPendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
+    }
     const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
       ? []
       : finalPayloads.filter(

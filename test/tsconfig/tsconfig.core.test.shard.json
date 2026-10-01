@@ -6,8 +6,8 @@
   "files": [
     "../../src/config/sessions/session-entry.test-compat.d.ts",
     "../../src/infra/host-env-security-policy.d.ts",
-    "../../src/state/openclaw-agent-db.generated.d.ts",
-    "../../src/state/openclaw-state-db.generated.d.ts",
+    "../../src/state/openclaw-agent-db.generated.ts",
+    "../../src/state/openclaw-state-db.generated.ts",
     "../../src/types/agent-sessions.d.ts",
     "../../src/types/node-runtime-globals.d.ts",
     "../../src/types/qrcode.d.ts",

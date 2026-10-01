@@ -1,8 +1,6 @@
-/** Plans reply/thread references for multi-payload channel sends. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyToMode } from "../../config/types.js";
 
-/** Stateful planner for reply-to ids across one delivery flow. */
 type ReplyReferencePlanner = {
   /** Returns the effective reply/thread id for the next send without updating state. */
   peek(): string | undefined;
@@ -14,12 +12,10 @@ type ReplyReferencePlanner = {
   hasReplied(): boolean;
 };
 
-/** Returns true for modes that use a reply reference only before the first send. */
 export function isSingleUseReplyToMode(mode: ReplyToMode): boolean {
   return mode === "first" || mode === "batched";
 }
 
-/** Creates a planner that tracks whether a reply reference has already been consumed. */
 export function createReplyReferencePlanner(options: {
   replyToMode: ReplyToMode;
   /** Existing thread/reference id (preferred when allowed by replyToMode). */
@@ -47,23 +43,18 @@ export function createReplyReferencePlanner(options: {
     return existingId ?? startId;
   };
 
-  const use = (): string | undefined => {
-    const id = resolve();
-    if (!id) {
-      return undefined;
-    }
-    hasReplied = true;
-    return id;
-  };
-
-  const markSent = () => {
-    hasReplied = true;
-  };
-
   return {
     peek: resolve,
-    use,
-    markSent,
+    use() {
+      const id = resolve();
+      if (id) {
+        hasReplied = true;
+      }
+      return id;
+    },
+    markSent() {
+      hasReplied = true;
+    },
     hasReplied: () => hasReplied,
   };
 }

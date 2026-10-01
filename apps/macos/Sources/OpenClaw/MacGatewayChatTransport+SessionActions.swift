@@ -88,6 +88,7 @@ extension MacGatewayChatTransport {
         return OpenClawChatSessionMutationRouteLease(
             sessionTarget: { transport.sessionTarget(for: $0) },
             unreadAckContract: unreadAckContract,
+            receivesPatchReceipts: true,
             request: { request in
                 try await self.connection.request(
                     request,

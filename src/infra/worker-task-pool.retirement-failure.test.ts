@@ -5,14 +5,18 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionHistoryUnavailableMessage } from "../gateway/session-history-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
+import * as nativeSections from "./worker-task-native-sections.js";
+import { createOwnedWorkerTaskPool, WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
+
+type PostedTask = { taskId: number; responseId?: number; nativeSections?: SharedArrayBuffer };
 
 type FakeWorker = EventEmitter & {
-  postMessage: ReturnType<typeof vi.fn<(message: { taskId: number; responseId?: number }) => void>>;
+  postMessage: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
   terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
 };
 const workers = vi.hoisted(() => [] as FakeWorker[]);
 const cleanup = vi.hoisted(() => vi.fn<() => Promise<void>>());
+const taskPosted = vi.hoisted(() => vi.fn());
 
 vi.mock("node:worker_threads", async (importOriginal) => {
   const { EventEmitter } = await import("node:events");
@@ -24,7 +28,9 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         super();
         workers.push(this);
       }
-      postMessage = vi.fn<(message: { taskId: number; responseId?: number }) => void>();
+      postMessage = vi.fn<(message: PostedTask) => void>(() => {
+        taskPosted();
+      });
       ref() {}
       unref() {}
       terminate = vi.fn(async () => {
@@ -61,15 +67,72 @@ function taskId(worker: FakeWorker) {
 beforeEach(() => {
   workers.splice(0);
   cleanup.mockReset().mockResolvedValue();
+  taskPosted.mockReset();
 });
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
 });
 
 describe("worker task retirement failures", () => {
+  it("settles cancellation when native work finishes before its settlement wait is registered", async () => {
+    const pool = createOwnedWorkerTaskPool<string, string>({
+      workerUrl: new URL("data:text/javascript,"),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+    });
+    const controller = new AbortController();
+    const reason = new Error("cancel native work");
+    const executionSettled = vi.fn();
+    const result = pool
+      .run("input", { signal: controller.signal, onExecutionSettled: executionSettled })
+      .catch((error: unknown) => error);
+    const worker = expectDefined(workers[0], "task worker");
+    const state = new Int32Array(
+      expectDefined(worker.postMessage.mock.calls[0]?.[0].nativeSections, "native section state"),
+    );
+    const release = nativeSections.withWorkerTaskNativeSectionScope(
+      state,
+      () => true,
+      nativeSections.retainCurrentWorkerNativeSection,
+    );
+    const isSettled = nativeSections.areWorkerNativeSectionsSettled;
+    const observed = vi
+      .spyOn(nativeSections, "areWorkerNativeSectionsSettled")
+      .mockImplementationOnce((sections) => {
+        const settled = isSettled(sections);
+        // The worker can release its last section after the parent's atomic read.
+        release();
+        return settled;
+      });
+    try {
+      controller.abort(reason);
+      await yieldToEventLoop();
+      expect(worker.terminate).toHaveBeenCalledOnce();
+      expect(await result).toBe(reason);
+      expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
+      expect(pool.getSnapshot().pendingTasks).toBe(0);
+    } finally {
+      observed.mockRestore();
+      release();
+      // Explicit servicing also cleans up the deliberately stalled pre-fix owner.
+      const rotation = pool.startRotate();
+      rotation.service();
+      await rotation.result;
+      await pool.close();
+      await result;
+    }
+  });
+
   it.each([false, true])(
     "joins every retirement retry and its artifacts before rejecting (second retry fails: %s)",
     async (secondRetryFails) => {
+      const admitted = createDeferredCore();
+      let pendingAdmissions = 2;
+      taskPosted.mockImplementation(() => {
+        if (--pendingAdmissions === 0) {
+          admitted.resolve();
+        }
+      });
       const pool = new WorkerTaskPool<string, string>({
         workerUrl: new URL("data:text/javascript,"),
         maxWorkers: 2,
@@ -87,6 +150,8 @@ describe("worker task retirement failures", () => {
           .run(`input-${index}`, { signal: controller.signal, onInputConsumed: released[index] })
           .catch((error: unknown) => error),
       );
+      await admitted.promise;
+      expect(workers).toHaveLength(2);
       for (const [index, worker] of workers.entries()) {
         worker.terminate.mockRejectedValueOnce(new Error("initial exit uncertain"));
         controllers[index]!.abort(new Error("task canceled"));

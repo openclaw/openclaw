@@ -1,4 +1,3 @@
-// Install extraction helpers validate and unpack skill archives into install roots.
 import path from "node:path";
 import { extractArchive as extractArchiveSafe } from "../../infra/archive.js";
 import { sha256File } from "../../infra/directory-durability.js";

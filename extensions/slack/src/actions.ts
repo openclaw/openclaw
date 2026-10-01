@@ -4,7 +4,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 import type { SlackActionClientOpts } from "./action-context.js";
@@ -188,29 +192,15 @@ function normalizeSlackReadTimestamp(
   if (SLACK_TIMESTAMP_RE.test(trimmed)) {
     return trimmed;
   }
-  if (!ISO_8601_TIMESTAMP_SCHEMA.safeParse(trimmed).success) {
-    throw new Error(
-      `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
-    );
-  }
-  const parsed = Date.parse(trimmed);
+  const parsed = ISO_8601_TIMESTAMP_SCHEMA.safeParse(trimmed).success
+    ? Date.parse(trimmed)
+    : Number.NaN;
   if (!Number.isFinite(parsed)) {
     throw new Error(
       `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
     );
   }
   return formatEpochSeconds(parsed);
-}
-
-function hasSlackPlatformError(err: unknown, code: string): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const data = (err as { data?: unknown }).data;
-  if (!data || typeof data !== "object") {
-    return false;
-  }
-  return (data as { error?: unknown }).error === code;
 }
 
 async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
@@ -261,7 +251,7 @@ function createSlackReactionUpdater(method: "add" | "remove", unchangedError: st
         name: normalizeSlackEmojiName(emoji),
       });
     } catch (err) {
-      if (!hasSlackPlatformError(err, unchangedError)) {
+      if (asOptionalObjectRecord(asOptionalObjectRecord(err)?.data)?.error !== unchangedError) {
         throw err;
       }
     }

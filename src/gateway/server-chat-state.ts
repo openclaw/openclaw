@@ -1,6 +1,4 @@
 import type { AgentPlanStep } from "../channels/streaming.js";
-// Gateway chat run state registries.
-// Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { mergeAssistantText, type AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
@@ -35,14 +33,9 @@ export type ChatAbortMarker = { abortedAtMs: number; sequence: number };
 
 let chatRunOrderingSequence = 0;
 
-function nextChatRunOrderingSequence(): number {
-  chatRunOrderingSequence += 1;
-  return chatRunOrderingSequence;
-}
-
 /** Create an abort marker ordered against chat run registrations, using a shared monotonic sequence. */
 export function createChatAbortMarker(now = Date.now()): ChatAbortMarker {
-  return { abortedAtMs: now, sequence: nextChatRunOrderingSequence() };
+  return { abortedAtMs: now, sequence: ++chatRunOrderingSequence };
 }
 
 /** Return the wall-clock timestamp used by maintenance TTL pruning. */
@@ -174,7 +167,7 @@ export type ChatRunRegistry = {
 
 function createChatRunRegistryForStore(store: ChatRunRecordStore): ChatRunRegistry {
   const add = (sessionId: string, entry: ChatRunRegistration) => {
-    const registeredEntry = { ...entry, registeredSequence: nextChatRunOrderingSequence() };
+    const registeredEntry = { ...entry, registeredSequence: ++chatRunOrderingSequence };
     const record = store.getOrCreate(sessionId);
     (record.registrations ??= []).push(registeredEntry);
   };

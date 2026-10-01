@@ -1,5 +1,3 @@
-// Push gateway methods send APNs/web-push test notifications and manage web
-// push subscriptions/VAPID public-key access for UI clients.
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -19,8 +17,6 @@ import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   normalizeApnsEnvironment,
-  resolveApnsAuthConfigFromEnv,
-  resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
@@ -48,6 +44,7 @@ import { getUserPreferences, setUserPreferences } from "../../state/user-prefere
 import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
+import { resolveNodePushTransport } from "./node-push-transport.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers, GatewayRequestHandlerOptions } from "./types.js";
@@ -237,42 +234,17 @@ export const pushHandlers = {
       }
 
       const overrideEnvironment = normalizeApnsEnvironment(params.environment);
-      let result: Awaited<ReturnType<typeof sendApnsAlert>>;
-      if (registration.transport === "direct") {
-        // Relay registrations must not read local APNs signing material.
-        const auth = await resolveApnsAuthConfigFromEnv(process.env);
-        if (!auth.ok) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, auth.error));
-          return;
-        }
-        result = await sendApnsAlert({
-          registration: {
-            ...registration,
-            environment: overrideEnvironment ?? registration.environment,
-          },
-          nodeId,
-          title,
-          body,
-          auth: auth.value,
-        });
-      } else {
-        const relay = resolveApnsRelayConfigFromEnv(
-          process.env,
-          context.getRuntimeConfig().gateway,
-          { registrationRelayOrigin: registration.relayOrigin },
-        );
-        if (!relay.ok) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, relay.error));
-          return;
-        }
-        result = await sendApnsAlert({
-          registration,
-          nodeId,
-          title,
-          body,
-          relayConfig: relay.value,
-        });
+      const transport = await resolveNodePushTransport(
+        registration.transport === "direct"
+          ? { ...registration, environment: overrideEnvironment ?? registration.environment }
+          : registration,
+        registration.transport === "relay" ? context.getRuntimeConfig() : undefined,
+      );
+      if (!transport.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, transport.error));
+        return;
       }
+      const result = await sendApnsAlert({ ...transport.transport, nodeId, title, body });
       if (
         shouldClearStoredApnsRegistration({
           registration,

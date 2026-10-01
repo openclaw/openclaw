@@ -31,6 +31,16 @@ schema version is unchanged.
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+The per-agent companion table `session_reactions` stores message reaction rows
+at the same schema version. The canonical database-open additive schema installs it on
+existing databases without changing `user_version`; older readers ignore the
+table. Rows bind the session key, transcript session ID, persisted message event
+ID, emoji, and reacting identity without changing transcript bytes. Deleting the
+session node cascades to its reactions. Transcript replacement and suffix removal
+delete reactions for removed message identities in the same transaction, while
+a reset makes old-instance rows inert. Downgrade leaves the table intact and disables Control UI reactions until
+a supporting build returns. No transcript backfill or rewrite is required.
+
 Admitted agent and cached shared-state handles retain their schema version and
 table facts. The handle owner revokes these facts after local DDL or transaction
 rollback. A fresh `PRAGMA data_version` probe observes foreign commits on the next

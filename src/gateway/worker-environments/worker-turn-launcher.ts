@@ -211,6 +211,13 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             (pending.runId !== runId || !options.placements.get(sessionId)?.turnClaim),
         );
       let identity = resolvePlacementIdentity(claim, current);
+      const reportProvisioning = () =>
+        emitAgentRunStatusEvent({
+          runId: claim.runId,
+          phase: "provisioning_environment",
+          sessionKey: identity.sessionKey,
+          agentId: identity.agentId,
+        });
       let routablePlacement = current;
       let assertInitialSetupCurrent: (() => void) | undefined;
       // Every admission wait retains the caller's authority, not only initial setup.
@@ -245,12 +252,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               "Worker setup has no live dispatch owner. Wait for recovery or explicitly retry setup.",
             );
           }
-          emitAgentRunStatusEvent({
-            runId: claim.runId,
-            phase: "provisioning_environment",
-            sessionKey: identity.sessionKey,
-            agentId: identity.agentId,
-          });
+          reportProvisioning();
           const ready = await waitForInitialWorkerPlacement({
             placements: options.placements,
             placement: routablePlacement,
@@ -265,12 +267,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           routablePlacement.state === "reclaimed" ||
           (routablePlacement.state === "failed" && routablePlacement.activeOwnerEpoch !== null)
         ) {
-          emitAgentRunStatusEvent({
-            runId: claim.runId,
-            phase: "provisioning_environment",
-            sessionKey: identity.sessionKey,
-            agentId: identity.agentId,
-          });
+          reportProvisioning();
           routablePlacement = await options.redispatchPlacement(routablePlacement, {
             assertCurrent: assertAdmissionCurrent,
             signal: inputTurn.abortSignal,
@@ -300,12 +297,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         const environmentId = placement.environmentId;
         const refresh = options.environments.readRuntimeRefresh?.(environmentId);
         if (refresh) {
-          emitAgentRunStatusEvent({
-            runId: claim.runId,
-            phase: "provisioning_environment",
-            sessionKey: identity.sessionKey,
-            agentId: identity.agentId,
-          });
+          reportProvisioning();
           await waitForWorkerRuntimeRefresh({
             refresh,
             ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
@@ -499,12 +491,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             placement,
             placements: options.placements,
             workspace,
-            ...(options.prepareAcceptedWorkspacePublication
-              ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
-              : {}),
-            ...(options.publishAcceptedWorkspace
-              ? { publishAcceptedWorkspace: options.publishAcceptedWorkspace }
-              : {}),
+            prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication,
+            publishAcceptedWorkspace: options.publishAcceptedWorkspace,
             workspaceOperations: options.workspaceOperations,
             turn,
             turnClaim,
@@ -570,12 +558,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                     runId: claim.runId,
                     reason: "worker:runtime_refresh",
                   });
-                  emitAgentRunStatusEvent({
-                    runId: claim.runId,
-                    phase: "provisioning_environment",
-                    sessionKey: identity.sessionKey,
-                    agentId: identity.agentId,
-                  });
+                  reportProvisioning();
                   await options.waitForAdmissionNode({
                     placement,
                     signal: reconnectSignal,

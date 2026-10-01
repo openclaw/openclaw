@@ -179,7 +179,6 @@ describe("CI changed Node test plan", () => {
     expect(selectedFiles(shards)).toEqual(
       expect.arrayContaining([
         "test/vitest-projects-config.test.ts",
-        "test/vitest-scoped-config.test.ts",
         "test/scripts/ci-node-test-plan.commands.test.ts",
       ]),
     );

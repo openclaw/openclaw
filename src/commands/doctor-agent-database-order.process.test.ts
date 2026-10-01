@@ -31,6 +31,7 @@ function seedHistoricalSharedDatabase(pathname: string): void {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const database = new DatabaseSync(pathname);
   try {
+    database.exec("BEGIN;");
     // Exact schema and metadata written by v2026.7.35, before deletion history existed.
     database.exec(
       fs.readFileSync(
@@ -42,6 +43,7 @@ function seedHistoricalSharedDatabase(pathname: string): void {
     database
       .prepare("INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, NULL, 1, 1)")
       .run();
+    database.exec("COMMIT;");
   } finally {
     database.close();
   }
@@ -51,6 +53,7 @@ function seedHistoricalAgentDatabase(pathname: string, agentId: string): void {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const database = new DatabaseSync(pathname);
   try {
+    database.exec("BEGIN;");
     // Exact schema bytes from v2026.7.35, whose agent databases used user_version=1.
     database.exec(
       fs.readFileSync(
@@ -62,6 +65,7 @@ function seedHistoricalAgentDatabase(pathname: string, agentId: string): void {
     database
       .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', 1, ?, NULL, 1, 1)")
       .run(agentId);
+    database.exec("COMMIT;");
   } finally {
     database.close();
   }

@@ -22,10 +22,10 @@ import {
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
-import { readCronJobNamesInDatabase } from "../cron/store/job-name.js";
-import { resolveCronJobsStorePath } from "../cron/store/paths.js";
-import { readActiveCronRunReceiptOwnersInDatabase } from "../cron/store/run-receipt-read.js";
-import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
+import {
+  isCronStateReadCommand,
+  readCronStateCommandInDatabase,
+} from "../cron/store/read-command.js";
 import {
   readSharedGitHubPublicationRequestInDatabase,
   readSharedRepositoryGitHubPublicationInDatabase,
@@ -46,12 +46,16 @@ import {
   readWorkerSessionPlacementProjectionInDatabase,
 } from "../gateway/worker-environments/placement-read-projection.js";
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
+import { readWorkspaceJournalInDatabase } from "../gateway/worker-environments/placement-workspace-journal.js";
+import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
 import {
   readWorkerEnvironmentFacts,
   readWorkerEnvironmentPrunePage,
 } from "../gateway/worker-environments/store-row-codec.js";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import { readGatewayOwnerLeaseFromDatabase } from "../infra/gateway-owner-lease.read.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
@@ -84,11 +88,13 @@ import {
   readAgentDatabaseDeletionSnapshotInDatabase,
   readAgentDeletionJournalStatusInDatabase,
 } from "./agent-deletion-journal.read.js";
+import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   readOpenClawStateReadOnlyLocation,
@@ -113,6 +119,7 @@ import {
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
+import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
@@ -152,7 +159,9 @@ serveOwnedWorkerTasks(
         const locationArgs = [
           input.databasePath,
           input.location,
-          undefined,
+          command.type === "doctor.gatewayOwnerLease.read"
+            ? openDoctorStateSchemaReadAdmission
+            : undefined,
           input.expectedIdentity,
           input.snapshotRoot,
           true,
@@ -203,6 +212,9 @@ serveOwnedWorkerTasks(
         const result = withOpenClawStateReadOnlyLocation(
           ({ db }): OpenClawStateReadResult => {
             sourceAdmitted = true;
+            if (command.type === "doctor.gatewayOwnerLease.read") {
+              return { type: command.type, lease: readGatewayOwnerLeaseFromDatabase(db) };
+            }
             if (command.type === "agentDatabaseDeletion.snapshot") {
               return {
                 type: command.type,
@@ -332,24 +344,11 @@ serveOwnedWorkerTasks(
                 record: inspectCurrentConversationBindingRecordInDatabase(db, command.conversation),
               };
             }
-            if (command.type === "cron.observeRunRecovery") {
-              return {
-                type: command.type,
-                observation: observeCronRunRecoveryInDatabase(db, command),
-              };
+            if (command.type === "backup.runs") {
+              return { type: command.type, runs: readBackupRunsInDatabase(db) };
             }
-            if (command.type === "cron.jobNames") {
-              const storePath = command.storePath ?? resolveCronJobsStorePath();
-              return {
-                type: command.type,
-                names: readCronJobNamesInDatabase(db, command.jobIds, storePath),
-              };
-            }
-            if (command.type === "cron.activeReceiptOwners") {
-              return {
-                type: command.type,
-                owners: readActiveCronRunReceiptOwnersInDatabase(db, command.agentId),
-              };
+            if (isCronStateReadCommand(command)) {
+              return readCronStateCommandInDatabase(db, command);
             }
             if (
               command.type === "devicePairing.list" ||
@@ -604,6 +603,14 @@ serveOwnedWorkerTasks(
                 values: selectUserPreferenceValues(db, command.profileIds, command.key),
               };
             }
+            if (command.type === "userModelAccounts.links") {
+              return {
+                type: command.type,
+                links: runSqliteDeferredTransactionSync(db, () =>
+                  listUserProfileAuthLinksInDatabase(db, command.profileId),
+                ),
+              };
+            }
             if (command.type === "userProfiles.email.resolve") {
               return {
                 type: command.type,
@@ -629,6 +636,9 @@ serveOwnedWorkerTasks(
                 placements: readWorkerPlacementChangeSnapshotInDatabase(db, command.profileIds),
               };
             }
+            if (isWorkspaceJournalReadCommand(command)) {
+              return readWorkspaceJournalInDatabase(db, command);
+            }
             if (command.type === "workers.placementRecoveryCandidates") {
               return {
                 type: command.type,
@@ -653,7 +663,10 @@ serveOwnedWorkerTasks(
         );
         return { ok: true, sourceAdmitted: true, ...result };
       });
-      if (process.versions.bun && bunSqliteNativeCleanupPending) {
+      if (
+        !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources &&
+        bunSqliteNativeCleanupPending
+      ) {
         nativeCleanupFailure ??= { error: undefined };
       }
       return nativeCleanupFailure ? { ...reply, nativeCleanupFailure } : reply;

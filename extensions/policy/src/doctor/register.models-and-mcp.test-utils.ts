@@ -430,7 +430,7 @@ describe("registerPolicyDoctorChecks", () => {
     );
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
-    const evidence = await collectPolicyEvidence(
+    const evidence = collectPolicyEvidence(
       {},
       {
         toolsRaw: await fs.readFile(join(workspaceDir, "AGENTS.md"), "utf-8"),

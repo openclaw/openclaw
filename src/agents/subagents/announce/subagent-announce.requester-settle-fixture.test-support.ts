@@ -12,7 +12,10 @@ import {
   deliverSpy,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
-let sessionStore: Record<string, { sessionId?: string; lastChannel?: string; lastTo?: string }>;
+let sessionStore: Record<
+  string,
+  { sessionId?: string; lifecycleRevision?: string; lastChannel?: string; lastTo?: string }
+>;
 
 const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts } = vi.hoisted(() => ({
   readDescendantFacts: vi.fn<
@@ -24,7 +27,12 @@ const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts } = vi
     typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent
   >(async () => undefined),
   registryRuntimeMock: {
-    getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => undefined),
+    getLatestLiveSubagentRunByChildSessionKey: vi.fn<
+      (
+        sessionKey: string,
+        matches?: (entry: SubagentRunRecord) => boolean,
+      ) => SubagentRunRecord | undefined
+    >(() => undefined),
     countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
     isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),
     shouldIgnorePostCompletionAnnounceForSession: vi.fn((_childSessionKey: string) => false),
@@ -112,6 +120,9 @@ beforeEach(() => {
   readDescendantFacts.mockReset().mockResolvedValue({ unsettled: false, active: 0 });
   registryRuntimeMock.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
   registryRuntimeMock.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
+  registryRuntimeMock.getLatestLiveSubagentRunByChildSessionKey
+    .mockReset()
+    .mockReturnValue(undefined);
 });
 
 function setSessionStore(store: typeof sessionStore): void {

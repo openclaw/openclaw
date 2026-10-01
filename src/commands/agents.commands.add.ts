@@ -43,7 +43,8 @@ import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { applyAgentBindings, buildChannelBindings, describeBinding } from "./agents.bindings.js";
+import { describeBinding, describeBindingConflict } from "./agents.binding-format.js";
+import { applyAgentBindings, buildChannelBindings } from "./agents.bindings.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { prepareAuthChoice } from "./auth-choice.apply.js";
@@ -188,9 +189,7 @@ export async function agentsAddCommand(
         added: bindingResult.added.map(describeBinding),
         updated: bindingResult.updated.map(describeBinding),
         skipped: bindingResult.skipped.map(describeBinding),
-        conflicts: bindingResult.conflicts.map(
-          (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-        ),
+        conflicts: bindingResult.conflicts.map(describeBindingConflict),
       },
     };
     if (opts.json) {
@@ -206,10 +205,7 @@ export async function agentsAddCommand(
         runtime.error(
           [
             "Skipped bindings already claimed by another agent:",
-            ...bindingResult.conflicts.map(
-              (conflict) =>
-                `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-            ),
+            ...bindingResult.conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
           ].join("\n"),
         );
       }
@@ -474,10 +470,7 @@ export async function agentsAddCommand(
           await prompter.note(
             [
               "Skipped bindings already claimed by another agent:",
-              ...result.conflicts.map(
-                (conflict) =>
-                  `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-              ),
+              ...result.conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
             ].join("\n"),
             "Routing bindings",
           );

@@ -1,4 +1,3 @@
-// Provides schema hint metadata for config docs and UI labels.
 import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
@@ -27,6 +26,7 @@ const GROUP_HINTS = [
   ["nodeHost", "Node Host", 35],
   ["cloudWorkers", "Cloud Workers", 37],
   ["desktop", "Desktop", 38],
+  ["storage", "Storage", 39],
   ["agents", "Agents", 40],
   ["tools", "Tools", 50],
   ["bindings", "Bindings", 55],
@@ -91,6 +91,7 @@ const SECTION_DOCS_URLS = {
   voicewake: "https://docs.openclaw.ai/nodes/voicewake",
   presence: "https://docs.openclaw.ai/concepts/presence",
   cloudWorkers: "https://docs.openclaw.ai/gateway/cloud-workers",
+  storage: "https://docs.openclaw.ai/concepts/storage-locations",
   desktop: "https://docs.openclaw.ai/gateway/configuration",
   worktreeRoot: "https://docs.openclaw.ai/concepts/managed-worktrees",
   worktreeAcceleration: "https://docs.openclaw.ai/concepts/managed-worktrees",

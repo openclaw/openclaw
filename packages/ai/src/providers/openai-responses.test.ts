@@ -217,6 +217,10 @@ describe("OpenAI Responses provider", () => {
   });
 
   it.each([
+    { id: "gpt-6.1-sol", reasoningEffort: undefined, expectedEffort: undefined },
+    { id: "gpt-6.1-sol", reasoningEffort: "none", expectedEffort: undefined },
+    { id: "gpt-6.1-sol", reasoningEffort: "minimal", expectedEffort: "low" },
+    { id: "gpt-6.1-sol", reasoningEffort: "max", expectedEffort: "max" },
     { id: "gpt-6-astra", reasoningEffort: undefined, expectedEffort: undefined },
     { id: "gpt-6-astra", reasoningEffort: "minimal", expectedEffort: "low" },
     { id: "gpt-6-astra", reasoningEffort: "xhigh", expectedEffort: "xhigh" },

@@ -43,17 +43,12 @@ const SKILL_WORKSHOP_APPROVAL_TIMEOUT_MS = 70_000;
 
 type SkillWorkshopLifecycleAction = keyof typeof SKILL_WORKSHOP_LIFECYCLE_APPROVALS;
 
-// Lifecycle actions mutate proposals or live skills and therefore require approval checks.
 function readLifecycleAction(params: unknown): SkillWorkshopLifecycleAction | undefined {
   const action = asNullableRecord(params)?.action;
   if (typeof action !== "string" || !Object.hasOwn(SKILL_WORKSHOP_LIFECYCLE_APPROVALS, action)) {
     return undefined;
   }
   return action as SkillWorkshopLifecycleAction;
-}
-
-function formatBodySizeKb(content: string): string {
-  return (Buffer.byteLength(content, "utf8") / 1024).toFixed(1);
 }
 
 function formatApprovalField(value: string): string {
@@ -122,7 +117,7 @@ async function resolveLifecycleApprovalDescription(params: {
         skillName: record.target.skillName,
         description: record.description,
         supportFileCount: record.supportFiles?.length ?? 0,
-        bodySizeKb: formatBodySizeKb(proposal.content),
+        bodySizeKb: (Buffer.byteLength(proposal.content, "utf8") / 1024).toFixed(1),
       }),
       proposalId: record.id,
     };
@@ -157,7 +152,6 @@ function lifecycleApprovalTimeoutReason(params: {
   ].join(" ");
 }
 
-/** Returns approval policy for skill workshop lifecycle tool calls. */
 export async function resolveSkillWorkshopToolApproval(params: {
   toolName: string;
   toolParams: unknown;

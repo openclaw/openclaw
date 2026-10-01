@@ -61,17 +61,6 @@ function getTelegramPlainFallbackTrigger(
   return undefined;
 }
 
-export function surrogateSafeChunkEnd(text: string, end: number, start: number): number {
-  const high = text.charCodeAt(end - 1);
-  const low = text.charCodeAt(end);
-  const splitsPair = end > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
-  if (!splitsPair) {
-    return end;
-  }
-  const clamped = end - 1;
-  return clamped > start ? clamped : start + 2;
-}
-
 export function splitTelegramPlainTextChunks(text: string, limit: number): string[] {
   if (!text) {
     return [];

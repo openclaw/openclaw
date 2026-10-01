@@ -5,7 +5,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
 import { resolveClickClackDiscussionRoute } from "./routing.js";
-import { createHarness } from "./service-test-support.js";
+import { discussionChannel, createHarness } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
 
 function createGatewayEventsHarness() {
@@ -102,10 +102,7 @@ describe("ClickClack discussion session events", () => {
         await new Promise<void>((resolve) => {
           releaseUpdate = resolve;
         });
-        return {
-          id: "chn_discussion",
-          route_id: "discussion-route",
-          workspace_id: "wsp_team",
+        return discussionChannel({
           name: patch.name ?? "renamed",
           kind: "public",
           external_managed: true,
@@ -114,8 +111,7 @@ describe("ClickClack discussion session events", () => {
           sidebar_section: patch.sidebar_section ?? "Projects",
           ...(patch.display_title !== undefined ? { display_title: patch.display_title } : {}),
           archived: false,
-          created_at: "2026-07-19T00:00:00.000Z",
-        };
+        });
       });
       harness.setSessionEntry({
         sessionId: "session-original",

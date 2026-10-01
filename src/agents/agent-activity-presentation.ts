@@ -88,7 +88,7 @@ export function summarizeAgentActivity(
   const outcomes = { failed: 0, blocked: 0, skipped: 0, unknown: 0 };
   let total = 0;
   for (const item of operations.values()) {
-    if (item.hideFromChannelProgress || item.suppressChannelProgress) {
+    if (item.hideFromChannelProgress) {
       continue;
     }
     // Prepared names describe operations, not successful effects or distinct

@@ -25,6 +25,7 @@ import {
   waitForPidFile,
 } from "../helpers/process-wait.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { withRuntimePreload } from "../helpers/runtime-preload.js";
 import { quote, setupFixture } from "./docker-all-harness-fixture.test-support.js";
 import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
@@ -150,29 +151,30 @@ function startOwnedScheduler(
     {
       cwd: fixture.target,
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        OPENCLAW_DOCKER_ALL_BUILD: "0",
-        OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
-        OPENCLAW_DOCKER_ALL_TIMINGS: "0",
-        OPENCLAW_DOCKER_ALL_START_STAGGER_MS: "0",
-        OPENCLAW_DOCKER_ALL_STATUS_INTERVAL_MS: "0",
-        OPENCLAW_DOCKER_ALL_LANES: laneNames.join(","),
-        OPENCLAW_DOCKER_ALL_LOG_DIR: path.join(fixture.root, "logs"),
-        OPENCLAW_DOCKER_ALL_PNPM_COMMAND: fixture.pinnedPnpm,
-        OPENCLAW_DOCKER_E2E_REPO_ROOT: fixture.target,
-        OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: fixture.selectedHarness,
-        OPENCLAW_DOCKER_E2E_SELECTED_SHA: fixture.selectedSha,
-        OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.tarball,
-        OPENCLAW_CURRENT_PACKAGE_VERSION: "2026.8.1",
-        OPENCLAW_CURRENT_PACKAGE_SHA256: fixture.sha256,
-        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: fixture.registry,
-        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: "2026.8.1",
-        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: fixture.registrySha256,
-        ...env,
-        NODE_OPTIONS:
-          `${process.env.NODE_OPTIONS ?? ""} --import ${pathToFileURL(preload).href}`.trim(),
-      },
+      env: withRuntimePreload(
+        {
+          ...process.env,
+          OPENCLAW_DOCKER_ALL_BUILD: "0",
+          OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+          OPENCLAW_DOCKER_ALL_START_STAGGER_MS: "0",
+          OPENCLAW_DOCKER_ALL_STATUS_INTERVAL_MS: "0",
+          OPENCLAW_DOCKER_ALL_LANES: laneNames.join(","),
+          OPENCLAW_DOCKER_ALL_LOG_DIR: path.join(fixture.root, "logs"),
+          OPENCLAW_DOCKER_ALL_PNPM_COMMAND: fixture.pinnedPnpm,
+          OPENCLAW_DOCKER_E2E_REPO_ROOT: fixture.target,
+          OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: fixture.selectedHarness,
+          OPENCLAW_DOCKER_E2E_SELECTED_SHA: fixture.selectedSha,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.tarball,
+          OPENCLAW_CURRENT_PACKAGE_VERSION: "2026.8.1",
+          OPENCLAW_CURRENT_PACKAGE_SHA256: fixture.sha256,
+          OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: fixture.registry,
+          OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: "2026.8.1",
+          OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: fixture.registrySha256,
+          ...env,
+        },
+        preload,
+      ),
     },
   );
   let stderr = "";

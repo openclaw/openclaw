@@ -100,13 +100,6 @@ function resolveExistingPath(value: string) {
   return currentPath;
 }
 
-function validatePnpmVersion(version: string) {
-  if (!/^[0-9A-Za-z.+_-]+$/u.test(version)) {
-    throw new Error(`unsupported pnpm version in packageManager: ${version}`);
-  }
-  return version;
-}
-
 function resolveMountedOutputPath(repoRoot: string, hostPath: string) {
   const relativePath = path.relative(repoRoot, hostPath);
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath) || relativePath.length === 0) {
@@ -137,7 +130,11 @@ function resolvePnpmVersion(repoRoot: string) {
   if (!match?.[1]) {
     throw new Error(`unable to resolve pnpm version from packageManager in ${packageJsonPath}`);
   }
-  return match[1];
+  const version = match[1];
+  if (!/^[0-9A-Za-z.+_-]+$/u.test(version)) {
+    throw new Error(`unsupported pnpm version in packageManager: ${version}`);
+  }
+  return version;
 }
 
 function resolveMultipassInstallHint() {
@@ -237,7 +234,7 @@ function createQaMultipassPlan(params: {
     cpus: params.cpus ?? qaMultipassDefaultResources.cpus,
     memory: params.memory ?? qaMultipassDefaultResources.memory,
     disk: params.disk ?? qaMultipassDefaultResources.disk,
-    pnpmVersion: validatePnpmVersion(resolvePnpmVersion(params.repoRoot)),
+    pnpmVersion: resolvePnpmVersion(params.repoRoot),
     scenarioIds,
     forwardedEnv,
     hostCodexHomePath,
@@ -378,11 +375,10 @@ async function appendMultipassLog(logPath: string, message: string) {
 async function runMultipassCommand(logPath: string, args: string[], options: ExecFileOptions = {}) {
   await appendMultipassLog(logPath, `$ ${["multipass", ...args].join(" ")}\n`);
   const result = await execFileAsync("multipass", args, options);
-  if (result.stdout.trim()) {
-    await appendMultipassLog(logPath, `${result.stdout.trim()}\n`);
-  }
-  if (result.stderr.trim()) {
-    await appendMultipassLog(logPath, `${result.stderr.trim()}\n`);
+  for (const output of [result.stdout, result.stderr]) {
+    if (output.trim()) {
+      await appendMultipassLog(logPath, `${output.trim()}\n`);
+    }
   }
   await appendMultipassLog(logPath, "\n");
   return result;

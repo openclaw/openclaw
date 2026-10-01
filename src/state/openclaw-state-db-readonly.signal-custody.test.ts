@@ -54,6 +54,7 @@ function retainFixturePreparation<T>(preparation: RetainedOperation<T>) {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
+  cleanupKey: Symbol("signal-custody snapshot cleanup"),
   source: "",
   sourceIdentity: { key: "", canonicalPath: "" },
   directory: "/synthetic/state/snapshot",
@@ -79,6 +80,21 @@ const mocks = vi.hoisted(() => ({
     throw new Error("This controlled custody test must not open SQLite or start a worker");
   }),
 }));
+
+// Synthetic files and captured exit callbacks must not reuse another file's native cleanup owner.
+vi.mock("../shared/global-singleton.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shared/global-singleton.js")>();
+  return {
+    ...actual,
+    resolveGlobalSingleton: (...args: Parameters<typeof actual.resolveGlobalSingleton>) => {
+      const [key, ...rest] = args;
+      return actual.resolveGlobalSingleton(
+        key === Symbol.for("openclaw.sqliteSnapshotCleanup") ? mocks.cleanupKey : key,
+        ...rest,
+      );
+    },
+  };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -202,7 +218,15 @@ beforeAll(() => {
   });
   restoreExitSpy = () => spy.mockRestore();
 });
-afterAll(() => restoreExitSpy());
+afterAll(async () => {
+  try {
+    await cleanupSnapshotOperations();
+    expect(mocks.resources.size).toBe(0);
+    Reflect.deleteProperty(globalThis, mocks.cleanupKey);
+  } finally {
+    restoreExitSpy();
+  }
+});
 
 beforeEach(() => {
   mocks.source = join(tempDirs.make("openclaw-signal-custody-source-"), "source.sqlite");

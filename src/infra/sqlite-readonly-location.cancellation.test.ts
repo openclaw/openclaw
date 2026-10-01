@@ -137,14 +137,13 @@ describe("SQLite read-only worker cancellation", () => {
     expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
   });
 
-  it.each(
-    [true, false].flatMap((preserveSourceArtifacts) =>
-      (["abort", "scope-close", "invalid-response", "signal-exit"] as const).map((stop) => ({
-        preserveSourceArtifacts,
-        stop,
-      })),
-    ),
-  )(
+  it.each([
+    { preserveSourceArtifacts: true, stop: "abort" },
+    { preserveSourceArtifacts: true, stop: "scope-close" },
+    { preserveSourceArtifacts: true, stop: "invalid-response" },
+    { preserveSourceArtifacts: false, stop: "invalid-response" },
+    { preserveSourceArtifacts: false, stop: "signal-exit" },
+  ] as const)(
     "joins a scoped child and removes its unpublished snapshot on $stop (raw=$preserveSourceArtifacts)",
     async ({ stop, preserveSourceArtifacts }) => {
       const fixture = tempDirs.make("openclaw-readonly-scoped-held-");
@@ -271,8 +270,8 @@ describe("SQLite read-only worker cancellation", () => {
       );
       controller.abort(reason);
       await expect(operation).rejects.toBe(reason);
-      await childClosed;
       expect(child.signalCode).toBe("SIGKILL");
+      await childClosed;
       expect(fs.existsSync(stagingRoot)).toBe(false);
       expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
     } finally {

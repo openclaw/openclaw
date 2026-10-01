@@ -53,13 +53,10 @@ export type IdentityAvatarLoader = Pick<IdentityAvatarController, "resolve" | "i
 export function renderAgentOverview(params: {
   applicationConfig?: ApplicationConfigCapability;
   agent: AgentsListResult["agents"][number];
-  basePath: string;
   defaultId: string | null;
   configForm: Record<string, unknown> | null;
   agentFilesList: AgentsFilesListResult | null;
   agentIdentity: AgentIdentityResult | null;
-  agentIdentityLoading: boolean;
-  agentIdentityError: string | null;
   identityDraft: AgentIdentityDraft;
   identityAvatarLoader: IdentityAvatarLoader;
   identitySaving: boolean;

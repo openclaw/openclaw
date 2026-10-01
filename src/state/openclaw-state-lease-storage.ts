@@ -25,10 +25,9 @@ import {
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 
 export type OpenClawStateLeaseDatabase = {
   scope: "shared";
@@ -98,6 +97,8 @@ export async function acquireLease(
       });
     }
   };
+  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+  assertAdmission();
   const result = await runOpenClawStateWorkerOperation(
     context,
     (scope) =>

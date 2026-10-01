@@ -1,7 +1,3 @@
-/**
- * Bundled provider plugin entry for Cloudflare AI Gateway setup, catalog
- * discovery, failover classification, and stream wrapping.
- */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -9,6 +5,7 @@ import {
   ensureAuthProfileStore,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
+  type ProviderAuthContext,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   captureProviderApiKey,
@@ -30,16 +27,9 @@ function readRequiredTextInput(value: unknown): string {
   return normalizeOptionalString(value) ?? "";
 }
 
-async function resolveCloudflareGatewayMetadataInteractive(ctx: {
-  accountId?: string;
-  gatewayId?: string;
-  prompter: {
-    text: (params: {
-      message: string;
-      validate?: (value: unknown) => string | undefined;
-    }) => Promise<unknown>;
-  };
-}) {
+async function resolveCloudflareGatewayMetadataInteractive(
+  ctx: Pick<ProviderAuthContext, "prompter"> & { accountId?: string; gatewayId?: string },
+) {
   let accountId = normalizeOptionalString(ctx.accountId) ?? "";
   let gatewayId = normalizeOptionalString(ctx.gatewayId) ?? "";
   if (!accountId) {
@@ -105,10 +95,7 @@ export default definePluginEntry({
                   credential: buildApiKeyCredential(
                     PROVIDER_ID,
                     input,
-                    {
-                      accountId: metadata.accountId,
-                      gatewayId: metadata.gatewayId,
-                    },
+                    metadata,
                     mode ? { secretInputMode: mode } : undefined,
                   ),
                 },
@@ -121,15 +108,12 @@ export default definePluginEntry({
             const authStore = ensureAuthProfileStore(ctx.agentDir, {
               allowKeychainPrompt: false,
             });
+            const credential = authStore.profiles[PROFILE_ID];
             const storedMetadata =
-              authStore.profiles[PROFILE_ID]?.type === "api_key"
+              credential?.type === "api_key"
                 ? {
-                    accountId: normalizeOptionalString(
-                      authStore.profiles[PROFILE_ID]?.metadata?.accountId,
-                    ),
-                    gatewayId: normalizeOptionalString(
-                      authStore.profiles[PROFILE_ID]?.metadata?.gatewayId,
-                    ),
+                    accountId: normalizeOptionalString(credential.metadata?.accountId),
+                    gatewayId: normalizeOptionalString(credential.metadata?.gatewayId),
                   }
                 : {};
             const accountId =

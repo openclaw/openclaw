@@ -344,7 +344,6 @@ export async function sendMSTeamsMessages(
   params: {
     replyStyle: MSTeamsReplyStyle;
     app: MSTeamsApp;
-    appId: string;
     conversationRef: StoredConversationReference;
     context?: { sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown> };
     messages: MSTeamsRenderedMessage[];

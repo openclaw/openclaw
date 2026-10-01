@@ -442,9 +442,6 @@ function resolveSkillSecurityLinks(
 ): ClawHubFetchedSubjectSecurity["links"] {
   const subject = normalizeOptionalString(item.skillUrl);
   const security = normalizeOptionalString(item.securityAuditUrl);
-  if (!subject && !security) {
-    return undefined;
-  }
   return {
     ...(subject ? { subject } : {}),
     ...(security ? { security } : {}),

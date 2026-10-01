@@ -16,14 +16,6 @@ type PluginRuntimeStorePluginOptions = {
 };
 type PluginRuntimeStoreOptions = PluginRuntimeStoreKeyOptions | PluginRuntimeStorePluginOptions;
 
-function pluginRuntimeStoreKeyForPluginId(pluginId: string): string {
-  const normalizedPluginId = pluginId.trim();
-  if (!normalizedPluginId) {
-    throw new Error("createPluginRuntimeStore: pluginId must not be empty");
-  }
-  return `plugin-runtime:${normalizedPluginId}`;
-}
-
 function resolvePluginRuntimeStoreOptions(
   options: string | PluginRuntimeStoreOptions,
 ): PluginRuntimeStoreKeyOptions {
@@ -31,8 +23,12 @@ function resolvePluginRuntimeStoreOptions(
     return { key: options, errorMessage: options };
   }
   if ("pluginId" in options) {
+    const normalizedPluginId = options.pluginId.trim();
+    if (!normalizedPluginId) {
+      throw new Error("createPluginRuntimeStore: pluginId must not be empty");
+    }
     return {
-      key: pluginRuntimeStoreKeyForPluginId(options.pluginId),
+      key: `plugin-runtime:${normalizedPluginId}`,
       errorMessage: options.errorMessage,
     };
   }

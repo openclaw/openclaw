@@ -46,6 +46,73 @@ const windowsEvidence = {
   },
   advisoryJobs: [windowsAdvisory],
 };
+const flakeReceipt = {
+  schema: "openclaw.frv-flake-classification.v1",
+  parentRunId: "123",
+  parentRunAttempt: 2,
+  child: "normalCi",
+  childRunId: "456",
+  childRunAttempt: 1,
+  targetSha,
+  jobId: "457",
+  jobName: "checks-node-test-2",
+  jobUrl: "https://github.com/openclaw/openclaw/actions/runs/456/job/457",
+  conclusion: "failure",
+  trackingUrl: "https://github.com/openclaw/openclaw/issues/789",
+  reason: "Shared test fixture races during cleanup; repair tracked on main.",
+  classifiedBy: "release-operator",
+  receiptRunId: "890",
+  receiptRunAttempt: 1,
+};
+const flakeEvidence = {
+  ...manifest,
+  runId: "123",
+  runAttempt: "2",
+  sourceParentRunAttempt: 2,
+  childRuns: { normalCi: "456" },
+  childEvidence: {
+    normalCi: {
+      runId: "456",
+      status: "completed",
+      conclusion: "failure",
+      jobs: [
+        {
+          name: flakeReceipt.jobName,
+          status: "completed",
+          conclusion: "failure",
+          acceptedRunAttempt: 1,
+          url: flakeReceipt.jobUrl,
+        },
+        {
+          name: "openclaw/ci-gate",
+          status: "completed",
+          conclusion: "failure",
+          url: "https://github.com/openclaw/openclaw/actions/runs/456/job/458",
+        },
+      ],
+      flakeClassifications: [flakeReceipt],
+      gateEntries: [
+        { name: "preflight", result: "success", selected: true },
+        { name: "checks-node", result: "failure", selected: true },
+        { name: "pr-fail-fast", result: "skipped", selected: false },
+      ],
+    },
+  },
+  advisoryJobs: [
+    {
+      class: "recorded-flake",
+      child: "normalCi",
+      job: flakeReceipt.jobName,
+      conclusion: "failure",
+      runId: "456",
+      url: flakeReceipt.jobUrl,
+      jobId: "457",
+      trackingUrl: flakeReceipt.trackingUrl,
+      reason: flakeReceipt.reason,
+      receiptRunId: "890",
+    },
+  ],
+};
 
 it.each([
   { releaseTag: "v2026.9.5-alpha.1", npmDistTag: "beta" },
@@ -294,6 +361,33 @@ describe("release publication control admission", () => {
       expect.objectContaining({ id: "publisher.selected-lanes", status: "FAIL" }),
     );
   });
+
+  it.each(["publisher", "core-npm", "stable-closeout"] as const)(
+    "admits recorded flakes only with their exact manifest proof at %s",
+    (consumer) => {
+      const selectedLaneGate = (evidence: unknown = flakeEvidence) =>
+        evaluateReleasePublishGates({
+          consumer,
+          releaseTag: "v2026.9.5",
+          npmDistTag: "latest",
+          manifest: evidence,
+        }).find((gate) => gate.id === `${consumer}.selected-lanes`);
+      expect(selectedLaneGate()).toMatchObject({ status: "PASS" });
+      for (const overrides of [
+        { runId: "124" },
+        { targetSha: "b".repeat(40) },
+        { advisoryJobs: [] },
+        { childEvidence: {} },
+        { validationInputs: { knownFlakyJobsJson: '["checks-node-test-2"]' } },
+        { validationInputs: { laneWaiver: "approved" } },
+        { publishInputs: { stableSoakWaiver: "approved" } },
+      ]) {
+        expect(selectedLaneGate({ ...flakeEvidence, ...overrides })).toMatchObject({
+          status: "FAIL",
+        });
+      }
+    },
+  );
 
   it.each([false, true])(
     "runs without installed dependencies and never emits waiver authority (waived=%s)",

@@ -1,4 +1,3 @@
-// Health check types define doctor checks, results, and repair metadata.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 

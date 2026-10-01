@@ -43,7 +43,7 @@ import {
   type SessionReferenceResolution,
   type SessionRoutePresentation,
 } from "./route-loader-short-resolve.ts";
-import type { ChatRouteData, SessionRouteCandidate } from "./session-route-data.ts";
+import type { ChatRouteData } from "./session-route-data.ts";
 
 export type { ChatRouteData, SessionChatRouteData } from "./session-route-data.ts";
 
@@ -167,19 +167,20 @@ function mainSessionKey(
   });
 }
 
-function candidatesForResolution(
+function ambiguousSessionRouteData(
   context: ApplicationContext,
   face: BoardFace,
   resolution: Extract<SessionReferenceResolution, { kind: "ambiguous" }>,
   location: RouteLocation,
   preferenceDerived: boolean,
-): SessionRouteCandidate[] {
+  shortId: string,
+): Extract<ChatRouteData, { kind: "ambiguous" }> {
   const resolvedRows = resolution.sessions.flatMap((row) => {
     const uuid = sessionKeyUuid(row.key);
     return uuid ? [{ row, uuid }] : [];
   });
   const uuids = resolvedRows.map(({ uuid }) => uuid);
-  return resolvedRows.flatMap(({ row, uuid }) => {
+  const candidates = resolvedRows.flatMap(({ row, uuid }) => {
     const prefix = uniqueShortIdPrefix(uuid, uuids, resolution.truncated);
     if (!prefix) {
       return [];
@@ -202,6 +203,7 @@ function candidatesForResolution(
         ]
       : [];
   });
+  return { kind: "ambiguous", shortId, candidates, truncated: resolution.truncated, face };
 }
 
 function resolvedSessionRouteData(params: {
@@ -450,19 +452,14 @@ export async function loadChatRoute(
           return missingSessionRouteData(context, face, target.agentId);
         }
         if (resolution?.kind === "ambiguous") {
-          return {
-            kind: "ambiguous",
-            shortId: target.slugCandidate,
-            candidates: candidatesForResolution(
-              context,
-              face,
-              resolution,
-              routeLocation,
-              preferenceDerived,
-            ),
-            truncated: resolution.truncated,
+          return ambiguousSessionRouteData(
+            context,
             face,
-          };
+            resolution,
+            routeLocation,
+            preferenceDerived,
+            target.slugCandidate,
+          );
         }
       }
     }
@@ -592,19 +589,14 @@ export async function loadChatRoute(
       : notFound({ routeId: face });
   }
   if (resolution.kind === "ambiguous") {
-    return {
-      kind: "ambiguous",
-      shortId: target.shortId,
-      candidates: candidatesForResolution(
-        context,
-        face,
-        resolution,
-        routeLocation,
-        preferenceDerived,
-      ),
-      truncated: resolution.truncated,
+    return ambiguousSessionRouteData(
+      context,
       face,
-    };
+      resolution,
+      routeLocation,
+      preferenceDerived,
+      target.shortId,
+    );
   }
   const resolved = resolvedSessionRouteData({
     context,

@@ -1,4 +1,3 @@
-// Implements trajectory export command packaging for the active session agent.
 import { createExecTool } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ReplyPayload } from "../types.js";

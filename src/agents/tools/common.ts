@@ -4,7 +4,6 @@ import {
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
-import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
 import type {
@@ -20,6 +19,7 @@ import { ToolAuthorizationError, ToolInputError } from "../tool-input-error.js";
 import { textResult } from "./tool-results.js";
 
 export { ToolAuthorizationError, ToolInputError };
+export { asNonArrayRecord as asToolParamsRecord } from "@openclaw/normalization-core/record-coerce";
 export { jsonResult, textResult } from "./tool-results.js";
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
@@ -52,10 +52,6 @@ type ErasedAgentToolExecute = {
 
 export type AnyAgentTool = Omit<AgentToolWithMeta<TSchema, unknown>, "execute"> &
   ErasedAgentToolExecute;
-
-export function asToolParamsRecord(params: unknown): Record<string, unknown> {
-  return asNonArrayRecord(params);
-}
 
 type StringParamOptions = {
   required?: boolean;

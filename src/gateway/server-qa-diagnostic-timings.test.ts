@@ -5,7 +5,8 @@ describe("resolveQaDiagnosticHeartbeatTimings", () => {
   it("accepts a bounded timing override only inside a QA Gateway child", () => {
     expect(
       resolveQaDiagnosticHeartbeatTimings({
-        OPENCLAW_QA_PARENT_PID: "123",
+        OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+        OPENCLAW_GATEWAY_HOST_LIFELINE: " stdin ",
         QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "30000",
       }),
     ).toEqual({ stuckSessionWarnMs: 15_000, stuckSessionAbortMs: 30_000 });
@@ -15,11 +16,21 @@ describe("resolveQaDiagnosticHeartbeatTimings", () => {
     {},
     { QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "30000" },
     {
-      OPENCLAW_QA_PARENT_PID: "123",
+      OPENCLAW_GATEWAY_HOST_LIFELINE: "stdin",
+      QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "30000",
+    },
+    {
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "30000",
+    },
+    {
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      OPENCLAW_GATEWAY_HOST_LIFELINE: "stdin",
       QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "29999",
     },
     {
-      OPENCLAW_QA_PARENT_PID: "123",
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      OPENCLAW_GATEWAY_HOST_LIFELINE: "stdin",
       QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "not-a-number",
     },
   ])("rejects non-QA or unsafe overrides: %j", (env) => {

@@ -28,7 +28,6 @@ import {
 } from "../navigation-guard.js";
 import {
   getBrowserProfileCapabilities,
-  shouldUsePlaywrightForAriaSnapshot,
   shouldUsePlaywrightForScreenshot,
 } from "../profile-capabilities.js";
 import { getLoadedPwAiModule, getPwAiModule } from "../pw-ai-module.js";
@@ -721,12 +720,8 @@ export function registerBrowserAgentSnapshotRoutes(
             });
           }
 
-          const usePlaywrightAriaSnapshot = shouldUsePlaywrightForAriaSnapshot({
-            profile: profileCtx.profile,
-            wsUrl: tab.wsUrl,
-          });
           let resolved: Awaited<ReturnType<typeof snapshotAria>>;
-          if (usePlaywrightAriaSnapshot) {
+          if (!tab.wsUrl) {
             const pw = await requirePwAi(res, "aria snapshot");
             if (!pw) {
               return;

@@ -11,9 +11,9 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agent-command-restart-recovery.js";
-import { hasVisibleAgentPayload } from "../embedded-agent-runner/message-visibility.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
+import { registerAgentCommandReplyPolicyTests } from "./delivery.reply-policy.test-support.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const deliverOutboundPayloadsMock = vi.hoisted(() =>
@@ -284,33 +284,11 @@ describe("deliverAgentCommandResult payload normalization", () => {
     setActivePluginRegistry(emptyRegistry);
   });
 
-  it.each([
-    {
-      name: "only a tool failure",
-      payloads: [{ text: "Yield failed", isError: true }],
-      visible: false,
-    },
-    {
-      name: "a final reply after a tool failure",
-      payloads: [
-        { text: "Yield failed", isError: true },
-        { text: "Both child results are ready." },
-      ],
-      visible: true,
-    },
-  ])("preserves completion visibility for $name", async ({ payloads, visible }) => {
-    const delivered = await deliverAgentCommandResultForTest({
-      payloads,
-      opts: { deliver: false },
-      omitReplyTarget: true,
-    });
-    expect(
-      hasVisibleAgentPayload(delivered, {
-        includeErrorPayloads: false,
-        includeReasoningPayloads: false,
-        requireTerminalContent: true,
-      }),
-    ).toBe(visible);
+  registerAgentCommandReplyPolicyTests({
+    deliverAgentCommandResultForTest,
+    deliverOutboundPayloadsMock,
+    latestOutboundDeliveryArgs,
+    expectDeliveryStatusFields,
   });
 
   it("rechecks delivery ownership after asynchronous payload preparation", async () => {
@@ -355,7 +333,6 @@ describe("deliverAgentCommandResult payload normalization", () => {
   it("forwards the run abort signal into durable delivery", async () => {
     const controller = new AbortController();
     controller.abort(createAgentRunRestartAbortError());
-
     await deliverMediaReplyForTest(undefined, {
       abortSignal: controller.signal,
     });

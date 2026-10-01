@@ -1,5 +1,6 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
@@ -40,7 +41,11 @@ import {
   resolveUpdateCommandAdmissionRoot,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
-import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import {
+  resolveServiceRefreshEnv,
+  withOwnedManagedUpdateEnv,
+  withUpdateInProgressEnv,
+} from "./update-command-service-env.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
@@ -158,18 +163,57 @@ async function updateCommandInternal(
   const updateStepTimeoutMs =
     prepared.timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
-  const target =
-    initialization?.target ??
-    (await resolveUpdateCommandTarget(
+  let target = initialization?.target;
+  let reselected = false;
+  if (target && initialization && !opts.channel && !opts.sourceUpdate) {
+    const config =
+      target.legacyConfigPlan?.config ??
+      (target.configSnapshot.valid
+        ? target.configSnapshot.config
+        : target.configSnapshot.sourceConfig);
+    if (normalizeUpdateChannel(config.update?.channel) !== target.storedChannel) {
+      defaultRuntime.error(
+        "Warning: Stored update channel changed during admission; selecting the current channel's target.",
+      );
+      run.executorFence?.assertCurrent();
+      await initialization.stagedPackage?.close();
+      run.executorFence?.assertCurrent();
+      // Candidate verdicts and downgrade confirmation belong to the old target.
+      initialization.stagedPackage = undefined;
+      initialization.candidateAdmission = undefined;
+      initialization.downgradeConfirmed = undefined;
+      run.candidateAdmissionChecks = undefined;
+      target = undefined;
+      reselected = true;
+    }
+  }
+  const selectTarget = () =>
+    resolveUpdateCommandTarget(
       opts,
       recoveryState,
       invocationCwd,
       prepared,
       executor,
       updateStepTimeoutMs,
-    ));
+    );
+  if (!target) {
+    target = initialization
+      ? await withOwnedManagedUpdateEnv(initialization.env, selectTarget)
+      : await selectTarget();
+  }
   if (!target) {
     return;
+  }
+  if (reselected && initialization) {
+    run.executorFence = await executor.enter(target.root, {
+      preflight: true,
+      serviceRoot: target.managedServiceRoot,
+    });
+    run.executorFence.assertCurrent();
+    assertUpdatePackageActivationAdmission(target.root, {
+      serviceRoot: target.managedServiceRoot,
+    });
+    initialization.target = target;
   }
   return await withUpdateCandidateAdmission(
     {

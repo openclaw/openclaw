@@ -266,6 +266,11 @@ async function runSpawnSample(
       progressSessionKey: "agent:bench:main",
     };
   });
+  const isSettledRun = (run: SubagentRunRecord | undefined) =>
+    run?.execution.status === "terminal" &&
+    typeof run.execution.endedAt === "number" &&
+    typeof run.cleanupCompletedAt === "number" &&
+    run.execution.outcome?.status === "ok";
   let result: Sample | undefined;
   let failure: unknown;
   try {
@@ -314,26 +319,14 @@ async function runSpawnSample(
     }
     for (const runId of runIds) {
       barrier.release(runId);
-      const runSettled = await waitForCondition(() => {
-        const run = registry.subagentRuns.get(runId);
-        return (
-          run?.execution.status === "terminal" &&
-          typeof run.execution.endedAt === "number" &&
-          typeof run.cleanupCompletedAt === "number" &&
-          run.execution.outcome?.status === "ok"
-        );
-      });
+      const runSettled = await waitForCondition(() =>
+        isSettledRun(registry.subagentRuns.get(runId)),
+      );
       if (!runSettled) {
         throw new Error(`spawn ${mode} did not settle released run ${runId}`);
       }
     }
-    const settledRuns = [...registry.subagentRuns.values()].filter(
-      (entry) =>
-        entry.execution.status === "terminal" &&
-        typeof entry.execution.endedAt === "number" &&
-        typeof entry.cleanupCompletedAt === "number" &&
-        entry.execution.outcome?.status === "ok",
-    ).length;
+    const settledRuns = [...registry.subagentRuns.values()].filter(isSettledRun).length;
     if (settledRuns !== fanout || barrier.outstanding !== 0) {
       throw new Error(
         `spawn ${mode} settlement invariant failed: ${JSON.stringify({ fanout, settledRuns, outstandingWaits: barrier.outstanding })}`,

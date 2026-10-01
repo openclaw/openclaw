@@ -155,6 +155,7 @@ export async function prepareCodexAttemptTurnRequest(
       connection.assertCurrent();
       liveThreadOwnership?.assertCurrent();
       if (
+        resourceState.client !== turnClient ||
         resourceState.thread !== selectedThread ||
         selectedThread.threadId !== threadId ||
         selectedThread.liveThreadOwnership !== liveThreadOwnership ||
@@ -195,8 +196,6 @@ export async function prepareCodexAttemptTurnRequest(
             model: resourceState.thread.model,
             modelProvider: resourceState.thread.modelProvider,
           }),
-      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       preserveNativeTurnSettings: usesSupervisionConnection,
       parentLocalEgress: inferenceRoute !== undefined,
       messageToolAvailable: toolBridge.availableTools.some((tool) => tool.name === "message"),
@@ -206,7 +205,8 @@ export async function prepareCodexAttemptTurnRequest(
       ),
     });
     const serviceTier = await resolveCodexUltrafastServiceTier({
-      enabled: turnAppServer.enableUltrafast === true && fastMode !== false,
+      enabled:
+        fastMode === "ultrafast" || (turnAppServer.enableUltrafast === true && fastMode !== false),
       serviceTier: turnStartParams.serviceTier,
       model: turnStartParams.model ?? model,
       modelProvider,
@@ -254,11 +254,9 @@ export async function prepareCodexAttemptTurnRequest(
         text: usesSupervisionConnection
           ? ""
           : (buildCodexParentLocalInstructions(runtimeParams, {
-              turnScopedDeveloperInstructions:
-                workspaceBootstrapContext.turnScopedDeveloperInstructions,
+              personaInstructions: workspaceBootstrapContext.personaInstructions,
               skillsInstructions: context.skillsInstructions,
-              memoryCollaborationInstructions:
-                workspaceBootstrapContext.memoryCollaborationInstructions,
+              memoryInstructions: workspaceBootstrapContext.memoryInstructions,
             }) ?? ""),
         signal: runAbortController.signal,
         assertCurrent: () => {
@@ -279,22 +277,10 @@ export async function prepareCodexAttemptTurnRequest(
         ...turnStartParams.responsesapiClientMetadata,
         [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
       };
-    } else if (!usesSupervisionConnection) {
+    } else if (workspaceBootstrapContext.personaFiles?.some((file) => file.personalUser)) {
       embeddedAgentLog.warn(
-        "Codex parent-local egress workaround is unavailable for this connection or native network profile; legacy collaboration delivery is not guaranteed.",
+        "Personal USER.md was omitted: this Codex connection has no parent-only inference relay. Shared workspace persona is still delivered.",
       );
-      prompt.systemPromptReport.source = "estimate";
-      prompt.systemPromptReport.injectedWorkspaceFiles =
-        prompt.systemPromptReport.injectedWorkspaceFiles.map((file) =>
-          ["SOUL.MD", "IDENTITY.MD", "USER.MD"].includes(file.name.toUpperCase())
-            ? {
-                ...file,
-                injectionStatus: "native_unverified",
-                injectedChars: null,
-                truncated: null,
-              }
-            : file,
-        );
     }
     const continuation = await prepareCodexProviderReviewContinuation({
       acknowledgment: params.providerReviewAcknowledgment,

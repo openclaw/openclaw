@@ -279,12 +279,13 @@ siblings sharing its serial bin retain their two-worker group caps. The CLI
 inventory, split policies, timing weights, and admission budgets are unchanged.
 
 The `agentic-gateway-server-isolated` family, including its database-worker
-config, is capped at eight workers on Blacksmith and hybrid profiles and
-additionally requires 28 GiB total memory. Its historical 20.70 GiB peak fits
-within 75% of that floor, leaving at
-least 7.30 GiB for the runner, operating system, and variation. Smaller hosts,
-hosted retries, frozen targets, and overlapping plans retain its two-worker
-fallback; the independently planned GitHub profile is unchanged.
+config, keeps two workers on Blacksmith and hybrid profiles. Current-source
+first-sign-in CI exceeded its unchanged 90-second deadline under the eight-worker
+allocation; an eight-worker baseline control completed in 85.4 seconds, leaving
+little margin. The two-worker budget restores cold-startup headroom without
+changing test deadlines, assertions, inventory, or cleanup. Existing host admission
+and fallback rules, the independently planned GitHub profile, and the separate
+four-worker Gateway methods policy remain unchanged.
 
 The historical [September 20 paired probe](https://github.com/openclaw/openclaw/actions/runs/35543209292)
 at source `39b3aa10677c99af54e3bffb43cadf3bb6c89eb8` used the same eight-CPU,
@@ -911,7 +912,7 @@ Automatic canonical hybrid first attempts count the complete selected hosted inv
 
 `HYBRID_HOSTED_BASE_ROW_LIMIT` is 40 and `HYBRID_HOSTED_ROW_LIMIT` is 45. At or below 40 base hosted rows, preflight may move `security-fast`, the three `checks-ui` rows, and the browser-extension E2E row to hosted Ubuntu, adding at most five rows and never exceeding 45 through this admission. Above 40 base hosted rows, all five retain their existing Blacksmith routes. An eligible base above 45 emits a warning with the row count and retains the complete base manifest. The 45-row budget bounds optional offload admission; it does not reject existing coverage or reshape noneligible fallback manifests: retries, manual and frozen targets, untrusted authors, other repositories, and the `github` outage override retain their existing routing, including wholly hosted runs that can already exceed 45 rows.
 
-After that admission, canonical main pushes and trusted Windows-selected PRs with a full compact Node plan and at least 500 predicted seconds in one serial row can move eight check rows to hosted Ubuntu: dependencies, five core test-type stripes, extension package boundaries, and runtime topology architecture. The five stripes distribute the same complete compiler graphs formerly grouped into two rows and the central type-check job. The separate `hybrid_hosted_checks` decision requires fresh healthy [assignment evidence](/ci/runners#hybrid-hosted-assignment-guard) and enough room for every selected check within the same 45-row limit. Precise PRs without that measured latency floor retain their existing routes.
+After that admission, canonical main pushes and trusted Windows-selected PRs with a full compact Node plan and at least 500 predicted seconds in one serial row can move seven check rows to hosted Ubuntu: dependencies, five core test-type stripes, and runtime topology architecture. Extension package boundaries retain Blacksmith. Their previous hosted-row reservation remains in admission so other checks keep the same thresholds; the reported hosted total counts only actual offloads. The five stripes distribute the same complete compiler graphs formerly grouped into two rows and the central type-check job. The separate `hybrid_hosted_checks` decision requires fresh healthy [assignment evidence](/ci/runners#hybrid-hosted-assignment-guard) and enough room for every selected check within the same 45-row limit. Precise PRs without that measured latency floor retain their existing routes.
 
 The six current hybrid extension-lint stripes are part of the base hosted inventory. The type split adds at most three Blacksmith registrations when hosted admission is unavailable; using the existing conservative four-main/21-PR arrival envelope, the 153/213 registration bound becomes 156/216, or 5,160 registrations, below the 6,000 operating target. No Node matrix cap or hosted admission limit changes. Reserving the additional real-Gateway row conservatively for every run raises that envelope to 157/217, or 5,185 registrations (`4 × 157 + 21 × 217`), leaving 815 below the operating target. This reservation does not spend ordinary PRs’ existing proof-tier omission; the eligible hybrid hosted inventory is unchanged because these rows retain Blacksmith.
 

@@ -79,6 +79,7 @@ function owner(config: OpenClawConfig, entries: ModelCatalogEntry[]): PreparedMo
 function withAdmitted<T>(snapshot: PreparedModelRuntimeSnapshot, run: () => T, active = true): T {
   return withPreparedModelRuntimePluginGenerationScope(
     {
+      remoteCatalog: null,
       pluginMetadataSnapshot: snapshot.metadataSnapshot,
       inlineProviderModels: [],
       configuredCatalogEntries: snapshot.modelCatalog.entries,

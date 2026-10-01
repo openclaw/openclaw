@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isWithinDir } from "@openclaw/fs-safe/path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -245,10 +246,7 @@ export function normalizeSessionEntry(
   }
   const normalized = { ...shaped };
   if (typeof normalized.sessionId === "string") {
-    normalized.updatedAt =
-      typeof normalized.updatedAt === "number" && Number.isFinite(normalized.updatedAt)
-        ? normalized.updatedAt
-        : Date.now();
+    normalized.updatedAt = asFiniteNumber(normalized.updatedAt) ?? Date.now();
   }
   if (typeof normalized.groupChannel !== "string" && typeof room === "string") {
     normalized.groupChannel = room;

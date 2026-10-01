@@ -13,6 +13,7 @@ import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
@@ -435,13 +436,14 @@ export async function maybeSpawnVisibleSession(params: {
       maxSpawnDepth: maxDepth,
     });
     try {
+      const titleSource = placement && buildDashboardSessionTitleSource({ message: params.task });
       const createParams = {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
-        ...(placement ? { titleSource: params.task } : { task: taskMessage }),
+        ...(placement ? { titleSource } : { task: taskMessage }),
         timeoutMs:
           runTimeoutSeconds === 0
             ? 0

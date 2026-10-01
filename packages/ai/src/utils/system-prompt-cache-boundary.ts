@@ -1,8 +1,3 @@
-/**
- * System prompt cache-boundary helpers.
- *
- * Keeps stable prompt prefixes separate from dynamic runtime additions for provider prompt caching.
- */
 import { normalizeStructuredPromptSection } from "./prompt-cache-stability.js";
 
 export const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n";
@@ -102,9 +97,5 @@ export function prependSystemPromptAdditionAfterCacheBoundary(params: {
   const dynamicSuffix = split.dynamicSuffix
     ? normalizeStructuredPromptSection(split.dynamicSuffix)
     : "";
-  if (!dynamicSuffix) {
-    return `${split.stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}${systemPromptAddition}`;
-  }
-
-  return `${split.stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}${systemPromptAddition}\n\n${dynamicSuffix}`;
+  return `${split.stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}${systemPromptAddition}${dynamicSuffix ? `\n\n${dynamicSuffix}` : ""}`;
 }

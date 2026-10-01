@@ -25,7 +25,7 @@ export async function listXaiTtsVoices(params: {
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
   const baseUrl = normalizeXaiTtsBaseUrl(params.baseUrl);
-  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+  const { assertOkOrThrowProviderError, readProviderJsonArrayFieldResponse } =
     await import("openclaw/plugin-sdk/provider-http");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedOrigin } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
@@ -44,13 +44,9 @@ export async function listXaiTtsVoices(params: {
   });
   try {
     await assertOkOrThrowProviderError(response, "xAI TTS voices API error");
-    const payload = await readProviderJsonResponse<unknown>(response, "xAI TTS voices", {
+    const voices = await readProviderJsonArrayFieldResponse(response, "xAI TTS voices", "voices", {
       maxBytes: XAI_TTS_VOICE_LIST_MAX_BYTES,
     });
-    const voices = asOptionalRecord(payload)?.voices;
-    if (!Array.isArray(voices)) {
-      throw new Error("xAI TTS voices: malformed JSON response");
-    }
     return voices.flatMap((value) => {
       const voice = asOptionalRecord(value);
       const id = trimToUndefined(voice?.voice_id);

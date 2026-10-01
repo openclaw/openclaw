@@ -12,7 +12,7 @@ import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { prepareCronPromptRunAdmission } from "../cron/isolated-agent/run-admission.js";
+import { prepareCronRunAdmission } from "../cron/run-admission.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
@@ -130,7 +130,8 @@ async function withHostedCreation(
         : undefined;
     const scheduled =
       source === "scheduled"
-        ? prepareCronPromptRunAdmission({
+        ? prepareCronRunAdmission({
+            deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
             cfg,
             runId: "scope-parent-run",
             agentId: "main",

@@ -117,7 +117,7 @@ export function createEmbeddedRunProgressController(params: {
     if (params.attempt.fastMode === "auto") {
       return resolveAttemptFastMode;
     }
-    return resolveAttemptFastMode();
+    return params.attempt.fastMode;
   };
   const maybeEmitFastModeAutoResetBestEffort = async () => {
     try {

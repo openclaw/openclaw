@@ -417,12 +417,11 @@ async function runCommandWithOutputEncoding(
 
   const captureOutput = (
     capture: CapturedOutputBuffers,
-    chunk: Buffer | string,
+    buffer: Buffer,
     maxBytes: number,
     stream: CommandOutputStream,
     captureMode: CommandOutputCaptureMode,
   ) => {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     outputBytesByStream[stream] += buffer.byteLength;
     const streamLimitExceeded = outputBytesByStream[stream] > maxBytes;
     if (maxCombinedOutputBytes === undefined) {

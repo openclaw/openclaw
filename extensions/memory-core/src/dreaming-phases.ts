@@ -301,13 +301,7 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
       flushChunk();
       continue;
     }
-    const candidateSnippet = buildDailyChunkSnippet(activeHeading, [...chunkLines, snippet]);
-    const shouldSplit =
-      chunkLines.length > 0 &&
-      (chunkLines.length >= DAILY_INGESTION_MAX_CHUNK_LINES ||
-        candidateSnippet.length > DAILY_INGESTION_MAX_SNIPPET_CHARS);
-
-    if (shouldSplit) {
+    if (chunkLines.length >= DAILY_INGESTION_MAX_CHUNK_LINES) {
       flushChunk();
     }
 
@@ -540,7 +534,7 @@ async function collectSessionIngestionBatches(params: {
   for (const agentId of agentIds) {
     const knownStateKeys = new Set<string>();
     const forgottenSessionIds = new Set(
-      listMemorySessionTombstones({ agentId }).map((tombstone) => tombstone.sessionId),
+      (await listMemorySessionTombstones({ agentId })).map((tombstone) => tombstone.sessionId),
     );
     for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId, {
       includeRetainedSqlite: true,

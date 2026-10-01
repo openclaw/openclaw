@@ -52,11 +52,6 @@ import {
 
 export { createCodexSessionCatalogControl } from "./session-catalog-control.js";
 export { createCodexSessionCatalogNodeHostCommands } from "./session-catalog-listing.js";
-export {
-  CODEX_LOCAL_SESSION_HOST_ID,
-  CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
-} from "./session-catalog-parsing.js";
-
 /** Allows read-only catalog and transcript commands on supported paired-node platforms. */
 export function createCodexSessionCatalogNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
   return [
@@ -149,12 +144,12 @@ function resolveLocalCatalogHomeForThread(params: {
     throw new CatalogParamsError("local Codex sessions are unavailable in isolated state");
   }
   const exact = params.sourceHomeId
-    ? params.homes.filter((home) => home.sourceHomeId === params.sourceHomeId)
-    : params.homes.filter((home) => home.hostId === params.hostId);
-  if (exact.length === 0 || (params.sourceHomeId && exact[0]?.hostId !== params.hostId)) {
+    ? params.homes.find((home) => home.sourceHomeId === params.sourceHomeId)
+    : params.homes.find((home) => home.hostId === params.hostId);
+  if (!exact || (params.sourceHomeId && exact.hostId !== params.hostId)) {
     throw new CatalogParamsError("Codex session source home is unavailable");
   }
-  return exact[0]!;
+  return exact;
 }
 
 type CatalogListOperation = ReturnType<NonNullable<SessionCatalogProvider["createListOperation"]>>;
@@ -240,13 +235,6 @@ function catalogHostMapper(
       finishTiming();
     }
   };
-}
-
-function mappedHostPublisher(
-  onHost: (host: SessionCatalogHost) => void,
-  mapHost: (host: CodexSessionCatalogHost) => SessionCatalogHost,
-) {
-  return (host: CodexSessionCatalogHost) => onHost(mapHost(host));
 }
 
 function mapCatalogListOperation(
@@ -344,7 +332,7 @@ function registerCodexSessionCatalog(params: {
           localHomes,
           allowPartialResults,
           nodeSnapshots,
-          ...(onHost ? { onHost: mappedHostPublisher(onHost, mapHost) } : {}),
+          ...(onHost ? { onHost: (host: CodexSessionCatalogHost) => onHost(mapHost(host)) } : {}),
         }),
         mapHost,
       );

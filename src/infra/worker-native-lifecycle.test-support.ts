@@ -7,6 +7,7 @@ import { mock } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread, Worker } from "node:worker_threads";
 import { createDeferredCore } from "../shared/deferred.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   captureRuntimeWorkerSource,
   withRuntimeWorkerGeneration,
@@ -573,8 +574,42 @@ async function runExplicitUnboundLifecycle() {
     await worker.terminate();
   }
   assert.equal(worker.threadId, -1);
+  assert.equal(getTrackedWorkerLifecycleSnapshot().workerCount, initialWorkers + 1);
+  const idleSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  assert.equal(idleSource, source);
+  let ownerClosed = false;
+  source.retain({}, async () => {
+    // Already admitted owners may finish queued work while shutdown drains them.
+    const queued = createRetainedNativeWorker(
+      echoWorkerSource,
+      { eval: true, execArgv: [] },
+      idleSource,
+    );
+    const queuedReply = createDeferredCore<unknown>();
+    queued.on("message", queuedReply.resolve);
+    queued.on("error", queuedReply.reject);
+    queued.postMessage(41, []);
+    assert.equal(await queuedReply.promise, 42);
+    await queued.terminate();
+    assert.equal(getTrackedWorkerLifecycleSnapshot().workerCount, initialWorkers + 1);
+    ownerClosed = true;
+  });
+  await drainGlobalSingletonLifecycleState();
+  assert.equal(ownerClosed, true);
+  assert.equal(getTrackedWorkerLifecycleSnapshot().workerCount, initialWorkers);
+  assert.throws(() => source.create(echoWorkerSource, { eval: true }), /closing/);
+  const renewed = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  assert.notEqual(renewed, source);
+  await drainGlobalSingletonLifecycleState();
   console.log(
-    JSON.stringify({ ending: "explicit-unbound", ambientReleased, value: 42, nativeJoined: true }),
+    JSON.stringify({
+      ending: "explicit-unbound",
+      ambientReleased,
+      value: 42,
+      nativeJoined: true,
+      idleReused: true,
+      shutdownJoined: true,
+    }),
   );
 }
 
@@ -588,6 +623,9 @@ assert.ok(
     ending === "supervisor-loss" ||
     ending === "native-resource" ||
     ending === "resource-supervisor-loss" ||
+    ending === "resource-auto-close-success" ||
+    ending === "resource-auto-close-failure" ||
+    ending === "resource-auto-close-refusal" ||
     ending === "resource-cold-supervisor-loss" ||
     ending === "resource-close-supervisor-loss" ||
     ending === "resource-late-attachment" ||
@@ -609,6 +647,30 @@ if (ending === "generation") {
   await runNativeColdRecovery(directory, serviceNativeUntil);
 } else if (ending === "resource-supervisor-loss") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil, true);
+} else if (ending === "resource-auto-close-success") {
+  await runNativeResourceLifecycle(
+    directory,
+    serviceNativeUntil,
+    true,
+    false,
+    "auto-close-success",
+  );
+} else if (ending === "resource-auto-close-failure") {
+  await runNativeResourceLifecycle(
+    directory,
+    serviceNativeUntil,
+    true,
+    false,
+    "auto-close-failure",
+  );
+} else if (ending === "resource-auto-close-refusal") {
+  await runNativeResourceLifecycle(
+    directory,
+    serviceNativeUntil,
+    true,
+    false,
+    "auto-close-refusal",
+  );
 } else if (ending === "resource-close-supervisor-loss") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil, true, true);
 } else if (ending === "resource-late-attachment") {

@@ -75,7 +75,7 @@ export async function finishAlreadyCurrentUpdate(
     };
     const admission = await inspectUpdateDatabaseContexts(inspection);
     const service = admission.service;
-    const context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
+    let context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
     const membership = await mutableUpdateGatewayServiceBlock({
       preManagedServiceStop:
         service ?? admission.services.get(params.managedServiceRoot ?? params.root),
@@ -157,7 +157,8 @@ export async function finishAlreadyCurrentUpdate(
       expectedServices: admission.services,
       expectedForeground: admission.foreground,
     });
-    await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
+    admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
+    context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
     let stopState = admission.foreground
       ? undefined
       : admission.services.get(params.managedServiceRoot ?? params.root);
@@ -186,8 +187,8 @@ export async function finishAlreadyCurrentUpdate(
     const env = owned?.env ?? context.env;
     let configSnapshot = owned?.configSnapshot ?? context.configSnapshot;
     const plan =
-      params.legacyConfigPlan?.snapshot.path === configSnapshot.path
-        ? params.legacyConfigPlan
+      context.legacyConfigPlan?.snapshot.path === configSnapshot.path
+        ? context.legacyConfigPlan
         : undefined;
     const storedChannel = normalizeUpdateChannel(
       (plan?.config ?? configSnapshot.config).update?.channel,

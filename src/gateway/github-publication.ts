@@ -462,7 +462,7 @@ export function createGitHubPublicationCoordinator(params: {
 
   const prepareClaimWorkspace = async (claim: WorkerSessionTurnClaim): Promise<void> => {
     ensureSchema();
-    params.placements.closeWorkerTurnToolAdmission(claim);
+    await params.placements.closeWorkerTurnToolAdmission(claim);
     const rows = listGitHubPublicationsForClaim(claim, { pendingOnly: true });
     if (rows.length === 0) {
       return;

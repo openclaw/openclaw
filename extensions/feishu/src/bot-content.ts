@@ -276,7 +276,12 @@ export async function resolveFeishuMediaList(params: {
         key: attachment.key,
         type: attachment.kind,
         fileName: attachment.kind === "file" ? attachment.fileName : undefined,
-        kind: attachment.kind === "image" ? "image" : "video",
+        kind:
+          attachment.kind === "image"
+            ? "image"
+            : attachment.origin === "top-level"
+              ? "document"
+              : "video",
         label: `embedded ${attachment.kind} ${attachment.key}`,
       });
     }

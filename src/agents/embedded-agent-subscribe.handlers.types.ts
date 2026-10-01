@@ -17,6 +17,7 @@ import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { StreamDirectiveCodePrefix } from "../utils/directive-tags.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -124,16 +125,7 @@ export type EmbeddedAgentSubscribeState = {
     string,
     { lastEmittedAtMs: number; itemMetadata: ExecLiveItemMetadata }
   >;
-  liveEditDiffStateById: Map<
-    string,
-    {
-      added: number;
-      removed: number;
-      emittedAdded: number;
-      emittedRemoved: number;
-      lastCheckedAtMs: number;
-    }
-  >;
+  liveEditDiffStateById: Map<string, LiveEditDiffProgressState>;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;

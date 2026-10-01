@@ -39,6 +39,17 @@ Home can include a bounded, quoted work-context reference with your message. Bef
 
 Sent messages show **Context attached** below your words instead of displaying the generated context as message text. Open it to inspect the captured session, page, agent, workspace, file, or selection; **Technical details** shows the snapshot as JSON. The snapshot is frozen when you send, including through queues and retries. Copying or editing your message does not include the generated reference. It remains reference data, not instructions or permission to access another conversation. Older messages without a recorded attachment are left unchanged.
 
+## Plugin conversation docks
+
+A plugin page can offer an action to open its conversation beside the page.
+It uses the same chat pane, drafts, attachments, right-or-bottom placement,
+resizing, and close controls as Home. Opening it replaces Home, Ask OpenClaw,
+or another conversation dock. It stays open across page navigation and hides
+while the same conversation is open as the Chat or Dashboard page. Closing
+leaves no dock open. Read-only access and session errors follow the normal
+chat rules. A plugin can include a bounded page reference, shown as
+**Context attached** after sending; it remains untrusted reference data.
+
 ## Operator terminal
 
 The operator terminal is enabled by default; set `gateway.terminal.enabled: false` to opt out. The terminal requires an `operator.admin` connection and opens a host PTY in the active agent workspace. New tabs follow the currently selected chat agent.

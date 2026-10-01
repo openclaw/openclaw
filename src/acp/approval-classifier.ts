@@ -1,4 +1,3 @@
-/** Classifies ACP tool permission requests into auto-approved and prompt-required risk buckets. */
 import { homedir } from "node:os";
 import path from "node:path";
 import { trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";

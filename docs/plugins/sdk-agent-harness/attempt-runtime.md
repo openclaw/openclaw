@@ -161,6 +161,16 @@ hook needs history. Heartbeat-only contributions do not read conversation histor
 The production-private `resolveAgentHarnessHistoryLimits` helper applies the shared
 Codex and Agents API transcript read budget.
 
+Agents API retains the first successfully prepared, bounded hook history for
+retries of the same logical run and native session. Prompt hooks still run on
+each attempt with the current input and live host authority; their history stays
+at the original before-turn snapshot. Accepted steering therefore does not force
+a new transcript read through the original message's now-stale admission.
+This snapshot is data, not renewed transcript-read permission: later transcript
+changes are observed by the next logical run, and a changed recorder, session,
+run identity, or history budget requires a fresh read. Session reset and run
+cancellation retain their existing authority checks.
+
 The `developerInstructions.build` callback receives `toolsAllow` and
 `hasToolRestrictions`. Omitted policy or a trimmed `*` entry is unrestricted;
 an empty list or a list without `*` is restrictive. Backends enforcing per-turn

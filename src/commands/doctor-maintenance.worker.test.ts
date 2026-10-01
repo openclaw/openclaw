@@ -235,8 +235,10 @@ describe("Doctor maintenance with shared-state workers", () => {
                 ).toEqual(relayRecord(2));
               }
               if (databaseGenerations) {
+                // Doctor's own schema upgrade changes the fingerprint, and the maintenance
+                // owner cannot attribute it, so no receipt is eligible for automatic restore.
                 expect(maintenance!.databaseWrites).toEqual({
-                  unchanged: scenario === "receipt-unchanged",
+                  unchanged: false,
                   fromGenerations: admittedGenerations,
                   generations: readUpdateDatabaseGenerations([databasePath]),
                 });

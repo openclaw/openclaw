@@ -70,10 +70,7 @@ enum ChatContextUsageCalculator {
 
 extension OpenClawChatViewModel {
     public var contextUsage: OpenClawChatContextUsage? {
-        let entry = self.sessions.first { $0.key == self.sessionKey } ??
-            self.sessions.first {
-                self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)
-            }
+        let entry = self.currentSessionEntry()
         return ChatContextUsageCalculator.usage(
             messages: self.messages,
             sessionEntry: entry,

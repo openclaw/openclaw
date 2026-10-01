@@ -169,9 +169,7 @@ export function buildMSTeamsPollCard(params: {
     value: String(index),
   }));
   const hint =
-    cappedMaxSelections > 1
-      ? `Select up to ${cappedMaxSelections} option${cappedMaxSelections === 1 ? "" : "s"}.`
-      : "Select one option.";
+    cappedMaxSelections > 1 ? `Select up to ${cappedMaxSelections} options.` : "Select one option.";
 
   const card = {
     type: "AdaptiveCard",

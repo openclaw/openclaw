@@ -127,6 +127,24 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           lastTriggerEvalAtMs: firstEvalAt,
           nextRunAtMs: nextEvalAt,
         });
+        const second = await waitForJob(
+          instance,
+          watcher.id,
+          (job) => (job.state.triggerEvalCount ?? 0) >= 2,
+        );
+        const secondState = second.state.triggerState as { count: number; startedAtMs: number };
+        expect(secondState.count).toBe(2);
+        expect(secondState.startedAtMs - firstEvalAt).toBeGreaterThanOrEqual(30_000);
+        expect(second.state.lastRunAtMs).toBeUndefined();
+        expect(await cliJson(instance, ["cron", "runs", watcher.id])).toMatchObject({
+          entries: [],
+        });
+        await cliJson(instance, ["cron", "disable", watcher.id]);
+        const quiescent = await waitForJob(
+          instance,
+          watcher.id,
+          (job) => !job.enabled && job.state.runningAtMs === undefined,
+        );
         const scratchText = "private café notes\nretained across restart";
         expect(
           await cliJson<CronScratchSetResult>(instance, [
@@ -142,12 +160,8 @@ describeLive("cron scheduling through an isolated Gateway", () => {
         await instance.stopGateway();
         await instance.startGateway();
         const restored = await cliJson<CronJob>(instance, ["cron", "get", watcher.id]);
-        expect(restored.state).toMatchObject({
-          triggerEvalCount: 1,
-          triggerState: first.state.triggerState,
-          lastTriggerEvalAtMs: firstEvalAt,
-          nextRunAtMs: nextEvalAt,
-        });
+        expect(restored.enabled).toBe(false);
+        expect(restored.state).toEqual(quiescent.state);
         expect(
           await cliJson<CronScratchGetResult>(instance, ["cron", "scratch", watcher.id]),
         ).toMatchObject({ currentRevision: 1, scratch: { content: scratchText } });
@@ -184,21 +198,9 @@ describeLive("cron scheduling through an isolated Gateway", () => {
         ]);
         expect(clearedScratch.currentRevision).toBe(2);
         expect(clearedScratch.scratch).toBeNull();
-        const second = await waitForJob(
-          instance,
-          watcher.id,
-          (job) => (job.state.triggerEvalCount ?? 0) >= 2,
-        );
-        const secondState = second.state.triggerState as { count: number; startedAtMs: number };
-        expect(secondState.count).toBe(2);
-        expect(secondState.startedAtMs - firstEvalAt).toBeGreaterThanOrEqual(30_000);
-        expect(second.state.lastRunAtMs).toBeUndefined();
-        expect(await cliJson(instance, ["cron", "runs", watcher.id])).toMatchObject({
-          entries: [],
-        });
         await cliJson(instance, ["cron", "rm", watcher.id]);
         logLiveProgress(
-          "cron scheduler: quiet condition kept its 30-second floor through reads and restart",
+          "cron scheduler: quiet condition kept its 30-second floor; disabled trigger state and scratch survived restart",
         );
 
         const scriptPath = path.join(workspace, "capture-stream.js");

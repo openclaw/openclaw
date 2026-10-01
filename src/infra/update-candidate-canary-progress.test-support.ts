@@ -18,6 +18,7 @@ import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import { stubHealthyGateway } from "./update-candidate-canary.test-support.js";
 import * as candidateIo from "./update-candidate-io.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { createUpdateRun, getUpdateRunAsync } from "./update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
@@ -129,6 +130,7 @@ export function registerCanaryProgressWorkerTests(
           }
         }
       };
+      const onStepComplete = vi.fn();
       const pending = Promise.resolve().then(() =>
         validateUpdateCandidateWithProgress(
           {
@@ -138,7 +140,7 @@ export function registerCanaryProgressWorkerTests(
             assertCurrent: guards.assertCurrent,
             writeOptions,
           },
-          { opts: { json: true }, progress: {} },
+          { opts: { json: true }, progress: { onStepComplete } },
           run,
         ),
       );
@@ -160,48 +162,38 @@ export function registerCanaryProgressWorkerTests(
           expect(mocks.spawn).not.toHaveBeenCalled();
           return;
         }
-        if (outcome === "interrupted-after-acceptance") {
-          const observed = await pending.then(
-            (result) => ({ result }),
-            (error: unknown) => ({ error }),
-          );
+        if (outcome === "revoked-at-commit" || outcome === "interrupted-after-acceptance") {
+          await expect(pending).rejects.toBeInstanceOf(UpdateRequesterRevokedError);
           expect(checkedCommit).toBe(true);
           const saved = await getUpdateRunAsync(run.runId, { env });
-          expect(saved?.steps).toContainEqual(
+          if (outcome === "revoked-at-commit") {
+            expect(saved).toEqual(created);
+          } else {
+            expect(saved?.steps).toContainEqual(
+              expect.objectContaining({
+                step: "candidate-state-snapshot",
+                status: "in_progress",
+                detail: expect.stringContaining("completed, attempt 1, 920445/920445 pages"),
+              }),
+            );
+          }
+          expect(onStepComplete).toHaveBeenCalledWith(
             expect.objectContaining({
-              step: "candidate-state-snapshot",
-              status: "in_progress",
-              detail: expect.stringContaining("completed, attempt 1, 920445/920445 pages"),
-            }),
-          );
-          expect(observed).toMatchObject({
-            result: {
-              status: "error",
-              phase: "snapshot",
-              steps: expect.arrayContaining([
+              name: "candidate-state-snapshot",
+              exitCode: 1,
+              failureFacts: expect.arrayContaining([
                 expect.objectContaining({
-                  exitCode: 1,
-                  failureFacts: expect.arrayContaining([
-                    expect.objectContaining({
-                      message: expect.stringContaining("requester-revoked"),
-                    }),
-                  ]),
+                  message: expect.stringContaining("requester-revoked"),
                 }),
               ]),
-            },
-          });
+            }),
+          );
           expect(mocks.spawn).not.toHaveBeenCalled();
           return;
         }
         const result = await pending;
         expect(checkedCommit).toBe(true);
         const saved = await getUpdateRunAsync(run.runId, { env });
-        if (outcome === "revoked-at-commit") {
-          expect(result).toMatchObject({ status: "error", phase: "snapshot" });
-          expect(saved).toEqual(created);
-          expect(mocks.spawn).not.toHaveBeenCalled();
-          return;
-        }
         expect(result.status).toBe("ok");
         expect(saved?.steps).toContainEqual(
           expect.objectContaining({

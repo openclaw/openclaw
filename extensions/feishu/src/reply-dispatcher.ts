@@ -11,6 +11,7 @@ import {
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toStringifiedError as toFeishuError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   getReplyPayloadTtsSupplement,
@@ -115,7 +116,6 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
   return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
 }
 
-/** Build a card header from agent identity config. */
 function resolveCardHeader(
   agentId: string,
   identity: OutboundIdentity | undefined,
@@ -132,7 +132,6 @@ function resolveCardHeader(
   };
 }
 
-/** Build a card note footer from agent identity and model context. */
 function resolveCardNote(
   agentId: string,
   identity: OutboundIdentity | undefined,
@@ -222,7 +221,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       accountId,
       typing: {
         start: async () => {
-          // Check if typing indicator is enabled (default: true)
           if (!(account.config.typingIndicator ?? true)) {
             return;
           }
@@ -370,20 +368,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const buildCombinedStreamText = (thinking: string, answer: string): string => {
-    const parts: string[] = [];
-    if (thinking) {
-      parts.push(formatReasoningPrefix(thinking));
-    }
-    if (thinking && answer) {
-      parts.push("\n\n---\n\n");
-    }
-    if (answer) {
-      parts.push(answer);
-    }
-    if (statusLine) {
-      parts.push(parts.length > 0 ? `\n\n${statusLine}` : statusLine);
-    }
-    return parts.join("");
+    const content = [thinking ? formatReasoningPrefix(thinking) : "", answer]
+      .filter(Boolean)
+      .join("\n\n---\n\n");
+    return [content, statusLine].filter(Boolean).join("\n\n");
   };
 
   const flushStreamingCardUpdate = (combined: string) => {
@@ -686,18 +674,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     infoKind?: string,
     ownerGeneration?: number,
   ): FeishuReplyDeliveryResultWithFinalization => {
-    let resolveFinalization!: (result: FeishuReplyDeliveryResult) => void;
-    let rejectFinalization!: (error: unknown) => void;
-    const finalization = new Promise<FeishuReplyDeliveryResult>((resolve, reject) => {
-      resolveFinalization = resolve;
-      rejectFinalization = reject;
-    });
+    const { promise: finalization, resolve, reject } = createDeferred<FeishuReplyDeliveryResult>();
     pendingStreamingDeliveries.push({
       result,
       ...(infoKind ? { infoKind } : {}),
       ...(ownerGeneration === undefined ? {} : { streamingGeneration: ownerGeneration }),
-      resolve: resolveFinalization,
-      reject: rejectFinalization,
+      resolve,
+      reject,
     });
     if (idleRequestedForReply) {
       void queueIdleSideEffects().catch((error: unknown) =>

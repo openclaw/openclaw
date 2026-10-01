@@ -268,9 +268,6 @@ enum ExecApprovalsStore {
     {
         var file = self.normalizeIncoming(
             record?.document ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
-        if file.socket == nil {
-            file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
-        }
         let existingSocketPath = file.socket?.path
         let resolvedSocketPath = self.resolvedPersistedSocketPath(
             existing: existingSocketPath,

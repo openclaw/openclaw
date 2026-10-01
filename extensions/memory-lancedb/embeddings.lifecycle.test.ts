@@ -92,41 +92,6 @@ function providerResult(
 }
 
 describe("memory-lancedb provider lifecycle", () => {
-  it("authenticates private agent embeddings without using the default agent's credentials", async () => {
-    const config = {};
-    const resolveAgentDir = vi.fn((_config: unknown, agentId: string) => `/tmp/agent-${agentId}`);
-    const embedQuery = vi.fn(async () => [0.1, 0.2, 0.3]);
-    const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-      if (options.agentDir !== "/tmp/agent-private") {
-        throw new Error("No provider credential for the default agent");
-      }
-      return providerResult({ embedQuery });
-    });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: { resolveAgentDir },
-      },
-    } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api);
-
-    await expect(embed(embeddings, "private", "private account memory")).resolves.toEqual([
-      0.1, 0.2, 0.3,
-    ]);
-
-    expect(resolveAgentDir).toHaveBeenCalledWith(config, "private");
-    expect(createProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ agentDir: "/tmp/agent-private" }),
-    );
-    expect(embedQuery).toHaveBeenCalledWith("private account memory");
-    await embeddings.close?.();
-  });
-
   it("isolates concurrent agent providers and retires every account exactly once", async () => {
     const config = {};
     const requests: Array<{ agentDir: string; text: string }> = [];

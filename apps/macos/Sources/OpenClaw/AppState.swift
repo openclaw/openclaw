@@ -1007,14 +1007,6 @@ extension AppState {
         }
     }
 
-    func startVoiceEars() {
-        self.earBoostActive = true
-    }
-
-    func stopVoiceEars() {
-        self.earBoostActive = false
-    }
-
     func blinkOnce() {
         self.blinkTick &+= 1
     }

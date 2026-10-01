@@ -17,8 +17,7 @@ function extractUnquotedShellText(raw: string): string | null {
   let inDouble = false;
   let escaped = false;
 
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
+  for (const ch of raw) {
     if (escaped) {
       if (!inSingle && !inDouble) {
         // Preserve escapes outside quotes so downstream heuristics can distinguish
@@ -39,11 +38,6 @@ function extractUnquotedShellText(raw: string): string | null {
       continue;
     }
     if (inDouble) {
-      const next = raw[i + 1];
-      if (ch === "\\" && next && /[\\'"$`\n\r]/.test(next)) {
-        i += 1;
-        continue;
-      }
       if (ch === '"') {
         inDouble = false;
       }

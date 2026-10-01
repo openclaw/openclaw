@@ -1,4 +1,3 @@
-// Sms type declarations define plugin contracts.
 import type { z } from "zod";
 import type { SmsAccountConfigSchema, SmsConfigSchema } from "./config-schema.js";
 

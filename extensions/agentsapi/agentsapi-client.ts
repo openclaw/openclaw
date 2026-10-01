@@ -10,11 +10,12 @@ import type {
 import type { EventCreateParams } from "openai/resources/beta/agents/sessions/events";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
+import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
-import type { AgentsApiEnvironment } from "./config.js";
+import { DEFAULT_NATIVE_TOOLS, type AgentsApiConfig, type AgentsApiEnvironment } from "./config.js";
 
 const usageSchema = z.looseObject({
   input_tokens: z.number(),
@@ -143,6 +144,7 @@ export type AgentsApiEvent = z.infer<typeof eventSchema>;
 export type AgentsApiItem = z.infer<typeof itemSchema>;
 export type AgentsApiFunctionCall = z.infer<typeof functionCallSchema>;
 export type AgentsApiInputFile = HostedEnvironmentFileParam.HostedEnvironmentFileParamInline;
+export type AgentsApiFileUploadResult = { status: "uploaded" } | { status: "unavailable" };
 export type AgentsApiArtifact = z.infer<typeof artifactSchema>;
 export type AgentsApiFunctionResult =
   | { success: true; output: string }
@@ -171,9 +173,16 @@ export class AgentsApiClient {
       },
       fetch: async (input, init) => {
         this.assertCurrent();
+        const url = input instanceof Request ? input.url : String(input);
+        const headers = resolveProviderRequestHeaders({
+          provider: "openai",
+          baseUrl: url,
+          transport: "http",
+          callerHeaders: Object.fromEntries(new Headers(init?.headers)),
+        });
         const guarded = await fetchWithSsrFGuard({
-          url: input instanceof Request ? input.url : String(input),
-          init,
+          url,
+          init: { ...init, headers },
           signal: init?.signal ?? undefined,
           beforeRequest: assertRequestCurrent,
         });
@@ -196,6 +205,7 @@ export class AgentsApiClient {
     instructions: string,
     model: string,
     options?: {
+      nativeTools?: AgentsApiConfig["nativeTools"];
       functions?: AgentToolParam.AgentToolConfigParamFunction[];
       mcpTools?: AgentToolParam.AgentToolConfigParamMcp[];
       files?: AgentsApiInputFile[];
@@ -204,26 +214,29 @@ export class AgentsApiClient {
     },
   ): Promise<string> {
     const environment: AgentsApiEnvironment = options?.environment ?? { type: "openai_hosted" };
-    const session = await this.sessions.create(
-      {
-        agent: {
-          model,
-          instructions,
-          reasoning: options?.reasoning,
-          multi_agent: { enabled: false },
-          tools: [
-            { type: "web_search", mode: "live" },
-            ...(options?.mcpTools ?? []),
-            ...(options?.functions ?? []),
-          ],
-        },
-        environment:
-          environment.type === "openai_hosted"
-            ? { ...environment, files: options?.files ?? [] }
-            : environment,
+    const tools = [
+      ...(options?.nativeTools ?? DEFAULT_NATIVE_TOOLS),
+      ...(options?.mcpTools ?? []),
+      ...(options?.functions ?? []),
+    ];
+    const body = {
+      agent: {
+        model,
+        instructions,
+        reasoning: options?.reasoning,
+        multi_agent: { enabled: false },
       },
-      { signal, headers: { "Idempotency-Key": randomUUID() } },
-    );
+      environment:
+        environment.type === "openai_hosted"
+          ? { ...environment, files: options?.files ?? [] }
+          : environment,
+    };
+    const session = await this.sessions.create(body, {
+      signal,
+      headers: { "Idempotency-Key": randomUUID() },
+      // The SDK body override forwards new tool types/options before its types catch up.
+      body: { ...body, agent: { ...body.agent, tools } },
+    });
     this.assertCurrent();
     return session.id;
   }
@@ -362,8 +375,9 @@ export class AgentsApiClient {
     sessionId: string,
     file: AgentsApiInputFile,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<AgentsApiFileUploadResult> {
     const session = await this.session(sessionId, signal);
+    signal.throwIfAborted();
     if (session.environment.type !== "openai_hosted") {
       throw new Error("Agents API file upload requires the session's connected hosted environment");
     }
@@ -372,17 +386,43 @@ export class AgentsApiClient {
       .object({ id: z.string(), type: z.literal("openai_hosted"), status: z.string() })
       .parse(retrieved);
     this.assertCurrent();
-    if (environment.id !== session.environment.id || environment.status !== "connected") {
+    signal.throwIfAborted();
+    if (environment.id !== session.environment.id) {
       throw new Error("Agents API file upload requires the session's connected hosted environment");
     }
-    const uploaded = await this.environments.files.create(session.environment.id, file, {
-      signal,
-      headers: { "Idempotency-Key": randomUUID() },
-    });
+    if (environment.status === "disconnected") {
+      return { status: "unavailable" };
+    }
+    if (environment.status !== "connected") {
+      throw new Error("Agents API file upload requires the session's connected hosted environment");
+    }
+    let uploaded: unknown;
+    try {
+      uploaded = await this.environments.files.create(session.environment.id, file, {
+        signal,
+        headers: { "Idempotency-Key": randomUUID() },
+      });
+    } catch (error) {
+      if (error instanceof OpenAI.ConflictError && error.status === 409) {
+        const failure = errorSchema.safeParse(error.error);
+        if (
+          failure.success &&
+          failure.data.type === "conflict_error" &&
+          failure.data.message ===
+            "the hosted environment is dormant; submit new input to start a fresh sandbox"
+        ) {
+          this.assertCurrent();
+          signal.throwIfAborted();
+          return { status: "unavailable" };
+        }
+      }
+      throw error;
+    }
     const saved = z
       .object({ environment_id: z.string(), path: z.string(), size_bytes: z.number() })
       .parse(uploaded);
     this.assertCurrent();
+    signal.throwIfAborted();
     if (
       saved.environment_id !== session.environment.id ||
       saved.path !== file.path ||
@@ -392,6 +432,7 @@ export class AgentsApiClient {
         "Agents API uploaded file did not match the requested environment, path, or size",
       );
     }
+    return { status: "uploaded" };
   }
 
   async artifacts(

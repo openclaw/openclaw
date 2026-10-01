@@ -135,6 +135,7 @@ export function bindCronSelfRemovalCommitGuard(
 export type CronActiveJobMarker = {
   jobId: string;
   agentId?: string;
+  stateIdentityKey?: string;
   declarationKey?: string;
   generation: number;
   token: number;
@@ -227,6 +228,7 @@ export function markCronJobActive(
   jobId: string,
   opts?: {
     agentId?: string;
+    stateIdentityKey?: string;
     declarationKey?: string;
     preserveAcrossGenerationAdvance?: boolean;
     isMessageActionAuthorityCurrent?: () => boolean;
@@ -242,6 +244,7 @@ export function markCronJobActive(
   const marker: CronActiveJobMarker = {
     jobId,
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts?.stateIdentityKey ? { stateIdentityKey: opts.stateIdentityKey } : {}),
     ...(opts?.declarationKey ? { declarationKey: opts.declarationKey } : {}),
     ...(opts?.isMessageActionAuthorityCurrent
       ? { isMessageActionAuthorityCurrent: opts.isMessageActionAuthorityCurrent }
@@ -368,6 +371,27 @@ export function requestActiveCronJobCancellation(jobId: string, reason: string):
   if (marker) {
     requestCronActiveJobMarkerCancellation(marker, reason);
   }
+}
+
+/** Capture deletion's exact owners; an outer rollback or later successor keeps its authority. */
+export function captureActiveCronJobAgentDeletion(
+  agentId: string,
+  stateIdentityKey: string,
+): () => void {
+  const state = getCronActiveJobState();
+  const markers = [...state.activeJobs.values()].filter(
+    (marker) =>
+      marker.agentId === agentId &&
+      marker.stateIdentityKey === stateIdentityKey &&
+      isMarkerActiveInGeneration(marker, state.generation),
+  );
+  return () => {
+    for (const marker of markers) {
+      if (getCurrentCronActiveJobMarker(marker.jobId) === marker) {
+        requestCronActiveJobMarkerCancellation(marker, "Cron job agent deletion began.");
+      }
+    }
+  };
 }
 
 /** Revokes every active run admitted from a declaration-key namespace. */

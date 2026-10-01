@@ -1,4 +1,3 @@
-// Gateway service installer: writes config defaults, resolves credentials, and installs service definitions.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -89,13 +88,14 @@ function formatNoAuthNonLoopbackInstallBlock(params: {
       ? `gateway.bind=tailnet currently resolves to ${params.bindHost} but can later resolve to a Tailnet interface`
       : `gateway.bind=${params.bind} resolves to ${params.bindHost}`;
   const hints: string[] = [`${bindReason}, but gateway.auth.mode=none disables Gateway auth.`];
-  if (normalizeOptionalString(auth.token)) {
+  const configuredSecret = normalizeOptionalString(auth.token)
+    ? "token"
+    : normalizeOptionalString(auth.password)
+      ? "password"
+      : undefined;
+  if (configuredSecret) {
     hints.push(
-      `This config already has gateway.auth.token; run ${formatCliCommand("openclaw config set gateway.auth.mode token")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
-    );
-  } else if (normalizeOptionalString(auth.password)) {
-    hints.push(
-      `This config already has gateway.auth.password; run ${formatCliCommand("openclaw config set gateway.auth.mode password")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
+      `This config already has gateway.auth.${configuredSecret}; run ${formatCliCommand(`openclaw config set gateway.auth.mode ${configuredSecret}`)} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
     );
   } else {
     hints.push(
