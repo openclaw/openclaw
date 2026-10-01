@@ -2,10 +2,14 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { validateSkillProposalRecord } from "../skills/workshop/store-record.js";
 import { readAppliedSkillProposalEvents } from "../skills/workshop/store-sqlite-event.js";
-import type { SkillProposalEvent } from "../skills/workshop/types.js";
+import type { SkillProposalEvent, SkillProposalRecord } from "../skills/workshop/types.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
-import type { LegacyWorkshopProposal } from "./doctor-skill-workshop-relocation.js";
+
+export type LegacyWorkshopProposal = {
+  record: SkillProposalRecord;
+  ownerAgentId: string | null;
+};
 
 export function readWorkshopMigrationRecordsInDatabase(
   database: DatabaseSync,

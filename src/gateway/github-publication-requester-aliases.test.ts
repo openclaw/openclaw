@@ -15,13 +15,13 @@ import {
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
-import * as userProfiles from "../state/user-profiles.js";
 import {
-  getUserProfileListItem,
   linkEmail,
   setDisplayName,
   setUserProfileRole,
-} from "../state/user-profiles.js";
+} from "../state/user-profile-writes.worker.js";
+import * as userProfiles from "../state/user-profiles.js";
+import { getUserProfileListItem } from "../state/user-profiles.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
   captureGitHubPublicationRequester,

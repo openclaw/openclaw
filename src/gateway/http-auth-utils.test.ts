@@ -21,8 +21,9 @@ import {
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import * as profileSchema from "../state/user-profiles-schema.js";
-import { getUserProfileListItem, linkEmail, setDisplayName } from "../state/user-profiles.js";
+import { getUserProfileListItem } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {

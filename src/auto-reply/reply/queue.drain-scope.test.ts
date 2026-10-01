@@ -16,8 +16,9 @@ import {
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { QueueSettings } from "./queue.js";
-import { clearSessionQueues, enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
+  clearFollowupQueueForTest,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
@@ -79,7 +80,7 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
   } finally {
     scopeClosed.resolve();
     requestRoot.release();
-    clearSessionQueues([key]);
+    clearFollowupQueueForTest(key);
     resetGatewayWorkAdmission();
   }
 });

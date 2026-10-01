@@ -7,12 +7,10 @@ import {
 /** Explicit reset retires child work without erasing its durable conversations. */
 import { expect, it, vi } from "vitest";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
-import {
-  clearSessionQueues,
-  enqueueFollowupRun,
-  getFollowupQueueDepth,
-} from "../../../auto-reply/reply/queue.js";
+import { enqueueFollowupRun, getFollowupQueueDepth } from "../../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "../../../auto-reply/reply/queue/drain.js";
+import { clearFollowupQueue } from "../../../auto-reply/reply/queue/state.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { initSessionState } from "../../../auto-reply/reply/session.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -459,7 +457,8 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       expect(getFollowupQueueDepth(parentKey)).toBe(1);
     } finally {
       replacementReply?.complete();
-      clearSessionQueues([parentKey]);
+      clearFollowupQueue(parentKey);
+      clearFollowupDrainCallback(parentKey);
       unregisterInternalHook("command:reset", replaceParent);
     }
   },

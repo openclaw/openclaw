@@ -434,6 +434,8 @@ export type EmbeddedRunAttemptResult = {
   yieldDetected?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
+  /** The registry accepted this attempt's explicit incoming-message wait. */
+  yieldMessageWaitRegistered?: boolean;
   /**
    * True when code mode owned this attempt's model tool surface. Absent means
    * the harness did not report engagement (treated as not engaged), which is
