@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -39,6 +40,21 @@ describe("plugin session store maintenance", () => {
       const execution = captureOpenClawAgentDatabaseExecution(scope);
       try {
         await seed(retainedKey, "retained");
+        await execution.prepare({
+          assertCurrent: () => execution.assertCurrent(),
+          createAdmission(binding) {
+            return () => ({
+              nativeLocations: binding.nativeLocations,
+              admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                binding.authorize(request);
+                execution.assertCurrent();
+                if (!grant()) {
+                  throw new Error("Session cleanup fixture lost database admission");
+                }
+              }, binding.attachment),
+            });
+          },
+        });
         expect(execution.fileIdentity).toBeDefined();
         await expect(
           cleanupSessionLifecycleArtifacts({
