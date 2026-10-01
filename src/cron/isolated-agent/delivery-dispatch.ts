@@ -39,10 +39,10 @@ import {
 } from "./delivery-dispatch-awareness.js";
 import {
   buildDirectCronDeliveryIdempotencyKey,
+  createBestEffortCronPayloadErrorHandler,
   DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
   isCompletedDirectCronDelivery,
   logCronDeliveryError,
-  logCronDeliveryErrorDeferred,
   logCronDeliveryWarn,
   maybeApplyTtsToCronPayloads,
   normalizeSilentReplyText,
@@ -336,13 +336,10 @@ export async function dispatchCronDelivery(
       // `onPayload` fires after send hooks render the outbound payload, but before
       // platform send. The mirror only consumes this array after full delivery succeeds.
       const attemptedPayloadsForMirror: NormalizedOutboundPayload[] = [];
-      const onError = params.deliveryBestEffort
-        ? (err: unknown, _payload: unknown) => {
-            logCronDeliveryErrorDeferred(
-              `[cron:${params.job.id}] delivery payload failed (bestEffort): ${formatErrorMessage(err)}`,
-            );
-          }
-        : undefined;
+      const onError = createBestEffortCronPayloadErrorHandler(
+        params.job.id,
+        params.deliveryBestEffort,
+      );
       const runDelivery = async () => {
         attemptedPayloadsForMirror.length = 0;
         const send = await sendDurableMessageBatchCore({
@@ -354,6 +351,9 @@ export async function dispatchCronDelivery(
           payloads: linkedPayloadsForDelivery,
           session: deliverySession,
           identity,
+          ...(params.undeliveredRunStatus === "ok"
+            ? { runId: params.sessionId, replyKind: "final" as const }
+            : {}),
           bestEffort: params.deliveryBestEffort,
           durability: params.deliveryBestEffort ? "best_effort" : "required",
           deliveryIntentId: deliveryIdempotencyKey,

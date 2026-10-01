@@ -7,6 +7,7 @@ import { terminateCodexAppServerOrphan } from "./transport-process-containment.j
 import {
   isDeadProcessState,
   ProcessInspectionError,
+  readCodexAppServerLinuxBootId,
   readCodexAppServerProcessCommand,
   readCodexAppServerProcessSnapshot,
 } from "./transport-process-snapshot.js";
@@ -32,6 +33,7 @@ const childIdentity = processIdentity.extend({
 const registrationSchema = z.object({ parent: processIdentity, child: childIdentity }).strict();
 type ProcessRegistration = z.infer<typeof registrationSchema>;
 const registrationCleanup = new WeakMap<object, Promise<void>>();
+const linuxStartIdentity = /^([a-f0-9-]{36}):\d+$/;
 
 /** Join bookkeeping after the transport owner has observed physical exit. */
 export async function waitForCodexAppServerProcessRegistrationCleanup(
@@ -58,11 +60,29 @@ async function openProcessRegistrationStore() {
 async function reapRegisteredCodexAppServerOrphans(): Promise<void> {
   const store = await openProcessRegistrationStore();
   const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
-  for (const entry of await store.entries()) {
+  const entries = await store.entries();
+  const currentLinuxBootId =
+    process.platform === "linux" && entries.length > 0
+      ? readCodexAppServerLinuxBootId(deadline)
+      : undefined;
+  for (const entry of entries) {
     if (Date.now() >= deadline) {
       throw new Error("Codex orphan cleanup exceeded its startup budget. Retry to finish cleanup.");
     }
     const registration = registrationSchema.parse(entry.value);
+    const parentBootId = linuxStartIdentity.exec(registration.parent.startedAt)?.[1];
+    const childBootId = linuxStartIdentity.exec(registration.child.startedAt)?.[1];
+    if (
+      currentLinuxBootId &&
+      parentBootId &&
+      parentBootId === childBootId &&
+      parentBootId !== currentLinuxBootId
+    ) {
+      // These exact processes cannot survive a kernel reboot. Avoid treating
+      // unrelated new processes that reused their PIDs as orphan candidates.
+      await store.delete(entry.key);
+      continue;
+    }
     const snapshot = await readCodexAppServerProcessSnapshot(deadline, [
       registration.parent.pid,
       registration.child.pid,

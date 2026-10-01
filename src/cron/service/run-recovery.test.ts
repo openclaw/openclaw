@@ -116,6 +116,25 @@ async function commitCompletedJob(params: {
 }
 
 describe("atomic cron run recovery", () => {
+  it("repairs a persisted paced check postponed by an older distant Flow", async () => {
+    const { storePath } = await makeStorePath();
+    const nowMs = Date.parse("2026-09-27T15:30:00.000Z");
+    const job = makeJob("paced-flow-recovery", nowMs);
+    job.pacing = { min: "5m", max: "5m" };
+    job.state = {
+      lastRunAtMs: nowMs - 60_000,
+      nextRunAtMs: nowMs + 6 * 60 * 60_000,
+      pacedNextRunAtMs: nowMs + 6 * 60 * 60_000,
+    };
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+
+    const result = recomputeUnownedCronSchedules(makeState(storePath, nowMs));
+    expect(result.jobs).toHaveLength(1);
+    expect(result.jobs[0]?.state.nextRunAtMs).toBe(nowMs + 5 * 60_000);
+    expect(result.jobs[0]?.state.pacedNextRunAtMs).toBe(nowMs + 5 * 60_000);
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(nowMs + 5 * 60_000);
+  });
+
   it("repairs a large unowned store with one active-receipt query", async () => {
     const { storePath } = await makeStorePath();
     const nowMs = Date.parse("2026-08-30T12:00:00.000Z");

@@ -7,7 +7,14 @@ import { isPluginJsonValue } from "./host-hook-json.js";
 
 export type PluginServiceCronHost = Pick<
   GatewayCronServiceContract,
-  "list" | "add" | "update" | "updateWithPrecondition" | "remove" | "removeStaleJobFamily"
+  | "list"
+  | "getJob"
+  | "run"
+  | "add"
+  | "update"
+  | "updateWithPrecondition"
+  | "remove"
+  | "removeStaleJobFamily"
 >;
 
 const TRIGGER_STATE_NAMESPACE_KEY = /^[A-Za-z][A-Za-z0-9]{0,127}$/;
@@ -60,6 +67,25 @@ function createBoundPluginCronGetter(params: {
         const jobs = await cron.list(opts);
         commitGuard();
         return jobs;
+      },
+      getJob: (id) => {
+        commitGuard();
+        const job = cron.getJob(id);
+        return job?.declarationKey?.startsWith(`${params.pluginId}:`) ? job : undefined;
+      },
+      run: async (id, mode, opts) => {
+        const assertOwned = () => {
+          commitGuard();
+          const current = cron.getJob(id);
+          if (!current?.declarationKey?.startsWith(`${params.pluginId}:`)) {
+            throw new Error("Cron run is not owned by this plugin");
+          }
+          opts.commitGuard?.();
+        };
+        assertOwned();
+        // The source job can change while admission waits for the store lock.
+        // Recheck plugin ownership at commit so a stale wake cannot run another job.
+        return await cron.run(id, mode, { evaluateTrigger: true, commitGuard: assertOwned });
       },
       add: async (input) => {
         commitGuard();

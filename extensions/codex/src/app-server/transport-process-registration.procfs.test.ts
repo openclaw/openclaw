@@ -128,7 +128,7 @@ describe("Codex registration procfs boundary", () => {
         let now = Date.now();
         vi.spyOn(Date, "now").mockImplementation(() => now);
         procfs.files.set("/proc/sys/kernel/random/boot_id", () => {
-          now += 3_000;
+          now += 2_000;
           return bootId;
         });
       }
@@ -144,6 +144,45 @@ describe("Codex registration procfs boundary", () => {
       expect(kill).not.toHaveBeenCalled();
     },
   );
+
+  it("retires only identities from a different Linux boot before inspecting reused PIDs", async () => {
+    store.register("previous-boot", { parent, child: { ...child, commandFingerprint } });
+    procfs.files.set("/proc/sys/kernel/random/boot_id", "00000000-0000-0000-0000-000000000002");
+    procfs.files.set(
+      `/proc/${parent.pid}/stat`,
+      Object.assign(new Error("reused PID"), {
+        code: "EIO",
+      }),
+    );
+
+    await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
+    expect(store.lookup("previous-boot")).toBeUndefined();
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("keeps a mixed-boot registration fail-closed", async () => {
+    store.register("inconsistent", {
+      parent,
+      child: {
+        ...child,
+        startedAt: "00000000-0000-0000-0000-000000000002:12345",
+        commandFingerprint,
+      },
+    });
+    procfs.files.set("/proc/sys/kernel/random/boot_id", "00000000-0000-0000-0000-000000000002");
+    procfs.files.set(
+      `/proc/${parent.pid}/stat`,
+      Object.assign(new Error("unreadable"), {
+        code: "EIO",
+      }),
+    );
+
+    await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({
+      reason: "unavailable",
+    });
+    expect(store.lookup("inconsistent")).toBeDefined();
+    expect(kill).not.toHaveBeenCalled();
+  });
 
   it.for([
     "readable",

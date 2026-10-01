@@ -41,6 +41,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import { createHookCronHostFixture } from "./server-startup-post-attach.test-helpers.js";
 import "./server-startup-outcomes.test-support.js";
 
 type PluginHookGatewayStartEvent = Parameters<PluginHookHandlerMap["gateway_start"]>[0];
@@ -469,17 +470,6 @@ function firstGatewayStartCall(
     throw new Error("gateway_start was not invoked");
   }
   return call as [PluginHookGatewayStartEvent, PluginHookGatewayContext];
-}
-
-function createHookCronHostFixture() {
-  return {
-    list: vi.fn(),
-    add: vi.fn(),
-    update: vi.fn(),
-    updateWithPrecondition: vi.fn(),
-    remove: vi.fn(),
-    removeStaleJobFamily: vi.fn(),
-  };
 }
 
 describe("startGatewayPostAttachRuntime", () => {

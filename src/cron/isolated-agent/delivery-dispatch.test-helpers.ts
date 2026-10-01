@@ -1,3 +1,5 @@
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { expect } from "vitest";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronDelivery } from "../types.js";
 import type { dispatchCronDelivery } from "./delivery-dispatch.js";
@@ -5,6 +7,17 @@ import type { DeliveryTargetResolution } from "./delivery-target.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 
 type SuccessfulDeliveryResolution = Extract<DeliveryTargetResolution, { ok: true }>;
+
+export function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key], key).toEqual(value);
+  }
+}
+
+export function expectResultFields(result: unknown, expected: Record<string, unknown>) {
+  const requireRecord = createRequireRecord("object", "expected-label");
+  expectFields(requireRecord(result, "cron delivery result"), expected);
+}
 
 export function makeResolvedDelivery(
   overrides: Partial<SuccessfulDeliveryResolution> = {},

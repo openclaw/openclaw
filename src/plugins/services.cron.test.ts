@@ -81,6 +81,28 @@ function createJob(name = family.name) {
 }
 
 describe("plugin service scheduler ownership", () => {
+  it("runs only the owning plugin's current job through the native trigger", async () => {
+    const { cron } = await createScheduler();
+    const owned = await cron.add({ ...createJob(), enabled: true });
+    const foreign = await cron.add({
+      ...createJob("Other plugin"),
+      declarationKey: "other-plugin:maintenance",
+      enabled: true,
+    });
+    const { context } = await startService(() => cron);
+    const service = expectDefined(context.getCron?.(), "plugin cron service");
+
+    expect(service.getJob(owned.id)?.id).toBe(owned.id);
+    expect(service.getJob(foreign.id)).toBeUndefined();
+    await expect(service.run(foreign.id, "force", { evaluateTrigger: true })).rejects.toThrow(
+      "not owned by this plugin",
+    );
+    await expect(service.run(owned.id, "force", { evaluateTrigger: true })).resolves.toMatchObject({
+      ok: true,
+      ran: true,
+    });
+  });
+
   it("leaves scheduler access absent outside the Gateway owner", async () => {
     const { context } = await startService();
     expect(context.getCron).toBeUndefined();

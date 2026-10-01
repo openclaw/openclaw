@@ -3,6 +3,7 @@
  *
  * Downscales and recompresses oversized base64 image blocks before provider replay.
  */
+import { createHash } from "node:crypto";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
@@ -39,6 +40,13 @@ const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
 // permitting legitimate tool-output images.
 const MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
+
+// The sanitizer owns this bounded, process-local transform cache. Callers still
+// load/authorize the source on every use; neither paths nor failed reads are cached.
+const resizedImages = new Map<string, { base64: string; mimeType: string }>();
+const MAX_RESIZED_IMAGE_CACHE_BYTES = 32 * 1024 * 1024;
+const MAX_RESIZED_IMAGE_CACHE_ENTRIES = 64;
+let resizedImageCacheBytes = 0;
 
 function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { type: "image" } {
   return (
@@ -344,6 +352,20 @@ export async function sanitizeContentBlocksImages(
       continue;
     }
 
+    // Exact input bytes include validation in the cached result. Hash before
+    // canonicalization so historical images do not repeat the base64 scan either.
+    const cacheKey = createHash("sha256")
+      .update(`${block.mimeType}:${maxDimensionPx}:${maxBytes}:`)
+      .update(block.data)
+      .digest("hex");
+    const cached = resizedImages.get(cacheKey);
+    if (cached) {
+      resizedImages.delete(cacheKey);
+      resizedImages.set(cacheKey, cached);
+      out.push({ ...block, data: cached.base64, mimeType: cached.mimeType });
+      continue;
+    }
+
     const data = block.data.trim();
     if (!data) {
       out.push({
@@ -373,6 +395,30 @@ export async function sanitizeContentBlocksImages(
         label,
         fileName,
       });
+      if (resized.resized) {
+        // Charge two bytes per character even on runtimes storing ASCII compactly.
+        const cacheBytes = resized.base64.length * 2;
+        if (cacheBytes <= MAX_RESIZED_IMAGE_CACHE_BYTES) {
+          const previous = resizedImages.get(cacheKey);
+          if (previous) {
+            resizedImageCacheBytes -= previous.base64.length * 2;
+            resizedImages.delete(cacheKey);
+          }
+          while (
+            resizedImages.size >= MAX_RESIZED_IMAGE_CACHE_ENTRIES ||
+            resizedImageCacheBytes + cacheBytes > MAX_RESIZED_IMAGE_CACHE_BYTES
+          ) {
+            const oldest = resizedImages.entries().next().value;
+            if (!oldest) {
+              break;
+            }
+            resizedImages.delete(oldest[0]);
+            resizedImageCacheBytes -= oldest[1].base64.length * 2;
+          }
+          resizedImages.set(cacheKey, { base64: resized.base64, mimeType: resized.mimeType });
+          resizedImageCacheBytes += cacheBytes;
+        }
+      }
       out.push({
         ...block,
         data: resized.base64,

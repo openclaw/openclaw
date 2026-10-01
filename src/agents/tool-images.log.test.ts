@@ -39,7 +39,7 @@ vi.mock("../media/media-services.js", () => ({
   resizeToJpeg: resizeToJpegMock,
 }));
 
-import { sanitizeContentBlocksImages } from "./tool-images.js";
+let sanitizeContentBlocksImages: typeof import("./tool-images.js").sanitizeContentBlocksImages;
 
 async function createLargePng(): Promise<Buffer> {
   return createSolidPngBuffer(2001, 8, { r: 0x7f, g: 0x7f, b: 0x7f });
@@ -53,7 +53,9 @@ describe("tool-images log context", () => {
     png = await createLargePng();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ sanitizeContentBlocksImages } = await import("./tool-images.js"));
     infoMock.mockClear();
     resizeToJpegMock.mockReset();
     resizeToJpegMock.mockResolvedValue(Buffer.alloc(100, 2));

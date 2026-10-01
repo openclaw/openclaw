@@ -66,6 +66,8 @@ function createGateway(
       }
       return [];
     }),
+    getJob: vi.fn(),
+    run: vi.fn(),
     add: vi.fn(async () => ({})),
     update: vi.fn(async () => ({})),
     mutateTriggerState: vi.fn(async () => ({ id: "test-cron-job" })),
