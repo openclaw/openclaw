@@ -73,3 +73,12 @@ export class AgentHarnessProjectionSettlement<
     }
   }
 }
+
+/** Native adapters supply final-answer text; authored silence is a completed answer too. */
+export function hasAgentHarnessCompletedAnswer(params: {
+  status: string | undefined;
+  error: unknown;
+  text: string | undefined;
+}): boolean {
+  return params.status === "completed" && params.error === null && Boolean(params.text?.trim());
+}

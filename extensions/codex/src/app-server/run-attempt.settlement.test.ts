@@ -139,166 +139,179 @@ describe("Codex app-server terminal settlement", () => {
     },
   );
 
-  it("preserves a completed reply through degraded settlement without stopping a shared sibling", async () => {
-    const physical = createInferenceReadyClientHarness();
-    const startClient = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(physical.client);
-    const projection = createDeferred<void>();
-    const onReasoningStream = vi.fn(() => projection.promise);
-    const onAttemptTimeout = vi.fn();
-    const createSharedRunParams = (suffix: string) => ({
-      ...createNativeRunParams(
-        path.join(tempDir, `${suffix}.jsonl`),
-        path.join(tempDir, "settlement-workspace"),
-        `agent:main:${suffix}`,
-      ),
-      sessionId: `session-${suffix}`,
-      sessionKey: `agent:main:${suffix}`,
-      runId: `run-${suffix}`,
-      provider: "openai",
-      disableTools: false,
-      timeoutMs: MAX_TIMER_TIMEOUT_MS,
-    });
-    const firstParams = {
-      ...createSharedRunParams("settlement"),
-      onReasoningStream,
-      onAttemptTimeout,
-    };
-    const siblingParams = createSharedRunParams("sibling");
-    const firstSettled = vi.fn();
-    const firstRun = runCodexAppServerAttempt(firstParams);
-    void firstRun.then(firstSettled, firstSettled);
-    let siblingRun: ReturnType<typeof runCodexAppServerAttempt> | undefined;
-    const wireRequests = () =>
-      physical.writes.map(
-        (write) =>
-          JSON.parse(write) as {
-            method?: string;
-            params?: { threadId?: string };
-          },
-      );
-    try {
-      const initialize = await waitForHarnessRequest(physical, "initialize");
-      physical.send({
-        id: initialize.id,
-        result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+  it.each(["Completed work remains visible.", "NO_REPLY"])(
+    "preserves %s through degraded settlement without stopping a shared sibling",
+    async (answer) => {
+      const physical = createInferenceReadyClientHarness();
+      const startClient = vi
+        .spyOn(CodexAppServerClient, "start")
+        .mockResolvedValue(physical.client);
+      const projection = createDeferred<void>();
+      const onReasoningStream = vi.fn(() => projection.promise);
+      const onAttemptTimeout = vi.fn();
+      const createSharedRunParams = (suffix: string) => ({
+        ...createNativeRunParams(
+          path.join(tempDir, `${suffix}.jsonl`),
+          path.join(tempDir, "settlement-workspace"),
+          `agent:main:${suffix}`,
+        ),
+        sessionId: `session-${suffix}`,
+        sessionKey: `agent:main:${suffix}`,
+        runId: `run-${suffix}`,
+        provider: "openai",
+        disableTools: false,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
       });
-      const firstRequirements = await waitForHarnessRequest(physical, "configRequirements/read");
-      physical.send({ id: firstRequirements.id, result: { requirements: null } });
-      const firstThread = await waitForHarnessRequest(physical, "thread/start");
-      physical.send({ id: firstThread.id, result: threadStartResult("thread-settlement") });
-      const firstTurn = await waitForHarnessRequest(physical, "turn/start");
-      physical.send({ id: firstTurn.id, result: turnStartResult("turn-settlement") });
-
-      const siblingStart = physical.writes.length;
-      siblingRun = runCodexAppServerAttempt(siblingParams);
-      const siblingRequirements = await waitForHarnessRequest(
-        physical,
-        "configRequirements/read",
-        siblingStart,
-      );
-      physical.send({ id: siblingRequirements.id, result: { requirements: null } });
-      const siblingThread = await waitForHarnessRequest(physical, "thread/start", siblingStart);
-      physical.send({ id: siblingThread.id, result: threadStartResult("thread-sibling") });
-      const siblingTurn = await waitForHarnessRequest(physical, "turn/start", siblingStart);
-      physical.send({ id: siblingTurn.id, result: turnStartResult("turn-sibling") });
-      await vi.waitFor(() => {
-        expect(resolveActiveEmbeddedRunSessionId(firstParams.sessionKey)).toBe(
-          firstParams.sessionId,
+      const firstParams = {
+        ...createSharedRunParams("settlement"),
+        onReasoningStream,
+        onAttemptTimeout,
+      };
+      const siblingParams = createSharedRunParams("sibling");
+      const firstSettled = vi.fn();
+      const firstRun = runCodexAppServerAttempt(firstParams);
+      void firstRun.then(firstSettled, firstSettled);
+      let siblingRun: ReturnType<typeof runCodexAppServerAttempt> | undefined;
+      const wireRequests = () =>
+        physical.writes.map(
+          (write) =>
+            JSON.parse(write) as {
+              method?: string;
+              params?: { threadId?: string };
+            },
         );
+      try {
+        const initialize = await waitForHarnessRequest(physical, "initialize");
+        physical.send({
+          id: initialize.id,
+          result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+        });
+        const firstRequirements = await waitForHarnessRequest(physical, "configRequirements/read");
+        physical.send({ id: firstRequirements.id, result: { requirements: null } });
+        const firstThread = await waitForHarnessRequest(physical, "thread/start");
+        physical.send({ id: firstThread.id, result: threadStartResult("thread-settlement") });
+        const firstTurn = await waitForHarnessRequest(physical, "turn/start");
+        physical.send({ id: firstTurn.id, result: turnStartResult("turn-settlement") });
+
+        const siblingStart = physical.writes.length;
+        siblingRun = runCodexAppServerAttempt(siblingParams);
+        const siblingRequirements = await waitForHarnessRequest(
+          physical,
+          "configRequirements/read",
+          siblingStart,
+        );
+        physical.send({ id: siblingRequirements.id, result: { requirements: null } });
+        const siblingThread = await waitForHarnessRequest(physical, "thread/start", siblingStart);
+        physical.send({ id: siblingThread.id, result: threadStartResult("thread-sibling") });
+        const siblingTurn = await waitForHarnessRequest(physical, "turn/start", siblingStart);
+        physical.send({ id: siblingTurn.id, result: turnStartResult("turn-sibling") });
+        await vi.waitFor(() => {
+          expect(resolveActiveEmbeddedRunSessionId(firstParams.sessionKey)).toBe(
+            firstParams.sessionId,
+          );
+          expect(resolveActiveEmbeddedRunSessionId(siblingParams.sessionKey)).toBe(
+            siblingParams.sessionId,
+          );
+        });
+
+        vi.useFakeTimers();
+        const receivedAt = Date.now();
+        // Queue both frames before yielding. The second callback starts only after
+        // the real router has finished handling the exact terminal notification.
+        physical.send({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-settlement",
+            turn: {
+              id: "turn-settlement",
+              status: "completed",
+              items: [
+                { id: "answer", type: "agentMessage", text: answer },
+                { id: "blank", type: "agentMessage", text: " \n\t" },
+                {
+                  id: "commentary",
+                  type: "agentMessage",
+                  phase: "commentary",
+                  text: "Still working.",
+                },
+                { id: "async", type: "agentMessage", delivery: "async", text: "Unrelated answer." },
+              ],
+            },
+          },
+        });
+        physical.send({
+          method: "item/reasoning/textDelta",
+          params: {
+            threadId: "thread-settlement",
+            turnId: "turn-settlement",
+            itemId: "late-reasoning",
+            delta: "Queued projection after native completion.",
+          },
+        });
+        await vi.waitFor(() => expect(onReasoningStream).toHaveBeenCalledOnce());
+        await vi.advanceTimersByTimeAsync(
+          receivedAt + TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS - Date.now() - 1,
+        );
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(firstSettled).toHaveBeenCalledOnce(), fastWait);
+        const result = await firstRun;
+        expect(readAttemptTerminal(result)).toMatchObject({
+          aborted: false,
+          timedOut: false,
+          promptError: null,
+          settlementWarning: { pendingStage: "onReasoningStream" },
+        });
+        expect(result.codexAppServerFailure).toBeUndefined();
+        expect(result.promptTimeoutOutcome).toBeUndefined();
+        expect(result.assistantTexts).toEqual([answer]);
+        expect(
+          wireRequests()
+            .filter(
+              ({ method }) =>
+                method === "turn/interrupt" ||
+                method === "thread/backgroundTerminals/list" ||
+                method === "thread/unsubscribe",
+            )
+            .map(({ params }) => params?.threadId),
+        ).toEqual([]);
+        expect(physical.stdinDestroyed).toBe(false);
+        expect(resolveActiveEmbeddedRunSessionId(firstParams.sessionKey)).toBeUndefined();
         expect(resolveActiveEmbeddedRunSessionId(siblingParams.sessionKey)).toBe(
           siblingParams.sessionId,
         );
-      });
 
-      vi.useFakeTimers();
-      const receivedAt = Date.now();
-      // Queue both frames before yielding. The second callback starts only after
-      // the real router has finished handling the exact terminal notification.
-      physical.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-settlement",
-          turn: {
-            id: "turn-settlement",
-            status: "completed",
-            items: [
-              { id: "answer", type: "agentMessage", text: "Completed work remains visible." },
-            ],
+        physical.send({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-sibling",
+            turn: {
+              id: "turn-sibling",
+              status: "completed",
+              items: [
+                { id: "sibling-answer", type: "agentMessage", text: "Sibling stayed healthy." },
+              ],
+            },
           },
-        },
-      });
-      physical.send({
-        method: "item/reasoning/textDelta",
-        params: {
-          threadId: "thread-settlement",
-          turnId: "turn-settlement",
-          itemId: "late-reasoning",
-          delta: "Queued projection after native completion.",
-        },
-      });
-      await vi.waitFor(() => expect(onReasoningStream).toHaveBeenCalledOnce());
-      await vi.advanceTimersByTimeAsync(
-        receivedAt + TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS - Date.now() - 1,
-      );
-      expect(onAttemptTimeout).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(onAttemptTimeout).not.toHaveBeenCalled();
-      await vi.waitFor(() => expect(firstSettled).toHaveBeenCalledOnce(), fastWait);
-      const result = await firstRun;
-      expect(readAttemptTerminal(result)).toMatchObject({
-        aborted: false,
-        timedOut: false,
-        promptError: null,
-        settlementWarning: { pendingStage: "onReasoningStream" },
-      });
-      expect(result.codexAppServerFailure).toBeUndefined();
-      expect(result.promptTimeoutOutcome).toBeUndefined();
-      expect(result.assistantTexts).toEqual(["Completed work remains visible."]);
-      expect(
-        wireRequests()
-          .filter(
-            ({ method }) =>
-              method === "turn/interrupt" ||
-              method === "thread/backgroundTerminals/list" ||
-              method === "thread/unsubscribe",
-          )
-          .map(({ params }) => params?.threadId),
-      ).toEqual([]);
-      expect(physical.stdinDestroyed).toBe(false);
-      expect(resolveActiveEmbeddedRunSessionId(firstParams.sessionKey)).toBeUndefined();
-      expect(resolveActiveEmbeddedRunSessionId(siblingParams.sessionKey)).toBe(
-        siblingParams.sessionId,
-      );
-
-      physical.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-sibling",
-          turn: {
-            id: "turn-sibling",
-            status: "completed",
-            items: [
-              { id: "sibling-answer", type: "agentMessage", text: "Sibling stayed healthy." },
-            ],
-          },
-        },
-      });
-      const siblingResult = await siblingRun;
-      expect(readAttemptTerminal(siblingResult)).toMatchObject({
-        aborted: false,
-        timedOut: false,
-        promptError: null,
-      });
-      expect(siblingResult.assistantTexts).toEqual(["Sibling stayed healthy."]);
-      expect(startClient).toHaveBeenCalledOnce();
-      expect(physical.stdinDestroyed).toBe(false);
-    } finally {
-      projection.resolve();
-      vi.useRealTimers();
-      physical.client.close();
-      await Promise.allSettled([firstRun, ...(siblingRun ? [siblingRun] : [])]);
-    }
-  });
+        });
+        const siblingResult = await siblingRun;
+        expect(readAttemptTerminal(siblingResult)).toMatchObject({
+          aborted: false,
+          timedOut: false,
+          promptError: null,
+        });
+        expect(siblingResult.assistantTexts).toEqual(["Sibling stayed healthy."]);
+        expect(startClient).toHaveBeenCalledOnce();
+        expect(physical.stdinDestroyed).toBe(false);
+      } finally {
+        projection.resolve();
+        vi.useRealTimers();
+        physical.client.close();
+        await Promise.allSettled([firstRun, ...(siblingRun ? [siblingRun] : [])]);
+      }
+    },
+  );
 
   it.each([
     { boundary: "checkpoint", termination: "timeout", release: "during recovery" },

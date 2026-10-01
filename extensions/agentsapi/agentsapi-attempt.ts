@@ -492,7 +492,7 @@ export async function runAgentsApiAttempt(
       await projection.commitUsage(result.turn);
       assertCurrent();
     } else {
-      const items = await client.items(remoteSessionId, result.turn.id, controller.signal);
+      const items = await native.readFinalItems(result.turn.id);
       assertCurrent();
       try {
         if (environment.type === "openai_hosted") {
@@ -562,13 +562,29 @@ export async function runAgentsApiAttempt(
       if (ownerCurrent) {
         finalizingProjection = true;
         finalizingProjectionSignal = cleanupSignal;
+        let recovered: Awaited<ReturnType<typeof native.reconcileAfterClose>>;
         try {
-          await native.reconcileAfterClose(cleanupSignal);
+          recovered = await native.reconcileAfterClose(
+            cleanupSignal,
+            terminal.kind === "failed" ? terminal.error : undefined,
+          );
         } catch (error) {
           embeddedAgentLog.warn("Agents API terminal history reconciliation failed", { error });
         } finally {
           finalizingProjection = false;
           finalizingProjectionSignal = undefined;
+        }
+        if (recovered && terminal.kind === "failed" && !controller.signal.aborted) {
+          try {
+            assertCurrent();
+            cleanupSignal.throwIfAborted();
+            await projection.commit(recovered.turn, recovered.items);
+            assertCurrent();
+            terminalTurnId = recovered.turn.id;
+            terminal = { kind: "ok" };
+          } catch (error) {
+            embeddedAgentLog.warn("Agents API completed result recovery failed", { error });
+          }
         }
       }
     }

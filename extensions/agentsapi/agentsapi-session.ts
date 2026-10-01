@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { APIConnectionError, APIError, APIUserAbortError } from "openai";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
+import { hasAgentHarnessCompletedAnswer } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -11,6 +12,8 @@ import {
   type AgentsApiFunctionCall,
   type AgentsApiItem,
 } from "./agentsapi-client.js";
+import { createAgentsApiSessionHistory } from "./agentsapi-session-history.js";
+import { readAgentsApiFinalText } from "./agentsapi-text.js";
 import type { AgentsApiToolExecutionResult } from "./agentsapi-tools.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
@@ -58,6 +61,9 @@ export function createAgentsApiSession(options: {
   let latestInputTurnId: string | undefined;
   let usageTurns: Promise<Turn[]> | undefined;
   let terminatedByTool = false;
+  let failedItemsRead:
+    | { error: unknown; turnId: string; inputCount: number; submission: Promise<void> }
+    | undefined;
 
   const isAvailable = () =>
     submitted && !inputAdmissionClosed && !stopped && !settled && !rootTurn && !signal.aborted;
@@ -134,8 +140,31 @@ export function createAgentsApiSession(options: {
     cancelled = !terminatedByTool && latest?.status === "cancelled";
     return turns;
   };
-  const readItemsByTurn = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
-    const savedItems = await readClient.items(sessionId, undefined, readSignal);
+  const readItemsByTurn = async (
+    readClient: AgentsApiClient,
+    readSignal: AbortSignal,
+    recoverCompletion = false,
+  ) => {
+    const completedTurn =
+      rootTurn?.status === "completed" && !rootTurn.error ? rootTurn : undefined;
+    const inputCount = admittedMessageCount;
+    const submissionFence = submission;
+    let savedItems: AgentsApiItem[];
+    try {
+      savedItems = await readClient.items(sessionId, undefined, readSignal);
+    } catch (error) {
+      // Only this read can be superseded by authoritative completed state.
+      // Tool, projection, admission, and native failures retain their own outcome.
+      if (recoverCompletion && completedTurn) {
+        failedItemsRead = {
+          error,
+          turnId: completedTurn.id,
+          inputCount,
+          submission: submissionFence,
+        };
+      }
+      throw error;
+    }
     readSignal.throwIfAborted();
     const itemsByTurn = new Map<string, AgentsApiItem[]>();
     for (const item of savedItems) {
@@ -148,70 +177,6 @@ export function createAgentsApiSession(options: {
     }
     return itemsByTurn;
   };
-  const readSavedState = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
-    const turns = await readAdmittedTurns(readClient, readSignal);
-    const entries: Array<{ turn: Turn; items: AgentsApiItem[] }> = [];
-    const inputItems = new Set<string>();
-    const itemsByTurn =
-      turns.length || baselineTurnId
-        ? await readItemsByTurn(readClient, readSignal)
-        : new Map<string, AgentsApiItem[]>();
-    for (const turn of turns) {
-      const items = itemsByTurn.get(turn.id) ?? [];
-      for (const item of items) {
-        rememberItemTurn(item.id, turn.id);
-        if (item.type === "message" && item.role === "user") {
-          inputItems.add(item.id);
-        }
-      }
-      entries.push({ turn, items });
-    }
-    observedInputItems = inputItems;
-    return { turns, entries, itemsByTurn };
-  };
-  const projectSavedState = async (
-    entries: Array<{ turn: Turn; items: AgentsApiItem[] }>,
-    readSignal: AbortSignal,
-  ) => {
-    let transcriptReady = true;
-    for (const { turn, items } of entries) {
-      readSignal.throwIfAborted();
-      const ready = await options.onReconcile?.(turn, items);
-      transcriptReady = ready !== false && transcriptReady;
-      readSignal.throwIfAborted();
-    }
-    return transcriptReady;
-  };
-  const reconcilePriorHistory = async (
-    readClient: AgentsApiClient,
-    readSignal: AbortSignal,
-    itemsByTurn: Map<string, AgentsApiItem[]>,
-  ) => {
-    if (!baselineTurnId || !options.onReconcileHistory) {
-      return;
-    }
-    const turns = await readClient.turns(sessionId, readSignal);
-    readSignal.throwIfAborted();
-    const baselineIndex = turns.findIndex((turn) => turn.id === baselineTurnId);
-    if (baselineIndex < 0) {
-      throw new Error("Agents API historical reconciliation lost its baseline turn");
-    }
-    const priorTurns = turns
-      .slice(0, baselineIndex + 1)
-      .filter((turn) => isAgentsApiTerminalTurn(turn.status));
-    if (!priorTurns.length) {
-      return;
-    }
-    // Historical facts repair the retained conversation without entering this
-    // attempt's admission, live presentation, tool lifecycle, or token accounting.
-    await options.onReconcileHistory(
-      priorTurns.map((turn) => ({
-        turn,
-        items: itemsByTurn.get(turn.id) ?? [],
-      })),
-    );
-    readSignal.throwIfAborted();
-  };
   const rememberItemTurn = (itemId: string, turnId: string) => {
     const previous = itemTurnIds.get(itemId);
     if (previous && previous !== turnId) {
@@ -221,40 +186,44 @@ export function createAgentsApiSession(options: {
     excludedItemIds.delete(itemId);
   };
 
+  const {
+    readSavedState,
+    projectSavedState,
+    reconcilePriorHistory,
+    readUsageTurns: readSavedUsageTurns,
+  } = createAgentsApiSessionHistory({
+    sessionId,
+    getBaselineTurnId: () => baselineTurnId,
+    readAdmittedTurns,
+    readItemsByTurn,
+    rememberItemTurn,
+    onInputItems: (items) => {
+      observedInputItems = items;
+    },
+    onReconcile: options.onReconcile,
+    onReconcileHistory: options.onReconcileHistory,
+    onUsageError: options.onUsageError,
+  });
+
   return {
     isAvailable,
     wasSubmitted: () => submitted,
     isSettled: () => settled,
     queueMessage: submit,
+    async readFinalItems(turnId: string) {
+      assertCurrent();
+      if (!settled || rootTurn?.id !== turnId) {
+        throw new Error("Agents API final items require the settled root turn");
+      }
+      const items = await readItemsByTurn(client, signal, true);
+      assertCurrent();
+      return items.get(turnId) ?? [];
+    },
     readUsageTurns() {
       if (!submitted || !settled) {
         return Promise.resolve([]);
       }
-      return (usageTurns ??= (async () => {
-        const usageSignal = AbortSignal.timeout(5_000);
-        let turns: Turn[] = [];
-        // Idle can precede the REST records and their usage. Give accounting
-        // a bounded settlement window, without treating unknown usage as zero.
-        try {
-          while (true) {
-            turns = await cleanupClient.turns(sessionId, usageSignal, baselineTurnId);
-            const recordedIds = new Set(turns.map((turn) => turn.id));
-            if (
-              turns.length > 0 &&
-              [...coordinatorTurnIds].every((id) => recordedIds.has(id)) &&
-              turns.every((turn) => turn.usage !== null)
-            ) {
-              return turns;
-            }
-            await delay(500, undefined, { signal: usageSignal });
-          }
-        } catch (error) {
-          if (!usageSignal.aborted) {
-            options.onUsageError?.(error);
-          }
-          return turns;
-        }
-      })());
+      return (usageTurns ??= readSavedUsageTurns(cleanupClient, coordinatorTurnIds));
     },
     async run(prompt: string, persistInput: () => Promise<void>, onSubmitted: () => void) {
       signal.throwIfAborted();
@@ -426,7 +395,7 @@ export function createAgentsApiSession(options: {
         await submissionFence;
         assertCurrent();
         const admittedCount = admittedMessageCount;
-        const snapshot = await readSavedState(client, signal);
+        const snapshot = await readSavedState(client, signal, true);
         assertCurrent();
         const session = await client.session(sessionId, signal);
         assertCurrent();
@@ -680,7 +649,10 @@ export function createAgentsApiSession(options: {
       }
       return { turn: rootTurn, cancelled, terminatedByTool };
     },
-    async reconcileAfterClose(cleanupSignal: AbortSignal): Promise<Turn | undefined> {
+    async reconcileAfterClose(
+      cleanupSignal: AbortSignal,
+      failedReadError?: unknown,
+    ): Promise<{ turn: Turn; items: AgentsApiItem[] } | undefined> {
       if (!closed) {
         throw new Error("Agents API canonical cleanup requires a closed session attempt");
       }
@@ -688,6 +660,7 @@ export function createAgentsApiSession(options: {
         return undefined;
       }
       cleanupSignal.throwIfAborted();
+      const failedRead = failedItemsRead;
       const session = await cleanupClient.session(sessionId, cleanupSignal);
       cleanupSignal.throwIfAborted();
       if (session.status !== "idle" && session.status !== "failed") {
@@ -695,8 +668,32 @@ export function createAgentsApiSession(options: {
       }
       const snapshot = await readSavedState(cleanupClient, cleanupSignal);
       await reconcilePriorHistory(cleanupClient, cleanupSignal, snapshot.itemsByTurn);
-      await projectSavedState(snapshot.entries, cleanupSignal);
-      return snapshot.turns.at(-1);
+      const transcriptReady = await projectSavedState(snapshot.entries, cleanupSignal);
+      const last = snapshot.entries.at(-1);
+      if (
+        !failedRead ||
+        failedRead.error !== failedReadError ||
+        terminatedByTool ||
+        session.status !== "idle" ||
+        session.error !== null ||
+        !last ||
+        last.turn.id !== failedRead.turnId ||
+        failedRead.submission !== submission ||
+        failedRead.inputCount !== admittedMessageCount ||
+        observedInputItems.size !== admittedMessageCount ||
+        !transcriptReady ||
+        !hasAgentHarnessCompletedAnswer({
+          status: last.turn.status,
+          error: last.turn.error,
+          text: readAgentsApiFinalText(last.items),
+        })
+      ) {
+        return undefined;
+      }
+      await submission;
+      cleanupSignal.throwIfAborted();
+      assertCurrent();
+      return last;
     },
     async close() {
       signal.removeEventListener("abort", onAbort);

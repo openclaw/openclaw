@@ -34,6 +34,9 @@ export {
   TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS,
   truncateNativeToolTranscriptText,
 } from "../agents/harness/projection-tool-output.js";
-export { AgentHarnessProjectionSettlement } from "../agents/harness/projection-settlement.js";
+export {
+  AgentHarnessProjectionSettlement,
+  hasAgentHarnessCompletedAnswer,
+} from "../agents/harness/projection-settlement.js";
 export { makeZeroUsageSnapshot } from "../agents/usage.js";
 export { racePromiseWithAbortSignal } from "../infra/abort-signal.js";

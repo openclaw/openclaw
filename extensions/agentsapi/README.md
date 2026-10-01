@@ -282,6 +282,16 @@ server instruction not to retry. Other HTTP errors, including conflicts, are
 returned to the existing turn recovery logic. This does not repair a session
 whose backend startup remains unresolved.
 
+A failed items read does not discard a completed conversation result when
+cleanup can prove the same error-free root turn, an idle error-free session,
+and all admitted input receipts under the original active owner. The Gateway
+commits that saved final reply, including explicit `NO_REPLY`, without replaying
+input or tools. The read error remains in diagnostics. Missing or incomplete
+saved output, changed inputs, cancellation, and genuine native failures retain
+the unsuccessful outcome. Existing sessions need no reset or migration.
+Agents API and Codex share the harness's completed-answer eligibility check;
+each backend retains its native receipt, cancellation, and recovery fences.
+
 Saved sessions keep their native conversation, workspace, and original tool
 declarations when Gateway tools are added. Fresh sessions receive the current
 Gateway tool declarations. Reset an existing session to adopt the new tool

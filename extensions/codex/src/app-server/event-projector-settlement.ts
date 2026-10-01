@@ -1,4 +1,7 @@
-import { AgentHarnessProjectionSettlement } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import {
+  AgentHarnessProjectionSettlement,
+  hasAgentHarnessCompletedAnswer,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexTurn } from "./protocol.js";
 
@@ -18,9 +21,12 @@ export class CodexProjectionSettlement extends AgentHarnessProjectionSettlement<
         item.type === "agentMessage" &&
         item.phase !== "commentary" &&
         item.delivery !== "async" &&
-        typeof item.text === "string" &&
-        item.text.trim().length > 0,
+        hasAgentHarnessCompletedAnswer({
+          status: turn.status,
+          error: turn.error ?? null,
+          text: typeof item.text === "string" ? item.text : undefined,
+        }),
     );
-    return turn?.status === "completed" && answer ? { turn, answer } : undefined;
+    return turn && answer ? { turn, answer } : undefined;
   }
 }
