@@ -118,6 +118,7 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
           scripts: {
             "pnpm-path": "node -p process.env.npm_execpath",
             "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
+            ...(entrypoint === "shared setup action" ? { postinstall: "pnpm --version" } : {}),
           },
           dependencies: {
             "hydrate-proof": "file:../deps/hydrate-proof",
@@ -213,7 +214,20 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
         return result.stdout.trim();
       };
       expect(`pnpm@${run("pnpm", ["--version"])}`).toBe(packageManager.split("+")[0]);
+      const manifestPath = path.join(workspace, "package.json");
+      const manifest = readFileSync(manifestPath, "utf8");
+      // Generate local dependency resolutions without asking offline pnpm to resolve itself.
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({ ...JSON.parse(manifest), packageManager: undefined }),
+      );
       run("pnpm", ["install", "--lockfile-only", "--offline", "--ignore-scripts"]);
+      writeFileSync(manifestPath, manifest);
+      const lockfilePath = path.join(workspace, "pnpm-lock.yaml");
+      if (environment !== null) {
+        const { dependencies } = pnpmLockfileDocuments(readFileSync(lockfilePath, "utf8"));
+        writeFileSync(lockfilePath, `---\n${environment}\n---\n${dependencies}`);
+      }
 
       const externalRoot = usesFallback
         ? path.join(cacheRoot, "openclaw/pnpm/install")
@@ -271,6 +285,12 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
         }
       }
 
+      let frozenLockfile: string | undefined;
+      if (entrypoint === "shared setup action") {
+        // Selected-source reconciliation must preserve the original package-manager document.
+        frozenLockfile = readFileSync(lockfilePath, "utf8");
+      }
+
       let script: string;
       const steps = workflow.jobs[job].steps;
       const setupName =
@@ -321,6 +341,11 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
       } else {
         for (let install = 0; install < 2; install++) {
           run("bash", ["-c", script]);
+          if (frozenLockfile !== undefined) {
+            expect(readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8")).toBe(
+              frozenLockfile,
+            );
+          }
           expect(run(process.execPath, ["-p", "require('hydrate-proof')"])).toBe("root dependency");
           expect(run(process.execPath, ["-p", "require('hydrate-ui-proof')"], ui)).toBe(
             "UI dependency",
