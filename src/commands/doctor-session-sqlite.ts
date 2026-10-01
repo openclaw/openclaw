@@ -668,11 +668,19 @@ async function inspectOrMigrateTarget(params: {
     archivedLegacyStoreFiles: [],
     issues,
   });
-  const retained = prepareRetainedSessionImport(params, issues);
+  const retained = await prepareRetainedSessionImport(params, issues);
   if (!retained) {
     return report;
   }
   const { retainedImport, sourceConflicts, retainedIndexPath } = retained;
+  if (retained.emptySources.size) {
+    await archiveConflictingRetainedSessionSources(
+      { ...params, verifiedEmpty: true },
+      retained.emptySources,
+      report,
+    );
+    retained.sourceVerification.verification.clear();
+  }
   if (params.mode === "recover" && !shouldFilterLegacySessionRecordsByTarget(params.target)) {
     await archiveConflictingRetainedSessionSources(params, sourceConflicts, report);
   }

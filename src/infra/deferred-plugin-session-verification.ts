@@ -8,6 +8,8 @@ import {
   type LegacySessionStoreTarget,
 } from "../config/sessions/legacy-store-inspection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recoverEmptyRetainedTranscript } from "./deferred-plugin-session-empty.js";
+import { readMigrationArtifactIdentity } from "./session-sqlite-migration-artifact.js";
 import {
   readLegacyPrimaryTranscriptIdentity,
   readOnlySqliteDbStats,
@@ -16,7 +18,7 @@ import {
 import { verifyCanonicalSessionTranscriptSources } from "./session-sqlite-transcript-verification.js";
 
 /** A replaced database cannot inherit completed-import authority from an old inode. */
-export function verifyDeferredSessionDatabase(params: {
+export async function verifyDeferredSessionDatabase(params: {
   cfg: OpenClawConfig;
   target: LegacySessionStoreTarget;
   sqlitePath: string;
@@ -24,7 +26,9 @@ export function verifyDeferredSessionDatabase(params: {
   sources: Array<{ path: string; originalPath: string }>;
   requireCompleteTranscript?: boolean;
   verifiedSourcePaths?: ReadonlySet<string>;
-}): void {
+  onEmptySource?: (sourcePath: string, reason: string) => void;
+  assertCurrent: () => void;
+}): Promise<void> {
   const target = { ...params.target, sqlitePath: params.sqlitePath };
   const snapshot = readOnlySqliteValidationSnapshot(target);
   const stats = readOnlySqliteDbStats(target);
@@ -63,7 +67,7 @@ export function verifyDeferredSessionDatabase(params: {
       snapshot.snapshot.sessionKeysBySessionId.get(record.entry.sessionId) !== record.sessionKey
     ) {
       throw new Error(
-        `Retained session ${record.sessionKey} is not present in ${params.sqlitePath}; sources remain protected. Compare a verified database backup before retrying recovery; canonical edits and deletions were not replayed.`,
+        `Retained session ${record.sessionKey} is not present in ${params.sqlitePath}; sources remain protected. Preserve ${record.transcriptPath ?? target.storePath} and its backups. Restore the intended session from a verified backup to ${params.sqlitePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state directory. Canonical edits and deletions were not replayed.`,
       );
     }
   }
@@ -73,6 +77,17 @@ export function verifyDeferredSessionDatabase(params: {
     }
     const sourcePath = resolved.get(source.originalPath);
     const indexed = records.filter((candidate) => candidate.transcriptPath === source.originalPath);
+    if (sourcePath && readMigrationArtifactIdentity(sourcePath).size === 0) {
+      const reason = await recoverEmptyRetainedTranscript({
+        source,
+        target,
+        env: params.env,
+        sessionIds: indexed.map((record) => record.entry.sessionId),
+        assertCurrent: params.assertCurrent,
+      });
+      params.onEmptySource?.(source.path, reason);
+      continue;
+    }
     if (params.requireCompleteTranscript && indexed.length === 0) {
       throw new Error(`Changed retained transcript has no verified indexed owner: ${source.path}`);
     }

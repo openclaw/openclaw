@@ -311,7 +311,7 @@ function assertVerifiedSessionSources(
         continue;
       }
       throw new Error(
-        `Retained session migration source changed: ${source.path}. Run openclaw doctor --fix to verify the current input or preserve it in the migration archive; canonical SQLite sessions were not replayed.`,
+        `Retained session migration source changed: ${source.path}. Preserve the current file and its ${source.path}.bak-<pid>-<timestamp> siblings, restore the verified original at ${source.path}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state directory. Canonical SQLite sessions were not replayed.`,
       );
     }
     verifiedPaths.set(source.path, verifiedPath);
@@ -477,11 +477,12 @@ function parseSessionImportReceipt(
 }
 
 /** Rebuild derived evidence from proven original index values or verified canonical transcripts. */
-export function rebuildDeferredPluginSessionSourceIndex(
+export async function rebuildDeferredPluginSessionSourceIndex(
   params: SessionImportSource & {
     onSourceConflict?: (sourcePath: string, artifactPath?: string, error?: unknown) => void;
+    onEmptySource?: (sourcePath: string, reason: string) => void;
   },
-): boolean {
+): Promise<boolean> {
   const receipt = readSessionImportReceipt(params);
   if (!receipt) {
     return false;
@@ -496,91 +497,143 @@ export function rebuildDeferredPluginSessionSourceIndex(
   const verifiedSourcePaths = new Set(recorded.sources.map((source) => source.path));
   const missingIndex =
     index && existingSessionSourcePaths(index.path, target, params.env, archives).length === 0;
-  const sources = recorded.sources
-    .filter((source) => !missingIndex || source !== index)
-    .map((source) => {
-      let failure: unknown;
-      const candidates = statMigrationPath(source.path)
-        ? [source.path]
-        : (archives.get(source.path) ?? []).map((archive) => archive.path);
-      for (const candidate of candidates) {
-        if (!statMigrationPath(candidate)) {
-          continue;
-        }
-        try {
-          const identity = readMigrationArtifactIdentity(candidate);
-          if (sameSourceContent(identity, source.identity)) {
-            return { path: source.path, identity };
-          }
-          if (
-            candidate !== source.path ||
-            (source.path !== path.resolve(target.storePath) &&
-              !isPrimarySessionTranscriptFileName(path.basename(source.path)))
-          ) {
+  const assertCurrent = () => {
+    if (
+      !isDeepStrictEqual(readSessionImportReceipt(params), receipt) ||
+      databaseIdentity(params.sqlitePath) !== currentDatabaseIdentity ||
+      (verifiedIndex && !resolveVerifiedSessionSource(verifiedIndex, target, params.env))
+    ) {
+      throw new Error(
+        "Retained session receipt, index, or database changed during recovery; sources remain protected.",
+      );
+    }
+  };
+  const sources: DeferredPluginSessionImport["sources"] = [];
+  for (const source of recorded.sources.filter((source) => !missingIndex || source !== index)) {
+    sources.push(
+      await (async () => {
+        let failure: unknown;
+        const candidates = statMigrationPath(source.path)
+          ? [source.path]
+          : (archives.get(source.path) ?? []).map((archive) => archive.path);
+        for (const candidate of candidates) {
+          if (!statMigrationPath(candidate)) {
             continue;
           }
-          const isIndex = source.path === path.resolve(target.storePath);
-          const indexPath =
-            !isIndex &&
-            verifiedIndex &&
-            resolveVerifiedSessionSource(verifiedIndex, target, params.env, verification);
-          if (isIndex) {
-            const issues: Array<{ code: string; message: string }> = [];
-            const current = readLegacySessionStoreEntries(params.target, issues, {
-              sourcePath: candidate,
-            });
-            if (!current.bytes || !preservesRecordedIndexValue(current.bytes, source.identity)) {
-              throw new Error(
-                `Cannot prove the retained index preserves its original entries, metadata, and transcript links: ${candidate}. ${issues.map((issue) => issue.message).join("; ")}`,
-              );
+          try {
+            const identity = readMigrationArtifactIdentity(candidate);
+            if (
+              candidate !== source.path &&
+              sameSourceContent(identity, source.identity) &&
+              currentDatabaseIdentity === recorded.databaseIdentity
+            ) {
+              return { path: source.path, identity };
             }
-          } else {
-            if (!indexPath || !verifiedIndex) {
-              throw new Error(
-                "Changed transcript has no verified retained index to establish its session owner.",
-              );
+            if (
+              identity.size === 0 &&
+              isPrimarySessionTranscriptFileName(path.basename(source.path))
+            ) {
+              const indexPath =
+                verifiedIndex &&
+                resolveVerifiedSessionSource(verifiedIndex, target, params.env, verification);
+              await verifyDeferredSessionDatabase({
+                ...params,
+                sources: [
+                  ...(verifiedIndex && indexPath
+                    ? [{ originalPath: verifiedIndex.path, path: indexPath }]
+                    : []),
+                  { originalPath: source.path, path: candidate },
+                ],
+                verifiedSourcePaths,
+                assertCurrent,
+              });
+              return { path: source.path, identity };
             }
-            verifyDeferredSessionDatabase({
-              ...params,
-              sources: [
-                { originalPath: verifiedIndex.path, path: indexPath },
-                { originalPath: source.path, path: candidate },
-              ],
-              requireCompleteTranscript: true,
-              verifiedSourcePaths,
-            });
-          }
-          if (
-            !sameMigrationArtifact(readMigrationArtifactIdentity(candidate), identity) ||
-            (indexPath &&
+            if (sameSourceContent(identity, source.identity)) {
+              return { path: source.path, identity };
+            }
+            if (
+              candidate !== source.path ||
+              (source.path !== path.resolve(target.storePath) &&
+                !isPrimarySessionTranscriptFileName(path.basename(source.path)))
+            ) {
+              continue;
+            }
+            const isIndex = source.path === path.resolve(target.storePath);
+            const indexPath =
+              !isIndex &&
               verifiedIndex &&
-              !sameSourceContent(readMigrationArtifactIdentity(indexPath), verifiedIndex.identity))
-          ) {
-            continue;
+              resolveVerifiedSessionSource(verifiedIndex, target, params.env, verification);
+            if (isIndex) {
+              const issues: Array<{ code: string; message: string }> = [];
+              const current = readLegacySessionStoreEntries(params.target, issues, {
+                sourcePath: candidate,
+              });
+              if (!current.bytes || !preservesRecordedIndexValue(current.bytes, source.identity)) {
+                throw new Error(
+                  `Cannot prove the retained index preserves its original entries, metadata, and transcript links: ${candidate}. ${issues.map((issue) => issue.message).join("; ")}`,
+                );
+              }
+            } else {
+              if (!indexPath || !verifiedIndex) {
+                throw new Error(
+                  "Changed transcript has no verified retained index to establish its session owner.",
+                );
+              }
+              await verifyDeferredSessionDatabase({
+                ...params,
+                sources: [
+                  { originalPath: verifiedIndex.path, path: indexPath },
+                  { originalPath: source.path, path: candidate },
+                ],
+                requireCompleteTranscript: true,
+                verifiedSourcePaths,
+                assertCurrent,
+              });
+            }
+            if (
+              !sameMigrationArtifact(readMigrationArtifactIdentity(candidate), identity) ||
+              (indexPath &&
+                verifiedIndex &&
+                !sameSourceContent(
+                  readMigrationArtifactIdentity(indexPath),
+                  verifiedIndex.identity,
+                ))
+            ) {
+              continue;
+            }
+            if (isIndex) {
+              verifiedIndex = { path: source.path, identity };
+            }
+            return { path: source.path, identity };
+          } catch (error) {
+            if (
+              statMigrationPath(candidate)?.size === 0 &&
+              isPrimarySessionTranscriptFileName(path.basename(source.path))
+            ) {
+              throw error;
+            }
+            // An unreadable or aliased source remains protected with its recorded identity.
+            failure = error;
           }
-          if (isIndex) {
-            verifiedIndex = { path: source.path, identity };
-          }
-          return { path: source.path, identity };
-        } catch (error) {
-          // An unreadable or aliased source remains protected with its recorded identity.
-          failure = error;
         }
-      }
-      if (failure !== undefined) {
-        params.onSourceConflict?.(source.path, undefined, failure);
-      }
-      // Unverified content retains its old receipt until Doctor protects the current artifact.
-      return source;
-    });
+        if (failure !== undefined) {
+          params.onSourceConflict?.(source.path, undefined, failure);
+        }
+        // Unverified content retains its old receipt until Doctor protects the current artifact.
+        return source;
+      })(),
+    );
+  }
   if (currentDatabaseIdentity !== recorded.databaseIdentity) {
     assertVerifiedSessionSources(params, { ...recorded, sources });
-    verifyDeferredSessionDatabase({
+    await verifyDeferredSessionDatabase({
       ...params,
       sources: sources.map((source) => ({
         originalPath: source.path,
         path: resolveVerifiedSessionSource(source, target, params.env)!,
       })),
+      assertCurrent,
     });
   }
   const rebuilt = { ...recorded, databaseIdentity: currentDatabaseIdentity, sources };

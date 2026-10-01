@@ -57,7 +57,7 @@ import type {
 } from "./doctor-session-sqlite-types.js";
 
 /** Receipt recovery belongs to offline Doctor; canonical session data is never replayed. */
-export function prepareRetainedSessionImport(
+export async function prepareRetainedSessionImport(
   params: {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -96,12 +96,14 @@ export function prepareRetainedSessionImport(
   }
   let retainedImport: DeferredPluginSessionImport | undefined;
   const sourceConflicts = new Map<string, string>();
+  const emptySources = new Map<string, string>();
   const sourceVerification = {
     ...prepareSessionSourceVerification({
       ...params,
       sqlitePath,
     }),
     allowMissingIndex: true,
+    onEmptySource: (sourcePath: string, reason: string) => emptySources.set(sourcePath, reason),
     onSourceConflict: (sourcePath: string, artifactPath = sourcePath, error?: unknown) => {
       if (sourceConflicts.has(artifactPath)) {
         return;
@@ -124,7 +126,7 @@ export function prepareRetainedSessionImport(
     try {
       if (
         (params.mode === "import" || params.mode === "recover") &&
-        rebuildDeferredPluginSessionSourceIndex(sourceVerification)
+        (await rebuildDeferredPluginSessionSourceIndex(sourceVerification))
       ) {
         issues.push({
           code: "retained_plugin_source_index_rebuilt",
@@ -155,7 +157,7 @@ export function prepareRetainedSessionImport(
   ) {
     appendRetainedIndexComparison(params, issues);
   }
-  return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath };
+  return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath, emptySources };
 }
 
 /** Compare current rows for diagnosis only; changed index values never gain receipt authority. */
@@ -229,6 +231,7 @@ export async function archiveConflictingRetainedSessionSources(
     protectedPaths?: ReadonlySet<string>;
     expectedIndexIdentity?: MigrationArtifactIdentity;
     targets?: readonly SessionSqliteMigrationTargetInput[];
+    verifiedEmpty?: boolean;
   },
   sourceConflicts: Map<string, string>,
   report: DoctorSessionSqliteTargetReport,
@@ -318,7 +321,9 @@ export async function archiveConflictingRetainedSessionSources(
         : report.archivedTranscriptFiles
       ).push(move.archivePath);
       report.issues.push({
-        code: "retained_plugin_source_conflict",
+        code: params.verifiedEmpty
+          ? "retained_empty_transcript_superseded"
+          : "retained_plugin_source_conflict",
         message: `${source}: ${reason} Preserved at ${move.archivePath}; canonical SQLite sessions were not replayed.`,
       });
     } catch (error) {
@@ -337,7 +342,7 @@ export async function archiveConflictingRetainedSessionSources(
 
 /** Historical discovery yields; verify the receipt again before counting or authorizing archival. */
 export function countRetainedSessionSources(
-  retained: NonNullable<ReturnType<typeof prepareRetainedSessionImport>>,
+  retained: NonNullable<Awaited<ReturnType<typeof prepareRetainedSessionImport>>>,
   records: readonly LegacySessionRecord[],
   report: DoctorSessionSqliteTargetReport,
 ): void {
