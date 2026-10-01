@@ -36,11 +36,11 @@ import {
   appendTranscriptEvent,
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
-  readSessionTranscriptActiveStats,
   readTranscriptStatsSync,
   upsertSessionEntryCore,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import { readActiveTranscriptStats } from "../../config/sessions/session-accessor.sqlite-history.test-support.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -2039,7 +2039,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(260) }, type: "message" },
     ]);
-    const growthBytes = readSessionTranscriptActiveStats(scope).sizeBytes - latchedBytes;
+    const growthBytes = readActiveTranscriptStats(scope).sizeBytes - latchedBytes;
     expect(growthBytes).toBeGreaterThan(0);
     expect(growthBytes).toBeLessThan(10);
     entry = await run(entry);
@@ -2117,7 +2117,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     const manager = SessionManager.open(scope, rootDir);
     manager.appendMessage({ role: "user", content: "x".repeat(256), timestamp: 1 });
-    const activeBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+    const activeBytes = readActiveTranscriptStats(scope).sizeBytes;
     const sessionEntry: SessionEntry = createFlushSessionEntry({
       totalTokens: 10,
       compactionCount: 0,
@@ -2225,7 +2225,7 @@ describe("runMemoryFlushIfNeeded", () => {
         storePath: fixture.storePath,
         isHeartbeat: true,
       });
-    const initialBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+    const initialBytes = readActiveTranscriptStats(scope).sizeBytes;
     let settledBytes = 0;
     incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
     compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
@@ -2253,7 +2253,7 @@ describe("runMemoryFlushIfNeeded", () => {
       await replaceTranscriptEvents(scope, [
         { type: "message", message: { role: "user", content: "x".repeat(128) } },
       ]);
-      settledBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+      settledBytes = readActiveTranscriptStats(scope).sizeBytes;
       await host?.onHostCompactionTranscriptSettled?.(commit);
       return {
         ok: true,
@@ -2283,7 +2283,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "small" }, type: "message" },
     ]);
-    const activeBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+    const activeBytes = readActiveTranscriptStats(scope).sizeBytes;
     const sessionEntry = createSessionEntry({
       compactionCount: 1,
       agentRuntimeOverride: "codex",

@@ -1,5 +1,7 @@
 import {
   isSessionTranscriptProjectionUnavailableError,
+  readSessionTranscriptBoundedMessageTailPageFromProjection,
+  type SessionTranscriptBoundedMessageTailOptions,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
@@ -11,6 +13,8 @@ import {
 import { readSessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
+import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
+import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
@@ -98,6 +102,25 @@ function createHistoryPageReader<Options, Result>(
 export const readSessionMessagesWithSourceAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesWithSourceAsync,
   (read, target, options) => read({ kind: "source-messages", params: { target, options } }),
+);
+
+export const readSessionTranscriptAccountingAsync = createHistoryPageReader(
+  async (target, options: SessionTranscriptAccountingOptions) =>
+    withCurrentProjectionSnapshot(target, (projection) =>
+      readSessionTranscriptAccountingFromProjection(projection, options),
+    ),
+  (read, target, options) => read({ kind: "active-accounting", params: { target, options } }),
+);
+
+export const readSessionTranscriptBoundedMessageTailPageAsync = createHistoryPageReader(
+  async (target, options: SessionTranscriptBoundedMessageTailOptions) =>
+    withCurrentProjectionSnapshot(
+      target,
+      (projection) =>
+        readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
+      options,
+    ),
+  (read, target, options) => read({ kind: "bounded-tail", params: { target, options } }),
 );
 
 export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
