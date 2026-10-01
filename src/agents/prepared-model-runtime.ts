@@ -498,11 +498,7 @@ export function rejectPendingPreparedModelRuntimeReplacement(
   notifyPreparedModelRuntimePublication({ phase: "failed", error: replacementError });
 }
 
-const {
-  recoverCatalog: recoverPreparedModelRuntimeCatalogWorker,
-  recoverPlugin: recoverRetiredConfiguredPluginGeneration,
-  ensureReady: ensureGatewayPreparedModelRuntimeReady,
-} = createPreparedModelRuntimeRecovery({
+const modelRuntimeRecovery = createPreparedModelRuntimeRecovery({
   owners,
   canRecover: () => gatewayLifecycleActive && !refreshCancellation.signal.aborted,
   getReplacement: () => pendingModelRuntimeReplacement,
@@ -510,7 +506,8 @@ const {
   captureLifetime: captureModelRuntimeLifetime,
   publish: refreshPreparedModelRuntimeSnapshots,
 });
-export { recoverPreparedModelRuntimeCatalogWorker, ensureGatewayPreparedModelRuntimeReady };
+export const recoverPreparedModelRuntimeCatalogWorker = modelRuntimeRecovery.recoverCatalog;
+export const ensureGatewayPreparedModelRuntimeReady = modelRuntimeRecovery.ensureReady;
 const remoteCatalogPublication = configuredRefresh.createRemoteCatalogPublication({
   ...preparedModelRuntimeLeaseContext,
   publicationQueue,
@@ -520,7 +517,7 @@ const remoteCatalogPublication = configuredRefresh.createRemoteCatalogPublicatio
   // Catalog adoption also waits for a degraded startup's final publication.
   getPendingReplacement: () =>
     (modelRuntimeDrain.pending ?? pendingModelRuntimeReplacement)?.promise,
-  onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
+  onPluginGenerationRetired: modelRuntimeRecovery.recoverPlugin,
 });
 export const { applyRemoteModelCatalogUpdate, advancePreparedModelRuntimeConfig } =
   remoteCatalogPublication;
@@ -632,7 +629,7 @@ export function refreshPreparedModelRuntimeSnapshots(
           buildTimeoutMs: modelRuntimeBuildTimeoutMs,
           progress: startup?.progress,
           acquisitionSignal,
-          onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
+          onPluginGenerationRetired: modelRuntimeRecovery.recoverPlugin,
         },
       );
       if (!isPublicationCurrent()) {
