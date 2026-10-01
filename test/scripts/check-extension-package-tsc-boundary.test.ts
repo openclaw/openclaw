@@ -133,7 +133,7 @@ describe("check-extension-package-tsc-boundary", () => {
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.cpSync(path.resolve(file), path.join(root, file), { recursive: true });
     }
-    for (const name of ["tsx", "@openclaw/fs-safe", "@babel/parser", "p-map"]) {
+    for (const name of ["tsx", "@openclaw/fs-safe", "p-map"]) {
       const file = `node_modules/${name}`;
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.symlinkSync(path.resolve(file), path.join(root, file));

@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { parse } from "@babel/parser";
+import { collectModuleReferencesFromSource } from "./guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "./native-typescript.mts";
 
 type Change = { path: string; status: string };
 type Selection = {
@@ -40,53 +41,6 @@ function publicEntries(rootDir: string, base?: string) {
       return read("entrypoints", revision).filter((entry) => !privateEntries.has(entry));
     }),
   );
-}
-
-function sdkImports(source: string, file: string): Set<string> {
-  const ast = parse(source, {
-    sourceType: "unambiguous",
-    plugins: [
-      ["typescript", { dts: /\.d\.[cm]?ts$/u.test(file) }],
-      "decorators-legacy",
-      ...(/\.[jt]sx$/u.test(file) ? ["jsx" as const] : []),
-    ],
-  });
-  const imports = new Set<string>();
-  const visit = (node: unknown): void => {
-    if (!node || typeof node !== "object") {
-      return;
-    }
-    const value = node as Record<string, unknown>;
-    if (
-      [
-        "ImportDeclaration",
-        "ExportNamedDeclaration",
-        "ExportAllDeclaration",
-        "ImportExpression",
-        "TSImportType",
-      ].includes(String(value.type))
-    ) {
-      const specifier = value.source as { value?: string } | undefined;
-      if (specifier?.value) {
-        imports.add(specifier.value);
-      }
-    } else if (value.type === "CallExpression") {
-      const callee = value.callee as { type?: string; name?: string } | undefined;
-      const argument = (value.arguments as { value?: string }[] | undefined)?.[0];
-      if ((callee?.type === "Import" || callee?.name === "require") && argument?.value) {
-        imports.add(argument.value);
-      }
-    }
-    for (const child of Object.values(value)) {
-      if (Array.isArray(child)) {
-        child.forEach(visit);
-      } else if (child && typeof child === "object") {
-        visit(child);
-      }
-    }
-  };
-  visit(ast.program);
-  return imports;
 }
 
 /** PR scope intentionally omits transitive declaration consumers; hourly checks them all. */
@@ -136,6 +90,7 @@ export function selectAffectedBoundaryPackages(
     })
       .split("\0")
       .filter((file) => SOURCE.test(file) && !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file));
+    const sources: { fileName: string; text: string; owner: string }[] = [];
     for (const file of files) {
       const owner = file.split("/")[1]!;
       if (
@@ -153,12 +108,23 @@ export function selectAffectedBoundaryPackages(
       if (!source.includes("openclaw/plugin-sdk/") && !source.includes("\\")) {
         continue;
       }
-      const direct = [...sdkImports(source, file)].find((entry) => changedEntries.has(entry));
-      if (direct) {
-        reasons.set(owner, `direct import of changed public entry ${direct}: ${file}`);
+      sources.push({ fileName: file, text: source, owner });
+    }
+    using parser = createNativeTypeScriptParser({ cwd: rootDir });
+    for (const [index, sourceFile] of parser.parseSourceFiles(sources).entries()) {
+      const { owner, fileName } = sources[index]!;
+      const direct = collectModuleReferencesFromSource(sourceFile, {
+        acceptSpecifier: (specifier) => changedEntries.has(specifier),
+      })[0];
+      if (direct && !reasons.has(owner)) {
+        reasons.set(
+          owner,
+          `direct import of changed public entry ${direct.specifier}: ${fileName}`,
+        );
       }
     }
   }
+
   return {
     mode: "affected",
     reason: "PR diff: touched packages, SDK smoke sample and direct public-entry consumers",

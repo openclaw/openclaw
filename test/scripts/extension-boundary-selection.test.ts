@@ -82,6 +82,7 @@ describe("extension package PR selection", () => {
     'export type { Value } from "openclaw/plugin-sdk/value";',
     'export type Result = import("openclaw/plugin-sdk/value").Value;',
     'export const load = () => import("openclaw/plugin-sdk/value");',
+    'import type { Value } from "openclaw/plugin-sdk/value"; export const options = { onRequest: true ? async (value, context): Promise<Value> => value : undefined };',
   ])("selects direct public-entry consumers for %s", (source) => {
     const { root, write, commit } = fixture();
     write("extensions/consumer/index.ts", source);
