@@ -4,13 +4,11 @@ import { defaultRuntime } from "../../../runtime.js";
 import { handleDirectiveOnly } from "../directive-handling.impl.js";
 import { parseInlineSessionDirectives } from "../directive-handling.parse.js";
 import * as directivePersistence from "../directive-handling.shared.js";
+import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "../queue.js";
 import {
-  clearSessionQueues,
-  enqueueFollowupRun,
-  FollowupRunDeferredError,
-  scheduleFollowupDrain,
-} from "../queue.js";
-import { createQueueTestRun as createRun } from "../queue.test-helpers.js";
+  clearFollowupQueueForTest,
+  createQueueTestRun as createRun,
+} from "../queue.test-helpers.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./lifecycle.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
@@ -79,7 +77,7 @@ describe("followup drain failure ownership", () => {
     });
   });
   afterEach(async () => {
-    clearSessionQueues([key]);
+    clearFollowupQueueForTest(key);
     await finish();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -483,7 +481,7 @@ describe("followup drain failure ownership", () => {
     enqueueFollowupRun(key, createRun({ prompt: "old", messageId: "old" }), SETTINGS);
     scheduleFollowupDrain(key, old);
     await flush();
-    clearSessionQueues([key]);
+    clearFollowupQueueForTest(key);
     enqueueFollowupRun(key, createRun({ prompt: "new", messageId: "new" }), SETTINGS);
     await vi.advanceTimersByTimeAsync(500);
     expect(old).toHaveBeenCalledTimes(1);
