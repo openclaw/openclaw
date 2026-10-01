@@ -4,12 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../../test/helpers/promise.js";
 let bundleRoot: string | undefined;
 let interruptsModuleUrl: string;
 
@@ -67,8 +63,8 @@ it.skipIf(process.platform === "win32").concurrent.for([
       env: { ...process.env, VITEST: undefined },
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const ready = createDeferred();
-    const cleanupStarted = createDeferred();
+    const ready = Promise.withResolvers<void>();
+    const cleanupStarted = Promise.withResolvers<void>();
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => {

@@ -3,16 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
-} from "../../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../../test/helpers/promise.js";
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import {
   createCodexCliSessionNodeHostCommands,
@@ -439,7 +438,7 @@ describe("codex cli node sessions", () => {
   });
 
   it("does not start a node resume canceled while its source is resolving", async () => {
-    const source = createDeferred<Awaited<ReturnType<typeof resolveCatalogSource>>>();
+    const source = Promise.withResolvers<Awaited<ReturnType<typeof resolveCatalogSource>>>();
     resolveCatalogSource.mockReturnValueOnce(source.promise);
     const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
       (entry) => entry.command === "codex.cli.session.resume",
@@ -570,8 +569,8 @@ describe("codex cli node sessions", () => {
       getPluginConfig: () => pluginConfig,
       resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     });
-    const allocated = createDeferred<string>();
-    const releaseAllocation = createDeferred<void>();
+    const allocated = Promise.withResolvers<string>();
+    const releaseAllocation = Promise.withResolvers<void>();
     const createTemporaryDirectory = fs.mkdtemp.bind(fs);
     const allocate = vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async (prefix, options) => {
       const directory = await createTemporaryDirectory(prefix, options);

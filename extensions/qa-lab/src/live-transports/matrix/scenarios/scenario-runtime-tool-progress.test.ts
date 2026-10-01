@@ -1,8 +1,8 @@
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../../../../test/helpers/promise.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import { createCurrentScenarioEventPredicate } from "./scenario-runtime-event-scope.js";
 import {
@@ -65,7 +65,7 @@ describe.skipIf(process.platform === "win32")("Matrix mention progress gate", ()
   async function prepareGate(consumeTimeoutMs?: number) {
     const gatewayWorkspaceDir = tempDirs.make("matrix-progress-gate-");
     const gatePath = path.join(gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY);
-    const published = createDeferred();
+    const published = Promise.withResolvers<void>();
     publications.set(gatePath, () => published.resolve());
     const gate = await prepareMatrixMentionProgressGate(
       { gatewayWorkspaceDir },

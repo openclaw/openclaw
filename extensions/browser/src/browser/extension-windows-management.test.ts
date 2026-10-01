@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
-} from "../../../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../../../test/helpers/promise.js";
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   managementRequestSchema,
   parseWindowsJson,

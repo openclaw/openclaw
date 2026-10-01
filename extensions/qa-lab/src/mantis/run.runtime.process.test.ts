@@ -2,15 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { hasErrnoCode } from "../../../../src/infra/errno.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
-} from "../../../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../../../test/helpers/promise.js";
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
 import { defaultMantisCommandRunner } from "./run-command.runtime.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
@@ -68,7 +68,7 @@ function killKnownProcessPids(pids: ReadonlyArray<number | undefined>) {
 async function readPidBeforeSettled(filePath: string, label: string, settled: Promise<SettledRun>) {
   const readPid = async () => {
     const value = await fs.readFile(filePath, "utf8").catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
+      if (hasNodeErrorCode(error, "ENOENT")) {
         return "";
       }
       throw error;

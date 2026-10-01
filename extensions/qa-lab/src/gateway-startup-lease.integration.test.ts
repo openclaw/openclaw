@@ -4,8 +4,8 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createQaBusState } from "./bus-state.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
@@ -323,7 +323,7 @@ async function reproduce(
       record("suite-rejected", { error: serializeError(error), ...snapshot() });
     }
     if (denyGroupSignals) {
-      const nextHeartbeat = createDeferred();
+      const nextHeartbeat = Promise.withResolvers<void>();
       onHeartbeat = () => nextHeartbeat.resolve();
       await withinTest(nextHeartbeat.promise, testSignal);
     }

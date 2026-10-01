@@ -3,13 +3,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
-} from "../../../../../../test/helpers/fixture-receipts.js";
-import { createDeferred, withinTest } from "../../../../../../test/helpers/promise.js";
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { killMatrixQaCliChild } from "./scenario-runtime-cli-process.js";
 import {
   formatMatrixQaCliCommand,
@@ -461,7 +461,7 @@ describe("Matrix QA CLI runtime", () => {
     let childPid: number | undefined;
     let grandchildPid: number | undefined;
     let session: ReturnType<typeof startMatrixQaOpenClawCli> | undefined;
-    const cleanup = createDeferred();
+    const cleanup = Promise.withResolvers<void>();
     // Vitest can finish a timed-out callback before its async finally; the hook joins that cleanup.
     onTestFinished(() => cleanup.promise);
     try {

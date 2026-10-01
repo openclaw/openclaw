@@ -2,8 +2,8 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import * as outputFiles from "./output-files.js";
 import {
   getPwToolsCoreSessionMocks,
@@ -162,7 +162,7 @@ describe("download current document", () => {
   it.for(["caller", "navigation", "close"] as const)(
     "cancels an active save on %s and leaves no partial file",
     async (reason, { signal, onTestFinished }) => {
-      const writeSettled = createDeferred();
+      const writeSettled = Promise.withResolvers<void>();
       const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
       const write = vi
         .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")

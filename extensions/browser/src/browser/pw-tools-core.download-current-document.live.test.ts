@@ -4,9 +4,9 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { isLiveTestEnabled } from "../../test-support.js";
 import * as outputFiles from "./output-files.js";
 import { closePlaywrightBrowserConnection } from "./pw-session.js";
@@ -192,7 +192,7 @@ describe.skipIf(!isLiveTestEnabled())("current-document downloads (real Chromium
     signal,
     onTestFinished,
   }) => {
-    const writeSettled = createDeferred();
+    const writeSettled = Promise.withResolvers<void>();
     const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
     const write = vi
       .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")

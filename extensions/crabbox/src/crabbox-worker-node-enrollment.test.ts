@@ -6,16 +6,15 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import * as tar from "tar";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
-} from "../../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../../test/helpers/promise.js";
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import * as tar from "tar";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
   createCrabboxNodeEnrollmentSetup,
@@ -24,7 +23,9 @@ import {
 } from "./crabbox-worker-node-enrollment.js";
 import {
   createNodeBootstrapFixture,
+  expectSetupPhases,
   readLaunch,
+  type DesktopFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
@@ -166,8 +167,8 @@ async function serveArtifact(
     tls = { cert: fs.readFileSync(cert), key: fs.readFileSync(key) };
   }
   const authorizations: Array<string | undefined> = [];
-  const requested = createDeferred<void>();
-  const closed = createDeferred<void>();
+  const requested = Promise.withResolvers<void>();
+  const closed = Promise.withResolvers<void>();
   const handle: http.RequestListener = (request, response) => {
     authorizations.push(request.headers.authorization);
     requested.resolve();
@@ -230,14 +231,6 @@ async function serveArtifact(
   });
   return { nodeBootstrap, authorizations, requested: requested.promise, closed: closed.promise };
 }
-
-type DesktopFixture = {
-  enabled: boolean;
-  setup?: string;
-  display?: string;
-  dbus?: string;
-  runtimeDir?: string;
-};
 
 async function enroll(
   home: string,
@@ -344,15 +337,6 @@ echo 123
     }
     await closed;
   }
-}
-
-async function expectSetupPhases(result: ReturnType<typeof enroll>) {
-  const completed = await result;
-  expect(completed.code).toBe(0);
-  const lines = completed.output.trim().split("\n");
-  // Crabbox consumes these stream markers; successful bootstrap emits no other data.
-  expect(lines.every((line) => /^CRABBOX_PHASE:[a-z.-]{1,80}$/.test(line))).toBe(true);
-  return lines.map((line) => line.slice("CRABBOX_PHASE:".length));
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
@@ -590,7 +574,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       ),
     );
     const workerBytes = Buffer.from("synthetic standalone worker archive");
-    const workerResponse = createDeferred<void>();
+    const workerResponse = Promise.withResolvers<void>();
     const worker = await serveArtifact(workerBytes, { hold: workerResponse.promise });
     const workerBundle = {
       ...worker.nodeBootstrap,
@@ -716,7 +700,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     "settles started work after %s fails before removing staging files",
     async (failure) => {
       const { home } = testHome();
-      const postinstallResponse = createDeferred<void>();
+      const postinstallResponse = Promise.withResolvers<void>();
       const postinstall = await serveArtifact(Buffer.from("finish"), {
         hold: postinstallResponse.promise,
       });
@@ -735,7 +719,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
 });`,
         ),
       );
-      const workerResponse = createDeferred<void>();
+      const workerResponse = Promise.withResolvers<void>();
       const worker = await serveArtifact(Buffer.from("synthetic worker archive"), {
         hold: workerResponse.promise,
       });

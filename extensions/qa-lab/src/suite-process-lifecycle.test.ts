@@ -4,9 +4,8 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
+import { resolveTestNodeExecPath, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
@@ -116,7 +115,7 @@ function startSuiteProcess(outputDir: string, scenarioIds: readonly string[]) {
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   activeChildren.add(child);
-  const summaryWritten = createDeferred();
+  const summaryWritten = Promise.withResolvers<void>();
   child.on("message", (message: unknown) => {
     if (message === "summary-written") {
       summaryWritten.resolve();

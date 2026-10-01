@@ -4,12 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../../../../test/helpers/promise.js";
 
 const childProcessMocks = vi.hoisted(() => ({
   children: [] as ChildProcess[],
@@ -104,7 +100,7 @@ describe("Matrix QA CLI runtime stream errors", () => {
             resolve();
           });
         });
-        const ready = createDeferred();
+        const ready = Promise.withResolvers<void>();
         let stdout = "";
         child.stdout?.on("data", (chunk: Buffer) => {
           stdout += chunk.toString();

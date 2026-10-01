@@ -2,12 +2,11 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as tempPaths from "openclaw/plugin-sdk/temp-path";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withinTest } from "../../../test/helpers/promise.js";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
 import * as transport from "./app-server/transport-stdio.js";
 import * as transportLifecycle from "./app-server/transport.js";
@@ -36,7 +35,7 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
   const receiver = vi.fn((_receive: (message: Uint8Array) => void | Promise<void>) => () => {});
   const send = vi.fn(async (_message: Uint8Array) => {});
   const assertExecAuthorized = vi.fn();
-  const released = createDeferred<void>();
+  const released = Promise.withResolvers<void>();
   const release = vi.fn(() => released.resolve());
   const command = createCodexNodeExecServerCommand();
   const io = {
@@ -144,8 +143,8 @@ describe("Codex node native readiness", () => {
     });
     const harness = await startFixture(true);
     const closed = once(harness.child, "close");
-    const receipt = createDeferred<void>();
-    const receiptHeld = createDeferred<void>();
+    const receipt = Promise.withResolvers<void>();
+    const receiptHeld = Promise.withResolvers<void>();
     const close = transportLifecycle.closeCodexAppServerTransportAndWait;
     const heldClose = vi
       .spyOn(transportLifecycle, "closeCodexAppServerTransportAndWait")

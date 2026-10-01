@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { resolveQaStagedBundledPluginsRoot } from "./bundled-plugin-staging.js";
 import * as gatewaySetup from "./gateway-child-setup.js";
 import { createQaGatewayChild } from "./gateway-child.js";
@@ -464,7 +464,7 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     signal: testSignal,
   }) => {
     const outputFlushed = new Map(
-      ["STILL_OWNED", "FINAL_OUTPUT"].map((text) => [text, createDeferred()] as const),
+      ["STILL_OWNED", "FINAL_OUTPUT"].map((text) => [text, Promise.withResolvers<void>()] as const),
     );
     for (const gate of outputFlushed.values()) {
       void gate.promise.catch(() => undefined);

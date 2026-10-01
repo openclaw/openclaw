@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import type { Frame, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withinTest } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import * as outputFiles from "./output-files.js";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
@@ -164,8 +163,8 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
   }
 
   function observeLocatorAction(targetId: string, method: "click" | "fill") {
-    const started = createDeferred<void>();
-    const settled = createDeferred<void>();
+    const started = Promise.withResolvers<void>();
+    const settled = Promise.withResolvers<void>();
     const observedFrames = new WeakSet<Frame>();
     // Discovery of another target can replace the cached connection. Observe the
     // exact Page returned to the action, not a Frame retained during fixture setup.
@@ -340,8 +339,8 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     const filePath = await createUploadFile();
     const { cdpUrl, pages } = await createActionPages(["<p>Waiting for a file input</p>"]);
     const page = pages[0]!;
-    const started = createDeferred<void>();
-    const settled = createDeferred<void>();
+    const started = Promise.withResolvers<void>();
+    const settled = Promise.withResolvers<void>();
     const frame = page.controlled.mainFrame();
     const setInputFiles = frame.setInputFiles.bind(frame);
     frame.setInputFiles = (selector, files, options) => {
@@ -476,7 +475,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     "cancels a streaming download after %s without publishing output",
     { timeout: 20_000 },
     async (failure, { signal, onTestFinished }) => {
-      const writeSettled = createDeferred<void>();
+      const writeSettled = Promise.withResolvers<void>();
       const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
       const write = vi
         .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
@@ -533,7 +532,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
       cleanup.push(async () => closeDownloadResponse?.());
 
       const controlledPage = await getPageForTargetId({ cdpUrl, targetId });
-      const saveStarted = createDeferred<void>();
+      const saveStarted = Promise.withResolvers<void>();
       let cancellationCount = 0;
       controlledPage.once("download", (download) => {
         const saveAs = download.saveAs.bind(download);

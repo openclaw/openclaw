@@ -6,13 +6,9 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type BrowserContext } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
 import { getChromeMcpPid } from "../src/browser/chrome-mcp-session.js";
 import {
   chromeProductRoots,
@@ -312,7 +308,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           .map((productRoot) =>
             path.join(productRoot.nativeManifestDir, "ai.openclaw.browser_bootstrap.json"),
           );
-        const registered = createDeferred();
+        const registered = Promise.withResolvers<void>();
         const installPromise = installChromeExtensionBootstrap({
           bundledDir: extensionSource,
           pluginRoot: path.resolve("extensions/browser"),

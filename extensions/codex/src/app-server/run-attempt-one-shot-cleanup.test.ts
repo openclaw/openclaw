@@ -4,10 +4,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import { isJsonObject } from "./protocol.js";
@@ -88,7 +87,7 @@ describe("Codex one-shot cleanup receipts", () => {
     async (completion) => {
       // Cold startup must not consume the unrelated attempt deadline in this cleanup fixture.
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const turnAccepted = createDeferred<void>();
+      const turnAccepted = Promise.withResolvers<void>();
       let terminalTerminated = false;
       const results: Record<string, unknown> = {
         initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
@@ -279,7 +278,7 @@ process.stdin.on("end", () => ${
           new processSnapshot.ProcessInspectionError("unavailable"),
         );
       }
-      const turnStarted = createDeferred<void>();
+      const turnStarted = Promise.withResolvers<void>();
       const removeTurnStartedHandler = client.addNotificationHandler((notification) => {
         if (
           notification.method === "turn/started" &&

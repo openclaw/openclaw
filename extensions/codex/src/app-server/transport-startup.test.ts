@@ -5,13 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
-} from "../../../../test/helpers/fixture-receipts.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
+  awaitGateBeforeSettlement,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient, isCodexAppServerConnectionClosedError } from "./client.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 import { closeCodexAppServerTransportAndWait, hasCodexAppServerNaturalExit } from "./transport.js";

@@ -3,8 +3,8 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
-import { withinTest } from "../../../test/helpers/promise.js";
 import { createCrabboxWorkerDesktopSetup } from "./crabbox-worker-desktop-setup.js";
 
 const browserClosures: Promise<unknown>[] = [];

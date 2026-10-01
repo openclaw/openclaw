@@ -1,11 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { FixtureReceiptChannel } from "../../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../../test/helpers/promise.js";
+import { type FixtureReceiptChannel, withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { expect } from "vitest";
 import type {
   CrabboxWorkerNodeEnrollment,
   CrabboxWorkerNodeRuntimePreparation,
 } from "./crabbox-worker-node-enrollment.js";
+
+export type DesktopFixture = {
+  enabled: boolean;
+  setup?: string;
+  display?: string;
+  dbus?: string;
+  runtimeDir?: string;
+};
 
 export function createWorkerArchiveFixture(): CrabboxWorkerNodeRuntimePreparation["workerBundle"] {
   return {
@@ -48,4 +56,13 @@ export async function readLaunch(
     environment: Record<string, string>;
     enabledPlugins: string[];
   };
+}
+
+export async function expectSetupPhases(result: Promise<{ code: number | null; output: string }>) {
+  const completed = await result;
+  expect(completed.code).toBe(0);
+  const lines = completed.output.trim().split("\n");
+  // Crabbox consumes these stream markers; successful bootstrap emits no other data.
+  expect(lines.every((line) => /^CRABBOX_PHASE:[a-z.-]{1,80}$/.test(line))).toBe(true);
+  return lines.map((line) => line.slice("CRABBOX_PHASE:".length));
 }
