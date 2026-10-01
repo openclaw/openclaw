@@ -1,4 +1,3 @@
-import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
@@ -25,15 +24,15 @@ const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
 /** Reads stay independent; the first prepared decision owns mutation and delivery. */
 export function createRequesterSettleBatchClaim(
   key: string,
-  resolveGatewayContext: GatewayContextResolver | undefined,
+  isGatewayCurrent: (() => boolean) | undefined,
 ) {
-  const hadGatewayContext = Boolean(resolveGatewayContext?.());
-  if (resolveGatewayContext && !hadGatewayContext) {
+  const hadGatewayContext = isGatewayCurrent?.() === true;
+  if (isGatewayCurrent && !hadGatewayContext) {
     return undefined;
   }
   const isGatewayClosed = () => {
     try {
-      return hadGatewayContext && !resolveGatewayContext?.();
+      return hadGatewayContext && !isGatewayCurrent?.();
     } catch {
       // An incompatible captured batch cannot block a fresh Gateway owner.
       return hadGatewayContext;

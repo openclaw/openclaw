@@ -236,7 +236,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     rearmGeneration: selectedState.rearmGeneration,
     pause: Boolean(pauseNotice),
   });
-  const claim = createRequesterSettleBatchClaim(wakeKeyBase, resolveGatewayContext);
+  const claim = createRequesterSettleBatchClaim(
+    wakeKeyBase,
+    resolveGatewayContext ? () => Boolean(resolveGatewayContext()) : undefined,
+  );
   if (!claim) {
     return false;
   }
