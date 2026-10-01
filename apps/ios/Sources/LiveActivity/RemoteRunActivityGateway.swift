@@ -1,6 +1,7 @@
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawNativeActions
 import OpenClawProtocol
 
 /// Uses one captured, profile-bound connection. Activity selectors never select

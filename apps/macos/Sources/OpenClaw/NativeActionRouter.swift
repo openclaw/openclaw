@@ -1,7 +1,7 @@
 import AppIntents
 import Foundation
 import OpenClawChatUI
-import OpenClawKit
+import OpenClawNativeActions
 
 extension OpenClawApp: AppIntentsPackage {
     nonisolated static var includedPackages: [any AppIntentsPackage.Type] {

@@ -1,5 +1,5 @@
 import AppIntents
-import OpenClawKit
+import OpenClawNativeActions
 
 extension OpenClawApp: AppIntentsPackage {
     nonisolated static var includedPackages: [any AppIntentsPackage.Type] {

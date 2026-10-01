@@ -54,7 +54,7 @@ xcrun swift build "${BUILD_ARGS[@]}"
 cmp "$SWIFT_PACKAGE_LOCK_BASELINE" "$SWIFT_PACKAGE_ROOT/Package.resolved"
 PRODUCTS="$(xcrun swift build "${BUILD_ARGS[@]}" --show-bin-path)"
 RESULTS="$SCRATCH/results"
-capture_app_intents_inputs "$PRODUCTS" "$RESULTS/$ARCH/app-intents" OpenClawKit OpenClaw
+capture_app_intents_inputs "$PRODUCTS" "$RESULTS/$ARCH/app-intents" OpenClawNativeActions OpenClaw
 
 # This bundle is only an extraction destination, never signed, installed, or run.
 APP="$SCRATCH/OpenClaw.app"
@@ -70,7 +70,7 @@ const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const [results, app, arch, reportPath, xcodeVersion] = process.argv.slice(2);
-const kitRoot = path.join(results, arch, "app-intents");
+const metadataRoot = path.join(results, arch, "app-intents");
 const entityNames = ["OpenClawSessionEntity", "OpenClawRunEntity"];
 const enumName = "OpenClawNativeSessionOperation";
 const entity = (typeName, optional = false) => ({ kind: "entity", typeName, optional });
@@ -89,9 +89,9 @@ const contracts = {
 const shortcutNames = ["OpenSessionIntent", "OpenComposeIntent", "SendMessageIntent", "InspectRunIntent"];
 const select = (values, name) => {
   const matches = Object.values(values).filter(
-    (value) => value.fullyQualifiedTypeName === `OpenClawKit.${name}`,
+    (value) => value.fullyQualifiedTypeName === `OpenClawNativeActions.${name}`,
   );
-  assert.equal(matches.length, 1, `Expected exactly one extracted OpenClawKit.${name}`);
+  assert.equal(matches.length, 1, `Expected exactly one extracted OpenClawNativeActions.${name}`);
   assert.ok(matches[0].mangledTypeName, `Missing compiled type for ${name}`);
   return matches[0];
 };
@@ -187,7 +187,7 @@ const report = {
   architecture: arch,
   configuration: "release",
   xcodeVersion: xcodeVersion.trim(),
-  sharedPackage: validate(path.join(kitRoot, "OpenClawKit.appintents/Metadata.appintents/extract.actionsdata"), false),
+  sharedPackage: validate(path.join(metadataRoot, "OpenClawNativeActions.appintents/Metadata.appintents/extract.actionsdata"), false),
   app: validate(path.join(app, "Contents/Resources/Metadata.appintents/extract.actionsdata"), true),
   installedDiscoveryVerified: false,
 };

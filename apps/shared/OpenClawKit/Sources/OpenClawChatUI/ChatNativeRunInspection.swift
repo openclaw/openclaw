@@ -1,5 +1,5 @@
 import Foundation
-import OpenClawKit
+import OpenClawNativeActions
 
 /// A bounded projection, not a scheduler. Receipts establish input ownership;
 /// only an exact active/terminal run fact establishes execution state.

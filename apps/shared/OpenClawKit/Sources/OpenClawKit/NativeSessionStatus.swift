@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawNativeActions
 import OpenClawProtocol
 
 /// A codec for an already selected connection, not an authenticated reader.

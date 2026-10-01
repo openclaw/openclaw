@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import OpenClawChatUI
-import OpenClawKit
+import OpenClawNativeActions
 
 struct WebChatRoute: Equatable, Sendable {
     let sessionKey: String

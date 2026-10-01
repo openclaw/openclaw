@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawNativeActions
 import OSLog
 
 struct SlashFilterCache {

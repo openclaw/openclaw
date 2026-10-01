@@ -22,6 +22,7 @@ const probe = vi.hoisted(() => ({
     "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
     "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer+Controls.swift",
     "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayDiscoveryStatusText.swift",
+    "apps/shared/OpenClawKit/Sources/OpenClawNativeActions/NativeActionIntents.swift",
   ],
 }));
 
@@ -344,6 +345,11 @@ describe("Apple app i18n catalogs", () => {
     ["iOS", buildIosCatalog, "apps/ios/Sources/Example.swift"],
     ["macOS", buildMacosCatalog, "apps/macos/Sources/OpenClaw/Example.swift"],
     ["shared iOS", buildIosCatalog, "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Example.swift"],
+    [
+      "native actions",
+      buildIosCatalog,
+      "apps/shared/OpenClawKit/Sources/OpenClawNativeActions/Example.swift",
+    ],
     [
       "shared macOS",
       buildMacosCatalog,

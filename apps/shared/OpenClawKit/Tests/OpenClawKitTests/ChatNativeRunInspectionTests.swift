@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawNativeActions
 import Testing
 @testable import OpenClawChatUI
 

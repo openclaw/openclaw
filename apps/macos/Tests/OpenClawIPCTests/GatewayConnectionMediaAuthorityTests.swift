@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import OpenClawChatUI
+import OpenClawNativeActions
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit

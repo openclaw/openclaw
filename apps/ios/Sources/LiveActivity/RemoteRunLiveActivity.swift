@@ -1,6 +1,6 @@
 @preconcurrency import ActivityKit
 import Foundation
-import OpenClawKit
+import OpenClawNativeActions
 import os
 
 /// The remote slot belongs to LiveActivityManager. These adapters isolate OS

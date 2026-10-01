@@ -1,5 +1,6 @@
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawNativeActions
 import SwiftUI
 import UIKit
 

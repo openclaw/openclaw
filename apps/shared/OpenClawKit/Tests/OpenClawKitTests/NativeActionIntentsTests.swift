@@ -1,5 +1,5 @@
 #if os(iOS) || os(macOS)
-import OpenClawKit
+import OpenClawNativeActions
 import Testing
 
 struct NativeActionIntentsTests {

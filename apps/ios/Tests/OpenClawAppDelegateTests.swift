@@ -2,6 +2,7 @@ import AppIntents
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawNativeActions
 import Testing
 import UIKit
 @testable import OpenClaw

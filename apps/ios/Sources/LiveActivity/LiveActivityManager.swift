@@ -1,6 +1,6 @@
 @preconcurrency import ActivityKit
 import Foundation
-import OpenClawKit
+import OpenClawNativeActions
 import os
 
 /// Owns local and remote ActivityKit slots. The local arbiter still selects

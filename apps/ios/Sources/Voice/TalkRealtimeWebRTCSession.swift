@@ -2,6 +2,7 @@ import AVFAudio
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawNativeActions
 import OpenClawProtocol
 import OSLog
 @preconcurrency import WebRTC

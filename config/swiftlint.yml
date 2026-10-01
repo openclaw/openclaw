@@ -3,6 +3,7 @@
 included:
   - ../apps/macos/Sources
   - ../apps/macos-mlx-tts/Sources
+  - ../apps/shared/OpenClawKit/Sources/OpenClawNativeActions
 
 excluded:
   - ../.build

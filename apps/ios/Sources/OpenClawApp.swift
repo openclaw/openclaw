@@ -1,6 +1,7 @@
 import BackgroundTasks
 import Foundation
 import OpenClawKit
+import OpenClawNativeActions
 import os
 import SwiftUI
 import UIKit

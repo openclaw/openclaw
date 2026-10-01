@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawNativeActions
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw

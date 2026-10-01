@@ -12,6 +12,7 @@ let package = Package(
     products: [
         .library(name: "OpenClawProtocol", targets: ["OpenClawProtocol"]),
         .library(name: "OpenClawNativeState", targets: ["OpenClawNativeState"]),
+        .library(name: "OpenClawNativeActions", targets: ["OpenClawNativeActions"]),
         .library(name: "OpenClawKit", targets: ["OpenClawKit"]),
         .library(name: "OpenClawChatUI", targets: ["OpenClawChatUI"]),
     ],
@@ -39,8 +40,15 @@ let package = Package(
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .target(
+            name: "OpenClawNativeActions",
+            path: "Sources/OpenClawNativeActions",
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+            ]),
+        .target(
             name: "OpenClawKit",
             dependencies: [
+                "OpenClawNativeActions",
                 "OpenClawNativeState",
                 "OpenClawProtocol",
                 .product(
@@ -59,6 +67,7 @@ let package = Package(
             name: "OpenClawChatUI",
             dependencies: [
                 "OpenClawKit",
+                "OpenClawNativeActions",
                 "OpenClawProtocol",
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "Markdown", package: "swift-markdown"),
@@ -75,6 +84,7 @@ let package = Package(
             name: "OpenClawKitTests",
             dependencies: [
                 "OpenClawKit",
+                "OpenClawNativeActions",
                 "OpenClawChatUI",
                 "OpenClawProtocol",
                 .product(name: "GRDB", package: "GRDB.swift"),

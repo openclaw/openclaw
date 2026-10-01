@@ -38,7 +38,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 
 /// Synchronous access to the shared native SQLite bootstrap surface.
 /// One recursive connection lock serializes transactions and statement access.
-public final class OpenClawNativeStateSQLite: @unchecked Sendable {
+public final class OpenClawNativeStateSQLite: OpenClawSQLiteConnection, @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION. Native clients never upgrade this database.
     private static let maximumSupportedSchemaVersion: Int64 = 17
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
@@ -204,8 +204,6 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
 
     private let databaseURL: URL
     private let handleLease: OpenClawNativeStateHandleLease
-    fileprivate let database: OpaquePointer
-    fileprivate let connectionLock = NSRecursiveLock()
 
     public init(
         databaseURL: URL,
@@ -217,54 +215,25 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         if createIfMissing {
             try Self.secureDirectory(databaseURL.deletingLastPathComponent())
         }
-        var database: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
-            | (createIfMissing ? SQLITE_OPEN_CREATE : 0)
-        let result = sqlite3_open_v2(databaseURL.path, &database, flags, nil)
-        guard result == SQLITE_OK, let database else {
-            let detail = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
-            if let database { sqlite3_close(database) }
-            throw OpenClawNativeStateError("Could not open native state database: \(detail)")
-        }
-        var initializationSucceeded = false
-        defer {
-            if !initializationSucceeded { sqlite3_close(database) }
-        }
-        self.database = database
         let timeout = busyTimeoutMilliseconds > 0
             ? busyTimeoutMilliseconds
             : Self.defaultBusyTimeoutMilliseconds
-        guard sqlite3_busy_timeout(database, timeout) == SQLITE_OK else {
-            throw self.databaseError(operation: "configure SQLite busy timeout")
-        }
+        try super.init(
+            databaseURL: databaseURL,
+            access: .readWrite(createIfMissing: createIfMissing),
+            busyTimeoutMilliseconds: timeout)
         try Self.secureDatabaseFiles(databaseURL)
-        initializationSucceeded = true
     }
 
     deinit {
         // Statements retain this owner. Its handle lease is released only after
         // SQLite closes and final metadata maintenance has completed.
-        sqlite3_close(self.database)
+        self.close()
         try? Self.secureDatabaseFiles(self.databaseURL)
     }
 
-    public var changes: Int32 {
-        self.withConnectionLock { sqlite3_changes(self.database) }
-    }
-
-    public func withImmediateTransaction<T>(_ body: () throws -> T) throws -> T {
-        try self.withConnectionLock {
-            try self.execute("BEGIN IMMEDIATE")
-            var committed = false
-            defer {
-                if !committed { try? self.execute("ROLLBACK") }
-            }
-            let value = try body()
-            try self.execute("COMMIT")
-            committed = true
-            try Self.secureDatabaseFiles(self.databaseURL)
-            return value
-        }
+    override func didCommit() throws {
+        try Self.secureDatabaseFiles(self.databaseURL)
     }
 
     /// Creates a requested table only in an owned schema-version-zero bootstrap database.
@@ -307,86 +276,6 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         try self.withConnectionLock {
             try self.validateTableShape(Self.descriptor(table))
         }
-    }
-
-    public func prepare(_ sql: String) throws -> OpenClawNativeStateSQLiteStatement {
-        try self.withConnectionLock {
-            var statement: OpaquePointer?
-            guard sqlite3_prepare_v2(self.database, sql, -1, &statement, nil) == SQLITE_OK,
-                  let statement
-            else {
-                throw self.databaseError(operation: "prepare SQLite statement")
-            }
-            return OpenClawNativeStateSQLiteStatement(connection: self, statement: statement)
-        }
-    }
-
-    public func execute(_ sql: String) throws {
-        try self.withConnectionLock {
-            var errorMessage: UnsafeMutablePointer<CChar>?
-            let result = sqlite3_exec(self.database, sql, nil, nil, &errorMessage)
-            guard result == SQLITE_OK else {
-                let detail = errorMessage.map { String(cString: $0) }
-                    ?? String(cString: sqlite3_errmsg(self.database))
-                sqlite3_free(errorMessage)
-                throw OpenClawNativeStateError("SQLite operation failed: \(detail)")
-            }
-        }
-    }
-
-    public func scalarInt64(_ sql: String) throws -> Int64 {
-        try self.withConnectionLock {
-            let statement = try self.prepare(sql)
-            guard try statement.step() == .row,
-                  statement.valueType(at: 0) == .integer
-            else {
-                throw OpenClawNativeStateError("SQLite integer query did not return one integer row")
-            }
-            let value = statement.int64(at: 0)
-            guard try statement.step() == .done else {
-                throw OpenClawNativeStateError("SQLite integer query returned multiple rows")
-            }
-            return value
-        }
-    }
-
-    public func scalarText(_ sql: String) throws -> String? {
-        try self.withConnectionLock {
-            let statement = try self.prepare(sql)
-            let result = try statement.step()
-            if result == .done { return nil }
-            let value = try statement.requiredText(at: 0, field: "query result")
-            guard try statement.step() == .done else {
-                throw OpenClawNativeStateError("SQLite text query returned multiple rows")
-            }
-            return value
-        }
-    }
-
-    public func schemaObjectExists(type: String, name: String) throws -> Bool {
-        try self.withConnectionLock {
-            let statement = try self.prepare(
-                "SELECT 1 FROM sqlite_schema WHERE type = ? AND name = ? LIMIT 1")
-            try statement.bindText(type, at: 1)
-            try statement.bindText(name, at: 2)
-            let result = try statement.step()
-            if result == .done { return false }
-            guard try statement.step() == .done else {
-                throw OpenClawNativeStateError("SQLite schema query returned multiple rows")
-            }
-            return true
-        }
-    }
-
-    fileprivate func databaseError(operation: String) -> OpenClawNativeStateError {
-        OpenClawNativeStateError(
-            "Could not \(operation): \(String(cString: sqlite3_errmsg(self.database)))")
-    }
-
-    fileprivate func withConnectionLock<T>(_ body: () throws -> T) rethrows -> T {
-        self.connectionLock.lock()
-        defer { self.connectionLock.unlock() }
-        return try body()
     }
 
     private static func descriptor(_ table: OpenClawNativeStateCanonicalTable) -> CanonicalTable {
@@ -611,105 +500,5 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         return (error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError)
             || (error.domain == NSPOSIXErrorDomain
                 && error.code == Int(POSIXErrorCode.ENOENT.rawValue))
-    }
-}
-
-public final class OpenClawNativeStateSQLiteStatement {
-    private let connection: OpenClawNativeStateSQLite
-    private let statement: OpaquePointer
-
-    fileprivate init(connection: OpenClawNativeStateSQLite, statement: OpaquePointer) {
-        self.connection = connection
-        self.statement = statement
-    }
-
-    deinit {
-        _ = self.connection.withConnectionLock {
-            sqlite3_finalize(self.statement)
-        }
-    }
-
-    public func step() throws -> OpenClawNativeStateSQLiteStep {
-        try self.connection.withConnectionLock {
-            switch sqlite3_step(self.statement) {
-            case SQLITE_ROW: .row
-            case SQLITE_DONE: .done
-            default: throw self.connection.databaseError(operation: "step SQLite statement")
-            }
-        }
-    }
-
-    public func bindText(_ value: String, at index: Int32) throws {
-        try self.connection.withConnectionLock {
-            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-            guard sqlite3_bind_text(self.statement, index, value, -1, transient) == SQLITE_OK else {
-                throw self.connection.databaseError(operation: "bind SQLite text")
-            }
-        }
-    }
-
-    public func bindInt64(_ value: Int64, at index: Int32) throws {
-        try self.connection.withConnectionLock {
-            guard sqlite3_bind_int64(self.statement, index, value) == SQLITE_OK else {
-                throw self.connection.databaseError(operation: "bind SQLite integer")
-            }
-        }
-    }
-
-    public func bindNull(at index: Int32) throws {
-        try self.connection.withConnectionLock {
-            guard sqlite3_bind_null(self.statement, index) == SQLITE_OK else {
-                throw self.connection.databaseError(operation: "bind SQLite null")
-            }
-        }
-    }
-
-    public func bindDouble(_ value: Double, at index: Int32) throws {
-        try self.connection.withConnectionLock {
-            guard sqlite3_bind_double(self.statement, index, value) == SQLITE_OK else {
-                throw self.connection.databaseError(operation: "bind SQLite double")
-            }
-        }
-    }
-
-    public func valueType(at column: Int32) -> OpenClawNativeStateSQLiteValueType {
-        self.connection.withConnectionLock {
-            switch sqlite3_column_type(self.statement, column) {
-            case SQLITE_INTEGER: .integer
-            case SQLITE_FLOAT: .float
-            case SQLITE_TEXT: .text
-            case SQLITE_BLOB: .blob
-            default: .null
-            }
-        }
-    }
-
-    public func int32(at column: Int32) -> Int32 {
-        self.connection.withConnectionLock {
-            sqlite3_column_int(self.statement, column)
-        }
-    }
-
-    public func int64(at column: Int32) -> Int64 {
-        self.connection.withConnectionLock {
-            sqlite3_column_int64(self.statement, column)
-        }
-    }
-
-    public func double(at column: Int32) -> Double {
-        self.connection.withConnectionLock {
-            sqlite3_column_double(self.statement, column)
-        }
-    }
-
-    public func requiredText(at column: Int32, field: String) throws -> String {
-        try self.connection.withConnectionLock {
-            guard self.valueType(at: column) == .text,
-                  let value = sqlite3_column_text(self.statement, column)
-            else {
-                throw OpenClawNativeStateError("SQLite \(field) must be text")
-            }
-            return String(cString: value)
-        }
     }
 }

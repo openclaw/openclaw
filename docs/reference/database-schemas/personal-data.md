@@ -104,3 +104,108 @@ client state.
 
 The [accepted design](https://github.com/openclaw/openclaw/issues/136617) records
 the schema, migration, ownership, retention and validation boundaries.
+
+## iOS widget projection cache
+
+The widget cache is a separate, reconstructible SQLite projection. Its storage
+design was accepted on September 10, 2026 in
+[the widget work](https://github.com/openclaw/openclaw/pull/142976).
+The cache provides storage APIs and a read-only native-action catalog. No status
+population, lifecycle call sites, widget provider, or control registration uses
+them yet.
+
+The app is the sole writer. The extension's reader opens an existing database
+read-only, without creating directories, changing permissions, taking the
+canonical native-state handle lease, or repairing storage. The existing native
+state schema, bootstrap allowlist, protection policy and handle lease are unchanged.
+
+Admission rejects any `-wal` or `-shm` entry, including dangling links, before
+opening or creating the cache. Each existing handle uses a private pager and
+reads its 100-byte main-file header through SQLite's own file object before SQL.
+An independent file descriptor is not used: closing one can release another
+SQLite connection's POSIX locks. Only the known rollback-format header proceeds
+to SQL schema and quota validation. These checks assume the sole writer never
+converts journal mode or replaces a live cache; they do not prevent arbitrary
+concurrent filesystem replacement. Local Apple SQLite 3.51.0 checks do not
+qualify the unavailable iOS 18 runtime.
+
+`WidgetCache/widget-cache.sqlite` belongs to the dedicated, build-specific
+`group.<app-bundle-id>.widgets` App Group. It does not share the auth/identity
+container or grant Keychain access. The app requests complete file protection
+at SQLite creation and on the cache directory, excludes both directory and
+database from backup, and uses DELETE journaling. Signed entitlement access,
+locked-device reads and actual database/journal protection still require native
+device proof.
+
+Cache format 1 uses application ID `0x4F435743` and two STRICT tables:
+
+- `widget_meta`: one writer epoch and monotonically issued publication ticket.
+- `widget_snapshots`: selection and owner digests, admission ID, latest-issued
+  ticket, admission/deadline times, payload byte count and a closed JSON payload.
+
+Selection keys hash the exact UTF-8 Gateway/profile/agent/session/generation/run
+tuple; hashes are lookup indexes, not authentication. Identifier byte limits
+are 4096/512/64/2048/512/1024 respectively. JSON preserves escaped identifiers
+without relying on SQLite C-string identity semantics. The payload requires exact
+Gateway/profile IDs alongside agent/session/generation/run identity, a label
+bounded to 96 characters and 384 UTF-8 bytes, kind, state, source fact time and
+separate observation time. Both owner and selection digests are recomputed from
+the decoded selectors before a row is accepted. Owner-less older payloads are
+unavailable; only explicit app-owned invalidation and readmission replaces them.
+There is no automatic upgrade or change to the tables or format version.
+
+Owner-ID persistence was approved on October 1, 2026. The intended producer is
+the app's captured canonical owner, not arbitrary decoded input: native selector
+types alone do not establish provenance or guarantee credential-free content.
+There is no separate endpoint/config object, credential, transcript, message-body
+or error-detail field. A canonical Gateway ID may itself contain endpoint
+information. IDs with a `ws`, `wss`, `http` or `https` scheme are parsed with
+Foundation: malformed absolute URLs, userinfo, passwords, queries and fragments
+are rejected before persistence and on decode. Accepted IDs are never stripped,
+normalized or reserialized; manual, Bonjour and other opaque IDs remain unchanged.
+This structural check is not a general secret detector. Consumers must still
+capture noncredential canonical selectors and authenticate the exact owner before
+publishing or opening a native action.
+
+Catalog queries share the reader's admission checks and use one read transaction
+for quota validation and deterministic enumeration of at most 64 eligible rows.
+They reconstruct the existing native session/run references without network or
+action-host access. Multiple eligible UTF-8 generations for a logical session
+suppress both its session and associated run choices, before search filtering.
+This is cached eligibility only: native entity IDs omit generation, and saved-ID
+lookup bypasses the catalog. App-owned generation binding remains required before
+widget or control registration; catalog results are not action authorization.
+
+All admitted rows, including unknown status, count toward 64 rows and 128 KiB
+of actual encoded payload plus stored key bytes. Writes enforce both limits in
+one immediate transaction, evicting the oldest admission first with selection
+key as the tie-breaker. Readers check bounds before decoding. The 256-page,
+4096-byte page ceiling bounds the database to 1 MiB; it is not a combined
+database/journal/filesystem disk guarantee.
+
+Admission fixes a 24-hour read deadline. A valid source fact may shorten it.
+Polling, observation changes, unknown-to-known transitions and unrelated
+invalidation never extend that deadline. Five minutes marks a fact stale for
+presentation, not a refresh SLA. Expired rows are ineligible even while the app
+is suspended; physical pruning happens only when the app runs.
+The shared row decoder rejects negative admission times, nonpositive intervals
+and persisted intervals longer than 24 hours for both read and write eligibility.
+It does not clamp deadlines or physically delete rejected rows or files.
+
+Before asynchronous work, the writer issues a persisted per-selection ticket.
+Publication revalidates the complete epoch/admission/ticket/deadline permit
+inside `BEGIN IMMEDIATE` and updates only an existing admission. A newer issued
+ticket fences an older callback even before the newer result arrives.
+Invalidation rotates the epoch and deletes affected rows atomically. Writer
+reopen also rotates the epoch. Future Forget/reset/logout/revocation call sites
+must invoke this owner before allowing replacement work; this cache does not
+infer those events or fall back to the current conversation.
+
+Unknown/newer formats, corruption, lock contention, permission failures and
+ordinary I/O errors return unavailable without deletion. Reconstruction is
+deferred until an owner can positively identify the cache and prove exclusive
+recovery with every affected handle closed. No automatic reconstruction path
+or compatibility importer is installed. Rollback leaves this dedicated cache
+unused; never reset the canonical native database to repair a widget.
+Invalidation does not promise immediate physical erasure or removal of OS-held
+widget snapshots.

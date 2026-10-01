@@ -2,6 +2,7 @@ import CoreLocation
 import Observation
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawNativeActions
 import OpenClawProtocol
 import os
 import Security

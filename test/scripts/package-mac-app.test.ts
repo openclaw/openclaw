@@ -70,7 +70,7 @@ describe.skipIf(process.platform === "win32")("App Intents metadata inputs", () 
       writeFileSync(source, "// source\n");
     }
     const commands = Object.fromEntries(
-      ["OpenClawKit", "OpenClaw"].map((moduleName) => {
+      ["OpenClawNativeActions", "OpenClaw"].map((moduleName) => {
         const object = path.join(products, `${moduleName}.o`);
         const constants = path.join(products, `${moduleName}.swiftconstvalues`);
         const outputFileMapPath = path.join(products, `${moduleName}.json`);
@@ -156,7 +156,7 @@ fs.writeFileSync(path.join(output, "extract.actionsdata"), JSON.stringify({ bina
       "capture_app_intents_inputs",
       products,
       captured,
-      "OpenClawKit",
+      "OpenClawNativeActions",
       "OpenClaw",
     );
     expect(capture.status, capture.stderr).toBe(0);
@@ -172,7 +172,10 @@ fs.writeFileSync(path.join(output, "extract.actionsdata"), JSON.stringify({ bina
     const { captured, sources, extract } = fixture();
     const result = extract();
     expect(result.status, result.stderr).toBe(0);
-    const encoded = readFileSync(path.join(captured, "OpenClawKit/sources"), "utf8").split("\n");
+    const encoded = readFileSync(
+      path.join(captured, "OpenClawNativeActions/sources"),
+      "utf8",
+    ).split("\n");
     expect(encoded.slice(0, -1)).toEqual([
       sources[0],
       sources[1].replaceAll(" ", "\\ "),
@@ -180,29 +183,35 @@ fs.writeFileSync(path.join(output, "extract.actionsdata"), JSON.stringify({ bina
       sources[3].replaceAll(" ", "\\ ").replaceAll("'", "\\'"),
     ]);
     expect(readFileSync(path.join(captured, "OpenClaw/static-metadata"), "utf8")).toBe(
-      path.join(captured, "OpenClawKit.appintents/Metadata.appintents/extract.actionsdata") + "\n",
+      path.join(
+        captured,
+        "OpenClawNativeActions.appintents/Metadata.appintents/extract.actionsdata",
+      ) + "\n",
     );
   });
 
   it("retains the captured static archive after products are replaced and cleaned", () => {
     const { products, captured, extract } = fixture();
     const input = JSON.parse(
-      readFileSync(path.join(captured, "OpenClawKit/inputs.json"), "utf8"),
+      readFileSync(path.join(captured, "OpenClawNativeActions/inputs.json"), "utf8"),
     ) as { archive?: string };
     expect(input.archive).toBeTypeOf("string");
     const original = readFileSync(input.archive!);
-    writeFileSync(path.join(products, "OpenClawKit.o"), "replacement build object");
+    writeFileSync(path.join(products, "OpenClawNativeActions.o"), "replacement build object");
     rmSync(products, { recursive: true });
     const result = extract();
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(input.archive!)).toEqual(original);
     const metadata = JSON.parse(
       readFileSync(
-        path.join(captured, "OpenClawKit.appintents/Metadata.appintents/extract.actionsdata"),
+        path.join(
+          captured,
+          "OpenClawNativeActions.appintents/Metadata.appintents/extract.actionsdata",
+        ),
         "utf8",
       ),
     ) as { binary: string };
-    expect(metadata.binary).toBe("OpenClawKit original object");
+    expect(metadata.binary).toBe("OpenClawNativeActions original object");
   });
 });
 

@@ -4,6 +4,7 @@ import Darwin
 import Dispatch
 import Foundation
 import OpenClawKit
+import OpenClawNativeActions
 import OSLog
 import SwiftUI
 

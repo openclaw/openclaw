@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawNativeActions
 import OpenClawProtocol
 import OSLog
 import SwiftUI

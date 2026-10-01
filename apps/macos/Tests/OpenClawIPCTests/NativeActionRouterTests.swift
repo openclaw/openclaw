@@ -2,6 +2,7 @@ import AppKit
 import ConcurrencyExtras
 import Foundation
 import OpenClawKit
+import OpenClawNativeActions
 import Testing
 @testable import OpenClaw
 @testable import OpenClawChatUI

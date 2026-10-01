@@ -1,5 +1,5 @@
 import Foundation
-import OpenClawKit
+import OpenClawNativeActions
 import Testing
 
 struct NativeActionsTests {

@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawNativeActions
 
 @MainActor
 @Observable

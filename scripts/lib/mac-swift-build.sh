@@ -64,7 +64,7 @@ for (const name of modules) {
     return command.otherArguments[index + 1];
   };
   let archive;
-  if (name === "OpenClawKit") {
+  if (name === "OpenClawNativeActions") {
     // The architecture lock ends before metadata extraction. Archive now so a
     // later build or cleanup cannot replace the binary paired with these constants.
     archive = path.join(directory, `${name}.a`);
@@ -102,7 +102,7 @@ const arch = [...architectures].sort()[0];
 const root = path.join(results, arch, "app-intents");
 const read = (name, architecture = arch) => JSON.parse(fs.readFileSync(
   path.join(results, architecture, "app-intents", name, "inputs.json"), "utf8"));
-const kit = read("OpenClawKit");
+const actions = read("OpenClawNativeActions");
 const main = read("OpenClaw");
 const extractor = execFileSync("xcrun", ["--find", "appintentsmetadataprocessor"], { encoding: "utf8" }).trim();
 const xcode = execFileSync("xcodebuild", ["-version"], { encoding: "utf8" });
@@ -124,7 +124,7 @@ const list = (file, entries, escaped = false) => {
   return file;
 };
 const empty = list(path.join(root, "empty-file-list"), []);
-const staticOutput = path.join(root, "OpenClawKit.appintents");
+const staticOutput = path.join(root, "OpenClawNativeActions.appintents");
 const run = (input, output, binary, dependencies, isStatic) => {
   if (input.compiler !== main.compiler || input.sdk !== main.sdk) throw new Error("Metadata toolchain inputs differ");
   const deployment = /-apple-macosx?([0-9.]+)$/.exec(input.triple)?.[1];
@@ -148,8 +148,8 @@ const run = (input, output, binary, dependencies, isStatic) => {
   if (!fs.statSync(metadata).size) throw new Error(`Empty App Intents metadata for ${input.module}`);
   return metadata;
 };
-const kitMetadata = run(kit, staticOutput, kit.archive, [], true);
-run(main, path.join(app, "Contents/Resources"), path.join(app, "Contents/MacOS/OpenClaw"), [kitMetadata], false);
+const actionsMetadata = run(actions, staticOutput, actions.archive, [], true);
+run(main, path.join(app, "Contents/Resources"), path.join(app, "Contents/MacOS/OpenClaw"), [actionsMetadata], false);
 NODE
 }
 
@@ -607,7 +607,7 @@ build_swift_architecture() {
   write_app_intents_protocols "$protocols"
   local metadata_flags=(-Xswiftc -emit-const-values -Xswiftc -Xfrontend -Xswiftc -const-gather-protocols-file -Xswiftc -Xfrontend -Xswiftc "$protocols")
   swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks "${metadata_flags[@]}"
-  capture_app_intents_inputs "$BUILD_PATH/$BUILD_CONFIG" "$SWIFT_WORK_ROOT/app-intents" OpenClawKit OpenClaw
+  capture_app_intents_inputs "$BUILD_PATH/$BUILD_CONFIG" "$SWIFT_WORK_ROOT/app-intents" OpenClawNativeActions OpenClaw
   verify_snapshot_swift_lock
   echo "🔨 Building openclaw-mac ($BUILD_CONFIG) [$arch]"
   swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks "${metadata_flags[@]}"
