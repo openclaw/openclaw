@@ -1106,7 +1106,6 @@ export function resolveAllowedModelRefFromAliasIndex(
   return { ref: resolved.ref, key: status.key };
 }
 
-/** True when config contains provider model rows that should seed catalogs. */
 function hasConfiguredProviderModelRows(cfg: OpenClawConfig): boolean {
   const providers = cfg.models?.providers;
   if (!providers || typeof providers !== "object") {

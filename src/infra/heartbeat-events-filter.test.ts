@@ -48,16 +48,19 @@ describe("heartbeat event prompts", () => {
 
   it.each([
     {
-      name: "builds user-relay exec prompt by default",
+      name: "makes exec follow-ups conditional on new user-relevant information",
       events: ["Exec finished (node=abc id=123, code 0)\nUploaded file"],
       opts: undefined,
       expected: [
         "Exec finished",
         "Uploaded file",
-        "Please relay the command output to the user",
-        "If it failed",
+        "requested result not yet delivered",
+        "continue any outstanding authorized work",
+        "routine output, duplicate or superseded results",
+        "failures already recovered from",
+        "reply NO_REPLY only",
       ],
-      unexpected: ["system messages above", "Handle the result internally", "[truncated]"],
+      unexpected: ["system messages above", "Please relay the command output", "[truncated]"],
     },
     {
       name: "builds internal-only exec prompt when delivery is disabled",
@@ -85,13 +88,16 @@ describe("heartbeat event prompts", () => {
       unexpected: ["Please relay the command output to the user", "abc12345"],
     },
     {
-      name: "reports metadata-only failed exec completions without asking for logs",
+      name: "applies relevance guidance to failures without captured logs",
       events: ["Exec failed (abc12345, code 1)"],
       opts: undefined,
       expected: [
         "without captured stdout/stderr",
         "include the exit status or signal",
         "Do not ask the user to provide missing logs",
+        "Notify the user only",
+        "failures already recovered from",
+        "reply NO_REPLY only",
       ],
       unexpected: ["Please relay the command output to the user"],
     },
@@ -103,6 +109,20 @@ describe("heartbeat event prompts", () => {
     for (const part of unexpected) {
       expect(prompt).not.toContain(part);
     }
+  });
+
+  it.each([
+    "Exec completed (report-job, code 0) :: Report ready",
+    "Exec failed (report-job, code 1)",
+  ])("uses the response tool for a nonempty completion: %s", (event) => {
+    const prompt = buildExecEventPrompt([event], { useHeartbeatResponseTool: true });
+
+    expect(prompt).toContain("requested result not yet delivered");
+    expect(prompt).toContain("heartbeat_respond");
+    expect(prompt).toContain("notify=false");
+    expect(prompt).toContain("notify=true with notificationText");
+    expect(prompt).not.toContain("reply NO_REPLY only");
+    expect(prompt).not.toContain("Please relay the command output");
   });
 
   it("uses heartbeat_respond for empty cron events in response-tool mode", () => {
@@ -200,6 +220,7 @@ describe("buildExecEventPrompt truncation", () => {
 
     expect(result).toContain(`${safePrefix}\n\n[truncated]`);
     expect(result).not.toContain("🚀tail");
-    expect(result.length).toBeLessThan(8_500);
+    const promptOverhead = buildExecEventPrompt(["x"]).length - 1;
+    expect(result.length).toBe(safePrefix.length + "\n\n[truncated]".length + promptOverhead);
   });
 });

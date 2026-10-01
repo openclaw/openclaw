@@ -13,7 +13,10 @@ import {
   resolveUpdateCandidatePluginPath,
   resolveUpdateCandidatePluginSourcePath,
 } from "./update-candidate-paths.js";
-import { resolveUpdateCandidatePluginSourceEntries } from "./update-candidate-plugin-sources.js";
+import {
+  inspectUpdateCandidatePluginSource,
+  resolveUpdateCandidatePluginSourceEntries,
+} from "./update-candidate-plugin-sources.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
@@ -113,16 +116,8 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   for (const entry of entries) {
     assertPrivate(entry.rootDir);
     assertPrivate(entry.entryFile);
-    let copiedGraph: ReturnType<typeof inspectPluginSourceDependencies>;
-    try {
-      copiedGraph = inspectPluginSourceDependencies([entry]);
-    } catch (error) {
-      if (!(error instanceof SyntaxError)) {
-        throw error;
-      }
-      warnings.push(
-        `Update checks could not inspect plugin ${entry.pluginId} (${entry.entryFile}): ${error.message}. Continuing without dependency repair for this entry.`,
-      );
+    const copiedGraph = inspectUpdateCandidatePluginSource(entry, warnings);
+    if (!copiedGraph) {
       continue;
     }
     for (const reference of copiedGraph.references) {

@@ -196,12 +196,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     // Includes four approved storage transport contract types on plugin-entry.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4592,
+      4591,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      2694,
+      2693,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

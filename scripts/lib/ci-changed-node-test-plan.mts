@@ -44,6 +44,7 @@ import {
 } from "./ci-node-test-inventory.mts";
 import {
   createUiRealGatewayTestShards,
+  hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
   packNodeTestGroups,
   nodeTestConfigRequiresCanonicalMetadata,
@@ -118,6 +119,13 @@ export function hasUiE2eAffectingChange(
 ) {
   const cwd = options.cwd ?? process.cwd();
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
+    return true;
+  }
+  if (
+    options.family !== "browser-extension" &&
+    options.family !== "real-gateway" &&
+    hasSharedUiE2eInput(changedPaths)
+  ) {
     return true;
   }
   const relevantPaths = changedPaths.filter(

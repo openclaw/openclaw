@@ -194,14 +194,19 @@ describe("legacy migrate provider-shaped config", () => {
       messages: {
         tts: {
           provider: "openai",
-          openai: { voice: "alloy" },
-          providers: { elevenlabs: { voiceId: "voice-1" } },
+          openai: { voice: "alloy", voiceName: "cedar" },
+          providers: { elevenlabs: { voiceId: "voice-1", speakerVoiceId: "canonical-voice" } },
           personas: { narrator: providerTts("google", { voiceName: "Kore" }) },
         },
       },
       agents: {
         defaults: { tts: providerTts("openai", { voice: "cedar", speakerVoice: "marin" }) },
-        list: [{ id: "voice-agent", tts: providerTts("openai", { voice: "cedar" }) }],
+        list: [
+          {
+            id: "voice-agent",
+            tts: providerTts("openai", { voice: "cedar", speakerVoice: "marin" }),
+          },
+        ],
       },
       channels: {
         discord: {
@@ -227,7 +232,7 @@ describe("legacy migrate provider-shaped config", () => {
     expect(res.config).toHaveProperty("tts", {
       provider: "openai",
       providers: {
-        elevenlabs: { speakerVoiceId: "voice-1" },
+        elevenlabs: { speakerVoiceId: "canonical-voice" },
         openai: { speakerVoice: "alloy" },
       },
       personas: { narrator: { providers: { google: { speakerVoice: "Kore" } } } },
@@ -237,7 +242,7 @@ describe("legacy migrate provider-shaped config", () => {
     });
     expect(res.config).toHaveProperty("agents.list.0", {
       id: "voice-agent",
-      tts: { providers: { openai: { speakerVoice: "cedar" } } },
+      tts: { providers: { openai: { speakerVoice: "marin" } } },
     });
     expect(res.config).toHaveProperty("channels.discord.tts", {
       providers: { microsoft: { voice: "en-US-AvaNeural" } },
@@ -254,6 +259,9 @@ describe("legacy migrate provider-shaped config", () => {
     expect(res.config).toHaveProperty("plugins.entries.voice-call.config.tts", {
       providers: { xai: { speakerVoiceId: "eve" } },
     });
+    expect(res.changes).toContain(
+      "Removed tts.providers.openai.voiceName (tts.providers.openai.speakerVoice already set).",
+    );
     expect(migrateLegacyConfig(res.config)).toEqual({ config: null, changes: [] });
   });
 

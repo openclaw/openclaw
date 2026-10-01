@@ -22,13 +22,24 @@ describe("CLI startup trace", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([false, true])(
-    "reports successful CLI bootstrap milestones only for canaries (%s)",
-    async (canary) => {
+  it.each([
+    { gateway: false, markers: 2 },
+    { gateway: true, markers: 0 },
+    { gateway: true, markers: 1 },
+    { gateway: true, markers: 2 },
+    { gateway: true, markers: 3 },
+  ])(
+    "reports CLI milestones only to a supporting updater ($gateway, $markers)",
+    async ({ gateway, markers }) => {
       vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
       const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
       const trace = createGatewayDispatchStartupTrace(
-        ["node", "openclaw", "gateway", "run", ...(canary ? ["--update-canary"] : [])],
+        [
+          "node",
+          "openclaw",
+          ...(gateway ? ["gateway", "run"] : ["agent"]),
+          ...Array.from({ length: markers }, () => "--update-canary"),
+        ],
         "cli.main",
       );
       trace.mark("argv");
@@ -43,7 +54,7 @@ describe("CLI startup trace", () => {
         }),
       ).rejects.toThrow("bootstrap failed");
       expect(stderr.mock.calls.map(([line]) => String(line))).toEqual(
-        canary
+        gateway && markers >= 2
           ? [
               "openclaw-update-canary-progress: cli.main.argv\n",
               "openclaw-update-canary-progress: cli.main.gateway-run-imports\n",

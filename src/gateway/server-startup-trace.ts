@@ -8,6 +8,7 @@ import {
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
   isUpdateCanaryStartupMilestone,
+  supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
@@ -37,6 +38,7 @@ export function createGatewayStartupTrace(
   startedAt = performance.now(),
   updateCanary = false,
 ) {
+  const progressEnabled = updateCanary && supportsUpdateCanaryProgress(process.argv);
   const logEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
   let timelineConfig: OpenClawConfig | undefined;
   let eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | undefined;
@@ -66,7 +68,7 @@ export function createGatewayStartupTrace(
   let spanSequence = 0;
   let bootstrapSummary = "";
   const reportProgress = (name: string) => {
-    if (updateCanary && !closed && isUpdateCanaryStartupMilestone(name)) {
+    if (progressEnabled && !closed && isUpdateCanaryStartupMilestone(name)) {
       process.stderr.write(`${UPDATE_CANARY_PROGRESS_PREFIX}${name}\n`);
     }
   };

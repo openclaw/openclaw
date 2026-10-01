@@ -16906,6 +16906,70 @@ public struct SessionsCatalogContinueResult: Codable, Sendable {
     }
 }
 
+public struct SessionsCatalogImportParams: Codable, Sendable {
+    public let catalogid: String
+    public let hostid: String
+    public let threadid: String
+    public let agentid: String?
+    public let sourcehomeid: String?
+    public let displayname: String?
+
+    public init(
+        catalogid: String,
+        hostid: String,
+        threadid: String,
+        agentid: String? = nil,
+        sourcehomeid: String? = nil,
+        displayname: String? = nil)
+    {
+        self.catalogid = catalogid
+        self.hostid = hostid
+        self.threadid = threadid
+        self.agentid = agentid
+        self.sourcehomeid = sourcehomeid
+        self.displayname = displayname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case catalogid = "catalogId"
+        case hostid = "hostId"
+        case threadid = "threadId"
+        case agentid = "agentId"
+        case sourcehomeid = "sourceHomeId"
+        case displayname = "displayName"
+    }
+}
+
+public struct SessionsCatalogImportResult: Codable, Sendable {
+    public let sessionkey: String
+    public let importeditems: Int
+    public let totalitems: Int
+    public let complete: Bool
+    public let created: Bool
+
+    public init(
+        sessionkey: String,
+        importeditems: Int,
+        totalitems: Int,
+        complete: Bool,
+        created: Bool)
+    {
+        self.sessionkey = sessionkey
+        self.importeditems = importeditems
+        self.totalitems = totalitems
+        self.complete = complete
+        self.created = created
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case importeditems = "importedItems"
+        case totalitems = "totalItems"
+        case complete
+        case created
+    }
+}
+
 public struct SessionsCatalogListParams: Codable, Sendable {
     public let catalogid: String?
     public let metadataonly: Bool?

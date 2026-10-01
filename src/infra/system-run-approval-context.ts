@@ -141,7 +141,6 @@ export function parsePreparedSystemRunPayload(raw: unknown): PreparedRunPayload 
   };
 }
 
-/** Build the approval request context from tool payload fields. */
 export function resolveSystemRunApprovalRequestContext(params: {
   host?: unknown;
   command?: unknown;

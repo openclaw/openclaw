@@ -137,9 +137,7 @@ export class MediaStreamHandler {
   private inflightUpgrades = 0;
   /** TTS playback queues per stream (serialize audio to prevent overlap) */
   private ttsQueues = new Map<string, TtsQueueEntry[]>();
-  /** Whether TTS is currently playing per stream */
   private ttsPlaying = new Map<string, boolean>();
-  /** Active TTS playback controllers per stream */
   private ttsActiveControllers = new Map<string, AbortController>();
   private pendingPlaybackMarks = new Map<string, Map<string, PendingPlaybackMark>>();
   private ignoredPlaybackMarks = new Map<string, Set<string>>();

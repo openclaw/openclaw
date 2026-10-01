@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
   isUpdateCanaryStartupMilestone,
+  supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
 
@@ -117,7 +118,7 @@ export function createGatewayDispatchStartupTrace(
 } {
   const gatewayInvocation = argv.slice(2).includes("gateway");
   const enabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) && gatewayInvocation;
-  const updateCanary = gatewayInvocation && argv.includes("--update-canary");
+  const updateCanary = gatewayInvocation && supportsUpdateCanaryProgress(argv);
   const started = performance.now();
   if (source === "entry" && enabled) {
     bootstrapSteps = new Map();

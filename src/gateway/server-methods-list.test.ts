@@ -250,6 +250,8 @@ describe("listGatewayMethods", () => {
       "users.merge",
       "gateway.stop.request",
       "diagnostics.heapSnapshot",
+      "sessions.catalog.import",
+      "backup.status",
       "storage.locations.list",
       "storage.locations.probe",
     ];
@@ -323,6 +325,8 @@ describe("listGatewayMethods", () => {
       "users.merge",
       "gateway.stop.request",
       "diagnostics.heapSnapshot",
+      "sessions.catalog.import",
+      "backup.status",
       "storage.locations.list",
       "storage.locations.probe",
     ]);
@@ -524,6 +528,8 @@ describe("listGatewayMethods", () => {
       "users.merge",
       "gateway.stop.request",
       "diagnostics.heapSnapshot",
+      "sessions.catalog.import",
+      "backup.status",
       "storage.locations.list",
       "storage.locations.probe",
     ];

@@ -22,6 +22,7 @@ import {
 
 const log = createSubsystemLogger("memory");
 const RETRY_DELAYS_MS = [500, 2_000, 5_000];
+const MIN_POLL_INTERVAL_MS = 30_000;
 type MemoryFileWatcherOptions = {
   workspaceDir: string;
   agentId: string;
@@ -35,6 +36,8 @@ type Observation = {
   group: MemoryObservation;
   key: string;
   subscription: WatchSubscription;
+  mode: "auto" | "poll";
+  pollIntervalMs: number;
 };
 
 export class MemoryFileWatcher {
@@ -45,6 +48,7 @@ export class MemoryFileWatcher {
   private nextRootId = 0;
   private readonly pendingPaths: MemoryWatchSettleQueue = new Map();
   private pressureWarningShown = false;
+  private pollingWarningShown = false;
   private readonly closeErrors: unknown[] = [];
   private closed = false;
   private degraded = false;
@@ -67,6 +71,26 @@ export class MemoryFileWatcher {
 
   get capacityDegraded(): boolean {
     return this.degraded;
+  }
+
+  health() {
+    return [...this.observations.values()].map(({ subscription, mode, pollIntervalMs }) => {
+      const health = subscription.health();
+      return {
+        state: health.state,
+        mode: health.mode,
+        directories: health.directories,
+        failure: health.failure
+          ? {
+              operation: health.failure.operation,
+              code: health.failure.code,
+              error: String(health.failure.error),
+            }
+          : undefined,
+        pollingFallback: mode === "auto" && health.mode === "poll",
+        pollIntervalMs,
+      };
+    });
   }
 
   start(): Promise<void> {
@@ -140,21 +164,25 @@ export class MemoryFileWatcher {
               continue;
             }
             const mode = resolveFsObservationMode();
+            // Background reconciliation must stay bounded even when native events are unavailable.
+            const pollIntervalMs = Math.max(MIN_POLL_INTERVAL_MS, resolveFsObservationIntervalMs());
             const owner: Observation = {
               id,
               group,
               key,
+              mode,
+              pollIntervalMs,
               subscription: watch(group.root, {
                 scopes,
                 mode,
-                pollIntervalMs: resolveFsObservationIntervalMs(),
+                pollIntervalMs,
                 maxDirectories: 1_000_000,
                 maxEntries: 1_000_000,
                 maxPendingPaths: MEMORY_WATCH_MAX_PATHS,
                 signal: this.lifetime.signal,
                 exclude: (file) => this.policy.exclude(owner.group, file),
                 onInvalidate: (hint) => this.dirty(owner.group, hint),
-                onHealth: (health) => this.health(health),
+                onHealth: (health) => this.onHealth(health, mode, pollIntervalMs),
               }),
             };
             this.observations.set(id, owner);
@@ -200,7 +228,7 @@ export class MemoryFileWatcher {
     }
   }
 
-  private health(health: WatchHealth): void {
+  private onHealth(health: WatchHealth, mode: "auto" | "poll", pollIntervalMs: number): void {
     if (health.state === "unavailable") {
       const code =
         health.failure?.operation === "watch" && health.failure.code === "watch-limit"
@@ -211,6 +239,16 @@ export class MemoryFileWatcher {
     }
     if (health.state !== "ready") {
       return;
+    }
+    if (mode === "auto" && health.mode === "poll" && !this.pollingWarningShown) {
+      this.pollingWarningShown = true;
+      const reason = health.failure
+        ? `${health.failure.code ?? health.failure.operation}: ${String(health.failure.error)}`
+        : "native watch events are unavailable; fs-safe did not report a reason";
+      log.warn(
+        `memory watcher using fallback polling every ${pollIntervalMs} ms: ${reason}. ` +
+          "Native watching will not be retried until the watcher restarts.",
+      );
     }
     const count = [...this.observations.values()].reduce(
       (total, entry) => total + entry.subscription.health().directories,

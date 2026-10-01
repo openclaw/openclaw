@@ -3,6 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
@@ -17,6 +18,7 @@ import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
+import { UPDATE_CANARY_PROGRESS_ARGS } from "./update-candidate-canary-progress.js";
 import {
   observeUpdateCandidateStartup,
   waitForUpdateCandidateReadiness,
@@ -137,12 +139,12 @@ export async function validateUpdateCandidateCanary(params: {
     const safe = redactSupportString(
       String(chunk),
       { env, stateDir: params.stateDir },
-      { maxLength: 20_000 },
+      { maxLength: Number.MAX_SAFE_INTEGER },
     );
     const lines = safe
       .split(/\r?\n/u)
       .filter(Boolean)
-      .map((line) => line.slice(-512));
+      .map((line) => sliceUtf16Safe(line, -512));
     for (const tail of [logTail, stepLogTail]) {
       tail.push(...lines);
       tail.splice(0, Math.max(0, tail.length - 40));
@@ -228,6 +230,7 @@ export async function validateUpdateCandidateCanary(params: {
       exitCode: 0,
       snapshotCapacity: rehearsal.snapshotCapacity,
       diagnostics: rehearsal.snapshotDiagnostics,
+      warnings: rehearsal.snapshotWarnings,
     };
     await recordStep(snapshotStep);
     env = { ...rehearsal.env };
@@ -528,7 +531,7 @@ export async function validateUpdateCandidateCanary(params: {
                         : `candidate-${phase}-failed`,
                   message: timedOut
                     ? failureMessage
-                    : (running.firstStderrLine() ?? failureMessage),
+                    : (running.stderrDiagnostic() ?? failureMessage),
                 },
                 env,
               ),
@@ -549,7 +552,7 @@ export async function validateUpdateCandidateCanary(params: {
     stepLogTail.length = 0;
     startBudget();
     remaining();
-    const args = ["gateway", "run", "--update-canary", "--bind", "loopback"];
+    const args = ["gateway", "run", ...UPDATE_CANARY_PROGRESS_ARGS, "--bind", "loopback"];
     const startupProgress = observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
     const processExit = new AbortController();
     const running = launch(entry, [...args, "--port", String(port)], {
@@ -568,7 +571,7 @@ export async function validateUpdateCandidateCanary(params: {
         processExitSignal: processExit.signal,
         assertCurrent: params.assertCurrent,
         hasExited: () => running.processExited() || running.hasExited(),
-        getExitReason: running.firstStderrLine,
+        getExitReason: running.stderrDiagnostic,
         startupProgress: startupProgress.milestones,
         onWarning: async (message) => {
           startupWarnings.push(message);

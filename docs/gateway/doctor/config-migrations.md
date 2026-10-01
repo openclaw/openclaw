@@ -371,7 +371,7 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     | `browser.ssrfPolicy.allowPrivateNetwork`                                                         | `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`                          |
     | `browser.profiles.*.driver: "extension"` with a stale `cdpUrl`                                  | driver preserved; stale relay URL removed                                     |
     | `browser.relayBindHost`                                                                          | removed (legacy Chrome extension relay setting)                             |
-    | `mcp.servers.*.type` (CLI-native aliases)                                                        | `mcp.servers.*.transport`                                                    |
+    | `mcp.servers.*.type`, `nodeHost.mcp.servers.*.type` (CLI-native aliases)                           | corresponding `transport` field                                            |
     | `mcp.servers.*.disabled`                                                                         | inverse `mcp.servers.*.enabled`                                              |
     | MCP timeout aliases `connectTimeout`/`connect_timeout`/`timeout`                                 | `connectionTimeoutMs`/`requestTimeoutMs`                                    |
     | MCP snake-case server fields                                                                     | camelCase MCP server fields                                                   |
@@ -413,6 +413,8 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     | `session.maintenance.rotateBytes`, `session.parentForkMaxTokens`                                 | removed (deprecated)                                                        |
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
+
+    Doctor migrates MCP `type: "http"` to `transport: "streamable-http"` and `type: "sse"` to `transport: "sse"` in both server maps. An existing `transport` wins. For command-based servers, Doctor removes `type: "stdio"`; the command still selects stdio. The update-time Doctor pass uses the same backed-up config repair. Plugin bundle files keep their external `type` format: bundle loading translates recognized types, and CLI exports use the destination's required format. An unknown bundle HTTP transport is rejected instead of being treated as SSE; its original `type` remains available to the destination CLI.
 
     Code Mode's runtime migration preserves an explicit QuickJS choice in global config, keyed agent entries, and legacy agent rosters. Existing `executor` values win, and activation and limits remain unchanged. Selecting the bundled QuickJS runtime works even when generic plugins are disabled or allowlisted, without enabling other plugins; an explicit deny or disabled entry for `code-mode-quickjs` still blocks it. Configurations that never selected a runtime use the new `node` default. See [Code Mode executors](/tools/code-mode/executors) before enabling Node execution; `node:vm` is not a security boundary.
 

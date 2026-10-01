@@ -388,6 +388,9 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
         anchor_git_root=$(pr_git -C "$script_parent_dir" rev-parse --show-toplevel 2>/dev/null || true)
         if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
           anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.XXXXXX" 2>/dev/null); then
+          # Hold the directory we created across exec, not an environment pathname.
+          # FD 9 is reserved for the supervisor; bootstrap children are awaited.
+          exec 9< "$anchor_exec_dir"
           anchor_extraction_valid=0
           # BSD tar can stop at the end marker before Git finishes writing padding,
           # causing SIGPIPE under pipefail. Require producer completion before reading.
@@ -420,13 +423,16 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
               rm -rf "$anchor_exec_dir"
               exit 1
             fi
-            # Not cleaned by trap: exec replaces this shell, and bash re-reads
-            # the script file during execution, so the copy must outlive the
-            # whole supervised run. OS tmp reaping owns this directory.
+            # Bash re-reads this copy during execution. Only the same-process
+            # supervisor may retire it after the entire operation has drained.
+            # Older anchors without that handoff retain OS temp-reaping behavior.
             echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running wrapper code materialized from the refs/remotes/origin/main trust anchor at revision $(pr_git -C "$script_parent_dir" rev-parse --short "$anchor_commit")." >&2
-            OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" exec "$anchor_exec_dir/scripts/pr" "$@"
+            OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" \
+              OPENCLAW_PR_ANCHOR_CREATOR_PID="$$" OPENCLAW_PR_ANCHOR_FD=9 \
+              exec "$anchor_exec_dir/scripts/pr" "$@"
           fi
           rm -rf "$anchor_exec_dir"
+          exec 9<&-
         fi
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
         # already exited for any staged or unstaged edit to these paths, so

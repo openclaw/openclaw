@@ -561,8 +561,8 @@ describe("gateway plugin instance bindings", () => {
           const prepare = kernel.prepareAttachedPluginRuntime;
           return {
             ...kernel,
-            prepareAttachedPluginRuntime: async (loaded) => {
-              const attachment = await prepare(loaded);
+            prepareAttachedPluginRuntime: async (...prepareArgs) => {
+              const attachment = await prepare(...prepareArgs);
               prepared.resolve();
               await release.promise;
               return attachment;

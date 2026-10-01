@@ -3,7 +3,11 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
-import { deleteCronQuarantinedJobsFromDatabase, saveCronQuarantinedJobs } from "./quarantine.js";
+import {
+  deleteCronQuarantinedJobsFromDatabase,
+  prepareCronQuarantineRegistration,
+  registerCronQuarantineInDatabase,
+} from "./quarantine.kernel.js";
 import {
   deleteCronJobRowInDatabase,
   loadedCronStoreFromRows,
@@ -204,12 +208,10 @@ export function saveCronStoreInDatabase(
   const stateOnly = isCronRuntimeOnlySave(opts);
   hooks?.hooks.beforeWrite?.(database.db, hooks.receiptSchema);
   if (opts?.quarantine?.entries.length) {
-    saveCronQuarantinedJobs({
-      storePath: storeKey,
-      entries: opts.quarantine.entries,
-      nowMs: opts.quarantine.nowMs,
-      database,
-    });
+    registerCronQuarantineInDatabase(
+      database.db,
+      prepareCronQuarantineRegistration({ storePath: storeKey, ...opts.quarantine }),
+    );
   }
   if (opts?.deleteQuarantineEntries?.length) {
     deleteCronQuarantinedJobsFromDatabase({

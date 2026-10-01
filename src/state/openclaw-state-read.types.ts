@@ -211,6 +211,7 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
+  | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | {
       type: "githubPublication.lifecycle";
@@ -423,6 +424,10 @@ export type OpenClawStateReadResult =
       values: Map<string, unknown>;
     }
   | {
+      type: "userModelAccounts.links";
+      links: import("./user-model-accounts.js").UserProfileAuthLink[];
+    }
+  | {
       type: "userProfiles.reconcile";
       profile: ProfileDisplayRow | undefined;
       emailBindings: UserProfileEmailBinding[];
@@ -554,6 +559,8 @@ export type OpenClawStateReadOptions = {
   context?: OpenClawStateWorkerContext;
   /** Publication and authority reads must not inherit an inspection snapshot. */
   current?: boolean;
+  /** Active writers may observe live rows; their lifecycle drains the retained reader. */
+  live?: true;
   /** Named committed-status readers may reopen the matching retained warm source. */
   preferIndependentWarmRead?: true;
   mapError?: (error: unknown, phase: OpenClawStateReadPhase) => unknown;

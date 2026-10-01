@@ -253,6 +253,11 @@ When file symlinks are unavailable, a generation can use hardlinks only if its
 directory preserves every captured companion and the selected host SDK. Otherwise
 that plugin reports a load error asking for file symlink support; the update
 continues with the existing plugin-failure warning behavior.
+Within a capture, admission checks each immutable namespace and companion-directory
+mapping once. Preparing more modules reuses those facts and checks newly admitted
+placements. Replacement captures, host selection, and recovery copies validate again,
+so Doctor and Gateway preparation avoid repeated walks without reusing another
+capture's verdict.
 The existing installed-index SQLite payload records directory membership, device,
 inode, mode, size, mtime, and ctime identities, SHA-256 digests, and the initial
 generation receipt. Unchanged warm startup reuses those facts. Added, removed, or

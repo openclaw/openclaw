@@ -125,11 +125,14 @@ describe("transcript follow continuity", () => {
         flushFrames();
         scrollTo.mockClear();
 
-        // The old maximum is still current. TanStack retires this no-op on
-        // its next frame, with no native offset/idle event to hand off follow.
+        // The old maximum is still current. Retire the no-op native target
+        // immediately, without depending on a native offset/idle handoff.
         transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
         flushFrames();
-        expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 4200, behavior: "smooth" });
+        expect(scrollTo.mock.calls).toEqual([
+          [{ top: 4200, behavior: "smooth" }],
+          [{ top: 4200, behavior: "instant" }],
+        ]);
         if (departure === "wheel") {
           container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
         }

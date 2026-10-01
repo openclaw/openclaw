@@ -15,6 +15,41 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 describe("retained package backup retirement", () => {
+  it.each(["missing", "verified", "advisory"] as const)(
+    "preserves historical backups without an activation transaction (%s)",
+    async (verification) => {
+      const base = await fs.realpath(dirs.make("openclaw-direct-historical-backup-"));
+      const { params, globalRoot, packageRoot } = await createPackageSwapFixture(base);
+      const historical = path.join(globalRoot, ".openclaw.package-backup-1-100");
+      await fs.mkdir(historical);
+      await fs.writeFile(path.join(historical, "sentinel"), "historical package");
+      const result = await swapStagedPackageInstall({
+        ...params,
+        postVerifyStep:
+          verification === "missing"
+            ? undefined
+            : async (root) => ({
+                name: "package-verify",
+                command: "verify fixture",
+                cwd: root,
+                durationMs: 0,
+                exitCode: verification === "verified" ? 0 : 1,
+                advisory:
+                  verification === "advisory"
+                    ? { kind: "recoverable-maintenance", message: "verification incomplete" }
+                    : undefined,
+              }),
+      });
+      expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+      expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+        '"version":"2.0.0"',
+      );
+      expect(await fs.readFile(path.join(historical, "sentinel"), "utf8")).toBe(
+        "historical package",
+      );
+    },
+  );
+
   it("keeps launcher evidence with a published transaction when mutation admission throws", async () => {
     await withTestDir({ prefix: "openclaw-retained-admission-" }, async (base) => {
       const { params, packageRoot, globalRoot, launcher } = await createPackageSwapFixture(base);
@@ -99,14 +134,31 @@ describe("retained package backup retirement", () => {
     "refused rollback",
   ] as const)("retires backups only after a proven outcome: %s", async (outcome) => {
     await withTestDir({ prefix: "openclaw-retained-outcome-" }, async (base) => {
-      const { result, transaction, packageRoot, globalRoot } =
-        await createRetainedPackageSwap(base);
+      const checkout = path.join(base, "earlier-checkout");
+      await fs.mkdir(checkout);
+      await fs.writeFile(path.join(checkout, "sentinel"), "operator checkout");
+      const { result, transaction, packageRoot, globalRoot } = await createRetainedPackageSwap(
+        base,
+        async ({ globalRoot: fixtureGlobalRoot }) => {
+          const directory = path.join(fixtureGlobalRoot, ".openclaw.package-backup-1-100");
+          await fs.mkdir(directory);
+          await fs.writeFile(path.join(directory, "sentinel"), "earlier package");
+          for (const name of [".openclaw.package-backup-2-200", ".openclaw-package-backup-3-300"]) {
+            await fs.symlink(
+              checkout,
+              path.join(fixtureGlobalRoot, name),
+              process.platform === "win32" ? "junction" : "dir",
+            );
+          }
+          const snapshots = `${directory}.databases`;
+          await fs.mkdir(snapshots);
+          await fs.writeFile(path.join(snapshots, "snapshot.sqlite"), "pre-migration bytes");
+        },
+      );
       const snapshots = `${transaction.backupRoot}.databases`;
-      const olderSnapshots = path.join(globalRoot, ".openclaw.package-backup-older.databases");
-      for (const directory of [snapshots, olderSnapshots]) {
-        await fs.mkdir(directory);
-        await fs.writeFile(path.join(directory, "snapshot.sqlite"), "pre-migration bytes");
-      }
+      const olderSnapshots = path.join(globalRoot, ".openclaw.package-backup-1-100.databases");
+      await fs.mkdir(snapshots);
+      await fs.writeFile(path.join(snapshots, "snapshot.sqlite"), "pre-migration bytes");
       expect(result.status).toBe("committed");
       if (outcome === "refused rollback") {
         await fs.writeFile(path.join(transaction.backupRoot, "dist", "index.js"), "changed");
@@ -144,7 +196,91 @@ describe("retained package backup retirement", () => {
       await expect(fs.readFile(path.join(olderSnapshots, "snapshot.sqlite"), "utf8")).resolves.toBe(
         "pre-migration bytes",
       );
+      for (const name of [
+        ".openclaw.package-backup-1-100",
+        ".openclaw.package-backup-2-200",
+        ".openclaw-package-backup-3-300",
+      ]) {
+        if (outcome === "verified activation") {
+          await expect(fs.lstat(path.join(globalRoot, name))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        } else {
+          await expect(fs.lstat(path.join(globalRoot, name))).resolves.toBeDefined();
+        }
+      }
+      await expect(fs.readFile(path.join(checkout, "sentinel"), "utf8")).resolves.toBe(
+        "operator checkout",
+      );
     });
+  });
+
+  it("preserves replacement, later-created, and unrelated recovery artifacts after activation", async () => {
+    const base = await fs.realpath(dirs.make("openclaw-historical-backup-replaced-"));
+    const { transaction, globalRoot } = await createRetainedPackageSwap(
+      base,
+      async ({ globalRoot: fixtureGlobalRoot }) => {
+        await fs.mkdir(path.join(fixtureGlobalRoot, ".openclaw.package-backup-1-100"));
+        for (const name of [
+          ".openclaw.package-backup-1-100.candidate",
+          ".openclaw.package-backup-manual",
+        ]) {
+          await fs.mkdir(path.join(fixtureGlobalRoot, name));
+          await fs.writeFile(path.join(fixtureGlobalRoot, name, "sentinel"), "recovery bytes");
+        }
+      },
+    );
+    const replaced = path.join(globalRoot, ".openclaw.package-backup-1-100");
+    await fs.rename(replaced, path.join(base, "captured-backup"));
+    const later = path.join(globalRoot, ".openclaw.package-backup-2-200");
+    for (const directory of [replaced, later]) {
+      await fs.mkdir(directory);
+      await fs.writeFile(path.join(directory, "sentinel"), "successor bytes");
+    }
+
+    const completion = await transaction.complete({ activationVerified: true }, () => {});
+    expect(completion).toMatchObject({
+      advisory: { kind: "recoverable-maintenance", message: expect.stringContaining(replaced) },
+    });
+    for (const directory of [replaced, later]) {
+      expect(await fs.readFile(path.join(directory, "sentinel"), "utf8")).toBe("successor bytes");
+    }
+    for (const name of [
+      ".openclaw.package-backup-1-100.candidate",
+      ".openclaw.package-backup-manual",
+    ]) {
+      expect(await fs.readFile(path.join(globalRoot, name, "sentinel"), "utf8")).toBe(
+        "recovery bytes",
+      );
+    }
+    expect(await transaction.complete({ activationVerified: true }, () => {})).toBe(completion);
+  });
+
+  it("finishes activation with a warning when historical backup inspection fails", async () => {
+    const base = await fs.realpath(dirs.make("openclaw-historical-backup-inspection-"));
+    const readdir = fs.readdir.bind(fs);
+    const { transaction, globalRoot } = await createRetainedPackageSwap(
+      base,
+      async ({ globalRoot: fixtureGlobalRoot }) => {
+        await fs.mkdir(path.join(fixtureGlobalRoot, ".openclaw.package-backup-1-100"));
+        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+          if (String(args[0]) === fixtureGlobalRoot) {
+            throw Object.assign(new Error("backup inspection denied"), { code: "EACCES" });
+          }
+          return readdir(...args);
+        });
+      },
+    );
+    const completion = await transaction.complete({ activationVerified: true }, () => {});
+    expect(completion).toMatchObject({
+      advisory: {
+        kind: "recoverable-maintenance",
+        message: expect.stringContaining("backup inspection denied"),
+      },
+    });
+    await expect(
+      fs.lstat(path.join(globalRoot, ".openclaw.package-backup-1-100")),
+    ).resolves.toBeDefined();
   });
 
   it("reports database cleanup failure as recoverable maintenance after verified activation", async () => {

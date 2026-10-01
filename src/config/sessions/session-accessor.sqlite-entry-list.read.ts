@@ -104,13 +104,18 @@ export function readSelectedSessionEntriesInDatabase(
  */
 export function listSessionEntriesReadOnly(
   scope: SessionEntryListScope = {},
-  options: { deferParticipants?: true } = {},
+  options: {
+    deferParticipants?: true;
+    continuation?: CanonicalSessionReaderContinuation;
+  } = {},
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options),
-    toDatabaseOptions(resolved),
-  );
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const read = () => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options);
+    return options.continuation
+      ? readWithCanonicalSessionReaderContinuation(database, options.continuation, read)
+      : read();
+  }, toDatabaseOptions(resolved));
   return result.found ? result.value : [];
 }
 

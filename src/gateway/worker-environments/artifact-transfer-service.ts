@@ -96,7 +96,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       artifact: TransferArtifact;
       artifactKey: string;
       ttlMs: number;
-      maxServes: 1 | 3;
+      maxServes: number;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
       onProgress?: (servedBytes: number) => void;

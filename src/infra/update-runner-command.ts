@@ -69,6 +69,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
       cwd,
       timeoutMs,
       env,
+      ...(opts.input !== undefined ? { input: opts.input } : {}),
     });
   } catch (error) {
     commandError = { cause: error };
