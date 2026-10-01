@@ -1,5 +1,16 @@
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 
+function bindDelivery<TPayload, TInfo, TResult>(delivery: {
+  deliver: (payload: TPayload, info: TInfo) => Promise<TResult>;
+  onDelivered?: (payload: TPayload, info: TInfo, result: TResult) => Promise<void> | void;
+}) {
+  return async (payload: TPayload, info: TInfo) => {
+    const result = await delivery.deliver(payload, info);
+    await delivery.onDelivered?.(payload, info, result);
+    return result;
+  };
+}
+
 export type SlackReplyOptionEvent =
   | {
       kind: "item";
@@ -133,3 +144,5 @@ export async function emitCompactProgressScenario(reply: GetReplyOptions) {
     steps: [{ step: "Verify", status: "completed" }],
   });
 }
+
+emitCompactProgressScenario.bindDelivery = bindDelivery;

@@ -4,6 +4,7 @@ import {
   resolveInboundReplyDispatchCounts,
   readAgentRunTerminalOutcome,
   hasVisibleInboundReplyDispatch,
+  isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
@@ -437,9 +438,21 @@ async function dispatchSlackMessageWithSetup(
       },
       delivery: {
         deliver: deliverSlackPayload,
+        onDelivered: async (payload, info, result) => {
+          if (info.kind === "final" && !previewLifecycle.finalStarted) {
+            await previewLifecycle.observeSettlement(result, {
+              isError: payload.isError === true,
+            });
+          }
+        },
         onError: (err, info) => {
           // Core settles delivery errors without throwing; Slack closeout still owns the failure.
           dispatchError ??= err;
+          if (info.kind === "final" && !previewLifecycle.finalStarted) {
+            previewLifecycle.observeFailure(
+              isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
+            );
+          }
           runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
           replyPipeline.typingCallbacks?.onIdle?.();
         },

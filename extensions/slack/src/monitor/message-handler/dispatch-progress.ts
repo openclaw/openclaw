@@ -25,7 +25,7 @@ import {
 } from "../../progress-blocks.js";
 import { applyAppendOnlyStreamUpdate } from "../../stream-mode.js";
 import { appendSlackStream } from "../../streaming.js";
-import { resolveExplicitSlackProgressTitle } from "./dispatch-helpers.js";
+import { resolveExplicitSlackProgressTitle, slackFinalMode } from "./dispatch-helpers.js";
 import {
   createSlackDraftProgressCardRuntime,
   formatSlackProgressDraftLine,
@@ -458,6 +458,7 @@ export function createSlackProgressRuntime(runtimeParams: {
           }
         : undefined,
     cleanupUndelivered: true,
+    finalDelivery: slackFinalMode(isProgressMode, useDraftProgressCard, useNativeProgressStreaming),
     onFinalStarted: () => progressDraft.markFinalReplyStarted(),
     onFinalDelivered: () => progressDraft.markFinalReplyDelivered(),
     onCleanupFailure: (error) =>

@@ -4,6 +4,7 @@ import {
   buildMattermostButtonInteractionMessageSid,
   buildMattermostModelPickerSelectMessageSid,
   formatMattermostFinalDeliveryOutcomeLog,
+  resolveMattermostProgressDeliveryPolicy,
   resolveMattermostInteractionReplyRootId,
   resolveMattermostReactionChannelId,
   resolveMattermostThreadSessionContext,
@@ -75,6 +76,59 @@ describe("Mattermost monitor context", () => {
       accountId: "default",
     });
     expect(shouldUpdateMattermostDraftToolProgress(account)).toBe(false);
+  });
+
+  it.each([
+    { name: "an absent finalDelivery value", progress: undefined },
+    { name: 'finalDelivery="in-place"', progress: { finalDelivery: "in-place" as const } },
+  ])("keeps progress finals in place for $name", ({ progress }) => {
+    const account = resolveMattermostAccount({
+      cfg: { channels: { mattermost: { streaming: { mode: "progress", progress } } } },
+      accountId: "default",
+    });
+    expect(resolveMattermostProgressDeliveryPolicy(account, "channel-1")).toMatchObject({
+      separate: false,
+      postType: undefined,
+      pinnedLabel: undefined,
+    });
+  });
+
+  it('uses typed progress and separate finals only for finalDelivery="separate"', () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: {
+              mode: "progress",
+              progress: { finalDelivery: "separate", label: "Working" },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+    expect(resolveMattermostProgressDeliveryPolicy(account, "channel-1")).toMatchObject({
+      separate: true,
+      postType: "custom_openclaw_progress",
+      pinnedLabel: "Working",
+    });
+  });
+
+  it("does not enable separate finals outside progress mode", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: {
+              mode: "partial",
+              progress: { finalDelivery: "separate" },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+    expect(resolveMattermostProgressDeliveryPolicy(account, "channel-1").separate).toBe(false);
   });
 
   it.each([

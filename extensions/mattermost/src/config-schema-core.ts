@@ -73,9 +73,16 @@ const MattermostNetworkSchema = z
   .strict()
   .optional();
 
+const MattermostStreamingProgressSchema = ChannelStreamingProgressSchema.omit({
+  commentary: true,
+  narration: true,
+}).extend({
+  finalDelivery: z.enum(["in-place", "separate"]).optional(),
+});
+
 const MattermostStreamingSchema = ChannelPreviewStreamingConfigSchema.extend({
   preview: ChannelStreamingPreviewSchema.omit({ chunk: true }).optional(),
-  progress: ChannelStreamingProgressSchema.omit({ commentary: true, narration: true }).optional(),
+  progress: MattermostStreamingProgressSchema.optional(),
 });
 
 const MattermostReplyToModeSchema = z.enum(["off", "first", "all", "batched"]);

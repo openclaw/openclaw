@@ -259,7 +259,10 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     forcedThreadTs?: string;
   }): Promise<LivePreviewDeliveryResult> => {
     if (state.streamSession?.stoppedBySlack) {
-      return { visibleReplySent: false };
+      return {
+        visibleReplySent: false,
+        suppression: { reason: "no_visible_result", cancelReason: "stopped by Slack user" },
+      };
     }
     const replyThreadTs = resolveDeliveryThreadTs(params);
     const deliveryReplyThreadTs =
@@ -277,7 +280,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     );
     if (deliveryTracker.hasDelivered(deliveryKey)) {
       logVerbose("slack: suppressed duplicate normal delivery within the same turn");
-      return { visibleReplySent: false };
+      return { visibleReplySent: false, suppression: { reason: "channel_transform" } };
     }
     const sent = await deliverPreparedReply(preparedReply, deliveryReplyThreadTs);
     if (!sent?.receipt.platformMessageIds.length) {
@@ -327,7 +330,10 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     taskDisplayMode?: "plan" | "timeline";
   }): Promise<LivePreviewDeliveryResult> => {
     if (state.streamSession?.stoppedBySlack) {
-      return { visibleReplySent: false };
+      return {
+        visibleReplySent: false,
+        suppression: { reason: "no_visible_result", cancelReason: "stopped by Slack user" },
+      };
     }
     if (!isStreamingEligible(params.payload)) {
       return await deliverNormally({
@@ -340,7 +346,10 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       await state.nativeProgressStreamStartPromise;
     }
     if (state.streamSession?.stoppedBySlack) {
-      return { visibleReplySent: false };
+      return {
+        visibleReplySent: false,
+        suppression: { reason: "no_visible_result", cancelReason: "stopped by Slack user" },
+      };
     }
     let session = state.streamSession;
     const threadTs = session?.threadTs ?? replyPlan.nextThreadTs();
@@ -357,7 +366,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     const deliveryKey = buildSlackEventDeliveryKey({ ...params, threadTs, textOverride: text });
     if (deliveryTracker.hasDelivered(deliveryKey)) {
       logVerbose("slack-stream: suppressed duplicate reply payload");
-      return { visibleReplySent: false };
+      return { visibleReplySent: false, suppression: { reason: "channel_transform" } };
     }
     let messageId: string | undefined;
     let fallbackDelivery: LivePreviewDeliveryResult | undefined;
@@ -411,7 +420,10 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     }
     if (session.stoppedBySlack && session.pendingText) {
       emitStreamedDelivery(hookContent, { success: false, error: "Stopped by Slack user" });
-      return { visibleReplySent: false };
+      return {
+        visibleReplySent: false,
+        suppression: { reason: "no_visible_result", cancelReason: "stopped by Slack user" },
+      };
     }
     if (!fallbackDelivery?.visibleReplySent && (!session.delivered || session.pendingText)) {
       return { visibleReplySent: false };

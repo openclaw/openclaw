@@ -229,6 +229,102 @@ export function registerMattermostPreviewDeliveryTests(harness: {
     },
   );
 
+  it.each([
+    { name: "an absent finalDelivery value", finalDelivery: undefined, separate: false },
+    { name: 'finalDelivery="in-place"', finalDelivery: "in-place", separate: false },
+    { name: 'finalDelivery="separate"', finalDelivery: "separate", separate: true },
+  ] as const)("applies $name at the Mattermost delivery boundary", async (testCase) => {
+    const progressConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: {
+            mode: "progress",
+            progress: {
+              ...(testCase.finalDelivery ? { finalDelivery: testCase.finalDelivery } : {}),
+              label: "Working",
+            },
+          },
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(progressConfig);
+    const draftStream = {
+      update: vi.fn(),
+      updateAssistantText: vi.fn(),
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => "preview-policy"),
+      clear: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {}),
+      seal: vi.fn(async () => {}),
+      deleteCurrentMessage: vi.fn(async () => {}),
+      forceNewMessage: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: vi.fn((text: string) => ({
+        kind: "full" as const,
+        text,
+        publishedParts: [],
+      })),
+    };
+    mockState.createMattermostDraftStream.mockReturnValue(draftStream);
+    mockState.updateMattermostPost.mockResolvedValue({
+      id: "preview-policy",
+      message: "Final answer",
+    });
+    mockState.sendMessageMattermost.mockResolvedValue({
+      content: "Final answer",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "mattermost", channelId: "chan-1", messageId: "final-policy" }],
+        kind: "text",
+      }),
+    });
+
+    mockState.dispatchInboundMessage.mockImplementation(async () => {
+      const dispatcherOptions =
+        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+      await dispatcherOptions?.deliver({ text: "Final answer" }, { kind: "final" });
+      mockState.abortController?.abort();
+    });
+
+    await receivePost(
+      {
+        id: `post-policy-${testCase.finalDelivery ?? "absent"}`,
+        message: "run this",
+      },
+      progressConfig,
+    );
+
+    expect(mockState.createMattermostDraftStream.mock.calls.at(-1)?.[0]?.postType).toBe(
+      testCase.separate ? "custom_openclaw_progress" : undefined,
+    );
+    if (testCase.separate) {
+      expect(mockState.updateMattermostPost).not.toHaveBeenCalled();
+      expect(mockState.sendMessageMattermost).toHaveBeenCalledOnce();
+      expect(draftStream.discardPending).toHaveBeenCalled();
+      expect(draftStream.clear).toHaveBeenCalled();
+      expect(draftStream.discardPending.mock.invocationCallOrder[0]).toBeLessThan(
+        mockState.sendMessageMattermost.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(mockState.sendMessageMattermost.mock.invocationCallOrder[0]).toBeLessThan(
+        draftStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    } else {
+      expect(mockState.updateMattermostPost).toHaveBeenCalledWith({}, "preview-policy", {
+        message: "Final answer",
+      });
+      expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
+      expect(draftStream.flush).toHaveBeenCalledOnce();
+      expect(draftStream.seal).toHaveBeenCalledOnce();
+      expect(draftStream.clear).not.toHaveBeenCalled();
+    }
+  });
+
   it("finalizes only the current block when the terminal reply is cumulative", async () => {
     const blockConfig = withStreaming({ mode: "block" }, "[bot]");
     const runtimeCore = createRuntimeCore(blockConfig);

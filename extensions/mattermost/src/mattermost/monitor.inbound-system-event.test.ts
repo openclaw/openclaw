@@ -28,6 +28,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { registerMattermostBlockProgressTests } from "./monitor.block-progress.test-support.js";
+import { bindTestDeliveryObserver } from "./monitor.delivery.test-support.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import { registerMattermostPreviewDeliveryTests } from "./monitor.preview-delivery.test-support.js";
 import { registerMattermostPreviewPolicyTests } from "./monitor.preview-policy.test-support.js";
@@ -135,9 +136,8 @@ vi.mock("./client.js", async () => {
 vi.mock("./draft-stream.js", async () => {
   const actual = await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
   return {
+    ...actual,
     createMattermostDraftStream: mockState.createMattermostDraftStream,
-    createMattermostDraftPreviewBoundaryController:
-      actual.createMattermostDraftPreviewBoundaryController,
   };
 });
 
@@ -286,7 +286,7 @@ function createRuntimeCore(
     });
     const prepared = mockState.createReplyDispatcherWithTyping({
       ...turn.dispatcherOptions,
-      deliver: turn.delivery.deliver,
+      deliver: bindTestDeliveryObserver(turn.delivery),
       onError: turn.delivery.onError,
     }) as { dispatcher: unknown; replyOptions?: Record<string, unknown> };
     const dispatchResult = await mockState.dispatchInboundMessage({

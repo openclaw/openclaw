@@ -330,6 +330,19 @@ describe("Mattermost post receipts", () => {
     },
   );
 
+  it("includes a custom post type atomically when provided", async () => {
+    const { client, fetchImpl } = customClient(Response.json({ id: "post-progress" }));
+    await createMattermostPost(client, {
+      ...postParams,
+      postType: "custom_openclaw_progress",
+    });
+    expect(requestBody(fetchImpl)).toEqual({
+      channel_id: "ch1",
+      message: "hello",
+      type: "custom_openclaw_progress",
+    });
+  });
+
   it("does not misclassify a network SyntaxError as accepted", async () => {
     const failure = new SyntaxError("network response parser failed");
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValueOnce(failure);

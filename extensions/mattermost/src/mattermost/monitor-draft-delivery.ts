@@ -36,6 +36,7 @@ type MattermostDraftPreviewDeliverParams = {
   client: MattermostClient;
   previewLifecycle: LivePreviewLifecycle<ReplyPayload, string>;
   effectiveReplyToId?: string;
+  separateProgressFinalDelivery?: boolean;
   resolvePreviewFinalText: (text?: string) => MattermostPreviewFinalResolution | undefined;
   logVerboseMessage: (message: string) => void;
   deliverPayload: (payload: ReplyPayload) => Promise<MattermostReplyDeliveryResult>;
@@ -68,6 +69,9 @@ export async function deliverMattermostReplyWithDraftPreview(
   params: MattermostDraftPreviewDeliverParams,
 ): Promise<MattermostReplyDeliveryResult> {
   if (isReasoningReplyPayload(params.payload)) {
+    if (params.info.kind === "final") {
+      params.previewLifecycle.observeSuppression();
+    }
     return {
       outcome: "reasoning_skipped",
       visibleReplySent: false,
@@ -78,7 +82,9 @@ export async function deliverMattermostReplyWithDraftPreview(
   let outcome: "text" | "media" = "text";
   const ttsSupplement = getReplyPayloadTtsSupplement(params.payload);
   const previewFinalResolution =
-    params.info.kind === "final" && !params.previewLifecycle.previewFinalized
+    params.info.kind === "final" &&
+    !params.separateProgressFinalDelivery &&
+    !params.previewLifecycle.previewFinalized
       ? params.resolvePreviewFinalText(params.payload.text ?? ttsSupplement?.spokenText)
       : undefined;
   const confirmedPreviewDelivery = previewFinalResolution?.confirmedDelivery;

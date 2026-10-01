@@ -4,6 +4,7 @@ import {
   dispatchChannelInboundTurn,
   getGroupThreadDeliverySession,
   hasFinalInboundReplyDispatch,
+  isChannelPartialDeliveryError,
   readAgentRunTerminalOutcome,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -268,7 +269,7 @@ export async function processDiscordMessage(
       allowProgressBlock?: boolean;
       deliverySession?: ReturnType<typeof getGroupThreadDeliverySession>;
     },
-  ) => {
+  ): Promise<LivePreviewDeliveryResult> => {
     if (abortSignal?.aborted) {
       // Surface so operators don't chase missing replies when an abort
       // drops a model-produced text payload.
@@ -280,7 +281,10 @@ export async function processDiscordMessage(
           sessionKey: ctxPayload.SessionKey,
         }),
       );
-      return { visibleReplySent: false };
+      return {
+        visibleReplySent: false,
+        suppression: { reason: "no_visible_result", cancelReason: "aborted before delivery" },
+      };
     }
     const deliverySession = options?.deliverySession ?? getGroupThreadDeliverySession();
     const deliveryOptions = {
@@ -314,7 +318,7 @@ export async function processDiscordMessage(
       const raw = (payload.text ?? "").trim();
       const body = raw.startsWith("Reasoning:\n") ? raw.slice("Reasoning:\n".length).trim() : raw;
       if (!body) {
-        return { visibleReplySent: false };
+        return { visibleReplySent: false, suppression: { reason: "channel_transform" } };
       }
       const chunkLimit = Math.max(256, Math.min(textLimit, 2000) - 8);
       const chunks = chunkDiscordTextWithMode(body, {
@@ -327,7 +331,7 @@ export async function processDiscordMessage(
         .filter((quote): quote is string => Boolean(quote))
         .map((quote) => Object.assign({}, payload, { text: quote, isReasoning: undefined }));
       if (!replies.length) {
-        return { visibleReplySent: false };
+        return { visibleReplySent: false, suppression: { reason: "channel_transform" } };
       }
       const result = await deliverDiscordReply({
         ...deliveryOptions,
@@ -354,7 +358,7 @@ export async function processDiscordMessage(
         // Root settlement can outlive this participant's dispatch scope.
         pendingToolWarningFinal = { payload, info, deliverySession };
       }
-      return { visibleReplySent: false };
+      return { visibleReplySent: false, suppression: { reason: "channel_transform" } };
     }
     if (isFinal) {
       draftPreview.freezeProgress();
@@ -380,7 +384,7 @@ export async function processDiscordMessage(
           sessionKey: ctxPayload.SessionKey,
         }),
       );
-      return { visibleReplySent: false };
+      return { visibleReplySent: false, suppression: { reason: "channel_transform" } };
     }
     if (
       await draftPreview.adoptProgressContinuation(deliverablePayload, info, {
@@ -408,7 +412,7 @@ export async function processDiscordMessage(
     ) {
       const reply = resolveSendableOutboundReplyParts(deliverablePayload);
       if (!reply.hasMedia && !deliverablePayload.isError) {
-        return { visibleReplySent: false };
+        return { visibleReplySent: false, suppression: { reason: "channel_transform" } };
       }
     }
     let deliveryResult: LivePreviewDeliveryResult = { visibleReplySent: false };
@@ -426,6 +430,10 @@ export async function processDiscordMessage(
               sessionKey: ctxPayload.SessionKey,
             }),
           );
+          deliveryResult = {
+            visibleReplySent: false,
+            suppression: { reason: "no_visible_result", cancelReason: "aborted before delivery" },
+          };
           return deliveryResult;
         }
         // Final replies need MESSAGE_CREATE so Discord advances unread state.
@@ -460,8 +468,8 @@ export async function processDiscordMessage(
     return deliveryResult;
   };
   const onDiscordDeliveryError = (err: unknown, info: { kind: string }) => {
-    if (info.kind === "final") {
-      lifecycle.observeFailure();
+    if (info.kind === "final" && !lifecycle.finalStarted) {
+      lifecycle.observeFailure(isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined);
     }
     runtime.error(
       danger(
@@ -530,6 +538,11 @@ export async function processDiscordMessage(
       },
       delivery: {
         deliverWithProviderMessageSending: deliverDiscordPayload,
+        onDelivered: async (payload, info, result) => {
+          if (info.kind === "final" && !lifecycle.finalStarted) {
+            await lifecycle.observeSettlement(result, { isError: payload.isError === true });
+          }
+        },
         onError: onDiscordDeliveryError,
       },
       record: turn.record,

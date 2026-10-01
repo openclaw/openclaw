@@ -72,6 +72,14 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
+export function slackFinalMode(
+  progress: boolean,
+  card: boolean,
+  native: boolean,
+): "in-place" | "separate" {
+  return progress && !card && !native ? "separate" : "in-place";
+}
+
 export function resolveSlackProgressStyle(
   entry: SlackProgressConfigEntry,
   hasReplyThread: boolean,

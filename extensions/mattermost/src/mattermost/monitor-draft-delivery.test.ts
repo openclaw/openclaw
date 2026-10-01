@@ -79,9 +79,10 @@ function resolvePreviewFinalText(text?: string) {
   return editText ? { editText, alreadyDelivered: false } : undefined;
 }
 
-function createPreviewLifecycle(draftStream: DraftStreamMock) {
+function createPreviewLifecycle(draftStream: DraftStreamMock, retainOnError = false) {
   return createLivePreviewLifecycle<ReplyPayload, string>({
     draft: { ...draftStream, id: draftStream.postId },
+    retainOnError,
   });
 }
 
@@ -97,7 +98,10 @@ function deliverDraftPreview(
     kind: "channel",
     client: createMattermostClientMock(),
     resolvePreviewFinalText,
-    previewLifecycle: createPreviewLifecycle(params.draftStream),
+    previewLifecycle: createPreviewLifecycle(
+      params.draftStream,
+      params.separateProgressFinalDelivery === true,
+    ),
     logVerboseMessage: vi.fn(),
     ...params,
   });
@@ -422,6 +426,54 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(draftStream.flush).not.toHaveBeenCalled();
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  });
+
+  it("sends a separate final before deleting the typed progress post", async () => {
+    const draftStream = createDraftStreamMock("progress-post-1");
+    const deliverFinal = createDeliverFinalMock();
+
+    const result = await deliverDraftPreview({
+      payload: { text: "All good" } as never,
+      draftStream,
+      separateProgressFinalDelivery: true,
+      deliverPayload: deliverFinal,
+    });
+
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalledOnce();
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "All good" });
+    expect(draftStream.clear).toHaveBeenCalledOnce();
+    expect(draftStream.discardPending.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverFinal.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(deliverFinal.mock.invocationCallOrder[0]).toBeLessThan(
+      draftStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(result).toMatchObject({
+      messageIds: ["delivered-post-1"],
+      visibleReplySent: true,
+      content: "All good",
+    });
+  });
+
+  it("retains separate progress when final delivery fails", async () => {
+    const draftStream = createDraftStreamMock("progress-post-1");
+    const deliverFinal = vi.fn(async () => {
+      throw new Error("send failed");
+    });
+
+    await expect(
+      deliverDraftPreview({
+        payload: { text: "Broken" } as never,
+        draftStream,
+        separateProgressFinalDelivery: true,
+        deliverPayload: deliverFinal,
+      }),
+    ).rejects.toThrow("send failed");
+
+    expect(draftStream.discardPending).toHaveBeenCalledOnce();
+    expect(draftStream.clear).not.toHaveBeenCalled();
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
   });
 
