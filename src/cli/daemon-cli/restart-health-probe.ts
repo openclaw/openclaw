@@ -210,17 +210,53 @@ function readChannelProbeFailures(health: unknown) {
   const errors: GatewayReachability["channelProbeErrors"] = [];
   const timeouts: GatewayReachability["channelProbeErrors"] = [];
   const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  for (const [id, summary] of Object.entries(channels ?? {})) {
-    const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
-      continue;
-    }
-    // Retain the explicit timeout marker from older Gateways that also sent ok:false.
-    (probe.timedOut === true ? timeouts : errors).push({
-      id,
-      error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
+  errors.push(...Object.entries(channels ?? {}).flatMap(([channelId, value]) => {
+    const summary = asOptionalRecord(value);
+    const accounts = asOptionalRecord(summary?.accounts);
+    // Account projections are authoritative when present; the channel summary mirrors only
+    // its preferred account and can hide a failed secondary account or duplicate its error.
+    const entries =
+      accounts && Object.keys(accounts).length > 0
+        ? Object.entries(accounts).map(
+            ([accountId, account]) => [`${channelId}/${accountId}`, account] as const,
+          )
+        : [[channelId, summary] as const];
+    return entries.flatMap(([id, value]) => {
+      const account = asOptionalRecord(value);
+      if (
+        account?.enabled === false ||
+        account?.configured === false ||
+        account?.linked === false
+      ) {
+        return [];
+      }
+      const lastError = typeof account?.lastError === "string" ? account.lastError.trim() : "";
+      const healthState = typeof account?.healthState === "string" ? account.healthState : "";
+      // A successful credential probe does not prove that the channel process is running.
+      // Keep an intentionally stopped account without a recorded failure non-blocking.
+      if (
+        healthState &&
+        healthState !== "healthy" &&
+        (healthState !== "not-running" || lastError || account?.restartPending === true)
+      ) {
+        return [{ id, error: lastError || healthState }];
+      }
+      const probe = asOptionalRecord(account?.probe);
+      if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
+        return [];
+      }
+      const failure = {
+        id,
+        error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
+      };
+      // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+      if (probe.timedOut === true) {
+        timeouts.push(failure);
+        return [];
+      }
+      return [failure];
     });
-  }
+  }));
   return { errors, timeouts };
 }
 

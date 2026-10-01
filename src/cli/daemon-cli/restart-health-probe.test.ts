@@ -593,4 +593,95 @@ describe("restart health", () => {
     ]);
     expect(sleep).not.toHaveBeenCalled();
   });
+  it.each([
+    [
+      "crash-loop suppression",
+      {
+        healthState: "not-running",
+        running: false,
+        lifecycle: "stopped",
+        lastError: "gateway restart-loop breaker tripped",
+      },
+    ],
+    [
+      "pending automatic restart",
+      { healthState: "not-running", running: false, restartPending: true, lastError: "" },
+    ],
+    ["disconnected transport", { healthState: "disconnected", running: true, connected: false }],
+  ])("rejects %s despite a successful account credential probe", async (_label, runtime) => {
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.24", connId: "new" },
+        health: {
+          ok: true,
+          channels: {
+            telegram: {
+              configured: true,
+              probe: { ok: true },
+              accounts: {
+                default: { configured: true, running: true, probe: { ok: true } },
+                affected: { configured: true, enabled: true, probe: { ok: true }, ...runtime },
+              },
+            },
+          },
+        },
+      }),
+    );
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.4.24",
+    });
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("channel-errors");
+    expect(snapshot.channelProbeErrors).toEqual([
+      {
+        id: "telegram/affected",
+        error:
+          "lastError" in runtime && runtime.lastError ? runtime.lastError : runtime.healthState,
+      },
+    ]);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { enabled: false },
+    { configured: false },
+    { linked: false },
+    { healthState: "not-running", lastError: null },
+  ])("preserves inactive account intent: %j", async (inactive) => {
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.24", connId: "new" },
+        health: {
+          ok: true,
+          channels: {
+            telegram: {
+              accounts: {
+                default: {
+                  configured: true,
+                  running: false,
+                  healthState: "not-running",
+                  lastError: "gateway restart-loop breaker tripped",
+                  probe: { ok: true },
+                  ...inactive,
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.4.24",
+    });
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.channelProbeErrors).toBeUndefined();
+  });
 });

@@ -718,6 +718,12 @@ ledger rows through a reusable read-only worker connection instead of repeatedly
 copying shared state. This applies to updates launched by the fixed updater; a
 published older updater keeps its own progress reader until it is replaced.
 
+Restart verification checks each configured channel account, including runtime
+health failures even when its credential probe succeeds. A channel suppressed by
+the crash-loop breaker cannot count as recovered. Inspect `openclaw health --json`
+and address the recorded failure before retrying; verification does not start
+channels that an operator stopped or disable the breaker.
+
 When no update is active, `openclaw update status` labels the saved outcome
 `Last recorded update` with the recorded start time, so historical results are
 distinct from current update activity.
