@@ -202,7 +202,11 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
   ) {
     throw new AgentHarnessPreflightError(
       "Agents API cannot enforce this run's restrictions on native shell, file, or web-search tools.",
-      { scope: "harness" },
+      {
+        scope: "harness",
+        userMessage:
+          "Agents API cannot run with this chat's tool restrictions because it cannot enforce them on native tools. Choose a harness that supports these restrictions or update the tool settings.",
+      },
     );
   }
   const target = requireAgentsApiSessionTarget(params);

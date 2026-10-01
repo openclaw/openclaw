@@ -271,6 +271,48 @@ it("transfers each turn's original image bytes to unique paths on the same hoste
   });
 });
 
+it("reports unsupported tool restrictions without replacing the bound native session", async () => {
+  await withOpenClawTestState({ label: "agentsapi-tool-policy-preflight" }, async (state) => {
+    const params = await createAttempt(state.stateDir);
+    const create = vi
+      .spyOn(AgentsApiClient.prototype, "create")
+      .mockResolvedValue("retained-session");
+    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
+    const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
+    vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+    const harness = registerHarness(state.env);
+    try {
+      expect(await harness.runAttempt(params)).toMatchObject({ terminal: { kind: "ok" } });
+      const restricted = harness.runAttempt({
+        ...params,
+        runId: "restricted-run",
+        pluginHarnessToolPolicyRestricted: true,
+      });
+      await expect(restricted).rejects.toBeInstanceOf(AgentHarnessPreflightError);
+      await expect(restricted).rejects.toMatchObject({
+        scope: "harness",
+        userMessage:
+          "Agents API cannot run with this chat's tool restrictions because it cannot enforce them on native tools. Choose a harness that supports these restrictions or update the tool settings.",
+      });
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(message).toHaveBeenCalledTimes(1);
+
+      expect(await harness.runAttempt({ ...params, runId: "allowed-following-run" })).toMatchObject(
+        {
+          terminal: { kind: "ok" },
+        },
+      );
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+        "retained-session",
+        "retained-session",
+      ]);
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
 it.each([false, true])(
   "reports Gateway sandbox placement independently of images (%s)",
   async (withImages) => {
