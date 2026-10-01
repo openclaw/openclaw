@@ -15,11 +15,13 @@ import {
   selectLlamaServerAsset,
   type LlamaServerArchive,
   type LlamaServerAsset,
+  type LlamaServerDependency,
 } from "./llama-server-assets.js";
 import {
   extractLlamaServerArchive,
   extractLlamaServerDependencyArchive,
 } from "./llama-server-extract.js";
+import { extractWindowsVcRuntime } from "./llama-server-vc-runtime.js";
 
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 const VERSION_TIMEOUT_MS = 15_000;
@@ -67,8 +69,11 @@ function assertSupportedLinuxRuntime(asset: LlamaServerAsset): void {
   }
 }
 
-function assetUrl(asset: LlamaServerArchive): string {
-  return `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_SERVER_RELEASE}/${asset.name}`;
+function assetUrl(asset: Pick<LlamaServerArchive, "name" | "url">): string {
+  return (
+    asset.url ??
+    `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_SERVER_RELEASE}/${asset.name}`
+  );
 }
 
 const verifiedFiles = new Map<string, { identity: string; sha256: string }>();
@@ -257,7 +262,7 @@ function formatRuntimeDependencyError(error: unknown): Error {
   }
   if (process.platform === "win32") {
     return new Error(
-      `The verified llama-server build could not start. Install the Microsoft Visual C++ 2015-2022 Redistributable, then rerun llama.cpp setup. Detail: ${detail}`,
+      `The verified llama-server build could not start with its app-local Visual C++ runtime. Rerun llama.cpp setup to reinstall it, or configure a compatible llama-server manually. Detail: ${detail}`,
       { cause: error },
     );
   }
@@ -347,17 +352,26 @@ async function installLlamaServer(
         url: assetUrl(dependency),
         destination: dependencyArchive,
         expectedSha256: dependency.sha256,
+        expectedSize: dependency.archive === "vc-redist" ? dependency.size : undefined,
         signal: options.signal,
         onProgress: options.onProgress,
       });
       const dependencyExtractDir = path.join(extractDir, `dependency-${index}`);
       await fsp.mkdir(dependencyExtractDir);
-      const dependencyRoot = await extractLlamaServerDependencyArchive({
-        archivePath: dependencyArchive,
-        destDir: dependencyExtractDir,
-        asset: dependency,
-      });
-      for (const file of dependency.files) {
+      const dependencyRoot =
+        dependency.archive === "vc-redist"
+          ? await extractWindowsVcRuntime({
+              bundlePath: dependencyArchive,
+              destDir: dependencyExtractDir,
+              asset: dependency,
+              signal: options.signal,
+            })
+          : await extractLlamaServerDependencyArchive({
+              archivePath: dependencyArchive,
+              destDir: dependencyExtractDir,
+              asset: dependency,
+            });
+      for (const file of dependencyFiles(dependency)) {
         await fsp.copyFile(
           path.join(dependencyRoot, file),
           path.join(extractedRoot, file),
@@ -385,6 +399,12 @@ async function installLlamaServer(
       fsp.rm(extractDir, { recursive: true, force: true }),
     ]);
   }
+}
+
+function dependencyFiles(dependency: LlamaServerDependency): readonly string[] {
+  return dependency.archive === "vc-redist"
+    ? dependency.files.map((file) => file.target)
+    : dependency.files;
 }
 
 export async function ensureLlamaServerInstalled(options: LlamaServerInstallOptions = {}): Promise<{
