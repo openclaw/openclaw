@@ -9,6 +9,7 @@ import { optionalPositiveIntegerSchema, requesterProfileSchema } from "../schema
 import {
   describeSessionLinkRule,
   describeSessionsSearchTool,
+  SESSION_LINK_RULE_DESCRIPTION,
   SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
@@ -74,11 +75,7 @@ const SessionsSearchOutputSchema = Type.Union([
   Type.Object(
     {
       results: Type.Array(SessionsSearchHitSchema),
-      sessionLinkRule: Type.Optional(
-        Type.String({
-          description: "How to build Control UI URLs for sessionKey values in this result.",
-        }),
-      ),
+      sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),
       indexing: Type.Optional(Type.Literal(true)),
       archivedTranscriptsExcluded: Type.Optional(Type.Integer({ minimum: 1 })),
       warning: Type.Optional(Type.String()),

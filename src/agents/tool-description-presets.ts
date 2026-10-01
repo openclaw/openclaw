@@ -62,6 +62,9 @@ export function describeSessionVisibilityScope(
   return SESSION_VISIBILITY_SCOPE_COPY[visibility];
 }
 
+export const SESSION_LINK_RULE_DESCRIPTION =
+  "How to build Control UI URLs for sessionKey values in this result.";
+
 type SessionLinkDescriptionOptions = { sessionLinkBase?: string };
 
 export function describeSessionLinkRule(base: string): string {

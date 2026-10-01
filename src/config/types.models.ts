@@ -1,8 +1,5 @@
 import type { z } from "zod";
-import type {
-  ModelDataImageInputConfig,
-  ModelDataMediaInputConfig,
-} from "../../packages/llm-core/src/model-data.js";
+import type { ModelDataMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
 import type { OpenAICompletionsCompat, RawModelCostConfig } from "../llm/types.js";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
@@ -29,8 +26,6 @@ export type ModelCompatConfig = Omit<
   "openRouterRouting" | "vercelGatewayRouting"
 > &
   Pick<OpenAICompletionsCompat, "openRouterRouting" | "vercelGatewayRouting">;
-
-export type ModelImageInputConfig = ModelDataImageInputConfig;
 
 export type ModelMediaInputConfig = ModelDataMediaInputConfig;
 
@@ -99,8 +94,6 @@ export type BedrockDiscoveryConfig = {
   /** Max output tokens applied when discovery cannot infer one. */
   defaultMaxTokens?: number;
 };
-
-export type ModelCatalogRefreshConfig = NonNullable<ModelsSchemaInput["catalogRefresh"]>;
 
 export type ModelsConfig = Omit<ModelsSchemaInput, "providers"> & {
   /** Configured provider catalog keyed by provider id. */
