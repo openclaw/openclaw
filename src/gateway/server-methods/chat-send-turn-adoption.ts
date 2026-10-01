@@ -56,6 +56,8 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   let terminalKnown = false;
   let completed = false;
   let adoptionStarted = false;
+  let steeringHeld = false;
+  let lifecycleSettled = false;
   let withdrawalHold: Deferred | undefined;
   let releaseWorkAdmission: (() => void) | undefined;
   const recordQueuedTerminal = (status: "completed" | "aborted") => {
@@ -118,7 +120,31 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       }
       params.controller.signal.throwIfAborted();
     },
-    onDeferred: () => {
+    holdSteering: () => {
+      if (
+        lifecycleSettled ||
+        adoptionStarted ||
+        withdrawalHold ||
+        steeringHeld ||
+        params.controller.signal.aborted
+      ) {
+        return undefined;
+      }
+      // Queue consumption can precede final receipt/error publication. Keep the original
+      // session and caller admission alive until the detached promotion actually settles.
+      const release = params.retainWorkAdmission();
+      steeringHeld = true;
+      let released = false;
+      return () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        steeringHeld = false;
+        release();
+      };
+    },
+    onDeferred: (controls) => {
       if (params.hasCronCreatorAuthority) {
         lifecycle.cronCreatorAuthorityUnavailable = "queued-local-operator";
       }
@@ -131,8 +157,15 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         agentId: params.agentId,
         ownerConnId: normalizeOptionalString(params.ownerConnId),
         ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
+        steer: controls?.steer,
         holdPendingInputWithdrawal: () => {
-          if (adoptionStarted || withdrawalHold || params.controller.signal.aborted) {
+          if (
+            lifecycleSettled ||
+            adoptionStarted ||
+            withdrawalHold ||
+            steeringHeld ||
+            params.controller.signal.aborted
+          ) {
             return undefined;
           }
           const hold = createDeferredCore();
@@ -171,6 +204,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       terminalKnown = true;
     },
     onSettled: () => {
+      lifecycleSettled = true;
       const ownsCompletion = completeQueuedChatTurn(
         params.chatQueuedTurns,
         params.runId,

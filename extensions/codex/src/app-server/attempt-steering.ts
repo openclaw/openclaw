@@ -36,7 +36,7 @@ export type CodexSteeringQueueOptions = Pick<
 type CodexSteeringCommitItem = Pick<
   CodexSteeringQueueOptions,
   "isInboundUserMessage" | "userTurnTranscriptRecorder"
->;
+> & { assertCurrent: () => void };
 
 /**
  * Creates a queue that batches steer messages while still serializing
@@ -58,6 +58,7 @@ export function createCodexSteeringQueue(params: {
     message: AgentMessage;
   }>;
   beforeSubmit?: (items: readonly CodexSteeringCommitItem[]) => Promise<void>;
+  commitMessage?: (item: CodexSteeringCommitItem) => Promise<void>;
 }) {
   type PendingSteerMessage = CodexSteeringQueueOptions & {
     assertCurrent: () => void;
@@ -239,6 +240,26 @@ export function createCodexSteeringQueue(params: {
         // crossing that boundary, then revalidate owners after the awaited write.
         await params.beforeSubmit(liveItems);
         assertActive();
+        liveItems = liveItems.filter(isCurrent);
+        if (liveItems.length === 0) {
+          return;
+        }
+      }
+      if (params.commitMessage) {
+        for (const item of liveItems) {
+          if (!isCurrent(item)) {
+            continue;
+          }
+          try {
+            await params.commitMessage(item);
+          } catch (error) {
+            // A revoked input cannot discard a live sibling already committed.
+            if (isCurrent(item)) {
+              throw error;
+            }
+          }
+          assertActive();
+        }
         liveItems = liveItems.filter(isCurrent);
         if (liveItems.length === 0) {
           return;

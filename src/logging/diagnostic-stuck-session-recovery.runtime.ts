@@ -11,7 +11,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
 import { recoverTerminalSessionPlacementTurn } from "../agents/session-placement-admission.js";
-import { prepareStaleFollowupDrainRetirement } from "../auto-reply/reply/queue/drain.js";
+import { prepareStaleFollowupDrainRetirement } from "../auto-reply/reply/queue/retirement.js";
 import {
   getCommandLaneActiveTaskIds,
   getCommandLaneSnapshot,

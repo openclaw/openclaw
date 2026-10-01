@@ -349,6 +349,20 @@ export const ChatSendParamsSchema = closedObject({
   idempotencyKey: NonEmptyString,
 });
 
+/** Promotes an already admitted queued input without replacing its payload or identity. */
+export const ChatSteerParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  runId: NonEmptyString,
+});
+
+/** Runtime custody acceptance is not transcript commitment or model consumption. */
+export type ChatSteerResult =
+  | { status: "accepted"; targetRunId?: string }
+  | { status: "queued"; reason: string }
+  | { status: "not_queued" };
+
 /** Cancels the active or named run for a chat session. */
 export const ChatAbortParamsSchema = closedObject({
   sessionKey: NonEmptyString,
@@ -520,6 +534,7 @@ export type ChatMetadataParams = Static<typeof ChatMetadataParamsSchema>;
 export type ChatToolTitlesParams = Static<typeof ChatToolTitlesParamsSchema>;
 export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
 export type LogsTailResult = Static<typeof LogsTailResultSchema>;
+export type ChatSteerParams = Static<typeof ChatSteerParamsSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatRunStartupPhase = Static<typeof ChatRunStartupPhaseSchema>;

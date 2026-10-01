@@ -34,7 +34,10 @@ describe("Codex app-server steering queue", () => {
   function createQueue(
     client: QueueParams["client"] | { request: ReturnType<typeof vi.fn> },
     options: Partial<
-      Pick<QueueParams, "signal" | "requestTimeoutMs" | "prepareMessage" | "beforeSubmit">
+      Pick<
+        QueueParams,
+        "signal" | "requestTimeoutMs" | "prepareMessage" | "beforeSubmit" | "commitMessage"
+      >
     > = {},
   ) {
     return createCodexSteeringQueue({
@@ -54,6 +57,68 @@ describe("Codex app-server steering queue", () => {
     signal: expect.any(AbortSignal),
     assertCurrent: expect.any(Function),
   };
+
+  it.each([0, 1])(
+    "keeps live siblings when committed source %i is revoked",
+    async (revokedIndex) => {
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line);
+          send({ id: request.id, result: { turnId: "turn-1" } });
+        },
+      });
+      const committing = createDeferred<void>();
+      const resume = createDeferred<void>();
+      let revoked = false;
+      let index = 0;
+      const committed: number[] = [];
+      const queue = createQueue(harness.client, {
+        commitMessage: async (item) => {
+          const currentIndex = index++;
+          if (currentIndex === revokedIndex) {
+            committing.resolve();
+            await resume.promise;
+          }
+          item.assertCurrent();
+          committed.push(currentIndex);
+        },
+      });
+      const outcomes = ["first", "second"].map((text, inputIndex) =>
+        queue
+          .queue(text, { debounceMs: 5 }, () => {
+            if (revoked && inputIndex === revokedIndex) {
+              throw new Error("source revoked during commit");
+            }
+          })
+          .then(
+            () => "accepted",
+            () => "rejected",
+          ),
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(5);
+        await committing.promise;
+        revoked = true;
+        resume.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(harness.writes).toHaveLength(1);
+        const request = JSON.parse(harness.writes[0]!);
+        expect(request.params.input).toEqual([
+          { type: "text", text: revokedIndex === 0 ? "second" : "first", text_elements: [] },
+        ]);
+        expect(committed).toEqual([1 - revokedIndex]);
+        expect(queue.confirmConsumed(request.params.clientUserMessageId)).toBe(true);
+        expect(await Promise.all(outcomes)).toEqual(
+          revokedIndex === 0 ? ["rejected", "accepted"] : ["accepted", "rejected"],
+        );
+      } finally {
+        resume.resolve();
+        queue.cancel();
+        harness.client.close();
+        await Promise.all(outcomes);
+      }
+    },
+  );
 
   it.each(["committed", "failed", "revoked", "aborted", "sealed"] as const)(
     "guards physical steering submission after the source commit is %s",

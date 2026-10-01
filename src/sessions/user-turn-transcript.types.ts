@@ -155,6 +155,7 @@ export type UserTurnTranscriptTargetResolver =
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
 export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
+  assertCurrent?: () => void;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
@@ -241,6 +242,8 @@ export type UserTurnTranscriptRecorder = {
   waitForRuntimePersistence: () => Promise<void>;
   persistApproved: (
     params?: UserTurnPersistenceOptions & {
+      /** Additional live operation authority, rechecked by the existing commit owner. */
+      assertCurrent?: () => void;
       expectedSessionId?: string;
       expectedSessionState?: SessionTranscriptTurnExpectedState;
       sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;

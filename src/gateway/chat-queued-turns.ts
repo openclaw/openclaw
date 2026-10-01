@@ -8,6 +8,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import type { QueuedTurnSteer } from "../auto-reply/get-reply-options.types.js";
 import {
   resolveChatAbortDiagnosticReason,
   type ChatAbortDiagnosticReason,
@@ -27,6 +28,8 @@ export type QueuedChatTurnEntry = {
   abortDiagnosticReason?: ChatAbortDiagnosticReason;
   /** Hold this source's adoption while its explicit withdrawal is committed. */
   holdPendingInputWithdrawal?: () => (() => void) | undefined;
+  /** Exact source capability, never a reconstructed send. */
+  steer?: QueuedTurnSteer;
 };
 
 export type QueuedChatTurnMap = Map<string, QueuedChatTurnEntry>;
@@ -57,6 +60,7 @@ type RegisterQueuedChatTurnParams = {
   ownerConnId?: string;
   ownerDeviceId?: string;
   holdPendingInputWithdrawal?: QueuedChatTurnEntry["holdPendingInputWithdrawal"];
+  steer?: QueuedTurnSteer;
   /** Record cancellation while the exact queued entry is still current. */
   onAborted?: (reason: ChatAbortDiagnosticReason) => void;
 };
@@ -115,6 +119,7 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
     agentId: normalizeOptionalString(params.agentId)?.toLowerCase(),
     ownerConnId: normalizeOptionalString(params.ownerConnId),
     ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
+    ...(params.steer ? { steer: params.steer } : {}),
     ...(params.holdPendingInputWithdrawal
       ? { holdPendingInputWithdrawal: params.holdPendingInputWithdrawal }
       : {}),

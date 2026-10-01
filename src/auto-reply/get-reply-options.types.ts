@@ -1,4 +1,5 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { ChatSteerResult } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
@@ -80,6 +81,9 @@ export type QueuedReplyDeliveryCorrelation = {
  */
 type TurnAdoptionAdmission = "exclusive" | "cancel-only";
 
+/** A queued source retains custody while its control request waits only for runtime acceptance. */
+export type QueuedTurnSteer = (assertRequestCurrent: () => void) => Promise<ChatSteerResult>;
+
 /**
  * Canonical turn-ownership lifecycle (adopt / defer / abandon / settle).
  * Single surface for durable ingress, gateway cancel identity, and reply-lane transfer.
@@ -95,7 +99,9 @@ export type TurnAdoptionLifecycle = {
   originatingLeafEntryId?: string | null;
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
-  onDeferred?: () => boolean | void;
+  onDeferred?: (controls?: { steer?: QueuedTurnSteer }) => boolean | void;
+  /** Exclude durable withdrawal until a manual steering attempt settles. */
+  holdSteering?: () => (() => void) | undefined;
   /** Pre-adoption liveness while waiting for reply-lane admission or preflight compaction. */
   onDeferredHeartbeat?: () => void;
   /** Requested cadence for pre-adoption heartbeats. */

@@ -429,13 +429,12 @@ export function activateCodexAttemptTurn(
         assertSteeringActive();
         activeProjector.markSteeringTranscriptPersisted();
       }
-      for (const item of transcriptItems) {
-        const recorder = item.userTurnTranscriptRecorder;
-        if (!recorder) {
-          continue;
-        }
+    },
+    commitMessage: async (item) => {
+      const recorder = item.userTurnTranscriptRecorder;
+      if (recorder) {
         assertSteeringActive();
-        await recorder.persistApproved();
+        await recorder.persistApproved({ assertCurrent: item.assertCurrent });
         if (!recorder.hasPersisted()) {
           throw new Error("Codex steering requires a persisted user turn before submission");
         }

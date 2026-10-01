@@ -4497,6 +4497,32 @@ public struct ChatStatusEvent: Codable, Sendable {
     }
 }
 
+public struct ChatSteerParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let sessionid: String
+    public let runid: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        sessionid: String,
+        runid: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.sessionid = sessionid
+        self.runid = runid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case sessionid = "sessionId"
+        case runid = "runId"
+    }
+}
+
 public struct ChatToolTitlesParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?

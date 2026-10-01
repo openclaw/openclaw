@@ -11,7 +11,7 @@ const deferredHeartbeatStops = new WeakMap<TurnAdoptionLifecycle, () => void>();
 
 type FollowupLifecycleRun = Pick<
   FollowupRun,
-  "steerPending" | "turnAdoptionLifecycle" | "operatorAuthority"
+  "steerPending" | "turnAdoptionLifecycle" | "operatorAuthority" | "steer"
 >;
 
 export function startFollowupRunPreAdoptionHeartbeat(
@@ -71,7 +71,10 @@ export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
       ? (run.turnAdoptionLifecycle = { admission: "cancel-only", onAdopted: () => {} })
       : undefined);
   if (lifecycle && !enqueuedTurnAdoptionLifecycles.has(lifecycle)) {
-    if (lifecycle.onDeferred?.() === false) {
+    const deferred = run.steer
+      ? lifecycle.onDeferred?.({ steer: run.steer })
+      : lifecycle.onDeferred?.();
+    if (deferred === false) {
       return false;
     }
     let releaseAuthority: (() => void) | undefined;
@@ -96,6 +99,19 @@ export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
     startFollowupRunPreAdoptionHeartbeat(lifecycle);
   }
   return true;
+}
+
+/** Only the original unadopted source can be promoted out of the waiting queue. */
+export function isFollowupRunPending(run: FollowupLifecycleRun): boolean {
+  const lifecycle = run.turnAdoptionLifecycle;
+  return (
+    !lifecycle ||
+    (enqueuedTurnAdoptionLifecycles.has(lifecycle) &&
+      !admittedTurnAdoptionLifecycles.has(lifecycle) &&
+      !admittingTurnAdoptionLifecycles.has(lifecycle) &&
+      !retiredTurnAdoptionCancellationLifecycles.has(lifecycle) &&
+      !completedTurnAdoptionLifecycles.has(lifecycle))
+  );
 }
 
 export function retireFollowupRunCancellation(run: FollowupLifecycleRun): void {

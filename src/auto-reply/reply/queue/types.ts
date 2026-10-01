@@ -31,6 +31,7 @@ import type { ExplicitSkillSelection, SkillSnapshot } from "../../../skills/type
 import type { SkillWorkshopProposalRevisionConstraint } from "../../../skills/workshop/types.js";
 import type {
   QueuedReplyDeliveryCorrelation,
+  QueuedTurnSteer,
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
   TurnAdoptionLifecycle,
@@ -138,6 +139,8 @@ export type FollowupRun = {
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  /** Retained source capability; the queue still owns payload, reservation, and settlement. */
+  steer?: QueuedTurnSteer;
   /** @internal Source execution receipts retained across queued collect batches. */
   replyOperationRunStates?: ReplyOperationRunState[];
   /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
