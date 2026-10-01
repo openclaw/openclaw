@@ -116,6 +116,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     effectiveResetTriggered,
     isBareSessionReset,
     workspaceDir,
+    skillsWorkspaceDir,
     hasUserBody,
     shouldInjectGroupIntro,
     typingMode,
@@ -481,6 +482,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
+      bootstrapWorkspaceDir: skillsWorkspaceDir !== workspaceDir ? skillsWorkspaceDir : undefined,
       cwd:
         normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??
         resolveAgentRunCwd(cfg, agentId),

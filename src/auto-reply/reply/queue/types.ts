@@ -228,6 +228,12 @@ export type FollowupRun = {
     approvalReviewerDeviceId?: string;
     sessionFile: string;
     workspaceDir: string;
+    /**
+     * Agent's configured workspace when `workspaceDir` is a session override
+     * (rooted cwd or spawned workspace). Maintenance runs that persist agent
+     * memory write there, where bootstrap reads it back.
+     */
+    bootstrapWorkspaceDir?: string;
     /** Task working directory for runtime execution. Defaults to workspaceDir. */
     cwd?: string;
     permissionMode?: SessionEntry["permissionMode"];

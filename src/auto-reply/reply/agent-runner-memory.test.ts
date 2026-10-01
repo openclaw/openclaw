@@ -1047,6 +1047,33 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(agentCall.authProfileIdSource).toBeUndefined();
   });
 
+  it("persists the flush in the configured workspace when the session runs in a rooted cwd", async () => {
+    const taskDir = path.join(rootDir, "projects", "task");
+    await fs.mkdir(taskDir, { recursive: true });
+    const sessionEntry = createFlushSessionEntry({ sessionRoot: taskDir });
+
+    const result = await runDefaultMemoryFlush(sessionEntry, {
+      followupRun: createTestFollowupRun({
+        workspaceDir: taskDir,
+        bootstrapWorkspaceDir: rootDir,
+        cwd: taskDir,
+        sessionRoot: taskDir,
+      }),
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(requireEmbeddedAgentCall()).toMatchObject({
+      memoryFlushWritePath: "memory/2023-11-14.md",
+    });
+    expect(runEmbeddedAgentEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        harness: expect.objectContaining({ workspaceDir: rootDir }),
+      }),
+    );
+    await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(taskDir, "memory"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("skips memory flush for incognito sessions", async () => {
     const sessionEntry = createFlushSessionEntry({
       incognito: true,
