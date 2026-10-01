@@ -27,6 +27,52 @@ callback requires an explicitly approved future breaking Plugin SDK release.
 The `next-plugin-sdk-major` gate does not itself authorize removal or shorten
 an existing compatibility window.
 
+## Migrate durable ingress files through Doctor
+
+Keep legacy file readers in the plugin's `PluginDoctorStateMigration`, exposed
+through its Doctor contract. Declare source directories and the destination
+database in `collectBackupResources`; detection remains read-only. Runtime
+consumers use canonical SQLite ingress queues.
+
+During repair, trusted channel plugins receive channel-bound access through
+`context.channelIngressQueues`. Require `assertCurrent` and
+`importLegacyEntries` before changing state; these capabilities expire when the
+repair section ends. Use `backupLegacyStateSource({ filePath, assertCurrent })`
+from `openclaw/plugin-sdk/runtime-doctor-migrations` before parsing or normalizing
+the source. It preserves exact bytes in a private, durable `.migrated` file
+(or a numbered successor), verifies source identity, and returns the snapshot
+plus guarded source cleanup.
+During discovery, normalize interrupted claim filenames with
+`resolveLegacyMigrationSourcePath`, deduplicate the original paths, and pass each
+source's discovered `claimPaths` to the backup helper. It restores interrupted
+claims through the shared migration owner before
+capturing its snapshot; receipts always use the original source path.
+
+Call `importLegacyEntries({ accountId, entries })` with canonical channel/account
+identities. Each item contains an `entry` and `sources`, whose records contain
+`sourcePath`, `sha256`, and `size` from the backed-up snapshots. The host commits
+pending entries or payload-free failed tombstones together with source receipts
+in the existing migration ledger. Equivalent rows and completed work remain
+authoritative; conflicting rows receive no completed receipt and keep their
+source files. Receipts suppress repeat imports even after queue rows are consumed
+or pruned. Changed source bytes form a distinct source generation.
+Historical receipt and failure timestamps are preserved. Imported rows start
+their mutation age at import time so pending-row pruning cannot discard old
+updates before their first replay.
+
+After a successful import or confirmed prior receipt, call
+`backup.removeSource(() => { result.markSourcesRemoved([backup.snapshot.sourcePath]); })`.
+The shared owner claims the original name, records its removal, then removes the
+claim. A failed bookkeeping operation keeps a discoverable source for the next
+Doctor pass. The callback must be synchronous. Preserve backups
+and report unresolved conflicts with `openclaw doctor --fix` recovery guidance.
+After a confirmed commit, cleanup-only failures may return
+`warningDisposition: "recoverable"` when current repair authority and retained
+source/backup identities still verify. Conflicts, lost authority, and uncertain
+imports remain refusals.
+Do not implement import as runtime `enqueue` followed by `fail`: an interruption
+would expose a historical failure as new pending work.
+
 ## How to migrate
 
 <Steps>

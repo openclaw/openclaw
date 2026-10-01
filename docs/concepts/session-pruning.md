@@ -135,6 +135,12 @@ To stop new pruning, set `mode: "off"`. Existing client-side projections keep
 replaying, including after a Gateway restart, until compaction removes their
 results or the session is reset.
 
+For a custom OpenAI-compatible provider, set the model's
+`compat.supportsPromptCacheKey` to `true` as well. This opts configured models using
+`openai-responses`, `openai-completions`, or `openai-chatgpt-responses` into
+cache-TTL pruning even when their provider ID is not `openai`. Provider plugins
+with their own cache-TTL policy still control eligibility.
+
 ## Pruning vs compaction
 
 |            | Pruning                                                              | Compaction                                              |

@@ -452,15 +452,15 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .log-time {
-    font-size: 12px; /* was 10px */
+    font-size: 12px;
   }
 
   .log-level {
-    font-size: 12px; /* was 9px */
+    font-size: 12px;
   }
 
   .log-subsystem {
-    font-size: 12px; /* was 11px */
+    font-size: 12px;
   }
 
   .log-message {
@@ -476,7 +476,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);
-    font-size: 12px; /* was 11px */
+    font-size: 12px;
   }
 }
 
@@ -492,7 +492,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .nav-item {
     padding: 6px 8px;
-    font-size: var(--control-ui-text-sm); /* was 11px */
+    font-size: var(--control-ui-text-sm);
   }
 
   .content {
@@ -518,13 +518,9 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .btn {
     padding: 6px 10px;
-    font-size: 12px; /* was 11px */
+    font-size: 12px;
   }
 }
-
-/* ===========================================
-   Sessions table – responsive column hiding
-   =========================================== */
 
 /* nth-child is 1-based and includes the checkbox column (col 1). The optional
    Group column in category mode shifts later indexes; grouping is a desktop
@@ -658,7 +654,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .data-table th,
   .data-table td {
     padding: 6px 4px;
-    font-size: 12px; /* was 11px */
+    font-size: 12px;
   }
 
   .session-key-cell {

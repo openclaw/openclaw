@@ -62,11 +62,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import {
-  findLegacyConfigIssues,
-  migrateLegacyContextBudgetConfig,
-  migratePersistedImplicitMainRoster,
-} from "./legacy.js";
+import { findLegacyConfigIssues, migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { captureManagedConfigSnapshotPreparation } from "./runtime-snapshot.js";
@@ -271,16 +267,11 @@ async function readConfigSnapshotWithPreparation(
       path: warning.configPath,
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
-    const contextBudgetMigration = migrateLegacyContextBudgetConfig(
-      readResolution.resolvedConfigRaw,
-    );
-    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config, {
+    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw, {
       env: deps.env,
       homedir: deps.homedir,
     });
     envVarWarnings.push(
-      ...contextBudgetMigration.changes,
-      ...contextBudgetMigration.warnings,
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
     const effectiveConfigRaw = rosterMigration.config;

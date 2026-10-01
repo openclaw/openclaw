@@ -1,4 +1,5 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { formatUiError } from "../format-error.ts";
@@ -533,6 +534,10 @@ export function createSessionCapability(
   });
 
   const stopEvents = gateway.subscribeEvents((event) => {
+    if (event.event === CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
+      githubPublication.observePullRequests(event.payload);
+      return;
+    }
     if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
       roster.observations.descriptions.clear();
     }

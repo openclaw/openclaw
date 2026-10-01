@@ -307,6 +307,8 @@ const baseConfig: OpenClawConfig = {
 
 const dynamicToolsConfig: OpenClawConfig = {
   ...baseConfig,
+  // Exclude optional media factories before they inspect ambient provider credentials.
+  tools: { deny: ["image_generate", "video_generate", "music_generate", "pdf"] },
   plugins: {
     enabled: true,
     slots: {
@@ -510,10 +512,8 @@ function createDynamicTools(params: {
     modelId: MODEL_ID,
     modelApi: "responses",
     model: happyPathModel,
-    // No provider runtime plugin owns tool-schema hooks for the `codex`
-    // harness provider, so a runtime plugin load can only rediscover that
-    // through the jiti source loader (minutes of core re-transpilation).
-    // Registry-only resolution keeps the same no-op outcome instantly.
+    // Codex has no provider tool-schema hooks; keep that no-op registry-only
+    // rather than rediscovering it through the cold source loader.
     allowProviderRuntimePluginLoad: false,
   });
   return params.codexApi.createCodexDynamicToolSpecsForPromptSnapshot({

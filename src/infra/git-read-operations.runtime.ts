@@ -1,4 +1,5 @@
 import { readRepositoryBranches } from "../agents/worktrees/branches.runtime.js";
+import { resolveRepositoryIdentity } from "../agents/worktrees/service-preparation.js";
 import {
   readCheckoutGitContext,
   readCheckoutGitRevision,
@@ -8,12 +9,20 @@ import {
   collectCheckoutDiff,
   collectCheckoutDiffBaseline,
 } from "../sessions/session-diff.runtime.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type { GitReadOperation, GitReadOperationResult } from "./git-read-operations.js";
 
 export async function executeGitReadOperation(
   operation: GitReadOperation,
 ): Promise<GitReadOperationResult> {
   switch (operation.type) {
+    case "repository.identities":
+      return (
+        await runTasksWithConcurrency({
+          tasks: operation.input.roots.map((root) => () => resolveRepositoryIdentity(root)),
+          limit: 4,
+        })
+      ).results;
     case "checkout.revision":
       return readCheckoutGitRevision(operation.input);
     case "checkout.context":

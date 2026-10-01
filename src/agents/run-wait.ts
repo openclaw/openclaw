@@ -155,6 +155,11 @@ function isAssistantReplyTranscriptArtifact(message: unknown): boolean {
   );
 }
 
+function readOpenClawMessageMeta(message: unknown): Record<string, unknown> | undefined {
+  const meta = isRecord(message) ? message["__openclaw"] : undefined;
+  return isRecord(meta) ? meta : undefined;
+}
+
 /** Read the latest model-authored assistant text from session history. */
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
@@ -162,15 +167,11 @@ export async function readLatestAssistantReply(params: {
   limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
-  const history = await (params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true }))<{
-    messages: unknown[];
-  }>({
+  const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
+  const agentParams = params.agentId ? { agentId: params.agentId } : {};
+  const history = await callGateway<{ messages: unknown[] }>({
     method: "chat.history",
-    params: {
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      limit: params.limit ?? 50,
-    },
+    params: { sessionKey: params.sessionKey, ...agentParams, limit: params.limit ?? 50 },
   });
   const messages = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -179,9 +180,24 @@ export async function readLatestAssistantReply(params: {
       continue;
     }
     const text = extractStoredAssistantText(message);
-    if (text?.trim()) {
+    if (!text?.trim()) {
+      continue;
+    }
+    const meta = readOpenClawMessageMeta(message);
+    if (meta?.truncated !== true) {
       return text;
     }
+    // chat.history caps long rows for display; the marker text is not the reply.
+    if (typeof meta.id !== "string" || !meta.id) {
+      return undefined;
+    }
+    const full = await callGateway<{ ok?: boolean; message?: unknown }>({
+      method: "chat.message.get",
+      params: { sessionKey: params.sessionKey, ...agentParams, messageId: meta.id },
+    }).catch(() => undefined);
+    return full?.ok === true && readOpenClawMessageMeta(full.message)?.truncated !== true
+      ? extractStoredAssistantText(full.message)
+      : undefined;
   }
   return undefined;
 }

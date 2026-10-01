@@ -290,7 +290,6 @@ export async function startGmailWatcher(
   cfg: OpenClawConfig,
   options: GmailWatcherStartOptions,
 ): Promise<GmailWatcherStartResult> {
-  // Check if gmail hooks are configured
   if (!cfg.hooks?.enabled) {
     return { started: false, reason: "hooks not enabled" };
   }
@@ -299,12 +298,10 @@ export async function startGmailWatcher(
     return { started: false, reason: "no gmail account configured" };
   }
 
-  // Check if gog is available
   if (!hasBinary("gog")) {
     return { started: false, reason: "gog binary not found" };
   }
 
-  // Resolve the full runtime config
   const resolved = resolveGmailHookRuntimeConfig(cfg, {});
   if (!resolved.ok) {
     return { started: false, reason: resolved.error };
@@ -332,7 +329,6 @@ export async function startGmailWatcherService(
     shuttingDown = false;
   }
 
-  // Set up Tailscale endpoint if needed
   if (runtimeConfig.tailscale.mode !== "off") {
     try {
       await ensureTailscaleEndpoint({
@@ -369,7 +365,6 @@ export async function startGmailWatcherService(
     log.warn("gmail watch start failed, but continuing with serve");
   }
 
-  // Spawn the gog serve process
   shuttingDown = false;
   watcherProcess = spawnGogServe(runtimeConfig);
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
@@ -389,9 +384,6 @@ export async function startGmailWatcherService(
   return { started: true };
 }
 
-/**
- * Stop the Gmail watcher service.
- */
 export async function stopGmailWatcher(): Promise<void> {
   await stopWatcherResources(() => log.info("stopping gmail watcher"));
 

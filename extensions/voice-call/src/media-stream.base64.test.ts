@@ -1,6 +1,6 @@
 import type { RealtimeTranscriptionSession } from "openclaw/plugin-sdk/realtime-transcription";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { MediaStreamHandler } from "./media-stream.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
 

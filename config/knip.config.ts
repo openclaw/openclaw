@@ -389,6 +389,8 @@ const rootEntries = [
   "src/worker/workspace-rsync-receiver.ts!",
   // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
   "src/gateway/plugin-channel-reload-targets.ts!",
+  // Published-update bridges import lifecycle facts from this stable dist entry.
+  "src/agents/provider-runtime-lifecycle.ts!",
   // Shipped compatibility facade for statusCommand and getStatusSummary.
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",

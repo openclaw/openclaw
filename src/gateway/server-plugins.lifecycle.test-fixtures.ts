@@ -42,6 +42,7 @@ export type ChannelBindingProof = {
 export type InstanceBindingProbeCoordinator = {
   channelName: string;
   reportReloadSettlement?: boolean;
+  contextEngineId?: string;
   channel?: ChannelPlugin;
   onLifecycleEvent?: (event: { registryId: number; port: number; kind: "start" | "stop" }) => void;
   identify: (value: object) => number;
@@ -173,6 +174,9 @@ export async function writeInstanceBindingProbePlugin(
     const registryId = coordinator.nextRegistryId++;
     coordinator.runtimes.push(api.runtime);
     coordinator.registrationModes.push(api.registrationMode);
+    if (coordinator.contextEngineId) {
+      api.registerContextEngine(coordinator.contextEngineId, () => ({}));
+    }
     api.on("gateway_stop", () => { coordinator.gatewayStops.push(registryId); });
     if (coordinator.channel) {
       api.registerChannel({ plugin: coordinator.channel });

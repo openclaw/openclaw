@@ -45,7 +45,6 @@ export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   opus: "anthropic/claude-opus-5-5",
   sonnet: "anthropic/claude-sonnet-5-5",
 
-  // OpenAI
   gpt: "openai/gpt-5.4",
   "gpt-mini": "openai/gpt-5.4-mini",
   "gpt-nano": "openai/gpt-5.4-nano",

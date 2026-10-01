@@ -67,7 +67,7 @@ main.content:where(.content--logs-page) .content-header {
 }
 
 .log-level {
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-weight: 500;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);

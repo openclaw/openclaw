@@ -149,11 +149,11 @@ describe("Control UI release-only inventories", () => {
     expect(files.toSorted()).toEqual(expectedFiles.toSorted());
   }
 
-  it("omits only the named exhaustive matrices from ordinary UI owners", () => {
+  it("retains PR-exempt entries while omitting release-only UI matrices", () => {
     const groups = createUiTestShardGroups({ includeReleaseOnlyTests: false });
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
     expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
-    expect(groups.e2e[0]?.includePatterns).not.toContain(entry);
+    expect(groups.e2e[0]?.includePatterns).toContain(entry);
     expect(
       uiE2eRealGatewayTestFiles.filter((file) => groups.e2e[0]?.includePatterns?.includes(file)),
     ).toEqual(uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)));
@@ -2021,10 +2021,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
       expect(isPolicyTestOwnedPath(changedPath), changedPath).toBe(false);
     }
-    const unrelatedTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.ts"]);
+    const newModule = "src/plugins/unrelated-new-plugin.ts";
+    const newModuleTargets = resolvePolicyTestTargets([newModule]);
+    const testOnlyTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.test.ts"]);
     for (const guard of guards) {
-      expect(unrelatedTargets).not.toContain(guard);
+      expect(newModuleTargets).toContain(guard);
+      expect(testOnlyTargets).not.toContain(guard);
     }
+    expect(isPolicyTestOwnedPath(newModule)).toBe(false);
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
     const shards = expectDefined(createChangedNodeTestShards([manifest]), "manifest test plan");
     for (const guard of guards) {

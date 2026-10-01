@@ -426,6 +426,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         hasGitHubPublicationWorkflowChanges({
           cwd: worktree.path,
           comparisonCommit: expectedRemoteHead || lineage.stdout.toString("utf8").trim(),
+          ancestryCommit: expectedRemoteHead || sourceHeadCommit,
+          targetCommit: remoteBaseSha,
           workspaceTree,
           run,
         }),

@@ -6,7 +6,7 @@ import type {
 import { readCronScratchSnapshotInDatabase } from "../scratch-read.kernel.js";
 import { readCronJobNamesInDatabase } from "./job-name.js";
 import { resolveCronJobsStorePath } from "./paths.js";
-import { readCronQuarantinedJobsInDatabase } from "./quarantine.js";
+import { readCronQuarantinedJobsInDatabase } from "./quarantine.kernel.js";
 import {
   readActiveCronRunReceiptOwnersInDatabase,
   readCronRunReceiptCurrentFactsInDatabase,

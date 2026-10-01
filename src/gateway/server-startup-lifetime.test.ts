@@ -144,13 +144,13 @@ describe("Gateway startup lifetime", () => {
       const previous = captureActivePluginRegistrySnapshot();
       const bootstrapModule = await import("./server-startup-bootstrap.js");
       const bootstrap = bootstrapModule.prepareGatewayServerBootstrap;
-      const registries: ReturnType<typeof loadAndActivateRootPluginRegistry>[] = [];
+      const registries: Awaited<ReturnType<typeof loadAndActivateRootPluginRegistry>>[] = [];
       const gatewayResolvers: GatewayContextResolver[] = [];
       const bootstrapSpy = vi
         .spyOn(bootstrapModule, "prepareGatewayServerBootstrap")
         .mockImplementation(async (...args) => {
           const result = await bootstrap(...args);
-          const registry = loadAndActivateRootPluginRegistry({
+          const registry = await loadAndActivateRootPluginRegistry({
             config,
             env: state.env,
             workspaceDir: state.workspaceDir,

@@ -97,8 +97,6 @@
   max-width: 1120px;
 }
 
-/* ── Page ── */
-
 /* Section separation stays generous (--space-8) so group surfaces read as
    distinct blocks; headings bind to their own group via the tighter
    .settings-section gap. */
@@ -165,8 +163,6 @@
   color: var(--muted);
   font: 400 var(--control-ui-text-sm) / 1.5 var(--mono);
 }
-
-/* ── Section ── */
 
 .settings-section {
   display: flex;
@@ -345,8 +341,6 @@
   margin-top: var(--space-3);
 }
 
-/* ── Row ── */
-
 .settings-row {
   display: flex;
   align-items: center;
@@ -521,8 +515,6 @@
 .settings-subrows .settings-row + .settings-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 }
-
-/* ── Controls ── */
 
 .settings-toggle {
   display: inline-flex;
@@ -779,8 +771,6 @@ textarea.settings-input {
   overflow-wrap: anywhere;
 }
 
-/* ── Empty state ── */
-
 .settings-empty {
   padding: var(--space-5) var(--space-4);
   font-size: var(--control-ui-text-sm);
@@ -827,8 +817,6 @@ textarea.settings-input {
   width: 104px;
 }
 
-/* ── Key/value facts (About build info, agent facts) ── */
-
 .settings-kv {
   display: grid;
   grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
@@ -869,8 +857,6 @@ textarea.settings-input {
 .identity-error .settings-row__desc {
   color: var(--danger);
 }
-
-/* ── Account value (small round avatar + handle inside a row control) ── */
 
 .settings-account {
   display: inline-flex;

@@ -429,7 +429,7 @@ describe("cached plugin load failures", () => {
   it.each([
     { name: "active root registry", load: loadAndActivateRootPluginRegistry, activates: true },
     { name: "non-activating registry handle", load: loadPluginRegistryHandle, activates: false },
-  ])("enforces strict errors for a cached $name before activation", ({ load, activates }) => {
+  ])("enforces strict errors for a cached $name before activation", async ({ load, activates }) => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "cached-load-failure",
@@ -444,7 +444,7 @@ describe("cached plugin load failures", () => {
         },
       },
     };
-    const cached = load(options);
+    const cached = await load(options);
     expect(cached.plugins).toContainEqual(
       expect.objectContaining({ id: plugin.id, status: "error" }),
     );
@@ -453,11 +453,11 @@ describe("cached plugin load failures", () => {
     // Staging preserves the cached generation until a successor commits its retirement.
     stageActivePluginRegistry(active, "existing-registry", "default");
 
-    expect(() => load({ ...options, throwOnLoadError: true })).toThrow(
+    await expect(async () => load({ ...options, throwOnLoadError: true })).rejects.toThrow(
       "cached registration failed",
     );
     expect(getActivePluginRegistry()).toBe(active);
-    expect(load(options)).toBe(cached);
+    expect(await load(options)).toBe(cached);
     expect(getActivePluginRegistry()).toBe(activates ? cached : active);
   });
 

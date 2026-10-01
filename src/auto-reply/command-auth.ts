@@ -262,7 +262,6 @@ function resolveCommandsAllowFromList(
     return null; // Not configured, fall back to channel allowFrom
   }
 
-  // Check provider-specific list first, then fall back to global "*"
   const providerKey = params.providerId ?? "";
   const providerList = commandsAllowFrom[providerKey];
   const globalList = commandsAllowFrom["*"];

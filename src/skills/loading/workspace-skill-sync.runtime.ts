@@ -6,6 +6,7 @@ import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { tryReadJson, writeJson } from "../../infra/json-files.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -22,6 +23,7 @@ import type {
   SkillUsagePath,
 } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
+import { ensureWritableSkillDirectories } from "./skill-directory-modes.js";
 import { shouldSyncSkillPath } from "./skill-paths.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { prepareWorkspaceSkills } from "./workspace-skill-loader.js";
@@ -279,7 +281,17 @@ export async function syncWorkspaceSkills(params: {
     );
     for (const child of await fsp.readdir(targetSkillsDir)) {
       if (!preservedDestinations.has(child)) {
-        await fsp.rm(path.join(targetSkillsDir, child), { recursive: true, force: true });
+        const childPath = path.join(targetSkillsDir, child);
+        try {
+          await fsp.rm(childPath, { recursive: true, force: true });
+        } catch (error) {
+          const permissionDenied = hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM");
+          if (process.platform === "win32" || !permissionDenied) {
+            throw error;
+          }
+          await ensureWritableSkillDirectories(targetSkillsDir, child);
+          await fsp.rm(childPath, { recursive: true, force: true });
+        }
       }
     }
 
@@ -313,6 +325,7 @@ export async function syncWorkspaceSkills(params: {
               force: true,
               filter: shouldSyncSkillPath,
             });
+            await ensureWritableSkillDirectories(targetSkillsDir, path.basename(destinationPath));
           }
         } catch (error) {
           if (entry.skill.source === "openclaw-library") {

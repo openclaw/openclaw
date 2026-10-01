@@ -602,6 +602,56 @@ describe("Sessions board classification service", () => {
     );
   });
 
+  it("forwards people views only for reads and intersects the filtered roster with classified sessions", async () => {
+    await withService(
+      { facts: [facts("one"), facts("two")] },
+      async ({ service, store, request }) => {
+        await service.sweep();
+        const board = await store.getSessionsBoard(BOARD_ID);
+        const classified = await store.listSessionPlacements(BOARD_ID);
+        const people = [
+          { identity: { type: "profile", id: "profile-one" }, label: "Alex", sessionCount: 1 },
+        ];
+        for (const view of [
+          { involvingMe: true, includePeople: true },
+          { involvingProfileId: "profile-one", includePeople: true },
+          { involvingMe: false, includePeople: false },
+        ]) {
+          request.mockClear();
+          request.mockResolvedValueOnce({
+            sessions: [facts("one"), facts("unclassified")],
+            people,
+            hasMore: false,
+          });
+          const read = await service.read(BOARD_ID, view);
+          expect(request).toHaveBeenCalledExactlyOnceWith(
+            "sessions.list",
+            expect.objectContaining(view),
+            { scopes: ["operator.read"] },
+          );
+          expect(read.sessions.map(({ key }) => key)).toEqual([facts("one").key]);
+          expect(read.people).toBe(view.includePeople ? people : undefined);
+        }
+        expect(await store.getSessionsBoard(BOARD_ID)).toEqual(board);
+        expect(await store.listSessionPlacements(BOARD_ID)).toEqual(classified);
+
+        request.mockClear();
+        await service.sweep();
+        await service.move(BOARD_ID, facts("two").key, "other");
+        expect(request).toHaveBeenCalled();
+        for (const [, input] of request.mock.calls) {
+          expect(input).not.toHaveProperty("involvingMe");
+          expect(input).not.toHaveProperty("involvingProfileId");
+          expect(input).not.toHaveProperty("includePeople");
+        }
+        expect((await service.read(BOARD_ID)).sessions).toMatchObject([
+          { key: facts("one").key, columnId: "focus" },
+          { key: facts("two").key, columnId: "other", source: "operator" },
+        ]);
+      },
+    );
+  });
+
   it("fences pending model writes and drains the operation when the service stops", async () => {
     const entered = Promise.withResolvers<Parameters<Completion>[0]>();
     const answer = Promise.withResolvers<string>();

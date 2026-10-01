@@ -28,6 +28,10 @@ import {
   readCodexCatalogDecodeRoute,
   type CodexCatalogDecodeRoute,
 } from "./client-message-frames.js";
+import {
+  CodexAppServerNotifications,
+  type CodexServerNotificationHandler,
+} from "./client-notifications.js";
 import { dispatchCodexAppServerResponse } from "./client-response.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
@@ -60,7 +64,6 @@ import {
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
 const CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS = 50;
-const CODEX_APP_SERVER_PENDING_STARTUP_WARNINGS_MAX = 32;
 const CODEX_APP_SERVER_CLIENT_INSTANCE_IDS = new WeakMap<object, string>();
 
 type RequestOptions = {
@@ -207,10 +210,6 @@ export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
   );
 }
 
-type CodexServerNotificationHandler = (
-  notification: CodexServerNotification,
-) => Promise<void> | void;
-
 /** Runtime identity returned by the Codex app-server initialize handshake. */
 export type CodexAppServerRuntimeIdentity = ReturnType<typeof buildCodexAppServerRuntimeIdentity>;
 
@@ -230,8 +229,7 @@ export class CodexAppServerClient {
   private readonly serverRequests = new CodexServerRequests((response) =>
     this.writeMessage(response),
   );
-  private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
-  private readonly pendingStartupWarnings: CodexServerNotification[] = [];
+  private readonly notificationDispatch = new CodexAppServerNotifications();
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
   private nextId = 1;
   private initialized = false;
@@ -722,13 +720,7 @@ export class CodexAppServerClient {
   }
 
   addNotificationHandler(handler: CodexServerNotificationHandler): () => void {
-    this.notificationHandlers.add(handler);
-    // Codex sends configuration warnings immediately after initialize, before
-    // OpenClaw can reserve the first thread or install its shared turn router.
-    for (const notification of this.pendingStartupWarnings.splice(0)) {
-      this.handleNotification(notification);
-    }
-    return () => this.notificationHandlers.delete(handler);
+    return this.notificationDispatch.addHandler(handler);
   }
 
   addCloseHandler(handler: (client: CodexAppServerClient) => void): () => void {
@@ -929,22 +921,7 @@ export class CodexAppServerClient {
     if (notification.method === "account/updated") {
       this.modelCatalogRevision += 1;
     }
-    if (this.notificationHandlers.size === 0 && notification.method === "configWarning") {
-      if (this.pendingStartupWarnings.length === CODEX_APP_SERVER_PENDING_STARTUP_WARNINGS_MAX) {
-        this.pendingStartupWarnings.shift();
-      }
-      this.pendingStartupWarnings.push(notification);
-      return;
-    }
-    for (const handler of this.notificationHandlers) {
-      try {
-        Promise.resolve(handler(notification)).catch((error: unknown) => {
-          embeddedAgentLog.warn("codex app-server notification handler failed", { error });
-        });
-      } catch (error) {
-        embeddedAgentLog.warn("codex app-server notification handler failed", { error });
-      }
-    }
+    this.notificationDispatch.dispatch(notification);
   }
 
   private closeWithError(error: Error): void {

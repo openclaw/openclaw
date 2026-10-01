@@ -120,7 +120,7 @@ function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: G
       options.outDir = path.resolve(repoRoot, arg.slice("--out=".length));
       continue;
     }
-    if (!(arg in GRAPH_DEFINITIONS)) {
+    if (!Object.hasOwn(GRAPH_DEFINITIONS, arg)) {
       throw new Error(`Unknown graph: ${arg}\n\n${usage()}`);
     }
     graphNames.push(arg as GraphName);

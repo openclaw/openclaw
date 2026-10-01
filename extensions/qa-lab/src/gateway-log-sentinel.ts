@@ -2,7 +2,11 @@ import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-transcript.js";
+import {
+  extractQaMessageText,
+  readQaMessageFunctionCalls,
+  readQaTranscriptMessages,
+} from "./runtime-transcript.js";
 
 type GatewayLogSentinelKind =
   | "plugin-hook-failure"
@@ -140,42 +144,15 @@ function lineNumberForOffset(logs: string, offset: number) {
 }
 
 export function extractGatewayMessageText(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (typeof rawContent === "string") {
-    return rawContent.trim();
-  }
-  if (!Array.isArray(rawContent)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isRecord(block)) {
-      continue;
-    }
-    const text = readNonEmptyString(block.text);
-    if (text) {
-      parts.push(text);
-      continue;
-    }
-    const nestedText = readNonEmptyString(block.content);
-    const normalizedType = readNonEmptyString(block.type)?.toLowerCase().replace(/_/g, "");
-    if (
-      nestedText &&
-      (normalizedType === "outputtext" ||
-        normalizedType === "text" ||
-        normalizedType === "message" ||
-        normalizedType === "toolresult")
-    ) {
-      parts.push(nestedText);
-    }
-  }
-  return parts.join("\n").trim();
+  return extractQaMessageText(message, (type) => {
+    const normalized = readNonEmptyString(type)?.toLowerCase().replace(/_/g, "");
+    return (
+      normalized === "outputtext" ||
+      normalized === "text" ||
+      normalized === "message" ||
+      normalized === "toolresult"
+    );
+  });
 }
 
 function parseJsonArguments(value: unknown): unknown {

@@ -23,6 +23,7 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveOptionalNativeText
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.nonBlankString
@@ -1233,6 +1234,8 @@ class ChatController internal constructor(
     clearLabel: Boolean = false,
     category: String? = null,
     clearCategory: Boolean = false,
+    snoozedUntil: Long? = null,
+    clearSnooze: Boolean = false,
     color: String? = null,
     clearColor: Boolean = false,
     pinned: Boolean? = null,
@@ -1251,6 +1254,8 @@ class ChatController internal constructor(
         label != null ||
         clearCategory ||
         category != null ||
+        clearSnooze ||
+        snoozedUntil != null ||
         clearColor ||
         color != null ||
         pinned != null ||
@@ -1258,7 +1263,7 @@ class ChatController internal constructor(
         unread != null
     if (!hasPatch) return false
     val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
-    if (archived != null && lifecycleSessionId == null) {
+    if ((archived != null || snoozedUntil != null || clearSnooze) && lifecycleSessionId == null) {
       updateErrorText("Session lifecycle action requires a durable session identity.")
       return false
     }
@@ -1277,6 +1282,11 @@ class ChatController internal constructor(
             put("category", JsonNull)
           } else if (category != null) {
             put("category", JsonPrimitive(category))
+          }
+          if (clearSnooze) {
+            put("snoozedUntil", JsonNull)
+          } else if (snoozedUntil != null) {
+            put("snoozedUntil", JsonPrimitive(snoozedUntil))
           }
           if (clearColor) {
             put("color", JsonNull)
@@ -7568,6 +7578,10 @@ class ChatController internal constructor(
       lastReadAt = obj["lastReadAt"].asLongOrNull(),
       markedUnreadAt = obj["markedUnreadAt"].asLongOrNull(),
       hasMarkedUnreadMetadata = "markedUnreadAt" in obj,
+      snoozedUntil = obj["snoozedUntil"].asLongOrNull(),
+      snoozedAt = obj["snoozedAt"].asLongOrNull(),
+      hasSnoozedUntilMetadata = "snoozedUntil" in obj,
+      hasSnoozedAtMetadata = "snoozedAt" in obj,
       agentStatus = parseSessionAgentStatus(obj["agentStatus"]),
       hasAgentStatusMetadata = "agentStatus" in obj,
       observerDigest =
@@ -8672,8 +8686,6 @@ private fun messageContentIdentityKey(message: ChatMessage): String? {
   return listOf(role, contentFingerprint).joinToString(separator = "|")
 }
 
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
-
 private fun parseSessionEditorAttachments(value: JsonElement?): List<SessionEditorAttachment> =
   value.asArrayOrNull()?.mapNotNull { element ->
     val attachment = element.asObjectOrNull() ?: return@mapNotNull null
@@ -8857,6 +8869,10 @@ internal fun mergeChatSessionEntry(
       if (next.hasMarkedUnreadMetadata) next.markedUnreadAt else existing.markedUnreadAt,
     hasMarkedUnreadMetadata =
       existing.hasMarkedUnreadMetadata || next.hasMarkedUnreadMetadata,
+    snoozedUntil = if (next.hasSnoozedUntilMetadata) next.snoozedUntil else existing.snoozedUntil,
+    snoozedAt = if (next.hasSnoozedAtMetadata) next.snoozedAt else existing.snoozedAt,
+    hasSnoozedUntilMetadata = existing.hasSnoozedUntilMetadata || next.hasSnoozedUntilMetadata,
+    hasSnoozedAtMetadata = existing.hasSnoozedAtMetadata || next.hasSnoozedAtMetadata,
     agentStatus = if (next.hasAgentStatusMetadata) next.agentStatus else existing.agentStatus,
     hasAgentStatusMetadata = existing.hasAgentStatusMetadata || next.hasAgentStatusMetadata,
     observerDigest = observerDigest,
