@@ -1,4 +1,4 @@
-import { statSync, unlinkSync, writeFileSync } from "node:fs";
+import { renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -28,13 +28,22 @@ it("shares prospective and existing file identities between sync capture and asy
   expect(existing.key).toMatch(/^file:/);
   expect(existing.canonicalPath).toBe(prospective.canonicalPath);
   expect(await readDatabasePathIdentity(pathname)).toEqual(existing);
-  const birthtime = statSync(pathname, { bigint: true }).birthtimeNs;
+  const birthtime =
+    process.platform === "linux"
+      ? "0"
+      : statSync(pathname, { bigint: true }).birthtimeNs.toString();
+  expect(existing.birthtime).toBe(birthtime);
+  expect(() => assertExistingDatabaseIdentity(pathname, existing.key, birthtime)).not.toThrow();
   expect(() =>
-    assertExistingDatabaseIdentity(pathname, existing.key, birthtime.toString()),
-  ).not.toThrow();
-  expect(() =>
-    assertExistingDatabaseIdentity(pathname, existing.key, (birthtime + 1n).toString()),
+    assertExistingDatabaseIdentity(pathname, existing.key, (BigInt(birthtime) + 1n).toString()),
   ).toThrow(/identity changed/);
+  const replacement = path.join(path.dirname(pathname), "replacement.sqlite");
+  writeFileSync(replacement, "replacement");
+  renameSync(replacement, pathname);
+  expect(readDatabasePathIdentitySync(pathname).key).not.toBe(existing.key);
+  expect(() => assertExistingDatabaseIdentity(pathname, existing.key, birthtime)).toThrow(
+    /identity changed/,
+  );
 });
 
 it.each(["before", "after"] as const)(
