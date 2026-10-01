@@ -10,6 +10,7 @@ import {
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqliteDir } from "../../state/openclaw-state-db.paths.js";
@@ -21,6 +22,7 @@ import {
 import {
   deferUpdateCommandTerminalResult,
   publishUpdateCommandTerminalResult,
+  retainUpdateCommandProgressUntilPublication,
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
@@ -50,6 +52,22 @@ beforeEach(() => {
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
+});
+
+it("disposes progress without publication when command cleanup remains uncertain", async () => {
+  const run = { runId: "uncertain-cleanup", env: {} };
+  const dispose = vi.fn();
+  const failure = new CommandProcessCleanupError();
+  expect(retainUpdateCommandProgressUntilPublication(run, dispose)).toBe(false);
+  await expect(
+    withUpdateCommandTerminalResult(async (registerRun) => {
+      registerRun(run);
+      expect(retainUpdateCommandProgressUntilPublication(run, dispose)).toBe(true);
+      throw failure;
+    }),
+  ).rejects.toBe(failure);
+  expect(dispose).toHaveBeenCalledOnce();
+  expect(retainUpdateCommandProgressUntilPublication(run, dispose)).toBe(false);
 });
 
 it.each(["new-error", "pending-aggregate"] as const)(
@@ -86,7 +104,10 @@ it.each(["new-error", "pending-aggregate"] as const)(
     const settlementFailure = new AggregateError([pending], "Update executor cleanup failed", {
       cause: pending,
     });
+    const disposeProgress = vi.fn();
+    let disposedDuringPublication: boolean | undefined;
     const publish = vi.fn(async (failure?: unknown) => {
+      disposedDuringPublication = disposeProgress.mock.calls.length > 0;
       if (publication === "pending-aggregate") {
         // Recovery publication preserves a changed settlement exception from its executor.
         throw failure;
@@ -100,6 +121,7 @@ it.each(["new-error", "pending-aggregate"] as const)(
         withUpdateCommandTerminalResult(
           async (registerRun) => {
             registerRun(run);
+            expect(retainUpdateCommandProgressUntilPublication(run, disposeProgress)).toBe(true);
             deferUpdateCommandTerminalResult(run, publish);
             throw publication === "pending-aggregate" ? settlementFailure : primary;
           },
@@ -108,6 +130,8 @@ it.each(["new-error", "pending-aggregate"] as const)(
       ),
     ).rejects.toMatchObject({ code: 1 });
     expect(publish).toHaveBeenCalledOnce();
+    expect(disposedDuringPublication).toBe(false);
+    expect(disposeProgress).toHaveBeenCalledOnce();
     if (json) {
       expect(output).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(result));
     } else {
@@ -135,7 +159,10 @@ it.each([false, true])(
     const env = { OPENCLAW_STATE_DIR: dirs.make("update-terminal-observer-") };
     const recorded = createUpdateRun({ trigger: "cli" }, { env });
     const run = { runId: recorded.runId, env };
+    const disposeProgress = vi.fn();
+    let disposedDuringResult: boolean | undefined;
     const onResult = vi.fn(() => {
+      disposedDuringResult = disposeProgress.mock.calls.length > 0;
       throw new TypeError("Observer could not finish");
     });
     const result: UpdateRunResult = {
@@ -148,6 +175,7 @@ it.each([false, true])(
       withUpdateCommandTerminalResult(
         async (registerRun) => {
           registerRun(run);
+          expect(retainUpdateCommandProgressUntilPublication(run, disposeProgress)).toBe(true);
           deferUpdateCommandTerminalResult(run, () =>
             publishUpdateCommandTerminalResult({ opts: { run } }, result, { rolledBack: false }),
           );
@@ -163,6 +191,8 @@ it.each([false, true])(
     } else {
       await expect(update).resolves.toBeUndefined();
     }
+    expect(disposeProgress).toHaveBeenCalledOnce();
+    expect(disposedDuringResult).toBe(false);
     expect(onResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ status: result.status }),
     );

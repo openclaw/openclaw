@@ -265,6 +265,22 @@ describe("update-cli", () => {
   it.each([false])(
     "records ordered update phases across service stop, restart, and verified health (json=%s)",
     async (json) => {
+      // A delayed verification observation must not lose committed terminal phases.
+      const reader = await import("../infra/update-run-reader.js");
+      const readProgress = reader.getUpdateRunForProgressAsync;
+      vi.spyOn(reader, "getUpdateRunForProgressAsync").mockImplementation(async (...args) => {
+        const record = await readProgress(...args);
+        if (record?.phase !== "verifying" && record?.phase !== "finished") {
+          return record;
+        }
+        const signal = args[2];
+        if (signal?.aborted) {
+          return undefined;
+        }
+        return new Promise((resolve) => {
+          signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+        });
+      });
       const ledgerReads = vi.spyOn(await import("../infra/update-run-ledger.js"), "getUpdateRun");
       const inspectSchemas = expectDefined(
         stateSchemaVersions.getMockImplementation(),

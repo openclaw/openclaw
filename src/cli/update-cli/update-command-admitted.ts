@@ -22,6 +22,7 @@ import { withUpdateInProgressEnv } from "./update-command-service-env.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import {
   prepareUnexpectedUpdateCommandFailure,
+  retainUpdateCommandProgressUntilPublication,
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
@@ -89,6 +90,12 @@ export async function runAdmittedUpdate(
     disposePresentation = presentation.dispose;
     const executeWith = (executor: UpdateCommandExecutor) =>
       withUpdatePreviewSignals(opts, async () => {
+        if (
+          disposePresentation &&
+          retainUpdateCommandProgressUntilPublication(run, disposePresentation)
+        ) {
+          disposePresentation = undefined;
+        }
         await admitUpdateRequesterContinuation(
           run,
           executor,

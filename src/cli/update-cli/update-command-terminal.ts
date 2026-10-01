@@ -47,7 +47,21 @@ type Publisher = (
   failure?: unknown,
   onTerminalRecord?: PublishedRecord,
 ) => Promise<UpdateRunResult>;
-const terminalOwners = new WeakMap<Run, { publish?: Publisher }>();
+type TerminalOwner = { publish?: Publisher; progress: DisposableStack };
+const terminalOwners = new WeakMap<Run, TerminalOwner>();
+
+/** Retain progress until the terminal owner finishes publication, including failure paths. */
+export function retainUpdateCommandProgressUntilPublication(
+  run: Run,
+  dispose: () => void,
+): boolean {
+  const owner = terminalOwners.get(run);
+  if (!owner) {
+    return false;
+  }
+  owner.progress.defer(dispose);
+  return true;
+}
 
 /** Finalization prepares a report; the outer invocation owns its publication. */
 export function deferUpdateCommandTerminalResult(
@@ -117,7 +131,8 @@ export async function withUpdateCommandTerminalResult<T>(
     onTerminalRecord?: PublishedRecord;
   } = {},
 ): Promise<T> {
-  const owner: { publish?: Publisher } = {};
+  using progress = new DisposableStack();
+  const owner: TerminalOwner = { progress };
   let run: Run | undefined;
   const notifyResult = (result: UpdateRunResult) => {
     try {
