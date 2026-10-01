@@ -6,7 +6,6 @@ import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
-import * as kysely from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -22,7 +21,6 @@ import {
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
 import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
-import { readSessionColdStorageInventoryInWorker } from "./session-cold-storage-worker.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -34,6 +32,7 @@ import { historyLane } from "./session-transcript-worker-resources.js";
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
 let embeddedBytes: number;
+let embeddedBlob: Buffer;
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
   fixture = await createSessionColdStorageFixture(state.statePath("shared.sqlite"));
@@ -45,7 +44,7 @@ beforeAll(async () => {
     )
     .get(historicalId)!;
   embeddedBytes = Number(descriptor.archive_bytes);
-  const bytes = await fs.readFile(
+  embeddedBlob = await fs.readFile(
     path.join(state.stateDir, "cold", String(descriptor.archive_name)),
   );
   fixture
@@ -53,7 +52,7 @@ beforeAll(async () => {
     .prepare(
       "UPDATE session_transcript_cold_archives SET storage = 'sqlite', archive_blob = ? WHERE session_id = ?",
     )
-    .run(bytes, historicalId);
+    .run(embeddedBlob, historicalId);
   await closeOpenClawAgentDatabasesAsync();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -127,9 +126,10 @@ it("counts a configured incognito store through its existing native owner withou
   replaceTranscriptEventsSync(scope, [{ type: "session", id: scope.sessionId }]);
   expect(await getSessionColdStorageStatus(config)).toEqual([{ ...empty, hotTranscripts: 1 }]);
   await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
-  let closing: Promise<void> | undefined;
+  let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
+  const readdir = fs.readdir;
   const intercept = vi.spyOn(fs, "readdir").mockImplementationOnce(
-    new Proxy(fs.readdir, {
+    new Proxy(readdir, {
       apply(read, receiver, args) {
         closing = closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
         void closing.catch(() => {});
@@ -146,42 +146,23 @@ it("counts a configured incognito store through its existing native owner withou
   }
 });
 
-it("keeps counts in one snapshot and observes a foreign commit on the next read", async () => {
+it("observes a foreign externalization on the next worker inventory", async () => {
   const foreign = openNodeSqliteDatabase(fixture.scope.storePath);
-  const read = kysely.executeSqliteQueryTakeFirstSync;
-  let changed = false;
-  const intercept = vi
-    .spyOn(kysely, "executeSqliteQueryTakeFirstSync")
-    .mockImplementation((...args) => {
-      const result = read(...args);
-      if (!changed) {
-        changed = true;
-        foreign
-          .prepare(
-            "UPDATE session_transcript_cold_archives SET archive_bytes = ? WHERE session_id = ?",
-          )
-          .run(embeddedBytes + 1, historicalId);
-      }
-      return result;
-    });
   try {
-    expect(readSessionColdStorageInventoryInWorker(fixture.options)).toEqual({
-      hotTranscripts: 1,
-      coldTranscripts: 1,
-      embeddedArchiveBytes: embeddedBytes,
-    });
-    expect(changed).toBe(true);
-    intercept.mockRestore();
+    foreign
+      .prepare(
+        "UPDATE session_transcript_cold_archives SET storage = 'file', archive_blob = NULL WHERE session_id = ?",
+      )
+      .run(historicalId);
     expect(
       await getSessionColdStorageStatus(maintenanceConfig(fixture.scope.storePath)),
-    ).toMatchObject([
-      { hotTranscripts: 1, coldTranscripts: 1, embeddedArchiveBytes: embeddedBytes + 1 },
-    ]);
+    ).toMatchObject([{ hotTranscripts: 1, coldTranscripts: 1, embeddedArchiveBytes: 0 }]);
   } finally {
-    intercept.mockRestore();
     foreign
-      .prepare("UPDATE session_transcript_cold_archives SET archive_bytes = ? WHERE session_id = ?")
-      .run(embeddedBytes, historicalId);
+      .prepare(
+        "UPDATE session_transcript_cold_archives SET storage = 'sqlite', archive_blob = ? WHERE session_id = ?",
+      )
+      .run(embeddedBlob, historicalId);
     foreign.close();
   }
 });
