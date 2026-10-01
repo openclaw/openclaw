@@ -293,6 +293,7 @@ export function prepareEmbeddedAttemptStream(input: {
     onModelUsage: input.onModelUsage,
     runId: attempt.runId,
     lifecycleGeneration: attempt.lifecycleGeneration,
+    admittedRunContext: attempt.admittedRunContext,
     messageChannel: input.runtimeChannel,
     initialReplayState: attempt.initialReplayState,
     hookRunner: getGlobalHookRunner() ?? undefined,
@@ -330,10 +331,8 @@ export function prepareEmbeddedAttemptStream(input: {
         ? AGENT_RUN_RESTART_ABORT_STOP_REASON
         : undefined,
     onBeforeLifecycleTerminal: () => {
-      if (deferredLifecycleOwner) {
-        return;
-      }
       if (
+        deferredLifecycleOwner ||
         requiresCompletionRequiredAsyncTaskWait({
           sessionKey: attempt.sessionKey,
           toolMetas: toolMetasForTerminal,

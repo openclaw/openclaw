@@ -1,4 +1,4 @@
-import { emitAgentRunOutputTokens } from "../infra/agent-events.js";
+import { emitAgentRunOutputTokens, type emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import type { AssistantMessage, Usage } from "../llm/types.js";
 import {
   createUsageAccumulator,
@@ -60,6 +60,7 @@ function preserveAssistantUsage(message: AssistantMessage, pending: NormalizedUs
 export function createEmbeddedModelState(
   params: SubscribeEmbeddedAgentSessionParams,
   log: Parameters<typeof runBestEffortCallback>[0]["log"],
+  publication: { emitEvent: typeof emitAgentEventIfCurrent; isCurrent: () => boolean },
 ) {
   const totals = createUsageAccumulator();
   let pending: NormalizedUsage | undefined;
@@ -85,7 +86,7 @@ export function createEmbeddedModelState(
   };
 
   const recordModelUsage = (usage: NormalizedUsage | undefined) => {
-    if (!hasObservedModelUsage(usage)) {
+    if (!hasObservedModelUsage(usage) || !publication.isCurrent()) {
       return;
     }
     mergeUsageIntoAccumulator(totals, usage);
@@ -96,18 +97,23 @@ export function createEmbeddedModelState(
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration,
       outputTokens: usage.output ?? 0,
+      emitEvent: publication.emitEvent,
     });
     if (data && params.onAgentEvent) {
       runBestEffortCallback({
         label: "usage agent event",
         log,
-        callback: () => params.onAgentEvent?.({ stream: "usage", data }),
+        callback: () =>
+          publication.isCurrent() ? params.onAgentEvent?.({ stream: "usage", data }) : undefined,
       });
     }
   };
 
   return {
     captureModelEvent: (evt: AgentSessionEvent): void => {
+      if (!publication.isCurrent()) {
+        return;
+      }
       if (evt.type === "compaction_end") {
         if (evt.outcome.status === "completed" && evt.outcome.willRetry) {
           // Retain the prior call only until the retry completes or reports its own usage.
@@ -151,19 +157,21 @@ export function createEmbeddedModelState(
           runBestEffortCallback({
             label: "model usage observation",
             log,
-            callback: () => params.onModelUsage?.(pending),
+            callback: () => (publication.isCurrent() ? params.onModelUsage?.(pending) : undefined),
           });
           pending = undefined;
           // Context-engine projection can later mutate transcript objects; retain this run's result.
           completed = structuredClone(message);
           lastUsage ??= message.stopReason === "error" ? retryUsage : undefined;
           retryUsage = undefined;
-          params.onContextAccountingEvent?.({
-            kind: "model",
-            contextTokens: deriveSessionTotalTokens({
-              lastCallUsage: normalizeUsage(message.usage),
-            }),
-          });
+          if (publication.isCurrent()) {
+            params.onContextAccountingEvent?.({
+              kind: "model",
+              contextTokens: deriveSessionTotalTokens({
+                lastCallUsage: normalizeUsage(message.usage),
+              }),
+            });
+          }
       }
     },
     recordAuxiliaryUsage: (usage: Usage) => recordModelUsage(normalizeUsage(usage)),

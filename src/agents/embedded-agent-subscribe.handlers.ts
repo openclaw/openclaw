@@ -25,14 +25,18 @@ import type { AgentSessionEvent } from "./sessions/index.js";
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
   const scheduleEvent = (evt: AgentSessionEvent, handler: () => unknown): void | Promise<void> => {
+    const purpose = evt.type === "compaction_end" ? "compaction-settlement" : undefined;
     // Tool-result delivery must settle before later assistant or terminal events;
     // suppression flags would discard those events instead of preserving order.
     const run = () => {
       try {
-        if (evt.type !== "message_update") {
+        if (!ctx.isCurrent(purpose)) {
+          return undefined;
+        }
+        if (evt.type !== "message_update" && !ctx.state.unsubscribed) {
           ctx.flushAssistantStream();
         }
-        return handler();
+        return ctx.isCurrent(purpose) ? handler() : undefined;
       } catch (err) {
         ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
         return undefined;
@@ -61,6 +65,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
   };
 
   return (evt: AgentSessionEvent) => {
+    if (!ctx.isCurrent()) {
+      return;
+    }
     // Model facts advance before persistence, independently of queued reply delivery.
     ctx.captureModelEvent(evt);
     // Capture tool facts before reply delivery can delay their lifecycle handlers.

@@ -4,7 +4,6 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import {
@@ -39,7 +38,7 @@ export {
 export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   const data = { phase: "start", startedAt: Date.now() };
-  emitAgentEvent({
+  ctx.emitEvent({
     runId: ctx.params.runId,
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
     ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
@@ -54,10 +53,12 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
     label: "lifecycle agent event",
     log: ctx.log,
     callback: () =>
-      ctx.params.onAgentEvent?.({
-        stream: "lifecycle",
-        data,
-      }),
+      ctx.isCurrent()
+        ? ctx.params.onAgentEvent?.({
+            stream: "lifecycle",
+            data,
+          })
+        : undefined,
   });
 }
 
@@ -229,7 +230,7 @@ export function handleAgentEnd(
       ...(livenessState ? { livenessState } : {}),
       ...(replayInvalid ? { replayInvalid } : {}),
     };
-    emitAgentEvent({
+    ctx.emitEvent({
       runId: ctx.params.runId,
       ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
       ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
@@ -244,10 +245,12 @@ export function handleAgentEnd(
       label: "lifecycle agent event",
       log: ctx.log,
       callback: () =>
-        ctx.params.onAgentEvent?.({
-          stream: "lifecycle",
-          data,
-        }),
+        ctx.isCurrent()
+          ? ctx.params.onAgentEvent?.({
+              stream: "lifecycle",
+              data,
+            })
+          : undefined,
     });
   };
 
@@ -267,6 +270,9 @@ export function handleAgentEnd(
   };
 
   const flushPendingMediaAndChannel = () => {
+    if (!ctx.isCurrent()) {
+      return undefined;
+    }
     if (ctx.params.onBlockReply && !ctx.state.pendingToolMediaDeliveryFailed) {
       const pendingToolMediaReply = readPendingToolMediaReply(ctx.state);
       if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
@@ -277,6 +283,9 @@ export function handleAgentEnd(
     const postMediaFlushResult = ctx.flushBlockReplyBuffer();
     if (isPromiseLike<void>(postMediaFlushResult)) {
       return postMediaFlushResult.then(() => {
+        if (!ctx.isCurrent()) {
+          return undefined;
+        }
         const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
         if (isPromiseLike<void>(onBlockReplyFlushResult)) {
           return onBlockReplyFlushResult;
@@ -285,7 +294,9 @@ export function handleAgentEnd(
       });
     }
 
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
+    const onBlockReplyFlushResult = ctx.isCurrent()
+      ? ctx.params.onBlockReplyFlush?.({ reason: "terminal" })
+      : undefined;
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult;
     }
@@ -295,6 +306,9 @@ export function handleAgentEnd(
   const runBeforeTerminalDelivery = ():
     | BeforeTerminalDeliveryDecision
     | Promise<BeforeTerminalDeliveryDecision> => {
+    if (!ctx.isCurrent()) {
+      return;
+    }
     const result = ctx.params.onBeforeTerminalDelivery?.({
       messages: evt?.messages ?? [],
       willRetry: evt?.willRetry === true,
@@ -359,7 +373,7 @@ export function handleAgentEnd(
 
   let lifecycleTerminalEmitted = false;
   const emitLifecycleTerminalOnce = (): void | Promise<void> => {
-    if (lifecycleTerminalEmitted) {
+    if (lifecycleTerminalEmitted || !ctx.isCurrent()) {
       return;
     }
     lifecycleTerminalEmitted = true;

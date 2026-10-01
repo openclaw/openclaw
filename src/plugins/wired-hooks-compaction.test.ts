@@ -52,7 +52,10 @@ describe("compaction hook wiring", () => {
     withRetryHooks?: boolean;
     isTerminalAborted?: () => boolean;
   }) {
+    const state = { compactionInFlight: true, unsubscribed: false };
     return {
+      emitEvent: hookMocks.emitAgentEvent,
+      isCurrent: () => !state.unsubscribed,
       params: {
         runId: params.runId,
         sessionKey: params.sessionKey,
@@ -62,7 +65,7 @@ describe("compaction hook wiring", () => {
           sessionFile: params.sessionFile,
         },
       },
-      state: { compactionInFlight: true },
+      state,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
       maybeResolveCompactionWait: vi.fn(),
       incrementCompactionCount: vi.fn(),
@@ -138,14 +141,17 @@ describe("compaction hook wiring", () => {
   it("calls runBeforeCompaction in handleCompactionStart", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
+    const state = { compactionInFlight: false, unsubscribed: false };
     const ctx = {
+      emitEvent: hookMocks.emitAgentEvent,
+      isCurrent: () => !state.unsubscribed,
       params: {
         runId: "r1",
         sessionKey: "agent:main:web-abc123",
         session: { messages: [1, 2, 3], sessionFile: "/tmp/test.jsonl" },
         onAgentEvent: vi.fn(),
       },
-      state: { compactionInFlight: false },
+      state,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
       incrementCompactionCount: vi.fn(),
       ensureCompactionPromise: vi.fn(),
@@ -345,9 +351,12 @@ describe("compaction hook wiring", () => {
       },
     ];
 
+    const state = { compactionInFlight: true, unsubscribed: false };
     const ctx = {
+      emitEvent: hookMocks.emitAgentEvent,
+      isCurrent: () => !state.unsubscribed,
       params: { runId: "r4", session: { messages } },
-      state: { compactionInFlight: true },
+      state,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
       maybeResolveCompactionWait: vi.fn(),
       getCompactionCount: () => 1,
@@ -375,9 +384,12 @@ describe("compaction hook wiring", () => {
       },
     ];
 
+    const state = { compactionInFlight: true, unsubscribed: false };
     const ctx = {
+      emitEvent: hookMocks.emitAgentEvent,
+      isCurrent: () => !state.unsubscribed,
       params: { runId: "r5", session: { messages } },
-      state: { compactionInFlight: true },
+      state,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
       noteCompactionRetry: vi.fn(),
       resetForCompactionRetry: vi.fn(),

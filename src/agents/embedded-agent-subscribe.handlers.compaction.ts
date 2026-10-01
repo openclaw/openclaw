@@ -3,7 +3,6 @@
  * liveness, emit agent events, run hooks, reconcile persisted counts, and
  * clear stale usage after compaction rewrites history.
  */
-import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
@@ -49,11 +48,12 @@ function emitCompactionAgentEvent(
       },
 ): void {
   const event = { stream: "compaction" as const, data };
-  emitAgentEvent({ runId: ctx.params.runId, ...event });
+  const purpose = data.phase === "end" ? "compaction-settlement" : undefined;
+  ctx.emitEvent({ runId: ctx.params.runId, ...event });
   runBestEffortCallback({
     label: "compaction agent event",
     log: ctx.log,
-    callback: () => ctx.params.onAgentEvent?.(event),
+    callback: () => (ctx.isCurrent(purpose) ? ctx.params.onAgentEvent?.(event) : undefined),
   });
 }
 
@@ -62,7 +62,7 @@ function runBestEffortCompactionHook(
   phase: "before" | "after",
 ): void {
   // Queued events still settle committed facts and waiters after close, not new plugin work.
-  if (ctx.state.unsubscribed || ctx.params.isTerminalAborted?.()) {
+  if (ctx.params.isTerminalAborted?.() || !ctx.isCurrent()) {
     return;
   }
   const hookRunner = getGlobalHookRunner();

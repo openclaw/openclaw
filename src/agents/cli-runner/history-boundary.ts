@@ -17,7 +17,7 @@ import {
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { assertOwnedTranscriptWriteCommit } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { bindAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
+import { bindAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -208,7 +208,7 @@ export async function prepareCliHistoryBoundary(
   if (!authority) {
     throw new Error("CLI history writer is no longer active");
   }
-  bindAgentRunTerminalWriteContext(authority, {
+  bindAgentRunTerminalWrites(authority, {
     run: (write) => runWithCliHistoryWriter(writer, write),
   });
   return writer;

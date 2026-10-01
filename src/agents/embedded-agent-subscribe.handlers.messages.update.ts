@@ -2,7 +2,6 @@
  * Handles assistant message deltas, reasoning, directives, and block replies.
  */
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
@@ -71,11 +70,12 @@ export function handleMessageUpdate(
   const liveEditDiff = updateLiveEditDiffProgress(ctx.state.liveEditDiffStateById, assistantRecord);
   if (liveEditDiff) {
     const data = { phase: "input_delta", ...liveEditDiff };
-    emitAgentEvent({ runId: ctx.params.runId, stream: "tool", data });
+    ctx.emitEvent({ runId: ctx.params.runId, stream: "tool", data });
     runBestEffortCallback({
       label: "live edit diff agent event",
       log: ctx.log,
-      callback: () => ctx.params.onAgentEvent?.({ stream: "tool", data }),
+      callback: () =>
+        ctx.isCurrent() ? ctx.params.onAgentEvent?.({ stream: "tool", data }) : undefined,
     });
   }
   const eventAssistantMessage =

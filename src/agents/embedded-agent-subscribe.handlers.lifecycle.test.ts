@@ -48,7 +48,7 @@ function createContext(
   const hasOnBlockReplyOverride = Boolean(overrides && "onBlockReply" in overrides);
   const onBlockReply = hasOnBlockReplyOverride ? overrides?.onBlockReply : vi.fn();
   const emitBlockReply = vi.fn();
-  return {
+  const ctx = {
     params: {
       runId: "run-1",
       config: {},
@@ -61,6 +61,7 @@ function createContext(
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
     },
     state: {
+      unsubscribed: false,
       lastAssistant: lastAssistant as EmbeddedAgentSubscribeContext["state"]["lastAssistant"],
       liveEditDiffStateById: new Map(),
       pendingCompactionRetry: 0,
@@ -91,6 +92,9 @@ function createContext(
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
   } as unknown as EmbeddedAgentSubscribeContext;
+  ctx.emitEvent = emitAgentEventMock;
+  ctx.isCurrent = () => !ctx.state.unsubscribed;
+  return ctx;
 }
 
 async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedAgentSubscribeContext) {
@@ -923,9 +927,7 @@ describe("handleAgentEnd", () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
     ctx.state.pendingToolAudioAsVoice = true;
-    vi.mocked(ctx.emitBlockReply).mockImplementation(
-      createReplyDelivery({ params: ctx.params, state: ctx.state, log: ctx.log }).emitBlockReply,
-    );
+    vi.mocked(ctx.emitBlockReply).mockImplementation(createReplyDelivery(ctx).emitBlockReply);
 
     await handleAgentEnd(ctx);
 

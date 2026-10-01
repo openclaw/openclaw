@@ -5,7 +5,6 @@ import {
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
@@ -46,12 +45,20 @@ const mergeStreamAppend = (previous: AssistantStreamData, next: AssistantStreamD
 });
 
 type ReplyDeliveryParams = {
+  emitEvent: EmbeddedAgentSubscribeContext["emitEvent"];
+  isCurrent: EmbeddedAgentSubscribeContext["isCurrent"];
   params: SubscribeEmbeddedAgentSessionParams;
   state: EmbeddedAgentSubscribeContext["state"];
   log: EmbeddedAgentSubscribeContext["log"];
 };
 
-export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams) {
+export function createReplyDelivery({
+  params,
+  state,
+  log,
+  emitEvent,
+  isCurrent,
+}: ReplyDeliveryParams) {
   const assistantTexts = state.assistantTexts;
   const deferredAssistantScopes: AssistantStreamScope[] = [];
   const provisionalAssistantBlocks = new Set<number>();
@@ -63,7 +70,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     if (
       !scope.delivery ||
       !scope.pending ||
-      state.unsubscribed ||
+      !isCurrent() ||
       (scope === streamScope && scope.active)
     ) {
       return;
@@ -79,7 +86,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       }
     };
     runBestEffortCallback({
-      callback: () => params.onPartialReply?.(data),
+      callback: () => (isCurrent() ? params.onPartialReply?.(data) : undefined),
       label: "assistant partial reply",
       log,
       pending: pendingPartialReplyTasks,
@@ -97,7 +104,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   let streamedText = "";
   let finalized = false;
   const emitAssistantStreamDataSafely = (scope: AssistantStreamScope) => {
-    if (!scope.delivery || scope.emitted || state.unsubscribed) {
+    if (!scope.delivery || scope.emitted || !isCurrent()) {
       return;
     }
     const delivery = scope.delivery;
@@ -133,12 +140,12 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       if (event.stream === "item") {
         lastEmittedCommentaryByItem.set(itemId, commentarySignature);
       }
-      emitAgentEvent({ runId: params.runId, ...event });
+      emitEvent({ runId: params.runId, ...event });
       if (params.onAgentEvent) {
         runBestEffortCallback({
           label: "assistant agent event",
           log,
-          callback: () => params.onAgentEvent?.(event),
+          callback: () => (isCurrent() ? params.onAgentEvent?.(event) : undefined),
         });
       }
     }
@@ -148,7 +155,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     data,
     options,
   ) => {
-    if (state.unsubscribed) {
+    if (!isCurrent()) {
       return;
     }
     let eventData: AssistantStreamData | undefined;
@@ -312,6 +319,9 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       }
     };
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+    if (!isCurrent()) {
+      return;
+    }
     runBestEffortCallback({
       callback: () =>
         assistantMessageIndex === undefined
@@ -332,6 +342,9 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       blockSourceText?: string;
     },
   ) => {
+    if (!isCurrent()) {
+      return;
+    }
     flushAssistantStream();
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
     const pendingToolMedia =

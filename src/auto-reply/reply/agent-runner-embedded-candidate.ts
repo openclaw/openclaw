@@ -144,6 +144,7 @@ export async function runEmbeddedFallbackCandidate(
   let postCompactionModelAttempted = false;
   let compactionAccounting: CompactionAccountingFact | undefined;
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
+    emitEvent: params.emitEvent,
     runId: params.runId,
     sessionKey: turn.sessionKey,
     getLifecycleGeneration: params.getLifecycleGeneration,

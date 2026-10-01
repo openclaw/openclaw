@@ -388,6 +388,7 @@ function createToolBoundaryBridge(params: {
 }
 
 type RunCliAgentWithLifecycleParams = {
+  emitEvent?: typeof emitAgentEvent;
   runId: string;
   lifecycleGeneration?: string;
   provider: string;
@@ -431,6 +432,7 @@ export function runCliAgentWithLifecycle(
 async function runCliAgentWithLifecycleInternal(
   params: RunCliAgentWithLifecycleParams,
 ): Promise<EmbeddedAgentRunResult> {
+  const emitEvent = params.emitEvent ?? emitAgentEvent;
   const startedAt = params.startedAt ?? Date.now();
   const fastModeStartedAtMs = params.runParams.fastModeStartedAtMs ?? startedAt;
   const fastModeAutoOnSeconds =
@@ -446,7 +448,7 @@ async function runCliAgentWithLifecycleInternal(
     fastAutoOnSeconds?: number;
   }) => {
     const summary = formatFastModeAutoProgressText(payload);
-    emitAgentEvent({
+    emitEvent({
       runId: params.runId,
       stream: "item",
       data: {
@@ -498,7 +500,7 @@ async function runCliAgentWithLifecycleInternal(
   };
   const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;
   params.onAgentRunStart?.();
-  emitAgentEvent({
+  emitEvent({
     runId: params.runId,
     ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
     ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
@@ -628,7 +630,7 @@ async function runCliAgentWithLifecycleInternal(
         }
       : result;
     if (cliText) {
-      emitAgentEvent({
+      emitEvent({
         runId: params.runId,
         stream: "assistant",
         data: { text: cliText },
@@ -636,7 +638,7 @@ async function runCliAgentWithLifecycleInternal(
     }
 
     if (emitLifecycleTerminal) {
-      emitAgentEvent({
+      emitEvent({
         runId: params.runId,
         ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
         ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
@@ -658,7 +660,7 @@ async function runCliAgentWithLifecycleInternal(
     await stopAgentEventBridges(bridges);
     await params.onErrorBeforeLifecycle?.(err);
     if (emitLifecycleTerminal) {
-      emitAgentEvent({
+      emitEvent({
         runId: params.runId,
         ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
         ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
@@ -684,7 +686,7 @@ async function runCliAgentWithLifecycleInternal(
       await maybeEmitFastModeAutoReset();
     }
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
-      emitAgentEvent({
+      emitEvent({
         runId: params.runId,
         ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
         ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),

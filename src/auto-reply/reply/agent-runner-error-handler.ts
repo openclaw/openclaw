@@ -71,6 +71,7 @@ export async function handleAgentExecutionError(params: {
     const terminal =
       params.state.pendingLifecycleTerminal?.backstop ??
       createAgentLifecycleTerminalBackstop({
+        emitEvent: params.state.emitEvent,
         runId: params.runId,
         sessionKey: turn.sessionKey,
         startedAt: params.state.turnStartedAtMs,

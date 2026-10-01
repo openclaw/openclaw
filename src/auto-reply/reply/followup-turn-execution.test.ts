@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
@@ -110,9 +111,23 @@ describe("executeFollowupTurn", () => {
     const turn = createTurn();
     const typing = createTypingController();
     const onAgentRunStart = vi.fn();
+    const onSessionPrepared = vi.fn(() => {
+      throw new Error("Original chat session preparation is closed");
+    });
+    const onAdmittedRunContext = vi.fn(() => {
+      throw new Error("Original chat admission is closed");
+    });
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      params.opts?.onAgentRunStart?.("run-1");
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      const admission = prepareSystemAgentRunAdmission({}, turn.runId, "agent", "followup-test");
+      try {
+        const context = await admission.admit("embedded");
+        params.opts?.onSessionPrepared?.({ sessionKey: "main", sessionId: "session" });
+        params.opts?.onAdmittedRunContext?.(context);
+        params.opts?.onAgentRunStart?.("run-1");
+        return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      } finally {
+        admission.close();
+      }
     });
 
     await executeFollowupTurn({
@@ -121,7 +136,7 @@ describe("executeFollowupTurn", () => {
         typing,
         typingMode: "instant",
         defaultModel: "claude",
-        opts: { onAgentRunStart },
+        opts: { onAgentRunStart, onSessionPrepared, onAdmittedRunContext },
       },
       onToolResult: vi.fn(async () => {}),
       onCompactionNoticePayload: vi.fn(async () => {}),
@@ -148,6 +163,8 @@ describe("executeFollowupTurn", () => {
       SenderId: "user-1",
     });
     expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
+    expect(onSessionPrepared).not.toHaveBeenCalled();
+    expect(onAdmittedRunContext).not.toHaveBeenCalled();
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 

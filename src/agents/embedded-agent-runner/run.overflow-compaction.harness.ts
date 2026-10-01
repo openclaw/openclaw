@@ -1049,8 +1049,9 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   return {
     runEmbeddedAgent: async (params) => {
       const agentId = params.agentId ?? "main";
+      const suppliedAdmission = params.preparedRunAdmission;
       const preparedRunAdmission =
-        params.preparedRunAdmission ??
+        suppliedAdmission ??
         prepareAgentRunAdmission({
           cfg: params.config ?? {},
           operationalRunInstance: createOperationalRunInstanceRef(params.runId),
@@ -1071,7 +1072,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
           agentId,
         });
       } finally {
-        preparedRunAdmission.close();
+        // Borrowed admission stays active through its outer owner's terminal drain.
+        if (!suppliedAdmission) {
+          preparedRunAdmission.close();
+        }
       }
     },
     registerPreparedAgentHarness: preparedRegistry.registerAgentHarness,

@@ -7,6 +7,7 @@ import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { emitAgentEvent } from "../../infra/agent-events.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import type {
@@ -23,6 +24,7 @@ import type { FollowupRun } from "./queue.js";
 
 /** Inputs prepared once per fallback candidate and consumed by either runtime adapter. */
 export type AgentFallbackCandidateCommonParams = {
+  emitEvent: typeof emitAgentEvent;
   preparedRunAdmission: PreparedAgentRunAdmission;
   turn: AgentTurnParams;
   candidateRun: FollowupRun["run"];
@@ -59,6 +61,7 @@ export type AgentFallbackCandidateCommonParams = {
 };
 
 export type AgentFallbackCycleState = {
+  emitEvent: typeof emitAgentEvent;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager;

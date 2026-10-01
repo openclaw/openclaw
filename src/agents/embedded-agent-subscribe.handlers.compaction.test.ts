@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import {
   readCompactionCount,
@@ -33,7 +34,7 @@ function createCompactionContext(params: {
   // Minimal context preserves only the compaction counters and callbacks the
   // handlers mutate, making store reconciliation assertions direct.
   let compactionCount = params.initialCount;
-  return {
+  const ctx = {
     params: {
       runId: "run-test",
       session: { messages: params.messages ?? [] } as never,
@@ -44,6 +45,7 @@ function createCompactionContext(params: {
       onAgentEvent: undefined,
     },
     state: {
+      unsubscribed: false,
       compactionInFlight: true,
       pendingCompactionRetry: 0,
     } as never,
@@ -64,6 +66,9 @@ function createCompactionContext(params: {
     noteCompactionTokensAfter: vi.fn(),
     getLastCompactionTokensAfter: vi.fn(() => undefined),
   } as unknown as EmbeddedAgentSubscribeContext;
+  ctx.emitEvent = emitAgentEvent;
+  ctx.isCurrent = () => !ctx.state.unsubscribed;
+  return ctx;
 }
 
 function makeUsageSnapshot(totalTokens: number): AssistantUsageSnapshot {

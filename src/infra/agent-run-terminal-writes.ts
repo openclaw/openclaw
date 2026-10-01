@@ -1,5 +1,9 @@
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
-import { getAgentRunContext, validateAgentRunDelegatedAuthority } from "./agent-run-registry.js";
+import {
+  getAgentRunContext,
+  getAgentRunContextOwnerStatus,
+  validateAgentRunDelegatedAuthority,
+} from "./agent-run-registry.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
 
 type OperationalRunInstance = AgentRunDelegatedAuthority["operationalRunInstance"];
@@ -7,25 +11,37 @@ type TerminalWriteContext = { run: <T>(write: () => T) => T };
 type TerminalWrites = {
   authority: AgentRunDelegatedAuthority;
   context?: TerminalWriteContext;
+  contextRevision: number;
   pending: Set<Promise<void>>;
 };
 
 const terminalWrites = new WeakMap<AgentRunContext, TerminalWrites>();
 
-/** Bind a prepared runtime's write context to its exact live operational owner. */
-export function bindAgentRunTerminalWriteContext(
+/** Bind terminal writes, optionally within a prepared runtime's account context. */
+export function bindAgentRunTerminalWrites(
   authority: AgentRunDelegatedAuthority,
-  context: TerminalWriteContext,
+  context?: TerminalWriteContext,
 ): void {
-  const owner = getAgentRunContext(authority.operationalRunInstance.runId);
-  if (owner?.delegatedAuthority !== authority || !validateAgentRunDelegatedAuthority(authority)) {
+  const runId = authority.operationalRunInstance.runId;
+  const owner = getAgentRunContext(runId);
+  if (
+    !validateAgentRunDelegatedAuthority(authority) ||
+    !owner ||
+    getAgentRunContext(runId) !== owner ||
+    owner.delegatedAuthority !== authority ||
+    getAgentRunContextOwnerStatus(runId, authority.claimId, authority.lifecycleGeneration) !==
+      "active"
+  ) {
     throw new Error("Terminal write owner is no longer active");
   }
   const current = terminalWrites.get(owner);
   if (current?.authority === authority) {
-    current.context = context;
+    if (context !== undefined && current.context !== context) {
+      current.context = context;
+      current.contextRevision++;
+    }
   } else {
-    terminalWrites.set(owner, { authority, context, pending: new Set() });
+    terminalWrites.set(owner, { authority, context, contextRevision: 0, pending: new Set() });
   }
 }
 
@@ -34,7 +50,9 @@ export function clearAgentRunTerminalWriteContext(instance: OperationalRunInstan
   const owner = getAgentRunContext(instance.runId);
   const current = owner ? terminalWrites.get(owner) : undefined;
   if (current?.authority.operationalRunInstance === instance) {
+    // Even undefined -> context -> undefined must revoke the original capture.
     current.context = undefined;
+    current.contextRevision++;
   }
 }
 
@@ -50,25 +68,37 @@ export function captureAgentRunTerminalWriteContext(
   const owner = getAgentRunContext(runId);
   const current = owner ? terminalWrites.get(owner) : undefined;
   const context = current?.context;
-  if (!owner || !current || !context) {
+  const contextRevision = current?.contextRevision;
+  if (!owner || !current) {
     return undefined;
   }
   const assertCurrent = () => {
     if (
+      !validateAgentRunDelegatedAuthority(current.authority) ||
       getAgentRunContext(runId) !== owner ||
       terminalWrites.get(owner) !== current ||
       current.context !== context ||
+      current.contextRevision !== contextRevision ||
       owner.delegatedAuthority !== current.authority ||
-      !validateAgentRunDelegatedAuthority(current.authority)
+      getAgentRunContextOwnerStatus(
+        runId,
+        current.authority.claimId,
+        current.authority.lifecycleGeneration,
+      ) !== "active"
     ) {
       throw new Error("Terminal write owner changed before commit");
     }
   };
+  try {
+    assertCurrent();
+  } catch {
+    return undefined;
+  }
   return {
     assertCurrent,
     run: (write) => {
       assertCurrent();
-      return context.run(write);
+      return context ? context.run(write) : write();
     },
     track: (persistence) => {
       current.pending.add(persistence);
