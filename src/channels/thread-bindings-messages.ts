@@ -4,6 +4,7 @@ import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/nu
  * Keep text system-prefixed and compact because callers post it directly into user-visible threads.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prefixSystemMessage } from "../infra/system-message.js";
 
@@ -52,9 +53,7 @@ export function resolveThreadBindingIntroText(params: {
   const idleTimeoutMs = resolveNonNegativeIntegerOption(params.idleTimeoutMs, 0);
   const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
   const cwd = normalizeOptionalString(params.sessionCwd);
-  const details = (params.sessionDetails ?? [])
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+  const details = normalizeTrimmedStringList(params.sessionDetails);
   if (cwd) {
     details.unshift(`cwd: ${cwd}`);
   }

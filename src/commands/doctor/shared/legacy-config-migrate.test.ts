@@ -3,48 +3,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
-import type { LegacyConfigMigrationContext } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
-import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
+import { migrateLegacyConfigForTest } from "./legacy-config-migrate.apply.test-support.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 
 function repairBindingsForTest(config: OpenClawConfig) {
   const changes: string[] = [];
   return { config: pruneBindingsForMissingAgents(config, changes), changes };
-}
-
-function migrateLegacyConfigForTest(
-  raw: unknown,
-  context?: LegacyConfigMigrationContext,
-): {
-  config: OpenClawConfig | null;
-  changes: string[];
-} {
-  if (!raw || typeof raw !== "object") {
-    return { config: null, changes: [] };
-  }
-  const next = structuredClone(raw) as Record<string, unknown>;
-  const changes: string[] = [];
-  for (const migration of LEGACY_CONFIG_MIGRATIONS) {
-    migration.apply(next, changes, context);
-  }
-  const visibleChanges = changes.filter(
-    (change) => change !== "Moved agents.list → keyed agents.entries.",
-  );
-  const agents = next.agents as Record<string, unknown> | undefined;
-  const entries = agents?.entries as Record<string, Record<string, unknown>> | undefined;
-  if (agents && entries) {
-    Object.defineProperty(agents, "list", {
-      configurable: true,
-      enumerable: false,
-      value: Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry)),
-    });
-  }
-  return visibleChanges.length === 0
-    ? { config: null, changes: visibleChanges }
-    : { config: next as OpenClawConfig, changes: visibleChanges };
 }
 
 describe("legacy session typing config migrate", () => {
@@ -98,77 +65,6 @@ describe("compatibility binding repair migrate", () => {
 
     expect(res.config.bindings).toEqual(cfg.bindings);
     expect(res.changes).not.toContain("Removed 1 binding that referenced missing agents.list ids.");
-  });
-});
-
-describe("legacy MCP server config migrate", () => {
-  it("moves disabled to enabled, preserves canonical values, and is idempotent", () => {
-    const raw = {
-      mcp: {
-        servers: {
-          disabled: { command: "example-mcp", disabled: true },
-          enabled: { command: "example-mcp", disabled: false },
-          canonical: { command: "example-mcp", disabled: true, enabled: true },
-        },
-      },
-    };
-
-    expect(findLegacyConfigIssues(raw)).toEqual([
-      expect.objectContaining({
-        path: "mcp.servers",
-        message: expect.stringContaining('unsupported "disabled" key'),
-      }),
-    ]);
-    const res = migrateLegacyConfigForTest(raw);
-
-    expect(res.config?.mcp?.servers).toEqual({
-      disabled: { command: "example-mcp", enabled: false },
-      enabled: { command: "example-mcp", enabled: true },
-      canonical: { command: "example-mcp", enabled: true },
-    });
-    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
-  });
-
-  it("moves MCP workingDirectory aliases to cwd with canonical values winning", () => {
-    const raw = {
-      mcp: {
-        servers: {
-          legacy: { command: "example-mcp", workingDirectory: "/legacy" },
-          canonical: { command: "example-mcp", cwd: "/canonical", workingDirectory: "/legacy" },
-        },
-      },
-      nodeHost: {
-        mcp: {
-          servers: {
-            legacy: { command: "example-mcp", workingDirectory: "/node-legacy" },
-          },
-        },
-      },
-    };
-
-    expect(findLegacyConfigIssues(raw)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "mcp.servers",
-          message: expect.stringContaining("use camelCase spellings and cwd"),
-        }),
-        expect.objectContaining({
-          path: "nodeHost.mcp.servers",
-          message: expect.stringContaining("use camelCase spellings and cwd"),
-        }),
-      ]),
-    );
-    const res = migrateLegacyConfigForTest(raw);
-
-    expect(res.config?.mcp?.servers).toEqual({
-      legacy: { command: "example-mcp", cwd: "/legacy" },
-      canonical: { command: "example-mcp", cwd: "/canonical" },
-    });
-    expect(res.config?.nodeHost?.mcp?.servers?.legacy).toEqual({
-      command: "example-mcp",
-      cwd: "/node-legacy",
-    });
-    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
   });
 });
 
@@ -1193,25 +1089,6 @@ describe("legacy agent runtime and sandbox config migrate", () => {
       autoStart: false,
     });
     expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
-  });
-});
-
-describe("legacy migrate MCP server type aliases", () => {
-  it("normalizes CLI-native transports while preserving explicit canonical transport", () => {
-    const res = migrateLegacyConfigForTest({
-      mcp: {
-        servers: {
-          http: { type: "http", url: "https://example.com/mcp" },
-          sse: { type: "sse", url: "https://example.com/sse" },
-          canonical: { type: "http", transport: "sse", url: "https://example.com/canonical" },
-        },
-      },
-    });
-    expect(res.config?.mcp?.servers).toEqual({
-      http: { transport: "streamable-http", url: "https://example.com/mcp" },
-      sse: { transport: "sse", url: "https://example.com/sse" },
-      canonical: { transport: "sse", url: "https://example.com/canonical" },
-    });
   });
 });
 

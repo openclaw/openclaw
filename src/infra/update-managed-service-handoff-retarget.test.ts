@@ -365,7 +365,7 @@ unix.each(["update", "foreground", "retarget"] as const)(
       const rows = () =>
         db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all();
       const before = rows();
-      expect(store.read(to)).toEqual({ kind: "unreadable" });
+      expect(store.read(to)).toEqual({ kind: "unreadable", error: expect.any(Error) });
       expect(rows()).toEqual(before);
       const result =
         admission === "retarget"

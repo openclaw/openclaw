@@ -57,7 +57,7 @@ export function registerAdmissionDrainControlTests({
       setSubagentControlDepsForTest({
         isEmbeddedAgentRunActive: () => false,
         abortEmbeddedAgentRun: () => false,
-        clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+        clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
       });
 
       const dispatch = vi.fn(async () => {});

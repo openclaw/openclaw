@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import {
   createSqliteLifecycleAggregateError,
@@ -40,8 +40,7 @@ type Instance = {
   pendingNative: Set<string>;
   closing?: boolean;
   scheduler?: GatewayScheduler;
-  cleanupJob?: GatewayScheduledJob;
-  detachScheduler?: () => void;
+  cleanupScope?: GatewaySchedulerScope;
   root?: string;
   managedRoot?: string;
   token?: SqliteStagingToken;
@@ -119,8 +118,7 @@ function retireInstance(key: string, instance: Instance): string | undefined {
   }
   instance.references.clear();
   instances.delete(key);
-  instance.cleanupJob?.cancel();
-  instance.detachScheduler?.();
+  scheduleCaptureCleanup(key, instance);
   return removalRoot;
 }
 
@@ -536,20 +534,20 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
   if (instance.scheduler === scheduler) {
     return;
   }
-  instance.detachScheduler?.();
-  instance.cleanupJob?.cancel();
   instance.scheduler = scheduler;
-  instance.cleanupJob = undefined;
-  instance.detachScheduler = undefined;
+  instance.cleanupScope?.beginClose();
+  instance.cleanupScope = undefined;
   if (!scheduler || instance.storage.placement === "temporary") {
     return;
   }
   // Metadata can retain native custody after its Gateway stops accepting timed work.
-  const rebind = () => scheduleCaptureCleanup(key, instance);
-  scheduler.signal.addEventListener("abort", rebind, { once: true });
-  instance.detachScheduler = () => scheduler.signal.removeEventListener("abort", rebind);
-  instance.cleanupJob = runInPluginSourceCaptureContext(() =>
-    scheduler.schedule({
+  const scope = scheduler.scope();
+  instance.cleanupScope = scope;
+  scope.signal.addEventListener("abort", () => scheduleCaptureCleanup(key, instance), {
+    once: true,
+  });
+  runInPluginSourceCaptureContext(() =>
+    scope.schedule({
       id: `plugin-source-captures:${key}`,
       delayMs: CAPTURE_GRACE_MS,
       everyMs: CAPTURE_GRACE_MS,
@@ -640,7 +638,15 @@ export function retainPluginSourceCaptureInstance(
       }
     },
     async releaseAsync() {
+      const scope = retained.cleanupScope;
       const root = retire();
+      if (scope !== retained.cleanupScope) {
+        await scope?.stop();
+      }
+      if (retained.references.size === 0) {
+        // A previous scheduler may still own the root's coalesced scan after rebinding.
+        await sweeps.get(path.resolve(resolvePluginSourceCapturesDirectory(storage.stateDir)));
+      }
       if (root) {
         try {
           await fsPromises.rm(path.join(root, "captures"), { recursive: true, force: true });

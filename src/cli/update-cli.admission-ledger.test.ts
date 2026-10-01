@@ -276,6 +276,34 @@ describe("update-cli", () => {
     "records ordered update phases only after buffered receipt settlement (%s)",
     async (outcome) => {
       const json = false;
+      const progressReads = await import("../infra/update-run-reader.js");
+      const readProgress = progressReads.getUpdateRunForProgressAsync;
+      const heldReads: ReturnType<typeof readProgress>[] = [];
+      const readSignals: AbortSignal[] = [];
+      const releaseReads = new Set<() => void>();
+      const progressReadSpy = vi
+        .spyOn(progressReads, "getUpdateRunForProgressAsync")
+        .mockImplementation((...args) => {
+          const readSignal = expectDefined(args[2], "owned progress reader signal");
+          readSignals.push(readSignal);
+          const delayed = (async () => {
+            const snapshot = structuredClone(await readProgress(...args));
+            if (!readSignal.aborted) {
+              await new Promise<void>((resolve) => {
+                const release = () => {
+                  readSignal.removeEventListener("abort", release);
+                  releaseReads.delete(release);
+                  resolve();
+                };
+                releaseReads.add(release);
+                readSignal.addEventListener("abort", release, { once: true });
+              });
+            }
+            return snapshot;
+          })();
+          heldReads.push(delayed);
+          return delayed;
+        });
       const prepareService = vi.spyOn(
         await import("./update-cli/update-command-post-update-maintenance.js"),
         "preparePostUpdateService",
@@ -461,16 +489,33 @@ describe("update-cli", () => {
             )
             .map((step) => step.step),
         ).toEqual(["requested", "staging", "validating", "activating", "restarting", "verifying"]);
-        if (!json) {
-          expect(getLogOutput()).toContain("Phase: activating");
-          expect(getLogOutput()).toContain("Phase: verifying");
-        }
+        expect(heldReads.length).toBeGreaterThan(0);
+        expect(readSignals.every((signal) => signal.aborted)).toBe(true);
+        const output = getLogOutput();
+        const phases = output.split("\n").filter((line) => line.startsWith("Phase:"));
+        expect(phases).toEqual([
+          "Phase: requested",
+          "Phase: staging",
+          "Phase: validating",
+          "Phase: activating",
+          "Phase: restarting",
+          "Phase: verifying",
+          "Phase: finished",
+        ]);
+        expect(output.indexOf("OpenClaw updated")).toBeGreaterThan(
+          output.indexOf("Phase: finished"),
+        );
       } finally {
         release.resolve();
         await settled;
         writer.mockRestore();
         worker.mockRestore();
         prepareService.mockRestore();
+        for (const releaseRead of releaseReads) {
+          releaseRead();
+        }
+        await Promise.allSettled(heldReads);
+        progressReadSpy.mockRestore();
       }
     },
   );

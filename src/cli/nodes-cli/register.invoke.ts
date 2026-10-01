@@ -25,7 +25,6 @@ function parseNodeInvokeParams(value = "{}"): unknown {
   }
 }
 
-/** Register direct node command invocation. */
 export function registerNodesInvokeCommands(nodes: Command) {
   nodesCallOpts(
     nodes

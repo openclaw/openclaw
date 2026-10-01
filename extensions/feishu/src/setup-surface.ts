@@ -258,7 +258,6 @@ async function runNewAppFlow(params: {
     scanDomain = scanResult.domain;
     scanOpenId = scanResult.openId;
   } else {
-    // Fallback to manual input: collect domain, appId, appSecret.
     await noteFeishuCredentialHelp(prompter);
 
     appId = (
@@ -288,7 +287,6 @@ async function runNewAppFlow(params: {
       appSecretProbeValue = appSecretResult.resolvedValue;
     }
 
-    // Fetch openId via API for manual flow.
     if (appId && appSecretProbeValue) {
       const { getAppOwnerOpenId } = await loadAppRegistrationModule();
       scanOpenId = await getAppOwnerOpenId({

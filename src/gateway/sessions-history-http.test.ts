@@ -27,12 +27,17 @@ import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
+import { setAvatar, setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import * as sessionHistoryState from "./session-history-state.js";
 import { SessionHistorySseState } from "./session-history-state.js";
-import { closeHistoryHarness, withGatewayHarness } from "./sessions-history-http.test-support.js";
+import {
+  closeHistoryHarness,
+  withGatewayHarness,
+  writeResetArchiveTranscript,
+} from "./sessions-history-http.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -86,26 +91,6 @@ async function seedSession(params?: { text?: string }) {
     expect(appended.ok).toBe(true);
   }
   return { storePath };
-}
-
-async function writeResetArchiveTranscript(params: {
-  dir: string;
-  sessionId: string;
-  timestamp: string;
-  texts: string[];
-}) {
-  await fs.writeFile(
-    path.join(params.dir, `${params.sessionId}.jsonl.reset.${params.timestamp}`),
-    [
-      JSON.stringify({ type: "session", version: 1, id: params.sessionId }),
-      ...params.texts.map((text) =>
-        JSON.stringify({
-          message: { role: "assistant", content: [{ type: "text", text }] },
-        }),
-      ),
-    ].join("\n"),
-    "utf-8",
-  );
 }
 
 function seedRawSessionRows(params: {

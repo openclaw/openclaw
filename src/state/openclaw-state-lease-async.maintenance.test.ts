@@ -7,9 +7,9 @@ import {
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateAsyncLeaseContext } from "./openclaw-state-lease-context.js";
 import type { LeaseHeartbeatCleanup } from "./openclaw-state-lease-heartbeat.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import { withOpenClawStateLeaseWorkerAdmission } from "./openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "./openclaw-state-lease.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 type CreateStorage =
@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   createOpenClawStateLeaseWorkerStorage: mocks.createStorage,
+  acquireLease: mocks.forbidden,
 }));
 vi.mock("./openclaw-state-lease-heartbeat.js", () => ({
   startOpenClawStateLeaseHeartbeat: mocks.startHeartbeat,
@@ -48,7 +49,6 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
     execute?.(),
   resolveLeaseDatabasePath: mocks.forbidden,
-  acquireLease: mocks.forbidden,
   renewOpenClawStateLease: mocks.forbidden,
   verifyOpenClawStateLeaseOwnership: mocks.forbidden,
   releaseOpenClawStateLease: mocks.forbidden,

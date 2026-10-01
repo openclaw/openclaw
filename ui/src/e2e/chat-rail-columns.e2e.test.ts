@@ -324,12 +324,9 @@ suite.define(() => {
                 marginRight: getComputedStyle(
                   document.querySelector<HTMLElement>(".content--chat")!,
                 ).marginRight,
-                reservation: document.documentElement.style.getPropertyValue(
-                  "--oc-browser-reserve-right",
-                ),
               })),
             )
-            .toEqual({ marginRight: "0px", reservation: "0px" });
+            .toEqual({ marginRight: "0px" });
           await expect
             .poll(() =>
               page
@@ -350,9 +347,6 @@ suite.define(() => {
                 const region = document.querySelector<HTMLElement>(".sidebar-region")!;
                 return {
                   marginRight: getComputedStyle(content).marginRight,
-                  reservation: document.documentElement.style.getPropertyValue(
-                    "--oc-browser-reserve-right",
-                  ),
                   spansRegion:
                     Math.abs(
                       panel.getBoundingClientRect().width - region.getBoundingClientRect().width,
@@ -362,7 +356,6 @@ suite.define(() => {
             )
             .toEqual({
               marginRight: "0px",
-              reservation: "0px",
               spansRegion: dock === "bottom",
             });
         },

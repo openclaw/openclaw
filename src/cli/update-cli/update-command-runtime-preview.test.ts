@@ -14,6 +14,7 @@ import * as databaseContext from "./update-command-database-context.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { updateCommand } from "./update-command.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
@@ -41,6 +42,7 @@ it.each([
     running = true,
     debugCapture = false,
   }) => {
+    stubNodeRuntime();
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", debugCapture ? "yes" : "0");
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", undefined);

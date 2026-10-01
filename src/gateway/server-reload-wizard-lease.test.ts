@@ -56,11 +56,12 @@ vi.mock("../agents/context.js", () => ({
 }));
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   advancePreparedModelRuntimeConfig: vi.fn(),
+  beginPreparedModelRuntimePluginDrain: () => ({ pendingPublication: false, release: () => {} }),
   markPreparedModelRuntimeSnapshotsStale: vi.fn(() => Symbol("model-replacement")),
   rejectPendingPreparedModelRuntimeReplacement: vi.fn(),
   refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
 }));
-vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../plugins/installed-plugin-index-record-reader.js", () => ({
   clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
   loadInstalledPluginIndexInstallRecordsSync: vi.fn(() => ({})),
@@ -209,7 +210,12 @@ describe("channel reload with a retained wizard waiting for the lifecycle lease"
       const releasePlugin = createDeferred();
       const reloadPlugins = vi.fn<ManagedGatewayConfigReloaderParams["reloadPlugins"]>(
         async (params) => {
-          params.prepareConfigEffects({ pluginIds: new Set(["fixture"]), channels: new Set() });
+          params
+            .prepareConfigEffects({
+              pluginIds: new Set(["fixture"]),
+              channels: new Set(),
+            })
+            .retire();
           await params.commitRuntime();
           pluginCommitted.resolve();
           await releasePlugin.promise;

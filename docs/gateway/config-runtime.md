@@ -69,9 +69,10 @@ The `models` root also owns global model-catalog behavior.
   accepted only for explicit localhost testing). The default is
   `https://catalog.openclaw.ai/models/v2/catalog.json`. Mirrors can serve v1 or v2.
   The Gateway
-  checks in the background at startup and every six hours. A downloaded catalog
-  applies on the next Gateway restart; a release whose bundled catalog is newer
-  always wins.
+  checks in the background at startup and every six hours. A compatible download
+  is prepared and published as one model-and-pricing generation without a
+  Gateway restart. Readers retain the current generation until preparation
+  succeeds; a release whose bundled catalog is newer always wins.
 
 V2 includes pricing in each model row. Unknown or unavailable pricing does not
 mean a model is free. Models outside the catalog, such as older model IDs or

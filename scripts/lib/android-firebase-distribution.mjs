@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, sign } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { Agent, fetch } from "undici";
 
 const API = "https://firebaseappdistribution.googleapis.com";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -46,30 +47,109 @@ function saveReceipt(file, receipt) {
   }
 }
 
-async function request(url, options, label) {
-  let response;
-  try {
-    response = await fetch(url, {
-      redirect: "error",
-      signal: AbortSignal.timeout(10 * 60_000),
-      ...options,
-    });
-  } catch {
-    throw new Error(`Firebase ${label} did not return a response. Its outcome may be uncertain.`);
+const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+const TRANSIENT_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "TIMEOUT",
+]);
+const DIAGNOSTIC_CODES = new Set([
+  ...TRANSIENT_CODES,
+  "ENOTFOUND",
+  "UND_ERR_INVALID_ARG",
+  "CERT_HAS_EXPIRED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+]);
+
+function transportCode(error) {
+  const code = error?.cause?.code ?? error?.code;
+  if (DIAGNOSTIC_CODES.has(code)) {
+    return code;
   }
-  if (!response.ok) {
-    // Never include provider bodies: token responses and signed download URLs are private.
-    const error = new Error(`Firebase ${label} failed (HTTP ${response.status}).`);
-    error.status = response.status;
-    throw error;
+  if (error?.name === "TimeoutError") {
+    return "TIMEOUT";
   }
+  return error instanceof SyntaxError ? "INVALID_JSON" : "REQUEST_FAILED";
+}
+
+async function withConnections(operation) {
+  const dispatcher = new Agent();
   try {
-    const text = await response.text();
-    return text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(
-      `Firebase ${label} returned an unreadable response. Its outcome may be uncertain.`,
+    return await operation(dispatcher);
+  } finally {
+    // Do not carry idle sockets across the coordinator's synchronous Android build.
+    await dispatcher.close();
+  }
+}
+
+async function request(url, options, label, retrySafe = false) {
+  const attempts = retrySafe ? 4 : 1;
+  const deadline = Date.now() + (retrySafe ? 120_000 : 10 * 60_000);
+  for (let attempt = 1; ; attempt++) {
+    let status;
+    let reason;
+    let transient = false;
+    let retryAfter = 0;
+    try {
+      const response = await fetch(url, {
+        ...options,
+        redirect: "error",
+        signal: AbortSignal.timeout(
+          Math.max(1, Math.min(retrySafe ? 30_000 : 10 * 60_000, deadline - Date.now())),
+        ),
+      });
+      if (response.ok) {
+        const text = await response.text();
+        return text ? JSON.parse(text) : {};
+      }
+      status = response.status;
+      reason = `HTTP ${status}`;
+      transient = TRANSIENT_STATUS.has(status);
+      const header = response.headers.get("retry-after");
+      if (header) {
+        retryAfter = /^\d+$/.test(header) ? Number(header) * 1000 : Date.parse(header) - Date.now();
+        if (!Number.isFinite(retryAfter)) {
+          retryAfter = 0;
+        }
+      }
+      // Discard private provider bodies and release the connection before retry/close.
+      await response.body?.cancel();
+    } catch (error) {
+      if (!status) {
+        reason = transportCode(error);
+        transient = TRANSIENT_CODES.has(reason);
+      }
+    }
+    const failure = new Error(
+      `Firebase ${label} failed (${reason}; attempt ${attempt}/${attempts}).${!retrySafe && (!status || status >= 500) ? " Its outcome may be uncertain." : ""}`,
     );
+    failure.status = status;
+    const wait = Math.max(
+      retryAfter,
+      Math.floor(1000 * 2 ** (attempt - 1) * (0.5 + Math.random())),
+    );
+    if (!retrySafe || !transient || attempt === attempts || Date.now() + wait >= deadline) {
+      throw failure;
+    }
+    console.warn(
+      `Firebase ${label}: ${reason}; retrying attempt ${attempt + 1}/${attempts} in ${wait} ms.`,
+    );
+    await delay(wait);
+    if (Date.now() >= deadline) {
+      throw failure;
+    }
   }
 }
 
@@ -117,7 +197,7 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
   let accessToken;
   let tokenExpiresAt = 0;
 
-  async function token() {
+  async function token(dispatcher) {
     if (accessToken && Date.now() < tokenExpiresAt - 60_000) {
       return accessToken;
     }
@@ -129,12 +209,14 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
       TOKEN_URL,
       {
         method: "POST",
+        dispatcher,
         body: new URLSearchParams({
           grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
           assertion,
         }),
       },
       "authentication",
+      true,
     );
     if (
       typeof result.access_token !== "string" ||
@@ -149,18 +231,20 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
     return accessToken;
   }
 
-  async function api(resource, options = {}, label = "request") {
+  async function api(dispatcher, resource, options = {}, label = "request") {
     return request(
       `${API}${resource}`,
       {
         ...options,
+        dispatcher,
         headers: {
-          Authorization: `Bearer ${await token()}`,
+          Authorization: `Bearer ${await token(dispatcher)}`,
           "Content-Type": "application/json",
           ...options.headers,
         },
       },
       label,
+      !options.method || options.method === "GET",
     );
   }
 
@@ -197,8 +281,8 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
     return value;
   }
 
-  async function preflight() {
-    const info = await api(`/v1/${appName}/aabInfo`, {}, "AAB preflight");
+  async function preflight(dispatcher) {
+    const info = await api(dispatcher, `/v1/${appName}/aabInfo`, {}, "AAB preflight");
     if (info.integrationState !== "INTEGRATED") {
       const state = /^[A-Z_]+$/.test(info.integrationState ?? "")
         ? info.integrationState
@@ -209,7 +293,7 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
     }
     for (const alias of groupAliases) {
       const name = `projects/${projectNumber}/groups/${alias}`;
-      const group = await api(`/v1/${name}`, {}, "tester-group preflight");
+      const group = await api(dispatcher, `/v1/${name}`, {}, "tester-group preflight");
       if (group.name !== name) {
         throw new Error("Firebase tester-group identity does not match configuration.");
       }
@@ -217,7 +301,7 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
     return configuration;
   }
 
-  async function distribute({ plan, notes, artifactsDirectory, receiptPath, playRef }) {
+  async function distribute(dispatcher, { plan, notes, artifactsDirectory, receiptPath, playRef }) {
     if (
       plan.destination !== "internal" ||
       canonical(plan.firebase) !== canonical(configuration) ||
@@ -345,7 +429,7 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
         throw new Error("Firebase receipt violates Wear-before-Phone distribution order.");
       }
       saveReceipt(receiptPath, receipt);
-      await preflight();
+      await preflight(dispatcher);
       // Firebase sorts by release creation time: finish Wear before creating Phone.
       for (const audience of AUDIENCES) {
         const saved = receipt.releases[audience];
@@ -357,6 +441,7 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
           if (!saved.operation) {
             // Re-uploading these exact bytes is deduplicated and does not send tester emails.
             const upload = await api(
+              dispatcher,
               `/upload/v1/${appName}/releases:upload`,
               {
                 method: "POST",
@@ -374,7 +459,12 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
           }
           const deadline = Date.now() + 5 * 60_000;
           while (true) {
-            const operation = await api(`/v1/${saved.operation}`, {}, `${audience} upload status`);
+            const operation = await api(
+              dispatcher,
+              `/v1/${saved.operation}`,
+              {},
+              `${audience} upload status`,
+            );
             if (operation.done) {
               if (operation.error) {
                 delete saved.operation;
@@ -398,6 +488,7 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
         }
         if (saved.state === "uploaded") {
           await api(
+            dispatcher,
             `/v1/${saved.release.name}?updateMask=release_notes.text`,
             {
               method: "PATCH",
@@ -416,6 +507,7 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
         saveReceipt(receiptPath, receipt);
         try {
           await api(
+            dispatcher,
             `/v1/${saved.release.name}:distribute`,
             {
               method: "POST",
@@ -439,5 +531,9 @@ export function createAndroidFirebaseDistribution({ env = process.env } = {}) {
     }
   }
 
-  return { configuration, preflight, distribute };
+  return {
+    configuration,
+    preflight: () => withConnections(preflight),
+    distribute: (options) => withConnections((dispatcher) => distribute(dispatcher, options)),
+  };
 }

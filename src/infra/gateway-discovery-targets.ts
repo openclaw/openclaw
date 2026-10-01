@@ -22,7 +22,6 @@ function pickSshPort(beacon: GatewayBonjourBeacon): number | null {
     : null;
 }
 
-/** Build normalized connection details for a discovered gateway beacon. */
 export function buildGatewayDiscoveryTarget(
   beacon: GatewayBonjourBeacon,
   opts?: { sshUser?: string | null },
@@ -44,14 +43,12 @@ export function buildGatewayDiscoveryTarget(
   };
 }
 
-/** Build the compact label shown in discovery lists. */
 export function buildGatewayDiscoveryLabel(beacon: GatewayBonjourBeacon): string {
   const target = buildGatewayDiscoveryTarget(beacon);
   const hint = target.endpoint ? `${target.endpoint.host}:${target.endpoint.port}` : "host unknown";
   return `${target.title} (${hint})`;
 }
 
-/** Serialize a beacon with resolved websocket information for CLI/UI output. */
 export function serializeGatewayDiscoveryBeacon(beacon: GatewayBonjourBeacon) {
   const target = buildGatewayDiscoveryTarget(beacon);
   return {

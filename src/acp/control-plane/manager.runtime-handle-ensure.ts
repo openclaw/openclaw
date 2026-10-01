@@ -17,8 +17,8 @@ import {
 import {
   matchesAcpSessionControlBinding,
   resolveAcpSessionControlOwner,
-  type AcpSessionRuntimeLocator,
 } from "../runtime/session-control-owner.js";
+import type { AcpSessionRuntimeLocator } from "../runtime/session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "../runtime/session-meta-entry.kernel.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {

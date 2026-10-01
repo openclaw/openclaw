@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { write } from "../fixtures/common.mjs";
 
 const root = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
 const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
@@ -217,11 +218,6 @@ function cleanupRefusal() {
   // These are not this process's children. Preserve identities for the container
   // owner instead of signalling a stale group or claiming that a signal joined it.
   assert.deepEqual(survivors, [], "Refusal cleanup incomplete; recorded processes remain");
-}
-
-function write(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
 }
 
 function digest(file) {

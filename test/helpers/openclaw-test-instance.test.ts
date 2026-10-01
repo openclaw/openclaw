@@ -22,7 +22,7 @@ import {
   drainFileLockStateForTest,
   FILE_LOCK_TIMEOUT_ERROR_CODE,
   resetFileLockStateForTest,
-} from "../../src/infra/file-lock.js";
+} from "../../src/plugin-sdk/file-lock.js";
 import { resolveMaxOutputBytes } from "../../src/process/exec-output.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -34,7 +34,7 @@ import {
   type OpenClawTestInstance,
   testing,
 } from "./openclaw-test-instance.js";
-import { isProcessAlive, waitForDead, waitForFile, waitForFixtureFile } from "./process-wait.js";
+import { isProcessAlive, waitForDead } from "./process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
@@ -141,6 +141,41 @@ afterEach(async () => {
 function trackOperation<T>(operation: Promise<T>): Promise<T> {
   fakeOperations.push(operation.catch(() => undefined));
   return operation;
+}
+
+async function observeCliExit() {
+  const managed = await import("../../scripts/lib/managed-child-process.mts");
+  const run = managed.runManagedCommand;
+  const exited = createDeferred();
+  // Observe the existing process handoff without replacing spawning or pipe ownership.
+  const observer = vi.spyOn(managed, "runManagedCommand").mockImplementation((options) =>
+    run({
+      ...options,
+      onReady(child) {
+        child.once("exit", () => exited.resolve());
+        options.onReady?.(child);
+      },
+    }),
+  );
+  return { exited: exited.promise, restore: () => observer.mockRestore() };
+}
+
+// Detached inherited writers have no ChildProcess handle in this test process.
+async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      if (!isProcessAlive(pid)) {
+        return;
+      }
+      await delay(5, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`process still alive: ${pid}`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 async function createGatewayControl(): Promise<FakeGatewayControl> {
@@ -272,18 +307,12 @@ const kind = (process.env.OPENCLAW_FAKE_GATEWAY_SEQUENCE || "ready").split(",")[
 if (kind === "cli-json") {
   if (argv[1] === "overflow-close") {
     const splitCodePoint = Buffer.from([0xf0, 0x9f, 0xa6, 0x8a]);
-    const releasePath = tracePath + ".overflow-release";
     const first = Buffer.concat([
       Buffer.alloc(Number(argv[0]) - 2, 0x61),
       splitCodePoint.subarray(0, 2),
     ]);
     await new Promise((resolve) => process.stdout.write(first, resolve));
-    writeFileSync(tracePath + ".overflow-ready", "");
-    const releaseDeadline = Date.now() + 5_000;
-    while (!existsSync(releasePath)) {
-      if (Date.now() >= releaseDeadline) throw new Error("overflow release timed out");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitForControl(controlUrl + "/wait");
     await new Promise((resolve) =>
       process.stdout.end(
         Buffer.concat([
@@ -313,7 +342,7 @@ if (kind === "cli" || kind === "cli-drain") {
   process.stderr.write("cli diagnostic\\n");
   if (argv[0] === "wait") {
     setInterval(() => {}, 1_000);
-    writeFileSync(tracePath + ".cli-ready", "ready");
+    if (controlUrl) await waitForControl(controlUrl + "/wait");
     await new Promise(() => {});
   }
   if (kind === "cli-drain") {
@@ -697,14 +726,16 @@ describe("openclaw test instance", () => {
     expect(caller.address()).toBeNull();
   });
 
-  it.each(["complete", "overflow", "overflow-close"] as const)(
+  it.for(["complete", "overflow", "overflow-close"] as const)(
     "owns complete CLI JSON and diagnostic tails (%s)",
-    async (mode) => {
+    async (mode, { signal }) => {
       await withEnvAsync({ OPENAI_API_KEY: "ambient-provider-fixture" }, async () => {
+        const control = mode === "overflow-close" ? await createGatewayControl() : undefined;
         const { instance, tracePath, readAttempts } = await createFakeGateway(
           "cli-json",
           1_000,
           1_500,
+          control,
         );
         // The command must not merge a removed credential back from its parent.
         delete instance.env.OPENAI_API_KEY;
@@ -724,8 +755,20 @@ describe("openclaw test instance", () => {
             (error: unknown) => error,
           );
           if (mode === "overflow-close") {
-            await waitForFile(`${tracePath}.overflow-ready`, 5_000);
-            await fs.writeFile(`${tracePath}.overflow-release`, "");
+            try {
+              // The fixture requests release only after its first stdout write completes.
+              await withinTest(
+                awaitGateBeforeSettlement(
+                  control!.reached,
+                  command,
+                  `timeout waiting for ${tracePath}.overflow-ready`,
+                ),
+                signal,
+              );
+            } finally {
+              control!.unblock();
+              await Promise.allSettled([command]);
+            }
           }
           const outcome = await outcomePromise;
           if (!(outcome instanceof Error)) {
@@ -761,14 +804,15 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it.each([
+  it.for([
     { mode: "0", prepare: false },
     { mode: "7", prepare: false },
     { mode: "drain", prepare: false },
     { mode: "large", prepare: false },
     { mode: "wait", prepare: false },
     { mode: "0", prepare: true },
-  ])("releases the CLI deadline after $mode (prepare=$prepare)", async ({ mode, prepare }) => {
+  ])("releases the CLI deadline after $mode (prepare=$prepare)", async (scenario, { signal }) => {
+    const { mode, prepare } = scenario;
     const control = prepare || mode === "drain" ? await createGatewayControl() : undefined;
     if (prepare) {
       await control?.release();
@@ -794,17 +838,28 @@ describe("openclaw test instance", () => {
       },
     });
     hook.enable();
+    const observed = mode === "drain" ? await observeCliExit() : undefined;
     try {
       const timeoutMs = mode === "wait" ? 1_000 : 30_000;
       const command = trackOperation(scope.run(true, () => instance.cli([mode], { timeoutMs })));
       if (mode === "drain") {
-        await awaitGateBeforeSettlement(
-          control!.reached,
-          command,
-          "CLI stdout writer did not reach its gate",
+        await withinTest(
+          awaitGateBeforeSettlement(
+            control!.reached,
+            command,
+            "CLI stdout writer did not reach its gate",
+          ),
+          signal,
         );
         const [attempt] = await readAttempts();
-        await waitForDead(attempt!.pid, 5_000);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            observed!.exited,
+            command,
+            `process still alive: ${attempt!.pid}`,
+          ),
+          signal,
+        );
         await control!.release();
       }
       if (mode === "wait") {
@@ -836,6 +891,8 @@ describe("openclaw test instance", () => {
       });
       expect(timers.size, "completed CLI invocation retained a deadline").toBe(0);
     } finally {
+      control?.unblock();
+      observed?.restore();
       hook.disable();
       scope.disable();
       // Retain the failing assertion while releasing only this invocation's timers.
@@ -845,7 +902,7 @@ describe("openclaw test instance", () => {
     }
   });
 
-  it("captures CLI stderr written after the process exits", async () => {
+  it("captures CLI stderr written after the process exits", async ({ signal }) => {
     const control = await createGatewayControl();
     const { instance, tracePath, readAttempts } = await createFakeGateway(
       "late-refuse",
@@ -853,17 +910,24 @@ describe("openclaw test instance", () => {
       1_500,
       control,
     );
+    const observed = await observeCliExit();
     const command = trackOperation(instance.cli(["fixture"], { timeoutMs: 10_000 }));
     let writerPid: number | undefined;
     try {
-      await awaitGateBeforeSettlement(
-        control.reached,
-        command,
-        "CLI stderr fixture did not reach its release gate",
+      await withinTest(
+        awaitGateBeforeSettlement(
+          control.reached,
+          command,
+          "CLI stderr fixture did not reach its release gate",
+        ),
+        signal,
       );
-      const [attempt] = await readAttempts();
       writerPid = Number(await fs.readFile(`${tracePath}.writer-pid`, "utf8"));
-      await waitForDead(attempt!.pid, 5_000);
+      const [attempt] = await readAttempts();
+      await withinTest(
+        awaitGateBeforeSettlement(observed.exited, command, `process still alive: ${attempt!.pid}`),
+        signal,
+      );
       // Release the inherited stderr writer only after the CLI leader has exited.
       await control.release();
       const result = await command;
@@ -875,6 +939,7 @@ describe("openclaw test instance", () => {
       });
     } finally {
       control.unblock();
+      observed.restore();
       await Promise.allSettled([command]);
       if (writerPid !== undefined) {
         await waitForDead(writerPid, 5_000);
@@ -1170,29 +1235,43 @@ describe("openclaw test instance", () => {
     }
   });
 
-  it("joins a cancelled CLI command before releasing instance state", async () => {
+  it("joins a cancelled CLI command before releasing instance state", async ({ signal }) => {
     const controller = new AbortController();
+    const control = await createGatewayControl();
     const { instance, tracePath, readAttempts } = await createFakeGateway(
       "cli",
       1_000,
       1_500,
-      undefined,
+      control,
       {
         signal: controller.signal,
       },
     );
     const command = trackOperation(instance.cli(["wait"], { timeoutMs: 1_000 }));
     const outcome = command.catch((error: unknown) => error);
-    await waitForFixtureFile(`${tracePath}.cli-ready`, command, "ready");
-    const [attempt] = await readAttempts();
-    expect(isProcessAlive(attempt!.pid)).toBe(true);
-    controller.abort(new Error("instance owner cancelled during CLI"));
-    expect(await outcome).toMatchObject({ message: expect.stringContaining("aborted") });
-    expect(isProcessAlive(attempt!.pid)).toBe(false);
-    await expect(fs.stat(instance.state.root)).resolves.toBeDefined();
-    await expect(instance.cli(["0"])).rejects.toThrow();
-    await instance.cleanup();
-    await expectPathMissing(instance.state.root);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          control.reached,
+          command,
+          `Child exited before writing ${tracePath}.cli-ready`,
+        ),
+        signal,
+      );
+      const [attempt] = await readAttempts();
+      expect(isProcessAlive(attempt!.pid)).toBe(true);
+      controller.abort(new Error("instance owner cancelled during CLI"));
+      expect(await outcome).toMatchObject({ message: expect.stringContaining("aborted") });
+      expect(isProcessAlive(attempt!.pid)).toBe(false);
+      await expect(fs.stat(instance.state.root)).resolves.toBeDefined();
+      await expect(instance.cli(["0"])).rejects.toThrow();
+      await instance.cleanup();
+      await expectPathMissing(instance.state.root);
+    } finally {
+      controller.abort();
+      control.unblock();
+      await outcome;
+    }
   });
 
   it("orders a new start after an intervening stop instead of joining the earlier start", async ({
@@ -1693,7 +1772,8 @@ describe("openclaw test instance", () => {
         expect(instance.logs()).not.toContain(RESTART_MARKER);
         expect(await readAttempts()).toHaveLength(1);
         expect(instance.child).toBeUndefined();
-        await expect.poll(() => isProcessAlive(drainingPid), { timeout: 500 }).toBe(false);
+        await withinTest(waitForProcessExit(drainingPid, testSignal), testSignal);
+        expect(isProcessAlive(drainingPid)).toBe(false);
       } finally {
         restoreClock();
         testSignal.removeEventListener("abort", restoreClock);
@@ -1847,7 +1927,6 @@ describe("openclaw test instance", () => {
               "dead",
             );
             await withinTest(closed, signal);
-            await waitForDead(resistantPid, 500);
             expect(inspectManagedProcessGroup(leader, { errorPolicy: "indeterminate" })).toBe(
               "dead",
             );
@@ -1987,7 +2066,8 @@ describe("openclaw test instance", () => {
         await instance.stopGateway();
         expect(instance.child).toBeUndefined();
         expect(isProcessAlive(attempts[1]?.pid as number)).toBe(false);
-        await expect.poll(() => isProcessAlive(drainingPid), { timeout: 500 }).toBe(false);
+        await withinTest(waitForProcessExit(drainingPid, testSignal), testSignal);
+        expect(isProcessAlive(drainingPid)).toBe(false);
       } finally {
         restoreClock();
         testSignal.removeEventListener("abort", restoreClock);

@@ -3,6 +3,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { resolveNodePairingGeneration } from "./device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordFromDatabase } from "./device-pairing-store.js";
 import {
@@ -20,8 +21,6 @@ import {
 } from "./push-apns-store.js";
 import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
 import type { ApnsRegistration } from "./push-apns-store.types.js";
-import type { ApnsRegistrationWorkerOperations } from "./push-apns-store.worker-contract.js";
-import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
@@ -55,15 +54,17 @@ function apnsRegistrationsEqual(left: ApnsRegistration, right: ApnsRegistration)
   );
 }
 
+type RegistrationResult =
+  | { status: "pairing-changed" }
+  | { status: "registered"; registration: ApnsRegistration };
+
 function registerApnsRegistrationInDatabase(
   database: OpenClawStateDatabase,
-  input: ApnsRegistrationWorkerOperations["apns.registration.register"]["input"],
-): ApnsRegistrationWorkerOperations["apns.registration.register"]["output"] {
+  input: { candidate: ApnsRegistration; expectedPairingGeneration?: string; nowMs: number },
+): RegistrationResult {
   const { candidate } = input;
   const { nodeId } = candidate;
-  return runOpenClawStateWriteTransaction<
-    ApnsRegistrationWorkerOperations["apns.registration.register"]["output"]
-  >(
+  return runOpenClawStateWriteTransaction<RegistrationResult>(
     ({ db }) => {
       if (input.expectedPairingGeneration) {
         // The Gateway admission check happens before this transaction. Reread the
@@ -120,30 +121,31 @@ function registerApnsRegistrationInDatabase(
   );
 }
 
-export function executeApnsRegistrationCommand(
-  command: SqliteWorkerCommand<ApnsRegistrationWorkerOperations>,
-  database: OpenClawStateDatabase,
-): ApnsRegistrationWorkerOperations[keyof ApnsRegistrationWorkerOperations]["output"] {
-  switch (command.type) {
-    case "apns.registration.register":
-      return registerApnsRegistrationInDatabase(database, command.input);
-    case "apns.registration.clearIfCurrent":
-      return runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          const { nodeId, registration, nowMs } = command.input;
-          const current = readApnsRegistrationFromDatabase(db, nodeId);
-          return Boolean(
-            current &&
-            apnsRegistrationsEqual(current, registration) &&
-            clearApnsRegistrationFromDatabase(db, nodeId, nowMs),
-          );
-        },
-        { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-      );
-    case "apns.registration.read":
-      return readApnsRegistrationFromDatabase(database.db, command.input);
-    case "apns.registrations.read":
-      return readApnsRegistrationsFromDatabase(database.db, command.input);
-  }
-  throw new Error("Unsupported APNs registration command");
-}
+export const apnsOperations = {
+  "apns.registration.register": (
+    input: Parameters<typeof registerApnsRegistrationInDatabase>[1],
+    { open },
+  ) => registerApnsRegistrationInDatabase(open(), input),
+  "apns.registration.clearIfCurrent": (
+    input: { nodeId: string; registration: ApnsRegistration; nowMs: number },
+    { open },
+  ) => {
+    const database = open();
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const { nodeId, registration, nowMs } = input;
+        const current = readApnsRegistrationFromDatabase(db, nodeId);
+        return Boolean(
+          current &&
+          apnsRegistrationsEqual(current, registration) &&
+          clearApnsRegistrationFromDatabase(db, nodeId, nowMs),
+        );
+      },
+      { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    );
+  },
+  "apns.registration.read": (input: string, { open }) =>
+    readApnsRegistrationFromDatabase(open().db, input),
+  "apns.registrations.read": (input: readonly string[], { open }) =>
+    readApnsRegistrationsFromDatabase(open().db, input),
+} satisfies WorkerOperationHandlers;

@@ -12,6 +12,7 @@ import {
   parsePackageDistContentInventory,
 } from "../../lib/package-dist-inventory-contract.mts";
 import { isUpdateCompatibilityChunk } from "../../lib/update-compat-contract.mjs";
+import { readJson } from "./fixtures/common.mjs";
 
 // Frozen candidates predating the recorded inventory retain their original fixture contract.
 export const LEGACY_UPDATE_COMPAT_CHUNKS = [
@@ -20,10 +21,6 @@ export const LEGACY_UPDATE_COMPAT_CHUNKS = [
   "shared-DFJEouXv.js",
 ];
 const FUTURE_FIXTURE_VERSION = "2026.9.99-first-hop.0";
-
-function readJson(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
 
 function readFirstHopReleases(packageRoot) {
   const inventoryPath = path.join(packageRoot, "dist", "update-compat-inventory.json");

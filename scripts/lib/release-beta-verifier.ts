@@ -15,7 +15,11 @@ import { lt as semverLt, valid as validSemver } from "semver";
 import { z } from "zod";
 import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
-import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
+import {
+  compareCodeUnits,
+  readPublicationArtifactArchive,
+  sha256Digest,
+} from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
 import { collectPublishableCorePackages } from "./npm-core-release-packages.mjs";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
@@ -33,6 +37,7 @@ import {
   diagnosticStage,
   diagnosticStageNames,
 } from "./release-postpublish-diagnostic-schema.mts";
+import { sleep } from "./sleep.mjs";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -636,10 +641,6 @@ function recordReleasePublishDiagnostics(event: string): void {
   }
 }
 
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 function requireString(value: unknown, label: string): string {
   const stringValue = normalizeOptionalString(value);
   if (stringValue === undefined) {
@@ -714,12 +715,7 @@ export async function runNpmViewWithRetry(
 ): Promise<string> {
   const deadlineMs = npmRegistryReadbackDeadline();
   const attempts = options.attempts ?? Infinity;
-  const delay =
-    options.delay ??
-    ((delayMs: number) =>
-      new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, delayMs);
-      }));
+  const delay = options.delay ?? sleep;
   const run =
     options.run ??
     ((npmArgs: string[]) =>
@@ -965,9 +961,7 @@ async function fetchWithRetry(
       lastError = error;
     }
     if (attempt < attempts) {
-      await new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, attempt * 1000);
-      });
+      await sleep(attempt * 1000);
     }
   }
   const message = lastError instanceof Error ? lastError.message : String(lastError);
@@ -988,12 +982,7 @@ export async function fetchJsonWithRetry(
   } = {},
 ): Promise<unknown> {
   const attempts = options.attempts ?? 5;
-  const delay =
-    options.delay ??
-    ((delayMs: number) =>
-      new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, delayMs);
-      }));
+  const delay = options.delay ?? sleep;
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? CLAWHUB_REQUEST_TIMEOUT_MS;
   let lastError: unknown;

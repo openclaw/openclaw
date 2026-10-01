@@ -831,15 +831,12 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
 
 private enum MacChatMessageSpeechError: LocalizedError {
     case invalidRequest
-    case emptyAudio
     case unsupportedTransport
 
     var errorDescription: String? {
         switch self {
         case .invalidRequest:
             "Failed to encode tts.speak request"
-        case .emptyAudio:
-            "Gateway tts.speak returned empty audio"
         case .unsupportedTransport:
             "Gateway TTS is unavailable for this chat transport"
         }
@@ -863,15 +860,7 @@ private enum MacChatMessageSpeechClient {
             params: params.mapValues(AnyCodable.init),
             timeoutMs: self.requestTimeoutMs,
             ifCurrentServerLease: serverLease)
-        let response = try JSONDecoder().decode(TtsSpeakResult.self, from: responseData)
-        guard let audioData = Data(base64Encoded: response.audiobase64), !audioData.isEmpty else {
-            throw MacChatMessageSpeechError.emptyAudio
-        }
-        return OpenClawChatSpeechClip(
-            data: audioData,
-            outputFormat: response.outputformat,
-            mimeType: response.mimetype,
-            fileExtension: response.fileextension)
+        return try OpenClawChatGatewayPayloadCodec.decodeSpeechClip(responseData)
     }
 }
 

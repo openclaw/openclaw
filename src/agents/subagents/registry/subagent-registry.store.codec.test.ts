@@ -22,29 +22,36 @@ function createRun(): SubagentRunRecord {
   };
 }
 
-it("persists the child identity independently of a redirected transcript", () => {
-  const entry = createRun();
-  entry.childSessionIdentity = { sessionId: "original-child", lifecycleRevision: "original" };
-  entry.execution.transcriptTarget = { sessionId: "hidden-transcript" };
-  const stored = bindSubagentRunRecord(entry);
-  if (stored.payload_json === undefined) {
-    throw new Error("Encoded subagent payload is missing");
-  }
-  const restored = rowToSubagentRunRecord({
-    run_id: entry.runId,
-    child_session_key: entry.childSessionKey,
-    requester_session_key: entry.requesterSessionKey,
-    controller_session_key: null,
-    requester_store_path: null,
-    controller_store_path: null,
-    created_at: 1,
-    payload_json: stored.payload_json,
-  });
-  expect(restored).toMatchObject({
-    childSessionIdentity: { sessionId: "original-child", lifecycleRevision: "original" },
-    execution: { transcriptTarget: { sessionId: "hidden-transcript" } },
-  });
-});
+it.each([bindSubagentRunRecord, bindCapturedSubagentRunRecord])(
+  "persists the child owner and identity independently of a redirected transcript (%#)",
+  (bind) => {
+    const entry = createRun();
+    entry.childSessionKey = "global";
+    entry.childAgentId = "research";
+    entry.childSessionIdentity = { sessionId: "original-child", lifecycleRevision: "original" };
+    entry.execution.transcriptTarget = { sessionId: "hidden-transcript" };
+    const stored = bind(entry);
+    if (stored.payload_json === undefined) {
+      throw new Error("Encoded subagent payload is missing");
+    }
+    const restored = rowToSubagentRunRecord({
+      run_id: entry.runId,
+      child_session_key: entry.childSessionKey,
+      requester_session_key: entry.requesterSessionKey,
+      controller_session_key: null,
+      requester_store_path: null,
+      controller_store_path: null,
+      created_at: 1,
+      payload_json: stored.payload_json,
+    });
+    expect(restored).toMatchObject({
+      childSessionKey: "global",
+      childAgentId: "research",
+      childSessionIdentity: { sessionId: "original-child", lifecycleRevision: "original" },
+      execution: { transcriptTarget: { sessionId: "hidden-transcript" } },
+    });
+  },
+);
 
 it.each([false, true])(
   "restores captured completion after encoding fails (reply present=%s)",

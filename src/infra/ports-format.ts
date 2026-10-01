@@ -2,6 +2,7 @@ import net from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { splitArgsPreservingQuotes } from "../daemon/arg-split.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
@@ -16,7 +17,9 @@ export function classifyPortListener(listener: PortListener, _port: number): Por
     return "non_gateway";
   }
   const argv = listener.commandLine
-    ? splitArgsPreservingQuotes(listener.commandLine, { escapeMode: "backslash-quote-only" })
+    ? process.platform === "win32"
+      ? (parseWindowsNativeCommandLine(listener.commandLine) ?? [])
+      : splitArgsPreservingQuotes(listener.commandLine, { escapeMode: "backslash-quote-only" })
     : [listener.command ?? ""];
   if (classifyOpenClawArgv(argv, { command: "gateway", pid: listener.pid }).kind === "openclaw") {
     return "gateway";
@@ -188,7 +191,6 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   return hints;
 }
 
-/** Formats one listener row for CLI diagnostics. */
 function formatPortListener(listener: PortListener): string {
   const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
   const user = listener.user ? ` ${listener.user}` : "";
@@ -197,7 +199,6 @@ function formatPortListener(listener: PortListener): string {
   return `${pid}${user}: ${command}${address}`;
 }
 
-/** Formats port diagnostics into CLI output lines. */
 export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status === "free") {
     return [`Port ${diagnostics.port} is free.`];

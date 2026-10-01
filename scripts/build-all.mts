@@ -220,7 +220,7 @@ const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
 );
 const FULL_BUILD_STEP_LABELS = [...FULL_RUNTIME_STEP_LABELS, ...FINAL_BUILD_ARTIFACTS_STEP_LABELS];
 
-export const BUILD_ALL_PROFILES: Record<string, string[]> = {
+const BUILD_ALL_PROFILES: Record<string, string[]> = {
   full: [...FULL_BUILD_STEP_LABELS],
   package: ["clean:dist", ...FULL_BUILD_STEP_LABELS],
   ciArtifacts: [...CI_ARTIFACT_STEP_LABELS],
@@ -243,7 +243,7 @@ const FULL_RUNTIME_ONLY_STEPS = [
   ...BUILD_METADATA_STEP_LABELS,
 ];
 
-export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
+const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
   full: {
     tsdown: {
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
@@ -402,7 +402,7 @@ export function resolveBuildAllEnvironment(
   return buildEnv;
 }
 
-export function resolveBuildAllTsdownPlan(
+function resolveBuildAllTsdownPlan(
   profile: string,
   env: NodeJS.ProcessEnv,
   params: Omit<MemoryLimitParams, "env"> = {},
@@ -482,7 +482,7 @@ export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepPara
   };
 }
 
-export function resolveBuildAllStepOnCacheHit(step: BuildAllStep) {
+function resolveBuildAllStepOnCacheHit(step: BuildAllStep) {
   if (!step.cache?.runOnHit) {
     return null;
   }

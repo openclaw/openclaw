@@ -1,5 +1,7 @@
 // Focused public test helpers for generic fixtures shared by plugin tests.
 
+export { resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
+
 export {
   createCliRuntimeCapture,
   firstWrittenJsonArg,
