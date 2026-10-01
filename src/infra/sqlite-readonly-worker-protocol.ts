@@ -10,7 +10,6 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 export type SqliteReadOnlyWorkerMode =
   | "sync"
   | "content-version"
-  | "state-ownership"
   | "async"
   | "consolidated"
   | "reclaim"
@@ -31,7 +30,6 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
-  | { ok: true; ownershipJson: string }
   | { ok: true; warnings: string[] }
   | { ok: false; message: string };
 
@@ -94,7 +92,6 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
     return false;
   }
   return (
-    (value.ok === true && "ownershipJson" in value && typeof value.ownershipJson === "string") ||
     (value.ok === true && "location" in value && typeof value.location === "string") ||
     (value.ok === true &&
       "contentVersion" in value &&
@@ -137,7 +134,7 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
-  mode: "sync" | "async" | "consolidated" | "content-version" | "state-ownership",
+  mode: "sync" | "async" | "consolidated" | "content-version",
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -193,9 +190,6 @@ export function readSqliteReadOnlyWorkerValue(
     "location" in result
   ) {
     return result.location;
-  }
-  if (mode === "state-ownership" && "ownershipJson" in result) {
-    return result.ownershipJson;
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;

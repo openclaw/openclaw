@@ -23,7 +23,6 @@ import {
   readSourceJournalMode,
   readSourceSidecars,
 } from "../infra/sqlite-readonly-location.js";
-import { runSqliteReadOnlyWorker } from "../infra/sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
@@ -41,10 +40,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
-import {
-  hydrateOpenClawStateWorkerError,
-  retainOpenClawStateWorkerErrorPayload,
-} from "./openclaw-state-worker-error.js";
+import { inspectOpenClawStateOwnershipWithWorker } from "./openclaw-state-ownership-worker.js";
 
 export const STATE_SUPERVISION_KEY = "gateway.supervision";
 const MAX_OWNERSHIP_TIMESTAMP_MS = 8_640_000_000_000_000;
@@ -247,18 +243,12 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     !getOpenClawDatabaseMaintenanceScope() &&
     !getStateDatabaseSchemaLease(databasePath)
   ) {
-    const ownershipJson = await runSqliteReadOnlyWorker(databasePath, {
-      mode: "state-ownership",
-      signal: options.signal,
-    });
+    const ownershipJson = await inspectOpenClawStateOwnershipWithWorker(
+      databasePath,
+      options.signal,
+    );
     options.signal?.throwIfAborted();
     assertStateDatabaseAccessAllowed(databasePath);
-    const response: unknown = JSON.parse(ownershipJson);
-    if (isRecord(response) && "workerError" in response) {
-      const error = new Error("Shared-state ownership inspection failed");
-      retainOpenClawStateWorkerErrorPayload(error, response.workerError);
-      throw hydrateOpenClawStateWorkerError(error);
-    }
     assertOwnershipAllowsWrite(
       ownershipJson === "null" ? null : parseExternalOwnership(ownershipJson, databasePath),
       databasePath,

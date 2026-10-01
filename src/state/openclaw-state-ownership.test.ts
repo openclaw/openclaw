@@ -14,7 +14,6 @@ import {
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
 } from "../infra/sqlite-lifecycle-errors.js";
-import * as readOnlyWorker from "../infra/sqlite-readonly-worker.js";
 import * as sqliteReadonlyLocation from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -30,6 +29,7 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "./openclaw-state-ownership-operations.js";
+import * as ownershipWorker from "./openclaw-state-ownership-worker.js";
 import {
   assertOpenClawStateWriteAllowedAtPath,
   inspectOpenClawStateOwnershipAtPath,
@@ -238,11 +238,11 @@ describe("external shared-state ownership", () => {
     );
     const controller = new AbortController();
     const reason = new Error("ownership worker stopped");
-    const run = readOnlyWorker.runSqliteReadOnlyWorker;
+    const run = ownershipWorker.inspectOpenClawStateOwnershipWithWorker;
     const worker = vi
-      .spyOn(readOnlyWorker, "runSqliteReadOnlyWorker")
-      .mockImplementationOnce(async (pathname, options) => {
-        const result = await run(pathname, options);
+      .spyOn(ownershipWorker, "inspectOpenClawStateOwnershipWithWorker")
+      .mockImplementationOnce(async (pathname, signal) => {
+        const result = await run(pathname, signal);
         controller.abort(reason);
         return result;
       });
@@ -250,10 +250,7 @@ describe("external shared-state ownership", () => {
       await expect(
         assertOpenClawStateWriteAllowedAtPath({ databasePath, signal: controller.signal }),
       ).rejects.toBe(reason);
-      expect(worker).toHaveBeenCalledWith(databasePath, {
-        mode: "state-ownership",
-        signal: controller.signal,
-      });
+      expect(worker).toHaveBeenCalledWith(databasePath, controller.signal);
     } finally {
       worker.mockRestore();
       database.close();
