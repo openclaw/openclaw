@@ -84,10 +84,20 @@ vi.mock("./typing.js", () => ({
 vi.mock("./streaming-card.js", async () => {
   const { mergeStreamingText } = await import("./card-test-helpers.js");
   class FeishuStreamingFinalizationError extends Error {
-    result: { visibleReplySent: boolean; content?: string; messageId?: string };
+    result: {
+      visibleReplySent: boolean;
+      content?: string;
+      messageId?: string;
+      finalTextAccepted?: boolean;
+    };
     constructor(
       cause: unknown,
-      result: { visibleReplySent: boolean; content?: string; messageId?: string },
+      result: {
+        visibleReplySent: boolean;
+        content?: string;
+        messageId?: string;
+        finalTextAccepted?: boolean;
+      },
     ) {
       super(cause instanceof Error ? cause.message : String(cause), { cause });
       this.result = result;
@@ -1371,6 +1381,62 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to a static card when the streaming card rejected the final text after a visible preview", async () => {
+    sendStructuredCardFeishuMock.mockResolvedValueOnce({ messageId: "om-static" });
+    const { options } = createDispatcherHarness();
+    const delivery = await options.deliver({ text: "completed final answer" }, { kind: "final" });
+    // CardKit closed streaming mode (for example after its ~10 minute stream lifetime);
+    // the card still shows the earlier accepted preview but refused the completed answer.
+    stream(0).closeWithResult.mockRejectedValueOnce(
+      new FeishuStreamingFinalizationError(
+        new Error("Update card content failed: streaming mode is closed (code=300309)"),
+        {
+          visibleReplySent: true,
+          content: "stale preview",
+          messageId: "om-stale-card",
+          finalTextAccepted: false,
+        },
+      ),
+    );
+
+    await expect(options.onIdle?.()).rejects.toThrow("streaming mode is closed");
+    await expect(delivery?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        content: "completed final answer",
+        messageIds: ["om-static"],
+        visibleReplySent: true,
+      },
+    });
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "completed final answer" }),
+    );
+
+    await options.deliver({ text: "completed final answer" }, { kind: "final" });
+    await options.onIdle?.();
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a visible streaming card when the final text was accepted before close failed", async () => {
+    const { options } = createDispatcherHarness();
+    const delivery = await options.deliver({ text: "accepted final" }, { kind: "final" });
+    stream(0).closeWithResult.mockRejectedValueOnce(
+      new FeishuStreamingFinalizationError(new Error("close failed"), {
+        visibleReplySent: true,
+        content: "accepted final",
+        messageId: "om-stream",
+      }),
+    );
+
+    await expect(options.onIdle?.()).rejects.toThrow("close failed");
+    await expect(delivery?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: { content: "accepted final", visibleReplySent: true },
+    });
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("falls back to post mode when over-limit streaming content was never accepted", async () => {
     sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-post" });
     const { options } = createDispatcherHarness();
@@ -1603,6 +1669,57 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       accepted("second", ["om-shared", "om-media-second"]),
     );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("shares one final-text recovery receipt for identical media-delayed finals in one generation", async () => {
+    sendStructuredCardFeishuMock.mockResolvedValueOnce({ messageId: "om-recovery" });
+    const firstMedia = gate<{ messageId: string }>();
+    const secondMedia = gate<{ messageId: string }>();
+    sendMediaFeishuMock
+      .mockImplementationOnce(firstMedia.wait)
+      .mockImplementationOnce(secondMedia.wait);
+    const { options } = createDispatcherHarness();
+    const firstDeliveryPromise = options.deliver(
+      { text: "completed final", mediaUrl: "https://example.com/first.png" },
+      { kind: "final" },
+    );
+    await firstMedia.started;
+    const secondDeliveryPromise = options.deliver(
+      { text: "completed final", mediaUrl: "https://example.com/second.png" },
+      { kind: "final" },
+    );
+    await secondMedia.started;
+
+    stream(0).closeWithResult.mockRejectedValueOnce(
+      new FeishuStreamingFinalizationError(new Error("streaming mode is closed"), {
+        visibleReplySent: true,
+        content: "stale preview",
+        messageId: "om-stale",
+        finalTextAccepted: false,
+      }),
+    );
+    const idle = Promise.resolve(options.onIdle?.());
+    firstMedia.resolve({ messageId: "om-first-media" });
+    secondMedia.resolve({ messageId: "om-second-media" });
+
+    const firstDelivery = await firstDeliveryPromise;
+    const secondDelivery = await secondDeliveryPromise;
+    await expect(firstDelivery?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: { content: "completed final", messageIds: ["om-recovery", "om-first-media"] },
+    });
+    await expect(secondDelivery?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        content: "completed final",
+        messageIds: ["om-recovery", "om-second-media"],
+      },
+    });
+    await expect(idle).rejects.toThrow("streaming mode is closed");
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "completed final" }),
+    );
   });
 
   it("retains every accepted voice upload fallback when a later fallback fails", async () => {

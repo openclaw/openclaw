@@ -323,6 +323,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     contentClaimed?: boolean;
   };
   const closedStreamingSettlements = new Map<number, ClosedStreamingSettlement>();
+  // Identical final payloads sharing one closed generation must share one static
+  // recovery send, including media-delayed owners settled later in this idle pass.
+  const streamingRecoveryPromises = new Map<string, Promise<FeishuReplyDeliveryResult>>();
   let sentIndependentBlockText = false;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
@@ -571,12 +574,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           closed = error.result;
           finalizationError = error;
         }
-        result = createFeishuReplyDeliveryResult({
-          results: [closed],
-          visibleReplySent: closed.visibleReplySent,
-          content: closed.content,
-          kind: "card",
-        });
+        result = {
+          ...createFeishuReplyDeliveryResult({
+            results: [closed],
+            visibleReplySent: closed.visibleReplySent,
+            content: closed.content,
+            kind: "card",
+          }),
+          ...(closed.finalTextAccepted === false ? { finalTextAccepted: false } : {}),
+        };
         if (result.visibleReplySent) {
           visibleReplySent = true;
         }
@@ -954,20 +960,41 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
-  const ensureVisibleStreamingDelivery = async (
-    result: FeishuReplyDeliveryResult | undefined,
-    content: string | undefined,
+  const performVisibleStreamingRecovery = (
+    content: string,
     infoKind?: string,
-  ): Promise<FeishuReplyDeliveryResult | undefined> => {
-    if (result?.visibleReplySent === true || !content?.trim()) {
-      return result;
-    }
-    return sendChunkedTextReply({
+  ): Promise<FeishuReplyDeliveryResult> =>
+    sendChunkedTextReply({
       text: content,
       useCard: withinCardTableLimit(content),
       infoKind,
       preparedPostText: true,
     });
+
+  const ensureVisibleStreamingDelivery = async (
+    result: FeishuReplyDeliveryResult | undefined,
+    content: string | undefined,
+    infoKind?: string,
+    generation?: number,
+  ): Promise<FeishuReplyDeliveryResult | undefined> => {
+    // A visible card whose final write was rejected only shows a stale preview; the
+    // completed answer still has to reach the chat through a static card/message.
+    if (
+      (result?.visibleReplySent === true && result.finalTextAccepted !== false) ||
+      !content?.trim()
+    ) {
+      return result;
+    }
+    if (generation === undefined) {
+      return performVisibleStreamingRecovery(content, infoKind);
+    }
+    const key = `${String(generation)}:${content}`;
+    let recovery = streamingRecoveryPromises.get(key);
+    if (!recovery) {
+      recovery = performVisibleStreamingRecovery(content, infoKind);
+      streamingRecoveryPromises.set(key, recovery);
+    }
+    return recovery;
   };
 
   function queueIdleSideEffects(): Promise<void> {
@@ -1019,6 +1046,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 providerFinalized,
                 completion.result.content,
                 completion.infoKind,
+                completion.streamingGeneration,
               );
             } catch (fallbackError: unknown) {
               const fallbackPartial = isChannelPartialDeliveryError(fallbackError)
@@ -1137,6 +1165,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             finalized,
             paramsLocal.content,
             paramsLocal.infoKind,
+            paramsLocal.ownerGeneration,
           )) ?? finalized;
       }
     } catch (fallbackError: unknown) {
@@ -1231,6 +1260,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         replyLifecycleStateInitialized = true;
         deliveredFinalTexts.clear();
         closedStreamingSettlements.clear();
+        streamingRecoveryPromises.clear();
         sentIndependentBlockText = false;
         idleRequestedForReply = false;
         visibleReplySent = false;

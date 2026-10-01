@@ -17,6 +17,8 @@ export type FeishuReplyDeliveryResult = {
   replyToId?: string;
   visibleReplySent?: boolean;
   content?: string;
+  /** False when a streaming card rejected the final text and only a stale preview is visible. */
+  finalTextAccepted?: boolean;
 };
 
 export type FeishuReplyDeliveryResultWithFinalization = FeishuReplyDeliveryResult & {
