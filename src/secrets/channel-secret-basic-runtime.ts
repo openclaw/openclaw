@@ -102,7 +102,10 @@ export function createChannelSecretContract(
 ) {
   return {
     secretTargetRegistryEntries: createChannelSecretTargetRegistryEntries(params),
-    collectRuntimeConfigAssignments(collectorParams: ChannelSecretCollectorParams): void {
+    collectRuntimeConfigAssignments(
+      this: void,
+      collectorParams: ChannelSecretCollectorParams,
+    ): void {
       const resolved = getChannelSurface(collectorParams.config, params.channelKey);
       if (!resolved) {
         return;
