@@ -12,6 +12,7 @@ private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
     private var pending: [String: [Pending]] = [:]
     private var waiting: [String: CheckedContinuation<Pending, Never>] = [:]
     private var automaticReply: Data?
+    private var responder: (@Sendable (OpenClawChatGatewayRequest) throws -> Data)?
     private var queuedReplies: [Data] = []
     private(set) var requests: [OpenClawChatGatewayRequest] = []
 
@@ -21,6 +22,7 @@ private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
 
     private func send(_ request: OpenClawChatGatewayRequest) async throws -> Data {
         self.requests.append(request)
+        if let responder { return try responder(request) }
         if !self.queuedReplies.isEmpty { return self.queuedReplies.removeFirst() }
         if let automaticReply { return automaticReply }
         return try await withCheckedThrowingContinuation { reply in
@@ -44,6 +46,10 @@ private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
     func replyAutomatically(with data: Data, after replies: [Data] = []) {
         self.automaticReply = data
         self.queuedReplies = replies
+    }
+
+    func replyUsing(_ responder: @escaping @Sendable (OpenClawChatGatewayRequest) throws -> Data) {
+        self.responder = responder
     }
 
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
@@ -71,6 +77,37 @@ private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
 
 @MainActor
 struct ChatSessionSidebarQueryTests {
+    @Test func `paging and retained refresh preserve enrichment beyond the Gateway response cap`() async {
+        let transport = SidebarQueryTransport()
+        let owner = self.owner(transport)
+        await transport.replyUsing { request in
+            let offset = request.params["offset"]?.value as? Int ?? 0
+            let limit = request.params["limit"]?.value as? Int ?? 0
+            let end = min(205, offset + limit)
+            let rows = (offset..<end).map { index -> [String: Any] in
+                var row: [String: Any] = ["key": "agent:main:row-\(index)", "sessionId": "row-\(index)"]
+                // The Gateway admits transcript fields for only the first 100 rows per response.
+                if index - offset < 100 {
+                    row["derivedTitle"] = "Title \(index)"
+                    row["lastMessagePreview"] = "Preview \(index)"
+                }
+                return row
+            }
+            return try JSONSerialization.data(withJSONObject: [
+                "sessions": rows, "hasMore": end < 205, "nextOffset": end, "totalCount": 205,
+            ])
+        }
+        await owner.load()
+        #expect(owner.rows.allSatisfy { $0.derivedTitle != nil && $0.lastMessagePreview != nil })
+        await owner.load(append: true)
+        await owner.load(append: true)
+        #expect(owner.rows.count == 205)
+        await owner.load()
+        #expect(owner.rows.count == 205)
+        #expect(owner.rows.allSatisfy { $0.derivedTitle != nil && $0.lastMessagePreview != nil })
+        #expect(await transport.requests.allSatisfy { ($0.params["limit"]?.value as? Int ?? 0) <= 100 })
+    }
+
     private func owner(
         _ transport: SidebarQueryTransport,
         query: OpenClawChatSidebarQuery = .init(agentID: "main")) -> OpenClawChatSessionSidebarData
@@ -131,7 +168,7 @@ struct ChatSessionSidebarQueryTests {
         vm.healthOK = true
         await transport.replyAutomatically(with: self.page([]))
         for (scope, agentID, limit) in [
-            (OpenClawChatSidebarAgentScope.selected, Optional("main"), 200), (.all, nil, 100),
+            (OpenClawChatSidebarAgentScope.selected, Optional("main"), 100), (.all, nil, 100),
         ] {
             vm.updateSidebarQuery(agentScope: scope)
             let task = try #require(owner.queryTask)
@@ -181,23 +218,22 @@ struct ChatSessionSidebarQueryTests {
     @Test func `selected pages deduplicate and refresh retains the loaded window without committing pending edits`() async throws {
         let transport = SidebarQueryTransport()
         let owner = self.owner(transport)
-        let first = (0..<200).map { self.row("row-\($0)") }
-        let initial = await self.load(owner, transport, self.page(first, paging: #""hasMore":true,"nextOffset":200"#))
-        #expect(initial.params["limit"]?.value as? Int == 200)
+        let first = (0..<100).map { self.row("row-\($0)") }
+        let initial = await self.load(owner, transport, self.page(first, paging: #""hasMore":true,"nextOffset":100"#))
+        #expect(initial.params["limit"]?.value as? Int == 100)
         let target = try #require(owner.rows.first)
         let intent = owner.beginMutation(target: target, field: .label) { $0.label = "Pending" }
         let append = await self.load(owner, transport, self.page([
-            self.row("row-0", label: "Duplicate"), self.row("row-200"),
+            self.row("row-0", label: "Duplicate"), self.row("row-100"),
         ]), append: true)
-        #expect(append.params["offset"]?.value as? Int == 200)
-        #expect(append.params["limit"]?.value as? Int == 200)
-        #expect(owner.rows.count == 201)
-        #expect(owner.result?.count == 201)
+        #expect(append.params["offset"]?.value as? Int == 100)
+        #expect(append.params["limit"]?.value as? Int == 100)
+        #expect(owner.rows.count == 101)
         owner.finishMutation(intent, receipt: nil)
         #expect(owner.row(key: target.key, agentID: "main")?.label == "Work")
         #expect(owner.nextOffset == nil)
         let refresh = await self.load(owner, transport, self.page([self.row("replacement")]))
-        #expect(refresh.params["limit"]?.value as? Int == 201)
+        #expect(refresh.params["limit"]?.value as? Int == 100)
         #expect(refresh.params["offset"] == nil)
         #expect(owner.rows.map(\.sessionId) == ["replacement"])
     }
@@ -280,11 +316,11 @@ struct ChatSessionSidebarQueryTests {
             #expect(request.params["archived"]?.value as? String == "all")
             #expect(request.params["agentId"] == nil)
         }
-        #expect(owner.result?.sessions.count == 300)
         #expect(owner.rows.count == 297)
-        #expect(owner.result?.hasMore == true)
         #expect(owner.nextOffset == nil)
         #expect(!owner.isSettled)
+        #expect(!owner.setQuery(.init(agentID: nil, status: .all)))
+        #expect(owner.rows.count == 300)
         #expect(!owner.setQuery(.init(agentID: nil, status: .archived)))
         #expect(owner.rows.map(\.sessionId) == ["global-0", "global-1", "global-2"])
         #expect(owner.row(key: "global", agentID: "owner-1")?.sessionId == "global-1")
@@ -308,7 +344,7 @@ struct ChatSessionSidebarQueryTests {
         #expect(owner.isSettled == !empty)
     }
 
-    @Test func `all agent window retains earlier totals when its final raw page omits pagination metadata`() async {
+    @Test func `all agent window stays incomplete when its final page omits pagination metadata`() async {
         let transport = SidebarQueryTransport()
         let owner = self.owner(transport, query: .init(agentID: nil, status: .archived))
         await transport.replyAutomatically(with: self.page([]), after: [
@@ -317,11 +353,10 @@ struct ChatSessionSidebarQueryTests {
         ])
         await owner.load()
         #expect(await transport.requests.count == 2)
-        #expect(owner.result?.sessions.count == 2)
-        #expect(owner.result?.totalCount == 400)
-        #expect(owner.result?.hasMore == true)
         #expect(owner.rows.isEmpty)
         #expect(!owner.isSettled)
+        #expect(!owner.setQuery(.init(agentID: nil, status: .all)))
+        #expect(owner.rows.map(\.sessionId) == ["first", "second"])
     }
 
     @Test func `cold roster admission survives first query failure and stale search responses`() async throws {

@@ -174,7 +174,9 @@ struct MacGatewayChatTransportMappingTests {
                 case "sessions.rewind": #"{"editorText":"rewound draft"}"#
                 case "sessions.fork": #"{"sessionKey":"forked","editorText":"continued draft"}"#
                 case "sessions.list":
-                    #"{"defaults":{"modelProvider":"example","model":"model-a","contextTokens":128000,"thinkingOptions":["low","high"],"thinkingDefault":"low","modelSelectionTarget":"session","agentRuntime":{"id":"pi","source":"agent"}},"sessions":[]}"#
+                    #"{"defaults":{"modelProvider":"example","model":"model-a","contextTokens":128000,"# +
+                        #""thinkingOptions":["low","high"],"thinkingDefault":"low","modelSelectionTarget":"session","# +
+                        #""agentRuntime":{"id":"pi","source":"agent"}},"sessions":[]}"#
                 case "sessions.search": #"{"results":[],"sessions":[]}"#
                 case "chat.send": #"{"runId":"native-send","status":"ok"}"#
                 default: #"{"ok":true}"#

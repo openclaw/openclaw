@@ -47,23 +47,12 @@ extension OpenClawChatSessionSidebarData {
         self.queryState?.error
     }
 
-    public var transcriptHits: [SessionsSearchHit] {
-        self.queryState?.hits ?? []
-    }
-
     public var searchIndexing: Bool {
         self.queryState?.indexing == true
     }
 
     public var archivedTranscriptsExcluded: Int {
         self.queryState?.excluded ?? 0
-    }
-
-    public var result: OpenClawChatSessionsListResponse? {
-        guard var page = self.queryState?.page else { return nil }
-        page.sessions = self.project(self.queryState?.pageIDs ?? [])
-        page.count = page.sessions.count
-        return page
     }
 
     public var rows: [OpenClawChatSessionEntry] {
@@ -205,21 +194,21 @@ extension OpenClawChatSessionSidebarData {
             var incoming: [OpenClawChatSessionEntry] = []
             var ids = page != nil ? state.pageIDs : []
             var seen = Set(ids)
-            // ui/src/lib/agents/roster-activity-store.ts:315: bounded three-page all-agent window, not Load more.
-            // src/shared/session-list-limits.ts:8; selected refreshes retain the loaded window.
-            let limit = !query.search.isEmpty ? 10 : allAgents ? 100 : append ? 200 :
-                max(200, state.pageIDs.count, self.rows.count)
-            for _ in 0..<(allAgents ? 3 : 1) {
+            // The Gateway enriches only 100 rows per response (src/shared/session-list-limits.ts).
+            // Page retained windows too; otherwise a refresh clears older titles and previews.
+            let limit = !query.search.isEmpty ? 10 : allAgents ? 300 : append ? 100 :
+                max(100, state.pageIDs.count, self.rows.count)
+            for consumed in stride(from: 0, to: limit, by: 100) {
                 let payload = try await request(OpenClawChatGatewayRequests.sidebarSessions(
                     query: query,
-                    limit: limit,
+                    limit: min(100, limit - consumed),
                     offset: offset))
                 let next = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(payload, agentID: query.agentID)
                 guard generation == self.queryState?.generation, !Task.isCancelled else { return }
                 // ui/src/lib/sessions/session-managed-list-refresh.ts:128 discards duplicate page facts.
                 incoming += next.sessions.filter { seen.insert(Self.identity($0)).inserted }
                 page = Self.appendPage(next, previous: page, count: seen.count)
-                if !allAgents || next.hasMore != true || next.sessions.isEmpty { break }
+                if next.hasMore != true || next.sessions.isEmpty { break }
                 offset = next.nextOffset ?? offset + next.sessions.count
             }
             let search = await transcript
