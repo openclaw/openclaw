@@ -121,6 +121,7 @@ export type HeartbeatRunOptions = {
   reason?: string;
   /** Persisted monitor cadence carried by a coalesced scheduled wake. */
   scheduledEveryMs?: number;
+  failureNotificationOwners?: readonly (() => boolean)[];
   tasks?: readonly HeartbeatScheduledTask[];
   deps?: HeartbeatDeps;
 };

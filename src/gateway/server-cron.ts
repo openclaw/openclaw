@@ -30,7 +30,6 @@ import {
   listConfiguredSessionStoreAgentIds,
   listKnownSessionStoreAgentIds,
 } from "../config/sessions/targets.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import {
@@ -125,6 +124,7 @@ import {
 } from "./scheduled-run-gateway-context.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import { drainGatewayCron } from "./server-cron-drain.js";
+import { normalizeCronHeartbeatWake } from "./server-cron-heartbeat-wake.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronWebhook,
@@ -239,14 +239,6 @@ function pickDefined<T extends Record<string, unknown>>(obj: T, keys: (keyof T)[
     }
   }
   return result;
-}
-
-function sanitizeCronHeartbeatOverride(
-  heartbeat: AgentDefaultsConfig["heartbeat"] | undefined,
-): AgentDefaultsConfig["heartbeat"] | undefined {
-  return heartbeat?.target === "last"
-    ? { ...heartbeat, to: undefined, accountId: undefined }
-    : heartbeat;
 }
 
 async function finalizeCronCompletionAnnouncement(params: {
@@ -496,24 +488,11 @@ export function buildGatewayCronService(params: {
     return { runtimeConfig, agentId, sessionKey };
   };
 
-  const resolveCronHeartbeatWake = (opts: HeartbeatWakeRequest): HeartbeatWakeRequest => {
-    const { agentId, sessionKey } = resolveCronTarget({
-      ...opts,
-      preserveUntargeted: opts.source !== "manual",
-    });
-    // Untargeted monitor ticks resolve their configured session in the runner.
-    const useConfiguredSession = opts.source === "interval" && !opts.sessionKey?.trim();
-    return {
-      source: opts.source,
-      intent: opts.intent,
-      reason: opts.reason,
-      agentId,
-      sessionKey: useConfiguredSession ? undefined : sessionKey,
-      heartbeat: sanitizeCronHeartbeatOverride(opts.heartbeat),
-      ...(opts.scheduledEveryMs !== undefined ? { scheduledEveryMs: opts.scheduledEveryMs } : {}),
-      ...(opts.tasks?.length ? { tasks: opts.tasks } : {}),
-    };
-  };
+  const resolveCronHeartbeatWake = (opts: HeartbeatWakeRequest): HeartbeatWakeRequest =>
+    normalizeCronHeartbeatWake(
+      opts,
+      resolveCronTarget({ ...opts, preserveUntargeted: opts.source !== "manual" }),
+    );
 
   const defaultAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(params.cfg);

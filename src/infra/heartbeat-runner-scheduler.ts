@@ -258,6 +258,9 @@ export function startHeartbeatRunner(opts: {
           intent,
           reason,
           ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
+          ...(params.failureNotificationOwners
+            ? { failureNotificationOwners: params.failureNotificationOwners }
+            : {}),
           ...(targeted ? { sessionKey: requestedSessionKey } : {}),
           tasks: requestedTasks,
           deps: { runtime: state.runtime },

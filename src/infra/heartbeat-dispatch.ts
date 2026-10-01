@@ -420,6 +420,13 @@ async function prepareHeartbeatDispatchReply(
   };
   if (failed) {
     await restoreActivity();
+    if (opts.failureNotificationOwners?.some((owner) => owner())) {
+      // Return the failure to the waiting scheduler; its existing route, threshold,
+      // cooldown, and incident owner must not compete with a primary chat copy.
+      await suppressSelected();
+      finish({ ...event, silent: true }, false);
+      return {};
+    }
   } else {
     const previousAt = stateEntry?.lastHeartbeatSentAt;
     if (

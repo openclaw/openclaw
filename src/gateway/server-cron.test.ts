@@ -38,6 +38,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { registerGatewayCronHeartbeatWakeTests } from "./server-cron-heartbeat-wake.test-support.js";
 import { registerGatewayCronContextTests } from "./server-cron.context.test-support.js";
 import {
   registerGatewayCronMutationAuthorityTests,
@@ -3000,69 +3001,14 @@ describe("buildGatewayCronService", () => {
     });
   });
 
-  it("forwards heartbeat overrides through the cron wake adapter", () => {
-    const cfg = createCronConfig("server-cron-heartbeat-override");
-    const state = loadCronService(cfg);
-    try {
-      const cronDeps = getCronDeps(state);
-
-      cronDeps?.requestHeartbeat?.({
-        source: "cron",
-        intent: "event",
-        reason: "cron:test",
-        sessionKey: "discord:channel:ops",
-        heartbeat: { target: "last" },
-        scheduledEveryMs: 15 * 60_000,
-      });
-
-      expect(requestHeartbeatMock).toHaveBeenCalledWith({
-        source: "cron",
-        intent: "event",
-        reason: "cron:test",
-        agentId: "main",
-        sessionKey: "agent:main:discord:channel:ops",
-        heartbeat: { target: "last", to: undefined, accountId: undefined },
-        scheduledEveryMs: 15 * 60_000,
-      });
-    } finally {
-      state.cron.stop();
-    }
-  });
-
-  it("returns the settled heartbeat result through the cron wake adapter", async () => {
-    requestHeartbeatAndWaitMock.mockResolvedValueOnce({
-      status: "failed",
-      reason: "agent-runner-failure",
-    });
-    await withCronService(createCronConfig("server-cron-heartbeat-settlement"), async (state) => {
-      const lifecycle = { abortSignal: new AbortController().signal };
-      await expect(
-        getCronState(state).deps.requestHeartbeatAndWait?.(
-          {
-            source: "interval",
-            intent: "task",
-            reason: "heartbeat-task:report",
-            agentId: "main",
-            scheduledEveryMs: 15 * 60_000,
-            tasks: [{ jobId: "report", name: "report", prompt: "Run report" }],
-          },
-          lifecycle,
-        ),
-      ).resolves.toEqual({ status: "failed", reason: "agent-runner-failure" });
-      expect(requestHeartbeatAndWaitMock).toHaveBeenCalledWith(
-        {
-          source: "interval",
-          intent: "task",
-          reason: "heartbeat-task:report",
-          agentId: "main",
-          sessionKey: undefined,
-          heartbeat: undefined,
-          scheduledEveryMs: 15 * 60_000,
-          tasks: [{ jobId: "report", name: "report", prompt: "Run report" }],
-        },
-        lifecycle,
-      );
-    });
+  registerGatewayCronHeartbeatWakeTests({
+    createCronConfig,
+    loadCronService,
+    withCronService,
+    getCronDeps,
+    getCronState,
+    requestHeartbeatMock,
+    requestHeartbeatAndWaitMock,
   });
 
   it("passes awaited target-last wakes as destination-only overrides", async () => {

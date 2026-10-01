@@ -44,6 +44,8 @@ export type HeartbeatWakeRequest = {
   heartbeat?: HeartbeatWakeOverride;
   /** Persisted cron monitor cadence carried with a scheduled heartbeat tick. */
   scheduledEveryMs?: number;
+  /** Live scheduler waiter owns failure notifications; never survives its retirement. */
+  failureNotificationOwners?: readonly (() => boolean)[];
   tasks?: readonly HeartbeatScheduledTask[];
   /** Internal marker for work retained after a spacing/cooldown deferral. */
   retainedWork?: boolean;

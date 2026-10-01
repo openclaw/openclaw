@@ -107,6 +107,61 @@ describe("heartbeat-wake", () => {
     vi.restoreAllMocks();
   });
 
+  it("retains live failure ownership when a manual wake wins coalescing", async () => {
+    vi.useFakeTimers();
+    let ownsFailure = true;
+    const owner = () => ownsFailure;
+    const failureNotificationOwners = [owner];
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+    requestHeartbeat(
+      wake("interval", { agentId: "main", failureNotificationOwners, coalesceMs: 100 }),
+    );
+    requestHeartbeat(wake("manual", { agentId: "main", coalesceMs: 100 }));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(handler).toHaveBeenCalledOnce();
+    const request = handler.mock.calls[0]?.[0] as WakeRequest;
+    expect(request.source).toBe("manual");
+    expect(request.failureNotificationOwners?.some((owns) => owns())).toBe(true);
+    ownsFailure = false;
+    expect(request.failureNotificationOwners?.some((owns) => owns())).toBe(false);
+  });
+
+  it("keeps original owners flat across repeated coalescing and removes retired waiters", async () => {
+    vi.useFakeTimers();
+    let live = true;
+    const owner = () => live;
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+    requestHeartbeat(
+      wake("interval", {
+        agentId: "main",
+        failureNotificationOwners: [owner],
+        coalesceMs: 100,
+      }),
+    );
+    for (let index = 0; index < 10_000; index += 1) {
+      requestHeartbeat(wake("exec-event", { agentId: "main", coalesceMs: 100 }));
+    }
+    await vi.advanceTimersByTimeAsync(100);
+    expect(handler).toHaveBeenCalledOnce();
+    const request = handler.mock.calls[0]?.[0] as WakeRequest;
+    expect(request.failureNotificationOwners).toEqual([owner]);
+    expect(request.failureNotificationOwners?.some((owns) => owns())).toBe(true);
+    live = false;
+    requestHeartbeat(
+      wake("interval", {
+        agentId: "main",
+        failureNotificationOwners: [owner],
+        coalesceMs: 100,
+      }),
+    );
+    requestHeartbeat(wake("exec-event", { agentId: "main", coalesceMs: 100 }));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1]?.[0].failureNotificationOwners).toBeUndefined();
+  });
+
   it("drains a pending wake once a handler is registered", async () => {
     vi.useFakeTimers();
 

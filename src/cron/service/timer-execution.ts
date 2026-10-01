@@ -22,6 +22,7 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
+import { resolveFailureAlert } from "./failure-alerts.js";
 import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
 import {
   type CronJobExecutionResult,
@@ -160,6 +161,10 @@ export async function executeJobCore(
       effectiveJob,
       state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
     );
+    let waitingForHeartbeat = true;
+    const failurePolicy =
+      effectiveJob.payload.kind === "heartbeat" ? resolveFailureAlert(state, effectiveJob) : null;
+    const marker = options?.activeJobMarker;
     const heartbeatWake = heartbeatTask
       ? {
           source: "interval" as const,
@@ -181,6 +186,19 @@ export async function executeJobCore(
           agentId,
           scheduledEveryMs:
             effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.everyMs : undefined,
+          ...(failurePolicy && marker
+            ? {
+                // The wake bus may retain this request after the scheduler waiter exits.
+                // Only its still-live occurrence can take the failure notice.
+                failureNotificationOwners: [
+                  () =>
+                    waitingForHeartbeat &&
+                    isCronActiveJobMarkerCurrent(marker) &&
+                    !marker.jobRemoved &&
+                    marker.cancellation?.kind !== "requested",
+                ],
+              }
+            : {}),
         };
     const heartbeatWaitLifecycle = options?.onHeartbeatExecutionStarted?.(heartbeatWake);
     const releaseHeartbeatWait = markCronJobWaitingForHeartbeat(
@@ -194,6 +212,7 @@ export async function executeJobCore(
         ...heartbeatWaitLifecycle,
       }) ?? { status: "failed", reason: "heartbeat wake settlement unavailable" });
     } finally {
+      waitingForHeartbeat = false;
       releaseHeartbeatWait();
     }
     if (abortSignal?.aborted) {

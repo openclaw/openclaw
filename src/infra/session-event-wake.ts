@@ -114,6 +114,13 @@ function merge(previous: PendingWake, next: PendingWake): PendingWake {
   );
   const bypass =
     (preferred.intent === "manual" || preferred.intent === "immediate") && !preferred.retainedWork;
+  // Retired waiters must not accumulate in a wake retained across cadence ticks.
+  const failureOwners = [
+    ...new Set([
+      ...(preferred.failureNotificationOwners ?? []),
+      ...(other.failureNotificationOwners ?? []),
+    ]),
+  ].filter((owner) => owner());
   return {
     ...preferred,
     // A scheduled reason must not discard the event's guard-retry semantics.
@@ -131,6 +138,7 @@ function merge(previous: PendingWake, next: PendingWake): PendingWake {
     notBefore: bypass ? 0 : Math.max(previous.notBefore, next.notBefore),
     heartbeat: preferred.heartbeat ?? other.heartbeat,
     scheduledEveryMs: preferred.scheduledEveryMs ?? other.scheduledEveryMs,
+    failureNotificationOwners: failureOwners.length ? failureOwners : undefined,
     tasks: tasks.size
       ? [...tasks.values()].toSorted((left, right) => left.jobId.localeCompare(right.jobId))
       : undefined,
@@ -423,6 +431,9 @@ function createSessionEventWakeRuntime() {
               ...(wake.heartbeat ? { heartbeat: wake.heartbeat } : {}),
               ...(wake.scheduledEveryMs !== undefined
                 ? { scheduledEveryMs: wake.scheduledEveryMs }
+                : {}),
+              ...(wake.failureNotificationOwners
+                ? { failureNotificationOwners: wake.failureNotificationOwners }
                 : {}),
               ...(wake.tasks ? { tasks: wake.tasks } : {}),
               ...(wake.retainedWork ? { retainedWork: true } : {}),

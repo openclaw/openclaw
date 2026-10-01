@@ -100,6 +100,22 @@ afterEach(async () => {
 });
 
 describe("startHeartbeatRunner", () => {
+  it("passes live scheduler failure ownership into the executing turn", async () => {
+    let live = true;
+    const failureNotificationOwners = [() => live];
+    start();
+    await wake({
+      source: "interval",
+      intent: "scheduled",
+      agentId: "main",
+      scheduledEveryMs: 30 * 60_000,
+      failureNotificationOwners,
+    });
+    const request = runSpy.mock.calls[0]?.[0];
+    expect(request?.failureNotificationOwners?.some((owner) => owner())).toBe(true);
+    live = false;
+    expect(request?.failureNotificationOwners?.some((owner) => owner())).toBe(false);
+  });
   it("starts stopped when its owner signal is already aborted", async () => {
     const owner = new AbortController();
     owner.abort();
