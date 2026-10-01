@@ -16,7 +16,6 @@ import {
 import {
   asOptionalObjectRecord,
   asSafeIntegerInRange,
-  containsAsciiControlCharacter,
   isRecord,
   normalizeBoundedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -227,9 +226,8 @@ function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {
     !name ||
     !contextWindow ||
     !maxTokens ||
-    containsAsciiControlCharacter(id) ||
-    id.includes(" ") ||
-    containsAsciiControlCharacter(name)
+    hasControlCharacter(id, true) ||
+    hasControlCharacter(name)
   ) {
     return null;
   }
@@ -245,4 +243,14 @@ function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {
       requiresStringContent: true,
     },
   };
+}
+
+function hasControlCharacter(value: string, includeSpace = false): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= (includeSpace ? 32 : 31) || code === 127) {
+      return true;
+    }
+  }
+  return false;
 }
