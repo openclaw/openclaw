@@ -69,6 +69,79 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(transitionBatchSpy).not.toHaveBeenCalled();
   });
 
+  it.each(["defer", "cancel"] as const)(
+    "coalesces sibling wake decisions before the %s write",
+    async (decision) => {
+      const children = ["run-a", "run-b"].map((runId) =>
+        makeSettledChild({
+          runId,
+          suppressCompletionDelivery: decision === "cancel",
+          requesterSettleWake: {
+            status: "pending",
+            attemptCount: 0,
+            requesterYieldBatch: true,
+            rearmGeneration: 1,
+            batchRunIds: ["run-a", "run-b"],
+          },
+        }),
+      );
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+      if (decision === "defer") {
+        readDescendantFacts.mockResolvedValue({ unsettled: true, active: 1 });
+      }
+      const original = wakeParams();
+      const transitionBatch = vi.fn(
+        async (...args: Parameters<typeof original.transitionBatch>) => {
+          await Promise.resolve();
+          return original.transitionBatch(...args);
+        },
+      );
+      const completeBatch = vi.fn(async (...args: Parameters<typeof original.completeBatch>) => {
+        await Promise.resolve();
+        return original.completeBatch(...args);
+      });
+
+      await Promise.all(
+        children.map((settledEntry) =>
+          maybeWakeRequesterAfterAllChildrenSettled(
+            wakeParams({
+              settledEntry,
+              transitionBatch,
+              completeBatch,
+            }),
+          ),
+        ),
+      );
+
+      expect(decision === "defer" ? transitionBatch : completeBatch).toHaveBeenCalledOnce();
+      expect(deliverSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("lets a healthy sibling decide while an earlier descendant read loses its source", async () => {
+    const children = ["run-a", "run-b"].map((runId) => makeSettledChild({ runId }));
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    const readStarted = createDeferred();
+    const staleRead = createDeferred<undefined>();
+    readDescendantFacts.mockImplementationOnce(() => {
+      readStarted.resolve();
+      return staleRead.promise;
+    });
+    const first = maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: children[0] }),
+    );
+    try {
+      await readStarted.promise;
+      await expect(
+        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+      ).resolves.toBe(true);
+      expect(deliverSpy).toHaveBeenCalledOnce();
+    } finally {
+      staleRead.resolve(undefined);
+      await expect(first).resolves.toBe(false);
+    }
+  });
+
   it("includes the whole connected drained wave for a staggered fan-out", async () => {
     // A overlaps B and B overlaps C, but A never overlaps C. When C settles
     // last, A's results must still ride the wake and the idempotency key must

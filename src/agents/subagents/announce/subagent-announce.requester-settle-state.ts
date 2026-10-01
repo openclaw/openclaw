@@ -1,3 +1,4 @@
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
@@ -18,6 +19,46 @@ export type RequesterSettleWakeBatchCallbacks = {
     onCommitted?: () => void,
   ) => void | Promise<void>;
 };
+
+const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
+
+/** Reads stay independent; the first prepared decision owns mutation and delivery. */
+export function createRequesterSettleBatchClaim(
+  key: string,
+  resolveGatewayContext: GatewayContextResolver | undefined,
+) {
+  const hadGatewayContext = Boolean(resolveGatewayContext?.());
+  if (resolveGatewayContext && !hadGatewayContext) {
+    return undefined;
+  }
+  const isGatewayClosed = () => {
+    try {
+      return hadGatewayContext && !resolveGatewayContext?.();
+    } catch {
+      // An incompatible captured batch cannot block a fresh Gateway owner.
+      return hadGatewayContext;
+    }
+  };
+  return {
+    isGatewayClosed,
+    claim: (): boolean => {
+      const owner = activeRequesterSettleWakeBatches.get(key);
+      if (owner === isGatewayClosed) {
+        return true;
+      }
+      if (owner?.() === false) {
+        return false;
+      }
+      activeRequesterSettleWakeBatches.set(key, isGatewayClosed);
+      return true;
+    },
+    release(): void {
+      if (activeRequesterSettleWakeBatches.get(key) === isGatewayClosed) {
+        activeRequesterSettleWakeBatches.delete(key);
+      }
+    },
+  };
+}
 
 /** Fence consumed pause notices and completions superseded by a pause. */
 export function isRequesterWakeStateCurrent(
