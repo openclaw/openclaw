@@ -760,6 +760,149 @@ describe("secret egress proxy", () => {
     );
   });
 
+  async function openStoreForGrantTests(prefix: string) {
+    const { openOpenClawStateDatabase, closeOpenClawStateDatabaseForTest } =
+      await import("../../state/openclaw-state-db.js");
+    const fsx = await import("node:fs");
+    const osp = await import("node:os");
+    const stateDir = fsx.mkdtempSync(path.join(osp.tmpdir(), prefix));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+    process.env.OPENCLAW_HOME = stateDir;
+    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    return {
+      close: () => {
+        closeOpenClawStateDatabaseForTest();
+        fsx.rmSync(stateDir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  function requireBinding(
+    names: string,
+    bindings: { name: string; sentinel: string; allowedHosts: string[] }[] | undefined,
+  ) {
+    const binding = bindings?.find((candidate) => candidate.name === names);
+    if (!binding) {
+      throw new Error(`snapshot missing egress binding ${names}`);
+    }
+    return binding;
+  }
+
+  it("keeps a running process's grant fixed after later store mutations", async () => {
+    // Documented lifetime contract (docs/tools/secrets.md, PR #152557): store
+    // mutations affect future launches only. A registered grant must keep
+    // substituting with zero store I/O, even for the row it was staged from.
+    const secret = "running-grant-secret-value";
+    const store = await openStoreForGrantTests("egress-fixed-");
+    const { readSecretStoreExecEnvironment, writeSecretStoreEntryWithRollback } =
+      await import("../store/secret-store.js");
+    const staged = writeSecretStoreEntryWithRollback({
+      scope: { kind: "team" } as const,
+      name: "FIXED_GRANT_KEY",
+      value: secret,
+      kind: "secret",
+      allowedHosts: ["localhost"],
+      updatedBy: "grant-test",
+    });
+    const binding = requireBinding(
+      "FIXED_GRANT_KEY",
+      readSecretStoreExecEnvironment({ includeSecretSentinels: true }).secretEgressBindings,
+    );
+    proxyEnv = proxy.registerProcess([binding]).env;
+
+    await expect(
+      requestThroughTunnel({ headers: { Authorization: `Bearer ${binding.sentinel}` } }),
+    ).resolves.toMatchObject({ status: 200 });
+    const originRequestsAfterValidUse = originRequests.length;
+
+    // A later mutation (version advances) must not disturb the running grant.
+    staged.rollback();
+    await expect(
+      requestThroughTunnel({ headers: { Authorization: `Bearer ${binding.sentinel}` } }),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(originRequests.length).toBe(originRequestsAfterValidUse + 1);
+    store.close();
+  });
+
+  it("refuses to register a stale snapshot whose row was rolled back before launch", async () => {
+    // The review P1: a staged write rolled back while approval was pending must
+    // never become a process grant. Validation runs once at registration on the
+    // launch path; the substitution path stays store-free.
+    const secret = "staged-rollback-secret-value";
+    const store = await openStoreForGrantTests("egress-stale-");
+    const { readSecretStoreExecEnvironment, writeSecretStoreEntryWithRollback } =
+      await import("../store/secret-store.js");
+    const staged = writeSecretStoreEntryWithRollback({
+      scope: { kind: "team" } as const,
+      name: "STAGED_KEY",
+      value: secret,
+      kind: "secret",
+      allowedHosts: ["localhost"],
+      updatedBy: "grant-test",
+    });
+    const binding = requireBinding(
+      "STAGED_KEY",
+      readSecretStoreExecEnvironment({ includeSecretSentinels: true }).secretEgressBindings,
+    );
+
+    // Rollback lands between snapshot and launch: registration re-validates the
+    // stale binding, finds the row gone, and grants nothing.
+    staged.rollback();
+    proxyEnv = proxy.registerProcess([binding]).env;
+
+    const result = await requestThroughTunnel({
+      headers: { Authorization: `Bearer ${binding.sentinel}` },
+    });
+    expect(result.status).toBe(502);
+    expect(originRequests).toHaveLength(0);
+    expect(auditEvents.at(-1)).toMatchObject({
+      kind: "refused",
+      reason: "unresolved-sentinel",
+    });
+    store.close();
+  });
+
+  it("re-validates stale bindings against the live store when the row still exists", async () => {
+    // Green path the earlier proof lacked: an unrelated store mutation advances
+    // the version, but the credential row is intact, so launch-time validation
+    // must look the name up in the live store and approve the grant. A broken
+    // lookup (wrong argument shape, stale row logic) fails this test.
+    const secret = "unrelated-mutation-secret-value";
+    const store = await openStoreForGrantTests("egress-green-");
+    const { readSecretStoreExecEnvironment, writeSecretStoreEntry } =
+      await import("../store/secret-store.js");
+    writeSecretStoreEntry({
+      scope: { kind: "team" } as const,
+      name: "SURVIVING_KEY",
+      value: secret,
+      kind: "secret",
+      allowedHosts: ["localhost"],
+      updatedBy: "grant-test",
+    });
+    const binding = requireBinding(
+      "SURVIVING_KEY",
+      readSecretStoreExecEnvironment({ includeSecretSentinels: true }).secretEgressBindings,
+    );
+
+    // Unrelated mutation advances the version; SURVIVING_KEY stays intact.
+    writeSecretStoreEntry({
+      scope: { kind: "team" } as const,
+      name: "OTHER_KEY",
+      value: "other-secret-value",
+      kind: "secret",
+      allowedHosts: ["localhost"],
+      updatedBy: "grant-test",
+    });
+
+    proxyEnv = proxy.registerProcess([binding]).env;
+    await expect(
+      requestThroughTunnel({ headers: { Authorization: `Bearer ${binding.sentinel}` } }),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(originRequests.at(-1)?.headers["authorization"]).toBe(`Bearer ${secret}`);
+    store.close();
+  });
+
   it.each([
     { label: "an unbound host", allowedHosts: ["api.example.com"] },
     { label: "no bound hosts", allowedHosts: [] },
