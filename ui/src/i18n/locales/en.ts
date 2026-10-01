@@ -217,6 +217,8 @@ export const en: TranslationMap & {
     pickerNoMatches: "No matches",
     save: "Save",
     saving: "Saving…",
+    downloadFailed: "Could not download {filename}. Try again.",
+    downloadReady: "{filename} is ready.",
     saveAndPublish: "Save & Publish",
     importing: "Importing…",
     importFromRelays: "Import from Relays",
