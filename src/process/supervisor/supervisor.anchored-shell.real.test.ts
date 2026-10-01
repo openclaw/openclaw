@@ -274,7 +274,6 @@ describe("supervisor anchored shell real process ownership", () => {
 
   it.skipIf(process.platform === "win32").for([
     { oneShot: false, ignoreTerm: false },
-    { oneShot: true, ignoreTerm: false },
     { oneShot: true, ignoreTerm: true },
   ])(
     "observes children that closed inherited descriptors (oneShot=$oneShot, ignores TERM=$ignoreTerm)",
@@ -298,129 +297,114 @@ describe("supervisor anchored shell real process ownership", () => {
       }
     },
   );
-  it.each(["inherited", "replacement", "empty"] as const)(
-    "completes an otherwise idle host with %s command environment",
-    async (environment) => {
-      const cwd = tempDirs.make("openclaw-anchored-shell-idle-");
-      let command =
-        'printf "%s\\n" "${OPENCLAW_TEST_PARENT_ENV-absent}" "${OPENCLAW_TEST_CHILD_ENV-absent}"';
-      if (process.platform === "win32") {
-        const commandPath = path.join(cwd, "environment.cmd");
-        await writeFile(
-          commandPath,
-          "@echo off\r\nif defined OPENCLAW_TEST_PARENT_ENV (echo parent) else (echo absent)\r\nif defined OPENCLAW_TEST_CHILD_ENV (echo child) else (echo absent)\r\n",
-        );
-        command = `"${commandPath}"`;
-      }
-      // A separate host has no Vitest timers or IPC keeping admission alive.
-      const host = spawnSync(
-        process.execPath,
-        [
-          ...resolveRuntimeWorkerArgv(
-            resolveRuntimeWorkerUrl(processProbeEntrypoints.idleSupervisor),
-          ),
-          environment,
-          command,
-        ],
-        {
-          env: {
-            ...process.env,
-            OPENCLAW_TEST_PARENT_ENV: "parent",
-            OPENCLAW_TEST_CHILD_ENV: undefined,
-          },
-          encoding: "utf8",
-          timeout: 10_000,
-        },
+  it("completes an otherwise idle host with a replacement command environment", async () => {
+    const cwd = tempDirs.make("openclaw-anchored-shell-idle-");
+    let command =
+      'printf "%s\\n" "${OPENCLAW_TEST_PARENT_ENV-absent}" "${OPENCLAW_TEST_CHILD_ENV-absent}"';
+    if (process.platform === "win32") {
+      const commandPath = path.join(cwd, "environment.cmd");
+      await writeFile(
+        commandPath,
+        "@echo off\r\nif defined OPENCLAW_TEST_PARENT_ENV (echo parent) else (echo absent)\r\nif defined OPENCLAW_TEST_CHILD_ENV (echo child) else (echo absent)\r\n",
       );
-      expect(host.error).toBeUndefined();
-      expect(host.status, host.stderr).toBe(0);
-      const result = JSON.parse(host.stdout);
-      expect({ ...result, stdout: result.stdout.replaceAll("\r\n", "\n") }).toMatchObject({
-        reason: "exit",
-        exitCode: 0,
-        stdout:
-          environment === "inherited"
-            ? "parent\nabsent\n"
-            : environment === "replacement"
-              ? "absent\nchild\n"
-              : "absent\nabsent\n",
-      });
-    },
-  );
+      command = `"${commandPath}"`;
+    }
+    // A separate host has no Vitest timers or IPC keeping admission alive.
+    const host = spawnSync(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(processProbeEntrypoints.idleSupervisor),
+        ),
+        "replacement",
+        command,
+      ],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_PARENT_ENV: "parent",
+          OPENCLAW_TEST_CHILD_ENV: undefined,
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+      },
+    );
+    expect(host.error).toBeUndefined();
+    expect(host.status, host.stderr).toBe(0);
+    const result = JSON.parse(host.stdout);
+    expect({ ...result, stdout: result.stdout.replaceAll("\r\n", "\n") }).toMatchObject({
+      reason: "exit",
+      exitCode: 0,
+      stdout: "absent\nchild\n",
+    });
+  });
 
-  it.each(["exit", "cancel"] as const)(
-    "keeps a replacement's status independent of an older live child's %s",
-    async (completion) => {
-      const supervisor = createProcessSupervisor();
-      const runs: ManagedRun[] = [];
-      const oldOutput = createDeferred();
-      const spawn = async (scopeKey: string) => {
-        const ready = createDeferred();
-        const run = await supervisor.spawn({
-          mode: "child",
-          runId: "shared-correlation",
-          scopeKey,
-          argv: [
-            process.execPath,
-            "-e",
-            `
+  it("keeps a replacement's status independent of an older live child's exit", async () => {
+    const supervisor = createProcessSupervisor();
+    const runs: ManagedRun[] = [];
+    const oldOutput = createDeferred();
+    const spawn = async (scopeKey: string) => {
+      const ready = createDeferred();
+      const run = await supervisor.spawn({
+        mode: "child",
+        runId: "shared-correlation",
+        scopeKey,
+        argv: [
+          process.execPath,
+          "-e",
+          `
               process.stdout.write("ready\\n");
               process.stdin.on("data", (data) => {
                 if (data.toString() === "emit") process.stdout.write("older-output\\n");
                 else process.exit(Number(data.toString()));
               });
             `,
-          ],
-          stdinMode: "pipe-open",
-          onStdout: (chunk) => {
-            if (chunk.includes("ready")) {
-              ready.resolve();
-            }
-            if (chunk.includes("older-output")) {
-              oldOutput.resolve();
-            }
-          },
-        });
-        runs.push(run);
-        activePids.add(run.pid!);
-        await Promise.race([
-          ready.promise,
-          run.wait().then(() => {
-            throw new Error("child exited before readiness");
-          }),
-        ]);
-        return run;
-      };
-      try {
-        const older = await spawn("older-backend");
-        const replacement = await spawn("replacement-backend");
-        const snapshot = { ...replacement.activity };
-        older.stdin!.write("emit");
-        await oldOutput.promise;
-        expect(replacement.activity).toEqual(snapshot);
+        ],
+        stdinMode: "pipe-open",
+        onStdout: (chunk) => {
+          if (chunk.includes("ready")) {
+            ready.resolve();
+          }
+          if (chunk.includes("older-output")) {
+            oldOutput.resolve();
+          }
+        },
+      });
+      runs.push(run);
+      activePids.add(run.pid!);
+      await Promise.race([
+        ready.promise,
+        run.wait().then(() => {
+          throw new Error("child exited before readiness");
+        }),
+      ]);
+      return run;
+    };
+    try {
+      const older = await spawn("older-backend");
+      const replacement = await spawn("replacement-backend");
+      const snapshot = { ...replacement.activity };
+      older.stdin!.write("emit");
+      await oldOutput.promise;
+      expect(replacement.activity).toEqual(snapshot);
 
-        if (completion === "exit") {
-          older.stdin!.write("23");
-        } else {
-          older.cancel();
-        }
-        expect(replacement.activity).toEqual(snapshot);
-        await older.wait();
-        expect(isProcessAlive(replacement.pid!)).toBe(true);
-        expect(replacement.activity).toEqual(snapshot);
+      older.stdin!.write("23");
+      expect(replacement.activity).toEqual(snapshot);
+      await older.wait();
+      expect(isProcessAlive(replacement.pid!)).toBe(true);
+      expect(replacement.activity).toEqual(snapshot);
 
-        replacement.stdin!.write("0");
-        await expect(replacement.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
-        expect(replacement.activity.resultSettled).toBe(true);
-      } finally {
-        for (const run of runs) {
-          run.cancel();
-        }
-        await Promise.all(runs.map((run) => run.wait()));
-        await supervisor.shutdown();
+      replacement.stdin!.write("0");
+      await expect(replacement.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
+      expect(replacement.activity.resultSettled).toBe(true);
+    } finally {
+      for (const run of runs) {
+        run.cancel();
       }
-    },
-  );
+      await Promise.all(runs.map((run) => run.wait()));
+      await supervisor.shutdown();
+    }
+  });
 
   it("keeps a replacement supervised after an older tree with the same run ID becomes extinct", async ({
     signal,

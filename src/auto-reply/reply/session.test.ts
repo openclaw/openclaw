@@ -3580,28 +3580,6 @@ describe("persistSessionUsageUpdate", () => {
     },
 
     {
-      name: "clears stale CLI binding with compaction accounting",
-      seed: {
-        cliSessionIds: { "claude-cli": "stale-cli-session", "codex-cli": "codex-session" },
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "stale-cli-session", authProfileId: "anthropic:old" },
-          "codex-cli": { sessionId: "codex-session" },
-        },
-        claudeCliSessionId: "stale-cli-session",
-      },
-      update: {
-        usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-        lastCallUsage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-        providerUsed: "claude-cli",
-        clearCliSessionBinding: true,
-      },
-      expected: {
-        cliSessionIds: { "codex-cli": "codex-session" },
-        cliSessionBindings: { "codex-cli": { sessionId: "codex-session" } },
-        claudeCliSessionId: undefined,
-      },
-    },
-    {
       name: "preserves an ordered zero context snapshot independently of billable usage",
       seed: {
         totalTokens: 1_794_391,

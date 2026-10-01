@@ -13,7 +13,8 @@ import { withPluginRuntimeGatewayRequestScope } from "../src/plugins/runtime/gat
 import { createPluginRuntime } from "../src/plugins/runtime/index.js";
 import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail } from "../src/state/user-profiles.js";
+import { linkEmail } from "../src/state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../src/state/user-profiles.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
 afterEach(() => {

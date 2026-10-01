@@ -28,6 +28,7 @@ import type {
 } from "../skills/workshop/store.worker-contract.js";
 import type { TranscriptWriteOperations } from "../transcripts/store-write.worker-contract.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
+import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
@@ -57,9 +58,11 @@ export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
   SkillCuratorOperations &
   TranscriptWriteOperations &
   AuthProfileWorkerOperations &
-  PluginRuntimeWorkerOperations;
+  PluginRuntimeWorkerOperations &
+  UserProfileWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredStateWorkerOperations>({
+  userProfiles: () => import("./user-profiles.worker.js").then((m) => m.userProfileOperations),
   authProfiles: () =>
     import("../agents/auth-profiles/store.worker.js").then((m) => m.authProfileOperations),
   plugins: () => import("../plugins/state.worker.js").then((m) => m.pluginRuntimeOperations),

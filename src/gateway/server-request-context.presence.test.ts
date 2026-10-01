@@ -5,10 +5,10 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { listSystemPresence } from "../infra/system-presence.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
-  linkEmail,
   resolveUserProfileId,
 } from "../state/user-profiles.js";
 import {

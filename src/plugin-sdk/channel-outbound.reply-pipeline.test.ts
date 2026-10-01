@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelReplyPipeline, type ReplyPrefixOptions } from "./channel-reply-pipeline.js";
+import {
+  createChannelMessageReplyPipeline as createChannelReplyPipeline,
+  type ReplyPrefixOptions,
+} from "./channel-outbound.js";
 
 describe("createChannelReplyPipeline", () => {
   afterEach(() => {

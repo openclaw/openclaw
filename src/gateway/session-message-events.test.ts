@@ -29,12 +29,8 @@ import * as secureRandom from "../infra/secure-random.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
-import {
-  ensureProfileForEmail,
-  listProfiles,
-  setAvatar,
-  setDisplayName,
-} from "../state/user-profiles.js";
+import { setAvatar, setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, listProfiles } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

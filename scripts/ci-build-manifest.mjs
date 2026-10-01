@@ -774,9 +774,21 @@ if (runtimePullRequest && runNodeFull) {
 // A Node-targeting fallback does not invalidate independently resolved
 // check families or their compiler/lint consumer graphs.
 const narrowCheckScope = proposedCheckScope?.mode === "scoped" ? proposedCheckScope : null;
-const runCheckPlan = Boolean(runCheck && narrowCheckScope);
+const extensionLintMode =
+  workflowEventName === "pull_request" &&
+  isCanonicalRepository &&
+  !releaseGate &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  changedPaths?.length &&
+  existsSync("scripts/lib/ci-extension-lint-plan.mts")
+    ? parseCiEnvFlag(process.env.OPENCLAW_CI_EXTENSION_LINT_FULL)
+      ? "full"
+      : "affected"
+    : undefined;
+const runCheckPlan = Boolean(runCheck && (narrowCheckScope || extensionLintMode));
 let typeGraphBoundaryOwner = "";
-if (runCheckPlan && narrowCheckScope.types) {
+if (runCheckPlan && proposedCheckScope?.types) {
   const { resolveChangedCiTsgoInputs } = await import(
     fromTarget("./scripts/lib/tsgo-core-test-shards.mts")
   );
@@ -784,8 +796,10 @@ if (runCheckPlan && narrowCheckScope.types) {
   typeGraphBoundaryOwner =
     runNodeFull &&
     !releaseFastLane &&
-    narrowCheckScope.additionalGroups.includes("boundaries") &&
-    (!compilerPaths || compilerPaths.every((file) => file.startsWith("extensions/")))
+    proposedCheckScope.additionalGroups.includes("boundaries") &&
+    (!narrowCheckScope ||
+      !compilerPaths ||
+      compilerPaths.every((file) => file.startsWith("extensions/")))
       ? "additional-checks"
       : "check-plan";
 }
@@ -1352,10 +1366,19 @@ const manifest = {
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
-  narrow_check_paths_json: narrowCheckScope ? JSON.stringify(changedPaths) : "",
+  narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
     ? JSON.stringify({
+        ...(extensionLintMode
+          ? {
+              extensionLintMode,
+              preserveFullChecks: !narrowCheckScope,
+              ...(process.env.OPENCLAW_CI_CHANGED_BASE
+                ? { changedBaseRef: process.env.OPENCLAW_CI_CHANGED_BASE }
+                : {}),
+            }
+          : {}),
         typeGraphBoundaryOwner,
         changedPaths,
         changedCoreTestPaths: changedCoreTestPaths ?? null,

@@ -50,7 +50,11 @@ import {
   unlinkUserChannelIdentity,
   resolveUserChannelAuthorizationPolicy,
 } from "../../state/user-channel-identities.js";
-import { linkEmail, setDisplayName, setUserProfileRole } from "../../state/user-profiles.js";
+import {
+  linkEmail,
+  setDisplayName,
+  setUserProfileRole,
+} from "../../state/user-profile-writes.worker.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   buildChannelInboundEventContext,

@@ -21,7 +21,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqli
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setUserPreferences } from "../state/user-preferences.js";
-import { syncGitHubIdentity } from "../state/user-profiles.js";
+import { syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import * as publicationExecutor from "./github-publication-executor.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";

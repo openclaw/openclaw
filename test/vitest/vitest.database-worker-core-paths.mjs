@@ -432,6 +432,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-post-update.test.ts",
   "src/hooks/installs.test.ts",
   "src/hooks/update.test.ts",
+  "src/plugins/install.npm-spec.test.ts",
   "src/plugins/install-persistence.enablement.test.ts",
   "src/plugins/install-persistence.test.ts",
   "src/plugins/install-persistence.warning-sink.test.ts",
