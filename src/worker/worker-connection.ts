@@ -32,7 +32,8 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
-import { notifyListeners } from "../shared/listeners.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
   connectWorkerConnectionAttempt,
   isRetryableWorkerCloseReason,
@@ -80,8 +81,7 @@ export class WorkerConnection {
   private readonly stateListeners = new Set<(state: WorkerConnectionState) => void>();
   private readonly frames: WorkerConnectionFrameDispatcher;
   private readonly reconnectAbort = new AbortController();
-  private readonly exitPromise: Promise<WorkerConnectionExit>;
-  private resolveExit!: (exit: WorkerConnectionExit) => void;
+  private readonly exit = createDeferredCore<WorkerConnectionExit>();
   private generation = 0;
   private socket: WebSocket | undefined;
   private startPromise: Promise<WorkerHelloOk> | undefined;
@@ -104,9 +104,6 @@ export class WorkerConnection {
       options.requestTimeoutMs,
       DEFAULT_REQUEST_TIMEOUT_MS,
     );
-    this.exitPromise = new Promise((resolve) => {
-      this.resolveExit = resolve;
-    });
     this.frames = new WorkerConnectionFrameDispatcher({
       connectParams: () => this.options.connectParams,
       requestTimeoutMs: this.requestTimeoutMs,
@@ -137,7 +134,7 @@ export class WorkerConnection {
   }
 
   waitForExit(): Promise<WorkerConnectionExit> {
-    return this.exitPromise;
+    return this.exit.promise;
   }
 
   waitForReady(): Promise<WorkerHelloOk> {
@@ -153,13 +150,11 @@ export class WorkerConnection {
   }
 
   onReady(listener: (hello: WorkerHelloOk) => void): () => void {
-    this.readyListeners.add(listener);
-    return () => this.readyListeners.delete(listener);
+    return registerListener(this.readyListeners, listener);
   }
 
   onStateChange(listener: (state: WorkerConnectionState) => void): () => void {
-    this.stateListeners.add(listener);
-    return () => this.stateListeners.delete(listener);
+    return registerListener(this.stateListeners, listener);
   }
 
   onTerminalError(listener: (error: Error) => void): () => void {
@@ -507,7 +502,7 @@ export class WorkerConnection {
     const socket = this.socket;
     this.socket = undefined;
     // Fence ownership before listeners or socket cleanup can reenter. The first exit stays final.
-    this.resolveExit(state);
+    this.exit.resolve(state);
     this.transition(state);
     // Clearing the live set also ends readiness delivery if one of its observers stopped us.
     this.readyListeners.clear();

@@ -273,7 +273,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.input.includeRunId === undefined ||
           typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
-      (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
+      ((input.command.type === "operatorApprovals.history" ||
+        input.command.type === "operatorApprovals.listCronGrants") &&
+        isRecord(input.command.input)) ||
       isTuiLastSessionReadCommand(input.command) ||
       input.command.type === "nodeHost.config" ||
       input.command.type === "operator.channelPolicy" ||

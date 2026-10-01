@@ -46,6 +46,7 @@ type DirectAnnounceResponseContext = {
   textCompletionDirectDeliveryKind: "completed_result" | "failed_notice";
   tryTextCompletionDirectDelivery: (
     kind: "completed_result" | "failed_notice",
+    agentResult?: { payloads?: unknown },
   ) => Promise<SubagentAnnounceDeliveryResult | undefined>;
 };
 
@@ -269,9 +270,10 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
           disposition: "permanent_failure",
         };
         return subagentDirectMessageCompletionRequiresMessageTool
-          ? tryTextCompletionDirectDelivery(textCompletionDirectDeliveryKind).then(
-              (textDelivery) => textDelivery ?? missingDelivery,
-            )
+          ? tryTextCompletionDirectDelivery(
+              textCompletionDirectDeliveryKind,
+              directAnnounceResult ?? undefined,
+            ).then((textDelivery) => textDelivery ?? missingDelivery)
           : missingDelivery;
       }
       const hasRequesterVisibleFinalDelivery =
@@ -327,6 +329,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     ) {
       return tryTextCompletionDirectDelivery(
         textCompletionDirectDeliveryKind,
+        directAnnounceResult ?? undefined,
       ).then<SubagentAnnounceDeliveryResult>((textDelivery) => {
         if (textDelivery) {
           return textDelivery;

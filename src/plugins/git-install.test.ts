@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -257,15 +258,16 @@ describe("installPluginFromGitSpec", () => {
       ]);
       expect(cloneArgv[4]).toContain("/repo");
       expect(commandArgvAt(2)).toEqual(["git", "switch", "--detach", "--", "abc123"]);
-      expect(commandArgvAt(4)).toEqual([
-        "npm",
-        "install",
-        "--omit=dev",
-        "--loglevel=error",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-      ]);
+      expect(commandArgvAt(4)).toEqual(
+        expectedNpmCommand([
+          "install",
+          "--omit=dev",
+          "--loglevel=error",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund",
+        ]),
+      );
       for (const index of [0, 2]) {
         expect(runCommandWithTimeoutMock.mock.calls[index]?.[1]?.timeoutMs).toBe(gitWork);
       }

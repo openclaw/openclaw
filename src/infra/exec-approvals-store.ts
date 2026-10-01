@@ -3,7 +3,6 @@ import {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
 } from "../agents/agent-lifecycle-registry.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
@@ -24,7 +23,6 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
-import { formatErrorMessage } from "./errors.js";
 import {
   createFailClosedExecApprovalsFallback,
   generateToken,
@@ -37,9 +35,10 @@ import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-
 import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
-  resetExecApprovalsMigrationGateForTest,
 } from "./exec-approvals-migration-gate.js";
 import {
+  snapshotFromExecApprovalsDatabase,
+  warnFailClosed,
   assertExecApprovalsMutationAllowed,
   assertExecApprovalsMutationAuthority,
   deleteExecApprovalsConfigRow,
@@ -51,40 +50,11 @@ import {
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
 
-const log = createSubsystemLogger("infra/exec-approvals");
-const WARN_INTERVAL_MS = 60_000;
-let lastWarnAt: number | undefined;
-
 class ExecApprovalsStoreUnavailableError extends Error {
   constructor(cause: unknown) {
     super(`Exec approvals SQLite state is unavailable: ${String(cause)}`, { cause });
     this.name = "ExecApprovalsStoreUnavailableError";
   }
-}
-
-function warnFailClosed(message: string, error?: unknown): void {
-  const now = Date.now();
-  if (lastWarnAt !== undefined && now - lastWarnAt < WARN_INTERVAL_MS) {
-    return;
-  }
-  lastWarnAt = now;
-  if (error === undefined) {
-    log.warn(message);
-  } else {
-    log.warn(message, { error: formatErrorMessage(error) });
-  }
-}
-
-export function snapshotFromExecApprovalsDatabase(
-  db: ReturnType<typeof openOpenClawStateDatabase>["db"],
-  displayPath = resolveExecApprovalsDisplayPath(),
-): ExecApprovalsSnapshot {
-  return snapshotFromExecApprovalsRow({
-    path: displayPath,
-    row: readExecApprovalsConfigRow(db),
-    onMalformed: () =>
-      warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
-  });
 }
 
 function readExecApprovalsSnapshotFromDatabase(
@@ -505,16 +475,4 @@ function ensureExecApprovalsSnapshotSync(): ExecApprovalsSnapshot {
 
 export async function ensureExecApprovalsSnapshot(): Promise<ExecApprovalsSnapshot> {
   return ensureExecApprovalsSnapshotSync();
-}
-
-const testing = {
-  reset(): void {
-    resetExecApprovalsMigrationGateForTest();
-    lastWarnAt = undefined;
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.execApprovalsStoreTestApi")] =
-    testing;
 }

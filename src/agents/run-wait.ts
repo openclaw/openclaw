@@ -145,13 +145,16 @@ function normalizePendingRunIds(runIds: Iterable<string>): Set<string> {
   return new Set(normalizeStringEntries([...runIds]));
 }
 
+// chat.history projects forwarded inputs (sessions_send messages, cron run prompts) as
+// assistant rows; they keep their input provenance and are not replies.
 function isAssistantReplyTranscriptArtifact(message: unknown): boolean {
   return (
     isTranscriptOnlyOpenClawAssistantMessage(message) ||
     isOpenClawMessageToolMirrorAssistantMessage(message) ||
     (isRecord(message) &&
       isRecord(message.provenance) &&
-      message.provenance.kind === "inter_session")
+      (message.provenance.kind === "inter_session" ||
+        message.provenance.kind === "internal_system"))
   );
 }
 

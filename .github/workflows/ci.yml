@@ -141,6 +141,8 @@ jobs:
       # docker-seed-e2e-contract-v1: frozen targets without this marker skip the lane.
       run_docker_seed_e2e: ${{ steps.manifest.outputs.run_docker_seed_e2e }}
       docker_seed_lanes: ${{ steps.manifest.outputs.docker_seed_lanes }}
+      # published-driver-update-contract-v1: older frozen targets omit this cell.
+      run_published_driver_update: ${{ steps.manifest.outputs.run_published_driver_update }}
       run_macos: ${{ steps.manifest.outputs.run_macos }}
       run_android: ${{ steps.manifest.outputs.run_android }}
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
@@ -2624,6 +2626,16 @@ jobs:
 
       - *linux_node_setup_step
 
+      - name: Install ripgrep for baseline ratchets
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if command -v rg >/dev/null 2>&1; then
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ripgrep
+
       - name: Run baseline ratchets
         env:
           RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
@@ -3159,7 +3171,7 @@ jobs:
       - *linux_node_checkout_step
       - name: Initialize RunsOn
         if: matrix.runner == 'runson-c8i-8xlarge' && runner.environment == 'self-hosted'
-        uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2
+        uses: runs-on/action@dfae4d98c5537a0dc7bbb7e6b9211f30ba240f6d # v2
 
       - name: Record RunsOn allocation
         if: matrix.runner == 'runson-c8i-8xlarge' && runner.environment == 'self-hosted'
@@ -5493,7 +5505,7 @@ jobs:
       - *platform_checkout_step
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
           ruby-version: "3.4.10"
           bundler: "4.0.21"
@@ -6001,6 +6013,13 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  published-driver-update:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha
+    uses: ./.github/workflows/ci-published-driver-update.yml
+
   docker-seed-e2e:
     permissions:
       contents: read
@@ -6188,6 +6207,7 @@ jobs:
       - android
       - android-access-native
       - docker-seed-e2e
+      - published-driver-update
       - pr-fail-fast
     if: ${{ (github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')) && ((github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && always() && (github.event_name == 'schedule' || !cancelled() || (needs.pr-fail-fast.outputs.failure_run_attempt == format('{0}', github.run_attempt) && needs.pr-fail-fast.outputs.failure_job_id != '') || (github.run_attempt == 1 && needs.pr-fail-fast.result == 'failure')) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)) }}
     # Blacksmith PR failures need critical-path routing within cancellation grace.
@@ -6207,6 +6227,11 @@ jobs:
           appendFileSync(process.env.GITHUB_STEP_SUMMARY, `PR CI stopped after **${name}** failed.\n\n[Originating job](${url}). Remaining jobs were cancelled to avoid wasted compute.\n`);
           process.exitCode = 1;
           EOF
+      - name: Record published-driver dispatch limitation
+        if: always() && needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision != github.sha
+        run: |
+          echo '::notice title=Published-driver update skipped::The selected checkout revision differs from github.sha; this cell only runs in the caller revision and cache scope.'
+          echo 'Published-driver update skipped: the dispatch-fallback checkout revision differs from `github.sha`. This cell only runs in the caller revision and cache scope; this run has no published-driver cell proof for the selected revision.' >> "$GITHUB_STEP_SUMMARY"
       - name: Verify selected CI lanes
         if: always()
         shell: bash
@@ -6250,6 +6275,7 @@ jobs:
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
             android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
+            published-driver-update=${{ needs.published-driver-update.result }}|${{ needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
             pr-fail-fast=${{ github.run_attempt != 1 && 'skipped' || needs.pr-fail-fast.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
         run: |
           set -euo pipefail

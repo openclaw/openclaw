@@ -1,4 +1,3 @@
-import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
   sanitizeAndNormalizeEmbedding,
@@ -9,6 +8,7 @@ import {
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
+  redactProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -72,14 +72,15 @@ async function discoverEmbeddingModels(params: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<string[]> {
   const url = `${params.baseUrl.replace(/\/$/, "")}/models`;
+  const headers = {
+    ...params.headers,
+    Authorization: `Bearer ${params.copilotToken}`,
+  };
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init: {
       method: "GET",
-      headers: {
-        ...params.headers,
-        Authorization: `Bearer ${params.copilotToken}`,
-      },
+      headers,
     },
     policy: params.ssrfPolicy,
     timeoutMs: COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS,
@@ -89,8 +90,9 @@ async function discoverEmbeddingModels(params: {
     if (!response.ok) {
       // Copilot requests carry a bearer token, so reflected upstream text must
       // be sanitized independently of the operator's log-redaction setting.
-      const detail = redactToolPayloadText(
+      const detail = redactProviderResponseErrorText(
         await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
+        headers,
       );
       throw new Error(`GitHub Copilot model discovery HTTP ${response.status}: ${detail}`);
     }
@@ -213,8 +215,9 @@ function createGitHubCopilotEmbeddingProvider(
       },
       onResponse: async (response) => {
         if (!response.ok) {
-          const detail = redactToolPayloadText(
+          const detail = redactProviderResponseErrorText(
             await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
+            client.headers,
           );
           throw new Error(`GitHub Copilot embeddings HTTP ${response.status}: ${detail}`);
         }

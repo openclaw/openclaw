@@ -1,9 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { PluginDoctorCronJob } from "../../plugins/doctor-contract-module.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
-import { tryParseJsonObject } from "./scalar-codec.js";
 import { getCronStoreKysely } from "./schema.js";
 
 /** Raw inspection deliberately bypasses runtime loading and its repair/filter policies. */
@@ -20,8 +20,8 @@ export function inspectCronRowsForDoctor(db: DatabaseSync): PluginDoctorCronJob[
       .orderBy("sort_order")
       .orderBy("job_id"),
   ).rows.map((row) => {
-    const definition = tryParseJsonObject(row.job_json) ?? null;
-    const state = tryParseJsonObject(row.state_json);
+    const definition = safeParseJsonRecord(row.job_json) ?? null;
+    const state = safeParseJsonRecord(row.state_json);
     const invalidReason = !definition
       ? "invalid-definition-json"
       : definition.id !== row.job_id

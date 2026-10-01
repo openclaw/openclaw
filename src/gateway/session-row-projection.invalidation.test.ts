@@ -53,7 +53,8 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, linkEmail, setDisplayName } from "../state/user-profiles.js";
+import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   identifiedClient,
@@ -526,6 +527,7 @@ it.each([
       let lists: Array<ReturnType<typeof listProjectedSessions>> = [];
       let stopWorkerReadGuard = () => {};
       try {
+        await projection.ensureMaterialized();
         await listProjectedSessions({ projection, opts });
         const catalogReads = vi.spyOn(catalogLookup, "findModelCatalogEntry");
         await listProjectedSessions({ projection, opts });

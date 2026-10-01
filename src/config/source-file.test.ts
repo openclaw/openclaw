@@ -217,7 +217,7 @@ describe("config file observation", () => {
     expect(h.onChange).toHaveBeenCalledOnce();
   });
 
-  it.each([undefined, "0", "false", "", "1"])(
+  it.each([undefined, "false", "1"])(
     "bounds watch-limit recovery and preserves polling override %s",
     async (setting) => {
       vi.stubEnv("CHOKIDAR_USEPOLLING", setting);

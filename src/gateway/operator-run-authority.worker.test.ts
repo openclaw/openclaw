@@ -11,7 +11,8 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";

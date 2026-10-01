@@ -1,5 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalVoiceCallStateRuntime } from "../runtime-state.js";
 import type { VoiceCallStateRuntime } from "../runtime-state.js";
@@ -59,11 +58,6 @@ type CallRecordChunkResults = Awaited<
   ReturnType<NonNullable<CallRecordStateStores["chunks"]["lookupMany"]>>
 >;
 
-/** Return the pre-SQLite JSONL call log path for migration/compat checks. */
-export function resolveVoiceCallLegacyCallLogPath(storePath: string): string {
-  return path.join(storePath, "calls.jsonl");
-}
-
 function resolvePluginStateEnv(storePath: string): NodeJS.ProcessEnv {
   return { ...process.env, OPENCLAW_STATE_DIR: storePath };
 }
@@ -109,11 +103,6 @@ export function buildChunkKey(eventKey: string, index: number): string {
   return `${eventKey}:chunk:${String(index).padStart(4, "0")}`;
 }
 
-/** Build a deterministic key for one legacy JSONL line. */
-export function buildVoiceCallLegacyJsonlEventKey(line: string, index: number): string {
-  return `jsonl:${String(index).padStart(8, "0")}:${createHash("sha256").update(line).digest("hex")}`;
-}
-
 /** Allocate monotonic ordering metadata for newly persisted call records. */
 function nextCallRecordOrder(): { persistedAt: number; sequence: number } {
   const sequence = callRecordEventSequence;
@@ -130,44 +119,6 @@ function parseEventKeySequence(key: string): number {
   const match = /^event:[^:]+:(\d+):/.exec(key);
   const sequence = match?.[1];
   return sequence ? Number.parseInt(sequence, 10) : 0;
-}
-
-/** Parse a stored call record line from v2 envelope or legacy raw-call JSON. */
-export function parseVoiceCallRecordLine(line: string, sequence = 0): PersistedCallRecord | null {
-  if (!line.trim()) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(line);
-    if (parsed && typeof parsed === "object" && (parsed as { version?: unknown }).version === 2) {
-      const envelope = parsed as {
-        call?: unknown;
-        persistedAt?: unknown;
-        sequence?: unknown;
-      };
-      const call = CallRecordSchema.parse(envelope.call);
-      return {
-        call,
-        persistedAt:
-          typeof envelope.persistedAt === "number" && Number.isFinite(envelope.persistedAt)
-            ? envelope.persistedAt
-            : 0,
-        sequence:
-          typeof envelope.sequence === "number" && Number.isFinite(envelope.sequence)
-            ? envelope.sequence
-            : sequence,
-        orderKey: "",
-      };
-    }
-    return {
-      call: CallRecordSchema.parse(parsed),
-      persistedAt: 0,
-      sequence,
-      orderKey: "",
-    };
-  } catch {
-    return null;
-  }
 }
 
 function countCallRecordChunks(call: CallRecord): number {
@@ -328,7 +279,11 @@ async function readCallRecordEvent(
     chunks.push(Buffer.from(chunk.dataBase64, "base64"));
   }
   const serialized = Buffer.concat(chunks, meta.byteLength).toString("utf8");
-  return parseVoiceCallRecordLine(serialized)?.call ?? null;
+  try {
+    return CallRecordSchema.parse(JSON.parse(serialized));
+  } catch {
+    return null;
+  }
 }
 
 /** Read all persisted call records in stable persisted order. */

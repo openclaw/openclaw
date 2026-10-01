@@ -56,7 +56,7 @@ import {
   createSubagentAnnounceConfig,
   createSubagentAnnounceHandoffOptions,
   createSubagentAnnounceSessionStore,
-  SUBAGENT_ANNOUNCE_DELIVERY_CASES,
+  SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES,
   SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES,
 } from "./attempt-execution.announce.test-support.js";
 import {
@@ -1958,7 +1958,7 @@ describe("CLI attempt execution", () => {
   });
 
   it.each([
-    ...SUBAGENT_ANNOUNCE_DELIVERY_CASES.map((testCase) =>
+    ...SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES.map((testCase) =>
       Object.assign({ provider: "claude-cli" }, testCase),
     ),
     ...SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES.map((testCase) =>

@@ -31,7 +31,8 @@ import {
 } from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail, setDisplayName } from "../state/user-profiles.js";
+import { setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   identifiedClient,

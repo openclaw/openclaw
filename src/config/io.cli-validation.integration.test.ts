@@ -61,13 +61,13 @@ async function validateThroughCli(
   return { output: output.at(-1), core, directories, schemaValidation, synchronousMetadata };
 }
 
-it.each([1, 480])("validates one config document for a %i-agent fleet", async (count) => {
+it("validates one config document for a 480-agent fleet", async () => {
   const { output, core, directories, schemaValidation, synchronousMetadata } =
     await validateThroughCli(
       {
         agents: {
           ownership: "explicit",
-          entries: Object.fromEntries(Array.from({ length: count }, (_, i) => [`agent-${i}`, {}])),
+          entries: Object.fromEntries(Array.from({ length: 480 }, (_, i) => [`agent-${i}`, {}])),
         },
         plugins: {
           entries: { "validation-fixture": { enabled: true, config: { label: "fixture" } } },

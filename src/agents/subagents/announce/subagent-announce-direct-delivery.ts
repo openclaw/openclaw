@@ -270,7 +270,8 @@ export async function sendSubagentAnnounceDirectly(
     }
     const recoveredResult = recovery?.result;
     const tryTextCompletionDirectDelivery = (
-      contentKind: "completed_result" | "failed_notice" = "completed_result",
+      contentKind: "completed_result" | "failed_notice" = textCompletionDirectDeliveryKind,
+      agentResult?: { payloads?: unknown },
     ) =>
       deliverCompletionDirect({
         cfg,
@@ -280,6 +281,7 @@ export async function sendSubagentAnnounceDirectly(
         deliveryTarget,
         internalEvents: params.internalEvents,
         contentKind,
+        agentResult,
         signal: params.signal,
         onDeliveryResult: params.onDeliveryResult,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
