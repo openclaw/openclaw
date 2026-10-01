@@ -205,11 +205,12 @@ describe("heartbeat notification store ownership through the Gateway", () => {
           await gateway.server.startupSettled;
           const parentKey = `agent:main:store-proof-${randomUUID()}`;
           const wait = (runId: string) =>
-            gateway!.client.request<{ status: string }>(
-              "agent.wait",
-              { runId, timeoutMs: 120_000 },
-              { timeoutMs: 125_000 },
-            );
+            gateway!.client.request<{
+              status: string;
+              error?: string;
+              stopReason?: string;
+              providerStarted?: boolean;
+            }>("agent.wait", { runId, timeoutMs: 120_000 }, { timeoutMs: 125_000 });
           const accepted = await gateway.client.request<{ runId: string }>(
             "chat.send",
             {
@@ -245,7 +246,16 @@ describe("heartbeat notification store ownership through the Gateway", () => {
             },
             { expectFinal: false },
           );
-          expect((await wait(followup.runId)).status).toBe("ok");
+          const followupReceipt = await wait(followup.runId);
+          expect(
+            followupReceipt.status,
+            JSON.stringify({
+              transition,
+              error: followupReceipt.error?.slice(0, 2048) ?? null,
+              stopReason: followupReceipt.stopReason ?? null,
+              providerStarted: followupReceipt.providerStarted ?? null,
+            }),
+          ).toBe("ok");
 
           if (transition === "different store") {
             const { hash } = await gateway.client.request<{ hash: string }>("config.get", {});
