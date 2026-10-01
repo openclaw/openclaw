@@ -761,12 +761,11 @@ describe("openSessionWorkspaceFile", () => {
     } as unknown as SessionWorkspaceHost;
 
     openSessionWorkspaceFile(state, { path: "screenshots/result.png" });
+    const settled = createDeferred();
+    state.requestUpdate = settled.resolve;
+    await settled.promise;
 
-    await vi.waitFor(() =>
-      expect(createSessionWorkspaceProps(state).error).toBe(
-        "Failed to load screenshots/result.png",
-      ),
-    );
+    expect(createSessionWorkspaceProps(state).error).toBeNull();
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
     expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
       kind: "unavailable",
@@ -800,10 +799,11 @@ describe("openSessionWorkspaceFile", () => {
     } as unknown as SessionWorkspaceHost;
 
     openSessionWorkspaceFile(state, { path: "notes.txt" });
+    const settled = createDeferred();
+    state.requestUpdate = settled.resolve;
+    await settled.promise;
 
-    await vi.waitFor(() =>
-      expect(createSessionWorkspaceProps(state).error).toBe("Failed to load notes.txt"),
-    );
+    expect(createSessionWorkspaceProps(state).error).toBeNull();
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
     expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
       kind: "unavailable",
@@ -827,14 +827,15 @@ describe("openSessionWorkspaceFile", () => {
     };
 
     openSessionWorkspaceFile(state, { path: "/outside/workspace/chat.md" });
+    const settled = createDeferred();
+    state.requestUpdate = settled.resolve;
+    await settled.promise;
 
-    await vi.waitFor(() =>
-      expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
-        kind: "unavailable",
-        message: "session file not found",
-      }),
-    );
-    expect(createSessionWorkspaceProps(state).error).toBe("session file not found");
+    expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
+      kind: "unavailable",
+      message: "session file not found",
+    });
+    expect(createSessionWorkspaceProps(state).error).toBeNull();
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
   });
 

@@ -52,7 +52,6 @@ export type SessionWorkspaceState = {
   connectionEpoch: number;
   diffContent?: SidebarContent;
   error: string | null;
-  errorOwner?: object;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
   pendingReload: boolean;

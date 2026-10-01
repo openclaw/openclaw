@@ -478,7 +478,7 @@ describe("session workspace artifacts", () => {
     },
   );
 
-  it("reports malformed base64 artifact data as a visible workspace error", async () => {
+  it("reports malformed base64 artifact data in its unavailable preview", async () => {
     const { handleOpenSidebar, state, previewSettled } = createArtifactHost({
       data: "not-base64!",
       mimeType: "text/plain",
@@ -486,11 +486,11 @@ describe("session workspace artifacts", () => {
 
     createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
 
-    await previewSettled;
-    expect(createSessionWorkspaceProps(state).error).toMatch(/InvalidCharacterError|invalid/i);
-    expect(handleOpenSidebar).toHaveBeenCalledOnce();
-    expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toMatchObject({
+    expect(await previewSettled).toMatchObject({
       kind: "unavailable",
+      message: expect.stringMatching(/InvalidCharacterError|invalid/i),
     });
+    expect(createSessionWorkspaceProps(state).error).toBeNull();
+    expect(handleOpenSidebar).toHaveBeenCalledOnce();
   });
 });
