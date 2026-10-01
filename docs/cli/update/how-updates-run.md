@@ -1066,11 +1066,12 @@ and active slots. A plugin can remain unavailable until repaired.
 After installing the core and before restarting the managed Gateway,
 `openclaw update` runs mandatory **post-core convergence**: it repairs missing
 configured plugin payloads, validates each _active_ tracked install record on disk,
-and statically verifies its `package.json` is parseable and its declared
+and statically verifies its `package.json` contains a JSON object and its declared
 `openclaw.extensions` entries are loadable. When a package does not declare
 OpenClaw extensions, the check instead verifies any explicitly declared npm
-`main`. Missing or unloadable plugin payloads add warnings while the core update
-continues. An invalid config snapshot still returns
+`main`. Invalid package manifests and missing or unloadable plugin payloads add
+per-plugin warnings while validation of the remaining plugins and the core update
+continue. An invalid config snapshot still returns
 `postUpdate.plugins.status: "error"`, makes the top-level update `status`
 `"error"`, and exits nonzero. Invalid state, ownership errors, failed required
 Doctor or readiness checks also remain errors. Disabled plugins are skipped unless their records are trusted official
