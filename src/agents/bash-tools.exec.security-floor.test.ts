@@ -6,7 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
-import { type ExecApprovalsFile } from "../infra/exec-approvals.js";
+import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";

@@ -8,7 +8,7 @@ import type { FsListDirResult } from "../../packages/gateway-protocol/src/index.
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
-import { type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";

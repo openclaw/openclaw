@@ -11,8 +11,8 @@ import type { OpenClawConfig } from "./config-contracts.js";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
+  normalizePluginsConfig,
 } from "./plugin-config-runtime.js";
-import { normalizePluginsConfig } from "./plugin-config-runtime.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
