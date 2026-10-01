@@ -20,8 +20,10 @@ jobs:
     steps:
       - name: Start cell budget
         run: |
-          # Reserve 15 seconds for termination and one minute for diagnostics.
-          echo "CELL_DEADLINE_EPOCH_SECONDS=$(( $(date +%s) + 525 ))" >> "$GITHUB_ENV"
+          # 2026-10-01: hosted cells reach update in <=222 s (run 36882406852) and update needs
+          # ~495 s on main (Testbox cell 576.6 s); ~725 s x ~1.5 => 1125 s. Reserve 15 seconds
+          # for termination and one minute for diagnostics (20 minutes total).
+          echo "CELL_DEADLINE_EPOCH_SECONDS=$(( $(date +%s) + 1125 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 2
         with:
@@ -41,7 +43,7 @@ jobs:
           path: .artifacts/published-driver-package
           merge-multiple: true
       - name: Update published driver to candidate
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
         run: |

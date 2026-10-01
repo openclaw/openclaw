@@ -238,7 +238,8 @@ function createPackageUpdateMaintenanceLanes() {
     npmLane(
       "published-driver-update",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-driver-update",
-      { resources: ["service"], stateScenario: "empty", timeoutMs: 10 * 60 * 1000 },
+      // Same measured cell as ci-published-driver-update.yml: ~725 s x ~1.5, rounded up.
+      { resources: ["service"], stateScenario: "empty", timeoutMs: 20 * 60 * 1000 },
     ),
     npmLane("dreaming-cron-doctor", dreamingCronDoctorCommand, {
       stateScenario: "upgrade-survivor",
