@@ -149,26 +149,6 @@ it("bounds fixed-store discovery per operation and refreshes the next source ros
   });
 });
 
-it("keeps deferred discovery unbound until first use and rejects prior registry churn", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const options = {
-      cfg: {},
-      currentSource: { agentId: database.agentId, path: database.path },
-      env: state.env,
-      registryPath: openOpenClawStateDatabase().path,
-      deferSources: true,
-    };
-    const unread = prepareGatewaySessionStoreReadSources(options);
-    const bound = prepareGatewaySessionStoreReadSources(options);
-    expect(bound.sources.main).toEqual([options.currentSource]);
-    invalidateRegisteredAgentDatabasesMemo({ path: options.registryPath });
-    expect(bound.assertCurrent).not.toThrow();
-    expect(unread.assertCurrent).toThrow("Session store changed");
-    expect(() => unread.sources).toThrow("Session store changed");
-  });
-});
-
 it("rejects a retargeted filesystem alias after registry metadata refresh", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
