@@ -71,6 +71,8 @@ invocation instead of a generated launcher.
 See [Bun-only installs](/install/bun-compatibility#bun-only-installs) for update,
 rollback, and custom-bin behavior.
 
+Known limitation: the published 2026.9.7 updater can wait for its full Gateway readiness timeout after a failed update rolls back, even with `--no-restart`; once it exits, run `openclaw doctor` with Bun as shown above or follow the printed recovery command before retrying.
+
 ## Lifecycle scripts
 
 Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:
