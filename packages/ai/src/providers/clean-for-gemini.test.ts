@@ -321,6 +321,25 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.enum).toBeUndefined();
   });
 
+  it("resolves percent-encoded definition names", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: { filter: { $ref: "#/definitions/Partial%3CFilter%3E" } },
+      definitions: {
+        "Partial<Filter>": {
+          type: "object",
+          properties: { limit: { type: "number" } },
+        },
+      },
+    });
+    expect(cleaned).toStrictEqual({
+      type: "object",
+      properties: {
+        filter: { type: "object", properties: { limit: { type: "number" } } },
+      },
+    });
+  });
+
   it("preserves shared definitions across inline and reference traversal", () => {
     const node = {
       type: "object",
