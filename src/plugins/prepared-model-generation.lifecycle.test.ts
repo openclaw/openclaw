@@ -102,7 +102,7 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
       await state.writeConfig(config);
       const originalListeners = process.listenerCount(event);
       if (retirement === "shared runtime projection") {
-        loadAndActivateRootPluginRegistry({
+        await loadAndActivateRootPluginRegistry({
           config,
           env: state.env,
           workspaceDir: state.workspaceDir,

@@ -98,18 +98,30 @@ export const modelsHandlers: GatewayRequestHandlers = {
       if (params.refresh !== true) {
         refreshExpiredPreparedModelCatalog({ agentId: resolved.agentId, config: cfg });
       }
-      const result = await buildModelsListResult({
-        source: { kind: "gateway", context },
-        agentId: resolved.agentId,
-        params,
-        includeManualSelection: hasGatewayClientCap(
-          client?.connect.caps,
-          GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
-        ),
-        requesterProfileId: publicationScope.requesterProfileId,
-        readScope: scope,
-        publicationScope,
-      });
+      const includeManualSelection = hasGatewayClientCap(
+        client?.connect.caps,
+        GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
+      );
+      const prepared =
+        !scope && params.refresh !== true
+          ? await context.readPreparedModelsList?.({
+              agentId: resolved.agentId,
+              params,
+              includeManualSelection,
+              requesterProfileId: publicationScope.requesterProfileId,
+            })
+          : undefined;
+      const result =
+        prepared ??
+        (await buildModelsListResult({
+          source: { kind: "gateway", context },
+          agentId: resolved.agentId,
+          params,
+          includeManualSelection,
+          requesterProfileId: publicationScope.requesterProfileId,
+          readScope: scope,
+          publicationScope,
+        }));
       publicationScope.draftAccountSelection?.assertCurrent();
       publicationScope.assertCurrent?.();
       const currentConfig = context.getRuntimeConfig();

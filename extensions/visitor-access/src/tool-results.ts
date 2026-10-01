@@ -40,10 +40,15 @@ export const visitorListDetailsSchema = Type.Object(
     grants: Type.Array(
       Type.Object(
         {
-          email: Type.String(),
+          email: Type.String({ description: "Grant selector; pass this email to visitor_revoke." }),
           grantId: Type.Optional(Type.String()),
           profileId: Type.Optional(Type.String()),
-          githubLogin: Type.Optional(Type.String()),
+          githubLogin: Type.Optional(
+            Type.String({
+              description:
+                "Current verified GitHub identity from the Gateway profile, when available. Use email or grantId to cancel one invitation; GitHub input selects the profile's recorded grants.",
+            }),
+          ),
           invitedAt: Type.String(),
           expiresAt: expiresAtSchema,
           state: Type.Union(

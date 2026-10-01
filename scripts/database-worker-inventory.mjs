@@ -113,6 +113,8 @@ const reviewed = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
+  "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
   "src/channels/message/ingress-queue-health.kernel.ts",
   "src/channels/message/ingress-queue.kernel.ts",
   "src/state/openclaw-state-worker-runtime.ts",

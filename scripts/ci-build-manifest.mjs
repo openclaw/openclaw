@@ -1554,8 +1554,8 @@ const hybridHostedOffload =
   hybridHostedEligible &&
   hybridHostedBaseRows <= HYBRID_HOSTED_BASE_ROW_LIMIT &&
   hybridHostedBaseRows + hybridHostedOffloadRows <= HYBRID_HOSTED_ROW_LIMIT;
-// The measured check rows consume only remaining hosted capacity.
-// Keep the original UI/security decision and all test-runner labels intact.
+// Reserve the previous check-row budget so retaining the boundary on Blacksmith
+// does not expand admission for other hosted checks. Report only actual rows below.
 const hybridHostedCheckRows =
   (manifest.run_check && checkTasks.some(({ task }) => task === "dependencies") ? 1 : 0) +
   (manifest.run_check &&
@@ -1570,6 +1570,11 @@ const hybridHostedCheckRows =
         ),
       ).length
     : 0);
+const retainedBoundaryRows = manifest.run_check_additional
+  ? manifest.check_additional_matrix.include.filter(
+      (row) => row.group === "extension-package-boundary",
+    ).length
+  : 0;
 const hybridHostedExistingRows =
   hybridHostedBaseRows + (hybridHostedOffload ? hybridHostedOffloadRows : 0);
 // R1's slowest admitted hosted check took 496s including setup. A full
@@ -1605,7 +1610,9 @@ Object.assign(manifest, {
   hybrid_hosted_main_checks: hybridHostedMainChecks,
   hybrid_hosted_base_rows: hybridHostedBaseRows,
   hybrid_hosted_total_rows:
-    hybridHostedRowsWithChecks + (hybridHostedMainChecks ? hybridHostedMainCheckRows : 0),
+    hybridHostedRowsWithChecks -
+    (hybridHostedChecks ? retainedBoundaryRows : 0) +
+    (hybridHostedMainChecks ? hybridHostedMainCheckRows : 0),
 });
 if (runCheckPlan) {
   console.log(

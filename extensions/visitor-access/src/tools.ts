@@ -64,7 +64,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       name: "visitor_revoke",
       label: "Revoke visitor",
       description:
-        "Remove the recorded Visitor invitations selected for a canonical profileId, or cancel one invitation by grantId, including before first sign-in. Use the IDs returned by visitor_list or visitor_invite. Person selection requires the original profile bindings to remain current at local commit and before policy requests. Already committed expirations remain ended if cleanup fails. Email cancels one email's invitation and can remove an unmanaged policy entry. GitHub login removes matching grants. Do not combine profileId or grantId with another selector. Preserves saved work, existing PRs and independent staff access. Already absent grants are a no-op.",
+        "Remove the recorded Visitor invitations selected for a canonical profileId, or cancel one invitation by grantId, including before first sign-in. Use the IDs returned by visitor_list or visitor_invite. Person selection requires the original profile bindings to remain current at local commit and before policy requests. Already committed expirations remain ended if cleanup fails. Email cancels one email's invitation and can remove an unmanaged policy entry. GitHub login resolves one current verified profile and selects its recorded invitations; missing or conflicting profiles require an exact email. Do not combine profileId or grantId with another selector. Preserves saved work, existing PRs and independent staff access. Already absent grants are a no-op.",
       parameters: Type.Object(
         {
           ...identityFields,
@@ -80,7 +80,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       name: "visitor_list",
       label: "List visitors",
       description:
-        "List recorded visitor grants, current Gateway access, invitation and expiry dates, and drift from the Access policy. Grant expiry does not describe independent staff access. Unmanaged policy emails are reported and retained; missing policy emails are never automatically restored.",
+        "List recorded visitor grants, current verified GitHub identities, current Gateway access, invitation and expiry dates, and drift from the Access policy. Grant expiry does not describe independent staff access. Unmanaged policy emails are reported and retained; missing policy emails are never automatically restored.",
       parameters: Type.Object({}, { additionalProperties: false }),
       outputSchema: Type.Union([visitorListDetailsSchema, visitorToolErrorSchema]),
       run: (service: VisitorAccessService) => service.list(assertCurrent),

@@ -57,6 +57,7 @@ describe("one-shot session PR reads", () => {
       const reading = owner.read(
         { ...target, ...(retired === "session" ? { assertCurrent } : {}) },
         retired === "caller" ? assertCurrent : () => {},
+        "publication",
       );
       const rejected = expect(reading).rejects.toThrow(/retired|closed/);
       await entered.promise;

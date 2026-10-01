@@ -365,10 +365,29 @@ export function registerContextEngineInRegistry(
 export { adoptRuntimeContextEngineRegistrations } from "./registry-adoption.js";
 
 /** Clear runtime quarantine only after a complete builder-local registry becomes active. */
-export function activateContextEngineRegistrations(pluginRegistry: PluginRegistry): void {
+export function activateContextEngineRegistrations(
+  pluginRegistry: PluginRegistry,
+  activation?: {
+    assertCurrent: () => void;
+    trackCleanup: (completion: Promise<void>) => void;
+  },
+): void {
   for (const [id, registration] of pluginRegistry.contextEngines) {
     if (registration.lifecycle === "runtime") {
-      clearContextEngineQuarantineForActivation(id);
+      if (activation) {
+        activation.trackCleanup(
+          clearContextEngineRuntimeQuarantine(id, () => {
+            activation.assertCurrent();
+            // An RPC can retain its predecessor registry while publishing this one.
+            if (pluginRegistry.contextEngines.get(id) !== registration) {
+              throw new Error("Context engine registration changed during activation cleanup");
+            }
+          }),
+        );
+      } else {
+        // The shipped provider-catalog SDK can activate while returning a synchronous array.
+        clearContextEngineQuarantineForActivation(id);
+      }
     }
   }
 }

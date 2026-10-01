@@ -1744,6 +1744,7 @@
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import ./scripts/tsx.mjs scripts/check-temp-path-guardrails.ts",
     "check:wrapper-shadowing": "node --import ./scripts/tsx.mjs scripts/check-wrapper-shadowing.mts",
+    "check:test-timeout-race-ratchet": "node --import ./scripts/tsx.mjs scripts/check-test-timeout-race-ratchet.mts",
     "check:test-types": "pnpm tsgo:test",
     "check:timed": "node --import ./scripts/tsx.mjs scripts/check-timed.mts",
     "check:timed:all-types": "node --import ./scripts/tsx.mjs scripts/check-timed.mts --include-test-types",

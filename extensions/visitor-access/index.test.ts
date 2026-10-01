@@ -20,6 +20,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { visitorListDetailsSchema, type VisitorListDetails } from "./src/tool-results.js";
 import type { VisitorGrant } from "./src/visitors.js";
 import { visitorProfileFixture } from "./src/visitors.test-support.js";
 
@@ -284,7 +285,7 @@ describe("visitor-access plugin lifecycle", () => {
         type: "text",
         text: [
           "Visitors: 1 recorded; 2 in policy. Drift: 1 unmanaged, 0 missing from policy.",
-          `visitor@example.test | GitHub unknown | grantId ${grantId} | invited 2026-08-01T00:00:00.000Z | grant expires 2026-08-08T00:00:00.000Z | managed | Gateway access: restricted guest (default role "external-work"; first sign-in pending)`,
+          `visitor@example.test | Verified GitHub: unavailable | grantId ${grantId} | invited 2026-08-01T00:00:00.000Z | grant expires 2026-08-08T00:00:00.000Z | managed | Gateway access: restricted guest (default role "external-work"; first sign-in pending)`,
           'manual@example.test | UNMANAGED: no grant record; retained until explicit revoke. | Gateway access: restricted guest (default role "external-work"; first sign-in pending)',
         ].join("\n"),
       },
@@ -336,6 +337,108 @@ describe("visitor-access plugin lifecycle", () => {
       expect(Value.Check(schema, result.details)).toBe(true);
     }
   });
+
+  it.each([
+    { github: undefined, selector: "email" },
+    { github: "invitation-login", selector: "email" },
+    { github: "invitation-login", selector: "github" },
+  ])(
+    "lists profile identity and revokes by $selector after invitation input $github",
+    async ({ github, selector }) => {
+      const policy = createPolicyFetch();
+      vi.stubGlobal("fetch", policy.fetcher);
+      const registered = registerPlugin();
+      await registered.start();
+      await registered.execute("visitor_invite", { email: "alias@example.test", github, days: 7 });
+      const grant = await registered.store.lookup("alias@example.test");
+
+      const pending = await registered.execute("visitor_list");
+      expect(pending.details).not.toHaveProperty("grants.0.githubLogin");
+      expect(pending.content).toEqual([
+        { type: "text", text: expect.stringContaining("Verified GitHub: unavailable") },
+      ]);
+      expect(pending.content).toEqual([
+        { type: "text", text: expect.stringContaining("first sign-in pending") },
+      ]);
+
+      await registered.execute("visitor_invite", {
+        email: "unrelated@example.test",
+        github: "current-person",
+        days: 7,
+      });
+      const otherGrant = await registered.store.lookup("unrelated@example.test");
+      let listedGrant: VisitorListDetails["grants"][number] | undefined;
+      // The directory selects the verified primary account, or null when none is selected.
+      for (const login of ["verified-person", null, "current-person"]) {
+        registered.setProfiles([
+          {
+            id: "linked-person",
+            emails: ["primary@example.test", "alias@example.test"],
+            githubIdentity: login ? { login } : null,
+          },
+          {
+            id: "unrelated-person",
+            emails: ["unrelated@example.test"],
+            githubIdentity: { login: "other-person" },
+          },
+        ]);
+        const listed = await registered.execute("visitor_list");
+        expect(listed.content).toEqual([
+          {
+            type: "text",
+            text: expect.stringContaining(
+              `Verified GitHub: ${login ? `@${login}` : "unavailable"}`,
+            ),
+          },
+        ]);
+        expect(listed.content).not.toEqual([
+          { type: "text", text: expect.stringContaining("first sign-in pending") },
+        ]);
+        expect(listed.content).not.toEqual([
+          { type: "text", text: expect.stringContaining("invitation-login") },
+        ]);
+        if (!Value.Check(visitorListDetailsSchema, listed.details)) {
+          throw new Error("Invalid visitor_list details");
+        }
+        const target = listed.details.grants.find((entry) => entry.email === grant?.email);
+        expect(target).toMatchObject({
+          email: "alias@example.test",
+          ...(login ? { githubLogin: login } : {}),
+        });
+        if (!login) {
+          expect(target).not.toHaveProperty("githubLogin");
+        }
+        listedGrant = target;
+        const schema = registered.tools.get("visitor_list")?.outputSchema;
+        if (!schema) {
+          throw new Error("visitor_list did not declare an output schema");
+        }
+        expect(Value.Check(schema, listed.details)).toBe(true);
+      }
+      expect(await registered.store.lookup("alias@example.test")).toEqual(grant);
+      if (!listedGrant) {
+        throw new Error("Missing listed grant");
+      }
+      expect(listedGrant.email).toBe("alias@example.test");
+      const revoked = await registered.execute(
+        "visitor_revoke",
+        selector === "email" ? { email: listedGrant.email } : { github: listedGrant.githubLogin },
+      );
+      expect(revoked.details).toEqual({
+        outcome: "revoked",
+        emails: ["alias@example.test"],
+        ...(selector === "github" ? { githubLogin: "current-person" } : {}),
+      });
+      expect(await registered.store.lookup("alias@example.test")).toBeUndefined();
+      expect(await registered.store.lookup("unrelated@example.test")).toEqual(otherGrant);
+      expect(policy.emails()).toEqual(["unrelated@example.test"]);
+      expect(
+        policy.fetcher.mock.calls.every(
+          ([input]) => requestUrl(input).hostname === "api.cloudflare.com",
+        ),
+      ).toBe(true);
+    },
+  );
 
   async function startVisitors() {
     const emails = [
