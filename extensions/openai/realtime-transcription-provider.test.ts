@@ -358,13 +358,90 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(parseSent(socket).at(-1)?.type).toBe("session.update");
   });
 
-  it("does not use Codex OAuth for realtime transcription", async () => {
+  it("treats an OpenAI OAuth profile as configured", () => {
+    const provider = buildOpenAIRealtimeTranscriptionProvider();
+    providerAuthMocks.isProviderAuthProfileConfigured.mockImplementation(
+      ({ profileTypes }) => profileTypes?.includes("oauth") === true,
+    );
+
+    expect(provider.isConfigured({ cfg: {}, providerConfig: {} })).toBe(true);
+  });
+
+  it("transcribes through an OAuth socket without minting an API-key client secret", async () => {
+    const cfg = { auth: { order: { openai: ["openai:oauth-test"] } } };
+    providerAuthMocks.resolveProviderAuthProfileApiKey.mockImplementation(
+      async ({ profileTypes }) =>
+        profileTypes?.includes("oauth") ? "oauth-test-token" : undefined,
+    );
+    const onTranscript = vi.fn();
+    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
+      cfg,
+      providerConfig: {},
+      onTranscript,
+    });
+    const socket = await connectFakeSession(session);
+
+    expect(socket.headers?.Authorization).toBe("Bearer oauth-test-token");
+    expect(providerAuthMocks.resolveProviderAuthProfileApiKey).toHaveBeenCalledWith({
+      provider: "openai",
+      capability: "audio-transcription",
+      cfg,
+      profileTypes: ["oauth"],
+      includeExternalCliAuth: false,
+    });
+    expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(parseSent(socket)[0]).toMatchObject({
+      type: "session.update",
+      session: { audio: { input: { transcription: { model: "gpt-4o-transcribe" } } } },
+    });
+    session.sendAudio(Buffer.alloc(800, 1));
+    expect(parseSent(socket).at(-1)?.type).toBe("input_audio_buffer.append");
+    emitCommitted(socket, "oauth-item", null);
+    emitCompleted(socket, "oauth-item", "This is a transcription test.");
+    expect(onTranscript).toHaveBeenCalledExactlyOnceWith("This is a transcription test.");
+  });
+
+  it.each(["explicit", "environment"])("prefers an %s API key over OAuth", async (source) => {
+    if (source === "environment") {
+      vi.stubEnv("OPENAI_API_KEY", "sk-test"); // pragma: allowlist secret
+    }
+    providerAuthMocks.resolveProviderAuthProfileApiKey.mockImplementation(
+      async ({ profileTypes }) =>
+        profileTypes?.includes("oauth") ? "oauth-test-token" : undefined,
+    );
+    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
+      providerConfig: source === "explicit" ? { apiKey: "sk-test" } : {}, // pragma: allowlist secret
+    });
+    const socket = await connectFakeSession(session);
+
+    expect(socket.headers?.Authorization).toBe("Bearer sk-test");
+    expect(providerAuthMocks.resolveProviderAuthProfileApiKey).not.toHaveBeenCalledWith(
+      expect.objectContaining({ profileTypes: ["oauth"] }),
+    );
+  });
+
+  it("does not fall back to OAuth when an API-key profile is rejected", async () => {
+    providerAuthMocks.resolveProviderAuthProfileApiKey.mockResolvedValue("sk-test"); // pragma: allowlist secret
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response("Unauthorized", { status: 401 }),
+      release: vi.fn(),
+    });
+    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
+      providerConfig: {},
+    });
+
+    await expect(session.connect()).rejects.toThrow("rejected the selected API key");
+    expect(providerAuthMocks.resolveProviderAuthProfileApiKey).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("rejects realtime transcription when neither an API key nor OAuth is available", async () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
     const cfg = { auth: { order: { openai: ["openai:default"] } } };
     const session = provider.createSession({ cfg: cfg as never, providerConfig: {} });
 
     await expect(session.connect()).rejects.toThrow(
-      "OpenAI Realtime transcription requires an OpenAI Platform API key",
+      "OpenAI Realtime transcription requires an OpenAI Platform API key or ChatGPT OAuth profile",
     );
     expect(providerAuthMocks.resolveProviderAuthProfileApiKey).toHaveBeenCalledWith({
       provider: "openai",
