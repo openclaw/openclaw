@@ -199,41 +199,56 @@ describe("update candidate canary", () => {
     expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
   });
 
-  it("classifies a deadline before teardown when SIGTERM closes the child with zero", async () => {
+  it("retains integrity progress and the timeout cause when teardown closes the child with zero", async () => {
     let now = 2_000_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const waiting = createDeferredCore();
+    const progress =
+      "SQLite integrity check still running: agent database (400 MiB, 10s elapsed, phase=checking).";
     stubHealthyGateway();
     mocks.spawn.mockImplementationOnce((_command, _args, options) => {
       const child = new FakeChild(nextPid++);
       children.set(child.pid, child);
       childEnv = options.env;
       queueMicrotask(() => {
-        child.stderr.write(
-          formatCliFailureLines({
-            title: "The CLI command failed.",
-            error: new Error("Health unavailable\nDistinct connection detail"),
-            env: {},
-          }).join("\n") + "\n",
-        );
+        child.stderr.write(`[state/sqlite] ${progress}\n`);
+        waiting.resolve();
       });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       now += 899;
       return child;
     });
     try {
-      const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
-      expect(result).toMatchObject({ status: "error", phase: "doctor" });
-      expect(result.logTail.join("\n")).toContain("checks phase timed out");
+      const pending = validateUpdateCandidateCanary(canaryStateOptions(1_000));
+      await waiting.promise;
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      const cause = "candidate-migration-rehearsal: doctor exceeded budget after 1 s";
+      expect(result).toMatchObject({
+        status: "error",
+        phase: "doctor",
+        reason: "candidate-checks-timeout",
+      });
+      expect(result.logTail.join("\n")).toContain(`${cause} ([state/sqlite] ${progress})`);
       expect(result.steps.at(-1)).toMatchObject({ exitCode: null, termination: "timeout" });
-      expect(result.steps.at(-1)?.stderrTail).toContain("checks phase timed out");
+      expect(result.steps.at(-1)?.failureFacts).toEqual([
+        expect.objectContaining({
+          check: "doctor",
+          code: "candidate-checks-timeout",
+          message: expect.stringContaining(cause),
+        }),
+      ]);
       const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
-      expect(detail).toContain("Distinct connection detail");
-      expect(detail).toContain("checks phase timed out");
+      expect(detail).toContain("phase=checking");
+      expect(detail).toContain(cause);
       const report = renderUpdateRunReport(
         updateRunReportInputFromResult({ ...result, mode: "git", root }),
       );
-      expect(report.markdown).toContain("checks phase timed out");
+      expect(report.markdown).toContain(cause);
+      expect(report.markdown).not.toContain("usable inference route");
     } finally {
       clock.mockRestore();
+      vi.useRealTimers();
     }
   });
 
@@ -272,12 +287,13 @@ describe("update candidate canary", () => {
   registerCanaryProgressWorkerTests(() => root, mocks, admission);
 
   it.each([
-    [0, undefined, "error"],
-    [2 * 1024 ** 3, undefined, "ok"],
-    [2 * 1024 ** 3, 30 * 60_000, "error"],
+    [0, undefined, 31 * 60_000, "error"],
+    [400 * 1024 ** 2, undefined, 400_000, "ok"],
+    [2 * 1024 ** 3, undefined, 31 * 60_000, "ok"],
+    [2 * 1024 ** 3, 30 * 60_000, 31 * 60_000, "error"],
   ] as const)(
     "derives validation time from %i state bytes while honoring an explicit %s ms deadline",
-    async (sqliteBytes, timeoutMs, expectedStatus) => {
+    async (sqliteBytes, timeoutMs, elapsedMs, expectedStatus) => {
       databasePath = path.join(root, "runtime-budget.sqlite");
       await fs.writeFile(databasePath, "");
       await fs.truncate(databasePath, sqliteBytes);
@@ -296,7 +312,7 @@ describe("update candidate canary", () => {
           const child = new FakeChild(nextPid++);
           children.set(child.pid, child);
           childEnv = options.env;
-          doctorElapsed = 31 * 60_000;
+          doctorElapsed = elapsedMs;
           queueMicrotask(() => child.emit("close", 0));
           return child;
         },

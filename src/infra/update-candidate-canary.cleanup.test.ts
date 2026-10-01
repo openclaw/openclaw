@@ -529,10 +529,11 @@ describe("canary teardown evidence", () => {
             {
               check: "lint",
               code: "candidate-checks-timeout",
-              message: "Update lint checks phase timed out (899ms)",
+              message:
+                "candidate-migration-rehearsal: lint exceeded budget after 1 s (└  Doctor complete.)",
             },
           ]);
-          expect(rendered.markdown).toContain("checks phase");
+          expect(rendered.markdown).toContain("lint exceeded budget after 1 s");
           expect(JSON.stringify(result)).not.toContain("exit phase");
         }
       } finally {
