@@ -1,10 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  executeSqliteQueryTakeFirstSync,
-  iterateSqliteQuerySync,
-  sqliteStringSet,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -28,11 +24,10 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
-import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import {
-  readExactSessionEntryRowValidated,
+  readSessionEntryByIdInDatabase,
   readExactSessionEntryRow,
   readSessionEntryRow,
   readQualifiedSessionEntryRow,
@@ -378,52 +373,6 @@ export function loadExactSessionEntryCandidates(
   }
   const result = withOpenClawAgentDatabaseReadOnly(read, options);
   return result.found ? result.value : [];
-}
-
-// SQLite's default trim removes only spaces; legacy ID matching used String.trim().
-const SESSION_ID_TRIM_CHARACTERS =
-  "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
-
-/** Uses the native current-ID and trimmed legacy-ID winner order inside the reader owner. */
-export function readSessionEntryByIdInDatabase(
-  database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
-  selection: { sessionId: string; projection?: SessionEntryReadScope["projection"] },
-): ExactSessionEntry | undefined {
-  return readWithCanonicalSessionAdmission(database, () => {
-    assertCanonicalSqliteSessionKeysCurrent(database);
-    const db = getSessionKysely(database.db);
-    const query = db.selectFrom("session_nodes").select("session_key").orderBy("session_key");
-    // The common path uses the current-ID index. Only a miss scans for one
-    // legacy ID, preserving listing order without materializing other entries.
-    for (const trimLegacyId of [false, true]) {
-      const matches = iterateSqliteQuerySync(
-        database.db,
-        trimLegacyId
-          ? query.where((eb) =>
-              eb(
-                eb.fn<string>("trim", ["current_session_id", eb.val(SESSION_ID_TRIM_CHARACTERS)]),
-                "=",
-                selection.sessionId,
-              ),
-            )
-          : query.where("current_session_id", "=", selection.sessionId),
-      );
-      for (const { session_key: sessionKey } of matches) {
-        if (isInternalSessionEffectsKey(sessionKey)) {
-          continue;
-        }
-        const selected = readExactSessionEntryRowValidated(
-          database,
-          sessionKey,
-          selection.projection,
-        );
-        if (selected) {
-          return { sessionKey, entry: selected.entry };
-        }
-      }
-    }
-    return undefined;
-  });
 }
 
 /** Loads a visible current ID, falling back to legacy trimmed IDs only on an exact miss. */

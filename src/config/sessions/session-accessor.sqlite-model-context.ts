@@ -1,5 +1,4 @@
 import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
-import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { sql, type AliasableExpression } from "kysely";
 import {
   iterateSessionContextEntries,
@@ -7,6 +6,7 @@ import {
   projectSessionEntryMessage,
 } from "../../../packages/agent-core/src/harness/session/session.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { isCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,

@@ -19,15 +19,17 @@ import {
   resolveSessionFilePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import {
-  listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
+import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
+import {
   loadTranscriptEventsSync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
-} from "../config/sessions/session-accessor.js";
-import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
+} from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   listDurableSqliteTargetPathsForSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,

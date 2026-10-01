@@ -20,9 +20,9 @@ const readOwners = [
   "src/gateway/session-transcript-entry-message.ts",
 ];
 
-it.each(readOwners)("keeps %s independent of host acquisition and decoration", (entry) => {
+it("keeps history readers independent of host acquisition and decoration", () => {
   expect(
-    findSourceImportBackedges(entry, [
+    findSourceImportBackedges(readOwners, [
       "src/config/sessions/session-accessor.sqlite-scope.ts",
       "src/config/sessions/session-accessor.sqlite-active-projection.ts",
       "src/config/sessions/session-accessor.sqlite-delta.ts",
@@ -35,6 +35,32 @@ it.each(readOwners)("keeps %s independent of host acquisition and decoration", (
       "src/gateway/current-user-profile-display.ts",
       "src/gateway/session-transcript-message.ts",
       "src/gateway/session-utils.fs.ts",
+    ]),
+  ).toEqual([]);
+});
+
+it("keeps lazy readers independent of unrelated runtime barrels", () => {
+  expect(
+    findSourceImportBackedges(
+      [
+        "src/config/sessions/session-store-target-inventory.ts",
+        "src/config/sessions/session-entry-read.worker.ts",
+        "src/config/sessions/session-accessor.sqlite-model-context.ts",
+      ],
+      [
+        "src/config/sessions/lifecycle.ts",
+        "src/config/sessions/session-accessor.ts",
+        "src/config/sessions/session-accessor.sqlite-entry-store.ts",
+        "src/config/sessions/session-accessor.sqlite-read.ts",
+        "src/config/sessions/session-accessor.sqlite-exact-read.ts",
+        "packages/ai/src/transports.ts",
+      ],
+    ),
+  ).toEqual([]);
+  expect(
+    findSourceImportBackedges("src/infra/session-cost-usage-worker.ts", [
+      "src/config/sessions/session-accessor.ts",
+      "packages/ai/src/transports.ts",
     ]),
   ).toEqual([]);
 });

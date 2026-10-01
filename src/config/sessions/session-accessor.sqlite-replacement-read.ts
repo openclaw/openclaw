@@ -11,7 +11,7 @@ import {
   readExactSessionEntryRow,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
 export type SessionEntryReplacementSelection = {
