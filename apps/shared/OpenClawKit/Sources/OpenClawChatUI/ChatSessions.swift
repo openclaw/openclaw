@@ -613,6 +613,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var pinnedAt: Double?
     public var archived: Bool?
     public var archivedAt: Double?
+    public var snoozedUntil: Double?
+    public var snoozedAt: Double?
     public var unread: Bool?
     public var agentStatus: OpenClawChatSessionAgentStatus?
     public var observerDigest: OpenClawChatSessionObserverDigest?
@@ -709,6 +711,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         pinnedAt: Double? = nil,
         archived: Bool? = nil,
         archivedAt: Double? = nil,
+        snoozedUntil: Double? = nil,
+        snoozedAt: Double? = nil,
         unread: Bool? = nil,
         agentStatus: OpenClawChatSessionAgentStatus? = nil,
         observerDigest: OpenClawChatSessionObserverDigest? = nil,
@@ -759,6 +763,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.pinnedAt = pinnedAt
         self.archived = archived
         self.archivedAt = archivedAt
+        self.snoozedUntil = snoozedUntil
+        self.snoozedAt = snoozedAt
         self.unread = unread
         self.agentStatus = agentStatus
         self.observerDigest = observerDigest
@@ -839,6 +845,11 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
 
     public var isArchived: Bool {
         self.archived == true
+    }
+
+    public func isSnoozed(at now: Date = .now) -> Bool {
+        guard let snoozedUntil, snoozedUntil.isFinite else { return false }
+        return snoozedUntil / 1000 > now.timeIntervalSince1970
     }
 }
 

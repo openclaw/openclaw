@@ -1,7 +1,7 @@
 /**
  * Runtime seams used by subagent control for queue and embedded-run cancellation.
  */
-export { clearSessionQueues } from "../../../auto-reply/reply/queue.js";
+export { clearSessionLifecycleQueues } from "../../../auto-reply/reply/queue/cleanup.js";
 export {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,

@@ -1097,6 +1097,7 @@ describe("local SQLite snapshot repository", () => {
         const published = await publish(options);
         if (
           path.basename(options.targetPath) === SNAPSHOT_SQLITE_FILENAME &&
+          path.dirname(path.dirname(options.targetPath)) === (await fs.realpath(repositoryPath)) &&
           !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
         ) {
           linkedArtifactPath = path.resolve(options.targetPath);
@@ -1137,6 +1138,8 @@ describe("local SQLite snapshot repository", () => {
             if (
               !raced &&
               path.basename(options.targetPath) === SNAPSHOT_SQLITE_FILENAME &&
+              path.dirname(path.dirname(options.targetPath)) ===
+                (await fs.realpath(repositoryPath)) &&
               !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
             ) {
               await fs.unlink(options.sourcePath);
@@ -1180,7 +1183,7 @@ describe("local SQLite snapshot repository", () => {
         const targetPath = path.resolve(options.targetPath);
         if (
           path.basename(targetPath) === SNAPSHOT_SQLITE_FILENAME &&
-          path.dirname(targetPath) !== repositoryPath &&
+          path.dirname(path.dirname(targetPath)) === (await fs.realpath(repositoryPath)) &&
           !path.basename(path.dirname(targetPath)).startsWith(".tmp-")
         ) {
           racedPath = targetPath;

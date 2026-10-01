@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   createOpenClawStateLeaseWorkerStorage: mocks.createStorage,
+  acquireLease: mocks.forbidden,
 }));
 vi.mock("./openclaw-state-lease-heartbeat.js", () => ({
   startOpenClawStateLeaseHeartbeat: mocks.startHeartbeat,
@@ -48,7 +49,6 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
     execute?.(),
   resolveLeaseDatabasePath: mocks.forbidden,
-  acquireLease: mocks.forbidden,
   renewOpenClawStateLease: mocks.forbidden,
   verifyOpenClawStateLeaseOwnership: mocks.forbidden,
   releaseOpenClawStateLease: mocks.forbidden,

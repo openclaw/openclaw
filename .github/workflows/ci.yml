@@ -1425,6 +1425,7 @@ jobs:
           OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
           OPENCLAW_CI_UI_E2E_FULL: ${{ vars.OPENCLAW_CI_UI_E2E_FULL || 'false' }}
           OPENCLAW_CI_IOS_SIMULATOR_FULL: ${{ vars.OPENCLAW_CI_IOS_SIMULATOR_FULL || 'false' }}
+          OPENCLAW_CI_EXTENSION_LINT_FULL: ${{ vars.OPENCLAW_CI_EXTENSION_LINT_FULL || 'false' }}
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
           OPENCLAW_CI_CHANGED_PATHS_FILE: ${{ steps.changed_scope.outputs.changed_paths_file }}
           OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
@@ -3392,6 +3393,12 @@ jobs:
       run_changed_core_type_stripes: ${{ steps.plan.outputs.run_changed_core_type_stripes }}
     steps:
       - *linux_node_checkout_step
+      - name: Ensure extension lint comparison base
+        if: github.event_name == 'pull_request' && contains(fromJSON('["affected","full"]'), fromJSON(needs.preflight.outputs.check_plan_input_json).extensionLintMode)
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:

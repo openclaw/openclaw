@@ -49,12 +49,12 @@ import {
   withRecentSessionTranscriptActiveEvents,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
 import {
   isSessionTranscriptLeafControl,
   selectSessionTranscriptLeafControlledPath,
 } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -69,6 +69,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { readPreflightTranscriptContextMessages } from "./agent-runner-memory-transcript-context.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -490,6 +491,7 @@ async function estimateProviderPromptTokens(
 
 async function estimatePromptTokensFromSessionTranscript(params: {
   agentId?: string;
+  abortSignal?: AbortSignal;
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
@@ -545,18 +547,14 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         transcriptByteSize: snapshot.byteSize,
       };
     }
-    const messages = (await readSessionMessagesAsync(
+    const messages = await readPreflightTranscriptContextMessages(
       {
+        ...params,
         agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
         sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
       },
-      {
-        mode: "full",
-        reason: "preflight-compaction-estimate",
-      },
-    )) as AgentMessage[];
+      params.abortSignal,
+    );
     const estimatedTokens = await estimateProviderPromptTokens(
       messages,
       params.contextWindowTokens,
@@ -573,8 +571,9 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       outputTokens: normalizedOutputTokens,
       transcriptByteSize: snapshot.byteSize,
     };
-  } catch {
-    return undefined;
+  } catch (error) {
+    params.abortSignal?.throwIfAborted();
+    return error instanceof SessionTranscriptReadFenceError ? Promise.reject(error) : undefined;
   }
 }
 
@@ -691,6 +690,7 @@ export async function runSessionCompactionIfNeeded(params: {
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           ...compactionTarget,
+          abortSignal: params.abortSignal,
           sessionId: entry.sessionId,
           contextWindowTokens,
         });

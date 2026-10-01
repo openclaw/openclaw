@@ -1,9 +1,17 @@
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
+import {
+  createSqliteWorkerWriteAdmission,
+  type SqliteWorkerStore,
+} from "../infra/sqlite-worker-store.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
 import { startOpenClawStateLeaseTimer } from "./openclaw-state-lease-heartbeat.js";
+import {
+  resolveLeaseDatabasePath,
+  type OpenClawStateLeaseDatabase,
+} from "./openclaw-state-lease-storage.js";
 import type {
   createOpenClawStateLeaseWorkerOwner,
   WorkerLeaseScope,
@@ -12,7 +20,67 @@ import type {
   OpenClawStateLeaseAcquisition,
   OpenClawStateLeaseIdentity,
 } from "./openclaw-state-lease.types.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
+
+export async function acquireLease(
+  database: OpenClawStateLeaseDatabase,
+  input: {
+    identity: OpenClawStateLeaseIdentity;
+    leaseMs: number;
+    operationLabel: string;
+    processBound?: boolean;
+  },
+  assertCurrent: () => void,
+  signal?: AbortSignal,
+) {
+  if (database.options?.readOnly) {
+    throw new Error("State lease acquisition requires writable storage");
+  }
+  if (database.schemaPolicy === "existing" && database.options?.database) {
+    throw new Error("Existing-state writes require their own tracked writable connection.");
+  }
+  const opened =
+    database.schemaPolicy === "existing" ? undefined : openOpenClawStateDatabase(database.options);
+  const context = captureOpenClawStateWorkerContext({
+    ...database.options,
+    path: opened?.path ?? resolveLeaseDatabasePath(database),
+  });
+  const assertAdmission = () => {
+    context.admission.assertCurrent();
+    assertCurrent();
+    // The worker cannot join a transaction held by the caller's verification handle.
+    if (opened?.db.isTransaction) {
+      throw new OpenClawStateLeaseError("State lease acquisition requires no active transaction", {
+        code: "OPENCLAW_STATE_LEASE_INVALID_INPUT",
+      });
+    }
+  };
+  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+  assertAdmission();
+  const result = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute(
+        {
+          type: "stateLease.acquire",
+          input: { ...input, schemaPolicy: database.schemaPolicy },
+        },
+        { signal },
+      ),
+    {
+      existingOnly: database.schemaPolicy === "existing",
+      assertCurrent: assertAdmission,
+      createAdmission: createSqliteWorkerWriteAdmission(assertAdmission, [
+        context.admission.databasePath,
+      ]),
+    },
+  );
+  if (!result) {
+    throw new Error("State lease acquisition requires an existing database");
+  }
+  return result;
+}
 
 type LeaseWorkerOwner = ReturnType<typeof createOpenClawStateLeaseWorkerOwner>;
 type LeaseWorkerOperation<T> = (

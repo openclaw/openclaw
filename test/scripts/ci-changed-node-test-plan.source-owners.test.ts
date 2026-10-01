@@ -365,7 +365,7 @@ describe("CI changed Node test plan", () => {
 
   it.each([
     "src/node-host/node-worker-bundle-installer.test.ts",
-    "src/plugin-sdk/config-runtime.test.ts",
+    "src/plugin-sdk/plugin-config-runtime.test.ts",
     "src/plugins/contracts/registry.retry.test.ts",
     "src/channels/plugins/config-schema.test.ts",
   ])("keeps exact test leaf %s focused while retaining boundary coverage", (target) => {
@@ -425,7 +425,7 @@ describe("CI changed Node test plan", () => {
   it("keeps uncovered and deleted-path coverage beside a dedicated contract target", () => {
     const target = "src/plugins/contracts/registry.retry.test.ts";
     const remaining = [
-      "src/plugin-sdk/config-runtime.test.ts",
+      "src/plugin-sdk/plugin-config-runtime.test.ts",
       "src/channels/plugins/config-schema.test.ts",
       "src/plugins/contracts/deleted.test.ts",
     ];

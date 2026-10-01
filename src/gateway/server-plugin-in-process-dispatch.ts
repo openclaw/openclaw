@@ -1,6 +1,7 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
@@ -118,7 +119,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   };
 }
 
-export async function withInProcessGatewayDispatch<T>(
+async function withInProcessGatewayDispatch<T>(
   method: string,
   params: unknown,
   options: DispatchGatewayMethodInProcessOptions | undefined,
@@ -165,6 +166,66 @@ export async function withInProcessGatewayDispatch<T>(
 }
 
 export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.js";
+
+export function withInProcessGatewayRead<T>(
+  params: {
+    method: "sessions.list" | "users.list";
+    scope: PluginRuntimeGatewayRequestScope | undefined;
+    resolveGatewayContext?: DispatchGatewayMethodInProcessOptions["resolveGatewayContext"];
+    callerAuthorityError: string;
+  },
+  run: (resolved: ResolvedInProcessGatewayDispatch, assertCurrent: () => void) => Promise<T>,
+): Promise<T> {
+  const { method, scope } = params;
+  return withInProcessGatewayDispatch(
+    method,
+    {},
+    {
+      forceSyntheticClient: true,
+      pluginRuntimeOwnerId: scope?.pluginId,
+      resolveGatewayContext: params.resolveGatewayContext,
+      syntheticScopes: ["operator.read"],
+      ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
+    },
+    async (resolved) => {
+      const assertLifetime = () => {
+        resolved.assertContextCurrent();
+        resolved.assertInvocationCurrent();
+        scope?.signal?.throwIfAborted();
+        if (resolved.hasCurrentClientAuthority?.() === false) {
+          throw new Error(params.callerAuthorityError);
+        }
+      };
+      const { authorizeGatewayRequestPreDispatch, createRequestGatewayMethodRegistry } =
+        await import("./server-methods.js");
+      assertLifetime();
+      const authorization = await authorizeGatewayRequestPreDispatch({
+        method,
+        requestParams: {},
+        client: resolved.client,
+        context: resolved.context,
+        methodRegistry:
+          resolved.context.getGatewayMethodRegistry?.() ?? createRequestGatewayMethodRegistry(),
+        hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
+        assertInvocationCurrent: assertLifetime,
+      });
+      try {
+        const assertCurrent = () => {
+          assertLifetime();
+          if (authorization.error) {
+            throw new Error(authorization.error.message);
+          }
+          authorization.sessionAccessAuthority?.assertCurrent();
+          authorization.sessionMutationAuthorization?.assertCurrent();
+        };
+        assertCurrent();
+        return await run(resolved, assertCurrent);
+      } finally {
+        authorization.sessionAccessAuthority?.release();
+      }
+    },
+  );
+}
 
 /** Local session input uses the same authorization and commit fences as an agent RPC. */
 export async function runWithInProcessGatewaySessionMutation<T>(

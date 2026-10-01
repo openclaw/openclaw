@@ -360,7 +360,9 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         _ archived: Bool?,
         _ unread: Bool?) async throws -> Void
     public typealias DeleteSession = @Sendable (_ key: String) async throws -> Void
-    public typealias PatchTarget = @Sendable (
+    public typealias DeleteTarget = @Sendable (_ target: OpenClawChatSessionTarget) async throws -> Void
+
+    private typealias SnoozePatchTarget = @Sendable (
         _ target: OpenClawChatSessionTarget,
         _ expectedSessionID: String?,
         _ expectedMarkedUnreadAt: Double??,
@@ -369,10 +371,10 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         _ color: String??,
         _ pinned: Bool?,
         _ archived: Bool?,
+        _ snoozedUntil: OpenClawChatSnoozePatch?,
         _ unread: Bool?) async throws -> OpenClawChatSessionPatchReceipt?
-    public typealias DeleteTarget = @Sendable (_ target: OpenClawChatSessionTarget) async throws -> Void
 
-    private let patchSessionImpl: PatchTarget
+    private let patchSessionImpl: SnoozePatchTarget
     private let deleteSessionImpl: DeleteTarget?
 
     public init(
@@ -381,8 +383,10 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
     {
         self
             .patchSessionImpl =
-            { target, expectedID, expectedUnreadAt, label, category, color, pinned, archived, unread in
-                guard target.agentID == nil else { throw OpenClawChatTransportSendError.notDispatched }
+            { target, expectedID, expectedUnreadAt, label, category, color, pinned, archived, snoozedUntil, unread in
+                guard target.agentID == nil, snoozedUntil == nil else {
+                    throw OpenClawChatTransportSendError.notDispatched
+                }
                 try await patchSession(
                     target.sessionKey, expectedID, expectedUnreadAt, label, category, color, pinned, archived, unread)
                 return nil
@@ -397,8 +401,8 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         }
     }
 
-    public init(patchTarget: @escaping PatchTarget, deleteTarget: DeleteTarget?) {
-        self.patchSessionImpl = patchTarget
+    private init(patchSnoozeTarget: @escaping SnoozePatchTarget, deleteTarget: DeleteTarget?) {
+        self.patchSessionImpl = patchSnoozeTarget
         self.deleteSessionImpl = deleteTarget
     }
 
@@ -411,7 +415,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
     {
         self.init(
-            patchTarget: { requested, expectedID, expectedUnreadAt, label, category, color, pinned, archived, unread in
+            patchSnoozeTarget: { requested, id, unreadAt, label, category, color, pinned, archived, snooze, unread in
                 guard unread != false || unreadAckContract != nil else {
                     throw OpenClawChatTransportSendError.notDispatched
                 }
@@ -419,15 +423,16 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
                 let data = try await request(OpenClawChatGatewayRequests.patchSession(
                     sessionKey: target.sessionKey,
                     agentID: target.agentID,
-                    expectedSessionID: expectedID,
+                    expectedSessionID: id,
                     label: label,
                     category: category,
                     color: color,
                     pinned: pinned,
                     archived: archived,
+                    snoozedUntil: snooze,
                     unreadPatch: .routed(
                         unread: unread,
-                        expectedMarkedUnreadAt: expectedUnreadAt,
+                        expectedMarkedUnreadAt: unreadAt,
                         supportsReadContract: unreadAckContract == true)))
                 guard receivesPatchReceipts else { return nil }
                 var receipt = try JSONDecoder().decode(OpenClawChatSessionPatchReceipt.self, from: data)
@@ -453,6 +458,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         color: String?? = nil,
         pinned: Bool? = nil,
         archived: Bool? = nil,
+        snoozedUntil: OpenClawChatSnoozePatch? = nil,
         unread: Bool? = nil) async throws -> OpenClawChatSessionPatchReceipt?
     {
         try await self.patchSessionImpl(
@@ -464,6 +470,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
             color,
             pinned,
             archived,
+            snoozedUntil,
             unread)
     }
 
@@ -1288,6 +1295,32 @@ extension OpenClawChatTransport {
         unread _: Bool?) async throws
     {
         throw Self.unsupportedOperation("sessions.patch not supported by this transport")
+    }
+
+    public func patchSession(
+        key: String,
+        expectedSessionID: String? = nil,
+        label: String?? = nil,
+        category: String?? = nil,
+        color: String?? = nil,
+        pinned: Bool? = nil,
+        archived: Bool? = nil,
+        snoozedUntil: OpenClawChatSnoozePatch?,
+        unread: Bool? = nil) async throws
+    {
+        guard let lease = await self.acquireSessionMutationRouteLease() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        try await lease.patchSession(
+            key: key,
+            expectedSessionID: expectedSessionID,
+            label: label,
+            category: category,
+            color: color,
+            pinned: pinned,
+            archived: archived,
+            snoozedUntil: snoozedUntil,
+            unread: unread)
     }
 
     public func deleteSession(key _: String) async throws {

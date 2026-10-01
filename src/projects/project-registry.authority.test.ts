@@ -56,8 +56,11 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("../state/openclaw-state-lease-storage.js", () => ({
+vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
+  createOpenClawStateLeaseWorkerStorage: fixture.forbiddenNative,
+}));
+vi.mock("../state/openclaw-state-lease-storage.js", () => ({
   prepareLeaseDatabase: fixture.forbiddenNative,
   resolveLeaseDatabasePath: () => path.resolve("/synthetic-state/lease.sqlite"),
   verifyOpenClawStateLeaseOwnership: () => {
