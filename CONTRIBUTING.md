@@ -57,8 +57,9 @@ The generated files live in ignored `.artifacts/kysely/`; build, typecheck,
 type-aware lint, and test entrypoints refresh them automatically, including after an install with
 `--ignore-scripts`. Unchanged inputs reuse the declarations without rewriting
 them. `pnpm db:kysely:check` checks schema projection and generator contracts.
-Sparse-checkout lint prepares only the available schemas and retires declarations
-for omitted schemas; normal generation and verification still require complete sources.
+Sparse core, script, and root-test lint prepare only the available schemas and
+retire declarations for omitted schemas. Normal source generation, verification,
+and extension-boundary builds still require complete schemas.
 
 Give each source checkout its own physical dependency installation. Tooling does
 not automatically link a missing `node_modules` to another checkout. Existing

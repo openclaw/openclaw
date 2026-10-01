@@ -99,18 +99,29 @@ const striped = [
 
 describe("typed lint Kysely prerequisites", () => {
   it.each([
-    { name: "direct", args: direct },
-    { name: "striped", args: striped },
-  ])("prepares cold declarations before $name core lint without plugin artifacts", ({ args }) => {
-    const fixture = createLintFixture();
-    expect(fs.existsSync(fixture.output)).toBe(false);
-    const result = fixture.run(args);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(fs.readFileSync(fixture.output, "utf8")).toContain("title: string;");
-    expect(fs.existsSync(path.join(fixture.root, ".artifacts/extension-package-boundary"))).toBe(
-      false,
-    );
-  });
+    { name: "direct", args: direct, sparse: false },
+    { name: "striped", args: striped, sparse: false },
+    { name: "sparse direct", args: direct, sparse: true },
+    { name: "sparse striped", args: striped, sparse: true },
+  ])(
+    "prepares cold declarations before $name core lint without plugin artifacts",
+    ({ args, sparse }) => {
+      const fixture = createLintFixture();
+      const agentProjection = ".artifacts/kysely/openclaw-agent-db.generated.ts";
+      if (sparse) {
+        fs.unlinkSync(path.join(fixture.root, "src/state/openclaw-agent-schema.sql"));
+        fixture.write(agentProjection, "export interface Stale {}\n");
+      }
+      expect(fs.existsSync(fixture.output)).toBe(false);
+      const result = fixture.run(args);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(fs.readFileSync(fixture.output, "utf8")).toContain("title: string;");
+      expect(fs.existsSync(path.join(fixture.root, agentProjection))).toBe(!sparse);
+      expect(fs.existsSync(path.join(fixture.root, ".artifacts/extension-package-boundary"))).toBe(
+        false,
+      );
+    },
+  );
 
   it.each([
     { name: "direct", args: direct },
