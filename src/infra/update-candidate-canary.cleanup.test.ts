@@ -159,6 +159,36 @@ describe("canary teardown evidence", () => {
     await expect(fs.access(copiedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.each(["candidate-doctor", "candidate-gateway-startup"])(
+    "awaits the %s start receipt before launching its process",
+    async (name) => {
+      const entered = createDeferredCore();
+      const receipt = createDeferredCore();
+      const refusal = new Error("check start receipt was refused");
+      const onStep = vi.fn();
+      const pending = validateUpdateCandidateCanary({
+        ...canaryStateOptions(3_000),
+        onStep,
+        onProgress: (step) => {
+          if (step.step === name && step.status === "in_progress") {
+            entered.resolve();
+            return receipt.promise;
+          }
+        },
+      });
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(mocks.spawn).toHaveBeenCalledTimes(name === "candidate-doctor" ? 0 : 5);
+        receipt.reject(refusal);
+        await expect(pending).rejects.toBe(refusal);
+        expect(onStep.mock.calls.some(([step]) => step.name === name)).toBe(false);
+      } finally {
+        receipt.resolve();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
   it("retains integrity progress and the timeout cause when teardown closes the child with zero", async () => {
     let now = 2_000_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);

@@ -220,7 +220,7 @@ export async function validateUpdateCandidateCanary(
     stepStartedAt = Date.now();
     // Admit the progress writer before the child chooses its snapshot source.
     // This receipt precedes work; streamed progress below keeps its stage owner.
-    await receipts.onInitialProgress?.({
+    await receipts.onProgress?.({
       step: "candidate-state-snapshot",
       status: "in_progress",
       startedAtMs: stepStartedAt,
@@ -292,6 +292,12 @@ export async function validateUpdateCandidateCanary(
       activeStep = { name: command.name, command: command.args.join(" ") };
       stepStartedAt = Date.now();
       stepLogTail.length = 0;
+      await receipts.onProgress?.({
+        step: activeStep.name,
+        status: "in_progress",
+        startedAtMs: stepStartedAt,
+        detail: `Running ${activeStep.command}`,
+      });
       startBudget();
       remaining();
       const doctorResultPath =
@@ -542,6 +548,12 @@ export async function validateUpdateCandidateCanary(
     activeStep = { name: "candidate-gateway-startup", command: "gateway run" };
     stepStartedAt = Date.now();
     stepLogTail.length = 0;
+    await receipts.onProgress?.({
+      step: activeStep.name,
+      status: "in_progress",
+      startedAtMs: stepStartedAt,
+      detail: `Running ${activeStep.command}`,
+    });
     startBudget();
     remaining();
     const args = ["gateway", "run", ...UPDATE_CANARY_PROGRESS_ARGS, "--bind", "loopback"];
