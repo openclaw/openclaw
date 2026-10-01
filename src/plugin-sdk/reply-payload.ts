@@ -264,7 +264,7 @@ export async function sendPayloadWithChunkedTextAndMedia<
   const chunkedText = limit && params.chunker ? params.chunker(text, limit) : [text];
   return (await sendPayloadTextChunkSequence({
     chunks: resolveTextChunksWithFallback(text, chunkedText),
-    send: ({ text }) => params.sendText({ ...params.ctx, text }),
+    send: ({ text: chunk }) => params.sendText({ ...params.ctx, text: chunk }),
     onResult: (result) => params.onResult?.(result),
   }))!;
 }
@@ -455,11 +455,11 @@ export async function sendTextMediaPayload(params: {
       : [text];
   return (await sendPayloadTextChunkSequence({
     chunks: resolveTextChunksWithFallback(text, chunkedText),
-    send: ({ text }) =>
+    send: ({ text: chunk }) =>
       sendAndReport((onDeliveryResult) =>
         params.adapter.sendText!({
           ...params.ctx,
-          text,
+          text: chunk,
           replyToId: nextReplyToId(),
           onDeliveryResult,
         }),
