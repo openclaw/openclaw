@@ -654,6 +654,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     { name: "work in the same batch", batch: ["read", "progress"], closing: "", completes: false },
     { name: "a later tool batch", batch: ["progress"], later: true, closing: "", completes: false },
     { name: "a progress reaction", batch: ["reaction"], closing: "", completes: false },
+    { name: "a partial progress send", batch: ["partial"], closing: "", completes: false },
   ])(
     "treats trailing source progress as the reply after $name",
     async ({ batch, later, closing, completes }) => {
@@ -671,14 +672,15 @@ describe("subscribeEmbeddedAgentSession", () => {
           content: tools.map((tool) => ({ type: "toolCall", id: tool, name: tool, arguments: {} })),
         });
         for (const tool of tools) {
-          const messageTool = tool === "progress" || tool === "reaction";
+          const partial = tool === "partial";
+          const messageTool = tool === "progress" || tool === "reaction" || partial;
           const toolName = messageTool ? "message" : tool;
           emit({
             type: "tool_execution_start",
             toolName,
             toolCallId: tool,
             args:
-              tool === "progress"
+              tool === "progress" || partial
                 ? { action: "send", final: false, target: "channel:source", message: "Working." }
                 : tool === "reaction"
                   ? { action: "react", final: false, target: "channel:source", emoji: "👀" }
@@ -692,7 +694,7 @@ describe("subscribeEmbeddedAgentSession", () => {
               {
                 messageDelivery: {
                   status: "settled",
-                  partialDelivery: false,
+                  partialDelivery: partial,
                   createdThreadIds: [],
                   sourceReplyDelivered: true,
                 },
@@ -704,7 +706,7 @@ describe("subscribeEmbeddedAgentSession", () => {
             type: "tool_execution_end",
             toolName,
             toolCallId: tool,
-            isError: false,
+            isError: partial,
             result: { content: [{ type: "text", text: "ok" }], details: {} },
           });
           await Promise.resolve();
