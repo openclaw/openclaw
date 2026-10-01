@@ -9,6 +9,7 @@ type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   providers?: readonly SessionCatalogProvider[];
   now?: () => number;
   signal?: AbortSignal;
+  providerTimeoutMs?: number;
   loadEntry?: typeof loadSessionEntry;
   isRunActive?: typeof isEmbeddedAgentRunActive;
   loadOwnRecentUserTexts?: (params: {
