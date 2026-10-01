@@ -13,6 +13,7 @@ import { runPluginRegistration } from "./api-lifecycle.js";
 import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
 import { findUninspectedPluginDiagnostic } from "./discovery-availability.js";
 import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
+import { applyPluginDoctorCompatibilitySequence } from "./doctor-compatibility-migration.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   selectInstalledPluginManifestRecords,
@@ -741,6 +742,7 @@ export const runPluginSetupConfigMigrations = withPluginSetupCache(function (par
 }): {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 } {
   const loadPaths = params.config.plugins?.load?.paths ?? [];
   const warning = findUninspectedPluginDiagnostic(
@@ -750,18 +752,14 @@ export const runPluginSetupConfigMigrations = withPluginSetupCache(function (par
     log.warn(warning.message);
     return { config: params.config, changes: [] };
   }
-  let next = params.config;
-  const changes: string[] = [];
   const pluginIds = resolveRelevantSetupMigrationPluginIds(params);
-  for (const entry of resolvePluginSetupRegistry({ ...params, pluginIds }).configMigrations) {
-    const migration = entry.migrate(next);
-    if (migration?.changes.length) {
-      next = migration.config;
-      changes.push(...migration.changes);
-    }
-  }
-
-  return { config: next, changes };
+  return applyPluginDoctorCompatibilitySequence(
+    params.config,
+    resolvePluginSetupRegistry({ ...params, pluginIds }).configMigrations.map((entry) => ({
+      pluginId: entry.pluginId,
+      normalizeCompatibilityConfig: ({ cfg }) => entry.migrate(cfg) ?? { config: cfg, changes: [] },
+    })),
+  );
 });
 
 export const resolvePluginSetupAutoEnableReasons = withPluginSetupCache(function (params: {

@@ -220,6 +220,7 @@ export type PluginDoctorContractModule = {
 export type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 };
 
 type PluginDoctorSessionStoreAgentIdsResolver = (params: {

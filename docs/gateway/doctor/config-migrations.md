@@ -9,6 +9,11 @@ read_when:
 Checks 0-2 cover config normalization and the legacy config key migrations,
 plus how doctor publishes shared-state schema during an update.
 
+Plugin config repairs run in order on private config copies. If a repair throws,
+Doctor keeps the config from before that hook, reports the failure, and continues
+with the remaining repairs. Warning-only results stay visible without changing
+config. Repair the affected plugin, then run `openclaw doctor --fix` again.
+
 ## Runtime config migration
 
 Runtime config reads require per-model context budgets and current GitHub Copilot

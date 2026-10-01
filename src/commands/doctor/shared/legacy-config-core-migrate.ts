@@ -132,9 +132,7 @@ export function normalizeCompatibilityConfigValues(
       const setupMigration = runPluginSetupConfigMigrations({
         config,
       });
-      if (setupMigration.changes.length === 0) {
-        return config;
-      }
+      contextBudgetWarnings.push(...(setupMigration.warnings ?? []));
       changes.push(...setupMigration.changes);
       return setupMigration.config;
     },

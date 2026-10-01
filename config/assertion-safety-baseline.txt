@@ -1940,7 +1940,6 @@ src/commands/doctor/cron/warnings.ts	1
 src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
 src/commands/doctor/shared/allowlist-policy-repair.ts	3
 src/commands/doctor/shared/channel-doctor.ts	4
-src/commands/doctor/shared/channel-legacy-config-migrate.ts	3
 src/commands/doctor/shared/codex-native-assets.ts	1
 src/commands/doctor/shared/codex-route-compaction-repair.ts	2
 src/commands/doctor/shared/codex-route-config-repair.ts	1

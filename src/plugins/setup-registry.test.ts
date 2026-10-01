@@ -522,6 +522,42 @@ describe("setup-registry module loader", () => {
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])("isolates registered migration candidates (throws=%s)", (throws) => {
+    const pluginRoot = makeTempDir();
+    writeSetupApiStub(pluginRoot);
+    mockSinglePlugin({ id: "fixture", rootDir: pluginRoot });
+    mocks.createJiti.mockImplementation(() => () => ({
+      default: {
+        register(api: SetupRegistryApi) {
+          api.registerConfigMigration((config) => ({
+            config: { ...config, gateway: { port: 18789 } },
+            changes: ["first"],
+          }));
+          api.registerConfigMigration((config) => {
+            config.gateway = { port: 19999 };
+            if (throws) {
+              throw new Error("fixture migration failed");
+            }
+            return null;
+          });
+          api.registerConfigMigration((config) => ({
+            config: { ...config, gateway: { ...config.gateway, bind: "loopback" } },
+            changes: ["last"],
+          }));
+        },
+      },
+    }));
+    const config = { plugins: { entries: { fixture: {} } } };
+    const result = runPluginSetupConfigMigrations({ config, env: {} });
+
+    expect(result.config.gateway).toEqual({ port: 18789, bind: "loopback" });
+    expect(result.changes).toEqual(["first", "last"]);
+    expect(result.warnings ?? []).toEqual(
+      throws ? [expect.stringContaining('Plugin "fixture" config repair failed')] : [],
+    );
+    expect(config).toEqual({ plugins: { entries: { fixture: {} } } });
+  });
+
   it("prefers setup provider descriptors over top-level provider ids", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");

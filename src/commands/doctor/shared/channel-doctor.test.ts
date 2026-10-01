@@ -252,6 +252,36 @@ describe("channel doctor compatibility mutations", () => {
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("discord");
   });
 
+  it("preserves config and continues after a channel repair throws", () => {
+    const cfg = { channels: { matrix: { enabled: true }, slack: { enabled: true } } };
+    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [
+        {
+          id: "matrix",
+          doctor: {
+            normalizeCompatibilityConfig({ cfg: candidate }: { cfg: typeof cfg }) {
+              candidate.channels.matrix.enabled = false;
+              throw new Error("fixture repair failed");
+            },
+          },
+        },
+        {
+          id: "slack",
+          doctor: { normalizeCompatibilityConfig: createNormalizeCompatibilityConfig("slack") },
+        },
+      ],
+    });
+
+    expect(collectChannelDoctorCompatibilityMutations(cfg)).toEqual([
+      {
+        config: cfg,
+        changes: ["slack"],
+        warnings: [expect.stringContaining('Plugin "matrix" config repair failed')],
+      },
+    ]);
+    expect(cfg.channels.matrix.enabled).toBe(true);
+  });
+
   it("retains informational channel guidance separately from changes and warnings", async () => {
     mockReadOnlyMatrixPlugin({
       runConfigSequence: () => ({
