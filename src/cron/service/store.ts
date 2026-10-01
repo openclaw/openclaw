@@ -16,6 +16,7 @@ import {
   loadCronJobsStoreWithConfigJobs,
   saveCronJobsStoreWithRevision,
   saveCronJobsStoreChangesWithRevision,
+  type LoadedCronStore,
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -110,40 +111,28 @@ function isValidatedCronJob(
   return getInvalidPersistedCronJobReason(value) === null;
 }
 
-/** Loads and normalizes the cron store, quarantining invalid persisted rows before runtime use. */
-export async function ensureLoaded(
-  state: CronServiceState,
-  opts?: {
-    forceReload?: boolean;
-    /** A disabled writer commits only its changed rows, so quarantine cleanup
-     *  must not turn its fresh read back into a full-store replacement. */
-    deferQuarantinePersist?: boolean;
-  },
-) {
-  // Keep scheduler-local pacing/catch-up mutations while the publication fact
-  // still matches; evicted partitions conservatively use the global sequence.
-  if (state.store && !opts?.forceReload) {
-    const loadedRevision = loadedCronStoreRevisions.get(state)?.revision;
-    if (
-      loadedRevision === undefined ||
-      loadedRevision === getCronJobsStoreRevision(state.deps.storePath)
-    ) {
-      return;
-    }
-  }
-  const previousJobsById = new Map<string, CronJob>();
-  for (const job of state.store?.jobs ?? []) {
-    previousJobsById.set(job.id, job);
-  }
-  const loadedRevision = getCronJobsStoreRevision(state.deps.storePath);
-  const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
-  const loadNowMs = state.deps.nowMs();
-  // Persisted cron rows are validated lazily, so treat them as raw records at the
-  // store boundary and only trust the CronJob shape after validation below.
-  const loadedJobs = (loaded.store.jobs ?? []).filter(isRecord);
+/** Validated runtime rows plus quarantine entries for one loaded cron store snapshot. */
+type ValidatedCronStoreLoad = {
+  jobs: CronJob[];
+  durableNextRunAtMsByJobId: Map<string, number | undefined>;
+  quarantinedConfigJobs: QuarantinedCronConfigJob[];
+};
+
+/** Normalizes, validates and quarantines the rows of a loaded store snapshot.
+ *  A narrowed read and a full reload share this pass so their validation cannot drift. */
+function validateCronStoreLoad(params: {
+  state: CronServiceState;
+  loaded: LoadedCronStore;
+  loadNowMs: number;
+  previousJobsById: Map<string, CronJob>;
+}) {
+  const { state, loaded, loadNowMs, previousJobsById } = params;
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
+  // Persisted cron rows are validated lazily, so treat them as raw records at the
+  // store boundary and only trust the CronJob shape after validation below.
+  const loadedJobs = (loaded.store.jobs ?? []).filter(isRecord);
   for (const [index, raw] of loadedJobs.entries()) {
     const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
@@ -211,6 +200,43 @@ export async function ensureLoaded(
     durableNextRunAtMsByJobId.set(hydrated.id, hydrated.state.nextRunAtMs);
     invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
   }
+  return { jobs, durableNextRunAtMsByJobId, quarantinedConfigJobs };
+}
+
+/** Loads and normalizes the cron store, quarantining invalid persisted rows before runtime use. */
+export async function ensureLoaded(
+  state: CronServiceState,
+  opts?: {
+    forceReload?: boolean;
+    /** A disabled writer commits only its changed rows, so quarantine cleanup
+     *  must not turn its fresh read back into a full-store replacement. */
+    deferQuarantinePersist?: boolean;
+  },
+) {
+  // Keep scheduler-local pacing/catch-up mutations while the publication fact
+  // still matches; evicted partitions conservatively use the global sequence.
+  if (state.store && !opts?.forceReload) {
+    const loadedRevision = loadedCronStoreRevisions.get(state)?.revision;
+    if (
+      loadedRevision === undefined ||
+      loadedRevision === getCronJobsStoreRevision(state.deps.storePath)
+    ) {
+      return;
+    }
+  }
+  const previousJobsById = new Map<string, CronJob>();
+  for (const job of state.store?.jobs ?? []) {
+    previousJobsById.set(job.id, job);
+  }
+  const loadedRevision = getCronJobsStoreRevision(state.deps.storePath);
+  const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
+  const loadNowMs = state.deps.nowMs();
+  const { jobs, durableNextRunAtMsByJobId, quarantinedConfigJobs } = validateCronStoreLoad({
+    state,
+    loaded,
+    loadNowMs,
+    previousJobsById,
+  });
   state.store = {
     version: 1,
     jobs,
