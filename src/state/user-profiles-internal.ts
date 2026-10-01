@@ -470,7 +470,10 @@ export function bindPreparedUserProfileIdentity(
   const ids = Object.freeze(
     initial.flatMap((binding) => (binding?.bindingId ? [binding.bindingId] : [])).toSorted(),
   );
-  const assertCurrent = (requiredEmailBindingIds: readonly string[] = []) => {
+  const assertCurrent = (
+    requiredEmailBindingIds: readonly string[] = [],
+    requiredGithubAccountIds?: readonly number[],
+  ) => {
     catalog.assertCurrent(profileId);
     if (
       resolveCatalogProfile(rows, profileId)?.id !== profileId ||
@@ -478,9 +481,19 @@ export function bindPreparedUserProfileIdentity(
     ) {
       throw new UserProfileNotFoundError(profileId);
     }
+    if (requiredGithubAccountIds?.length) {
+      const accounts = new Set(rows.get(profileId)?.githubAccountIds);
+      if (requiredGithubAccountIds.some((accountId) => !accounts.has(accountId))) {
+        throw new UserProfileNotFoundError(profileId);
+      }
+    }
   };
-  function readCurrentProfile(this: void, requiredEmailBindingIds?: readonly string[]) {
-    assertCurrent(requiredEmailBindingIds);
+  function readCurrentProfile(
+    this: void,
+    requiredEmailBindingIds?: readonly string[],
+    requiredGithubAccountIds?: readonly number[],
+  ) {
+    assertCurrent(requiredEmailBindingIds, requiredGithubAccountIds);
     return { profileId, assignedRole: rows.get(profileId)?.role || null };
   }
   return {
@@ -498,6 +511,7 @@ export function bindPreparedUserProfileIdentity(
     },
     readCurrentFacts(this: void, requiredEmailBindingIds) {
       const profile = readCurrentProfile(requiredEmailBindingIds);
+      const githubAccountIds = rows.get(profileId)?.githubAccountIds;
       const aliases = new Set([profileId]);
       for (const row of rows.values()) {
         if (row.merged_into === profileId) {
@@ -508,6 +522,7 @@ export function bindPreparedUserProfileIdentity(
         profile: {
           profileId: profile.profileId,
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
+          ...(githubAccountIds ? { githubAccountIds: [...githubAccountIds] } : {}),
           assignedRole: profile.assignedRole,
         },
         aliases,

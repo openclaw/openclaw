@@ -2,7 +2,6 @@
 # Ratchet: this list may only shrink. Split files; never add entries.
 # Existing suppressions carry a TODO at the file site.
 extensions/acpx/src/codex-auth-bridge.ts
-extensions/acpx/src/runtime.test.ts
 extensions/acpx/src/runtime.ts
 extensions/active-memory/index.test.ts
 extensions/amazon-bedrock/index.test.ts

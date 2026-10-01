@@ -22,6 +22,10 @@ import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "./activity-summary-source.types.js";
+import type {
+  ArchivedSessionEvictionBatch,
+  ArchivedSessionEvictionQuery,
+} from "./disk-budget.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
@@ -198,6 +202,12 @@ type SessionTitleFieldsWorkerInput = {
   scope: SessionTranscriptReadScope;
   includeInterSession?: boolean;
   admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
+type SessionTranscriptWatermarkWorkerInput = {
+  kind: "transcript-watermark";
+  database: { agentId: string; path: string };
+  scope: SessionTranscriptReadScope;
 };
 
 type SessionActivitySummarySourceWorkerInput = SessionActivitySummaryBatchInput & {
@@ -469,9 +479,15 @@ type SessionHistoricalEvictionCandidatesWorkerInput = {
   preserveRecentMs?: number | null;
 };
 
+type SessionArchivedEvictionCandidatesWorkerInput = Omit<
+  SessionHistoricalEvictionCandidatesWorkerInput,
+  "admissionIdentities" | "preserveRecentMs"
+> & { archived: ArchivedSessionEvictionQuery };
+
 export type SessionHistoryWorkerInput =
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
   | SessionHistoricalEvictionCandidatesWorkerInput
+  | SessionArchivedEvictionCandidatesWorkerInput
   | SessionArchivePruningWorkerInput
   | SessionPendingArchivesWorkerInput
   | SessionArchivePresenceWorkerInput
@@ -481,6 +497,7 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
+  | SessionTranscriptWatermarkWorkerInput
   | SessionActivitySummarySourceWorkerInput
   | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
@@ -521,10 +538,10 @@ export type SessionTranscriptWorkerValues = {
   prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
   "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };
-  "historical-eviction-candidates": {
-    kind: "historical-eviction-candidates";
-    sessionIds: string[];
-  };
+  "historical-eviction-candidates": { kind: "historical-eviction-candidates" } & (
+    | { sessionIds: string[] }
+    | { batch: ArchivedSessionEvictionBatch }
+  );
   "session-archive-pruning": {
     kind: "session-archive-pruning";
     result: PublishedSessionTranscriptArchive | null;
@@ -539,6 +556,7 @@ export type SessionTranscriptWorkerValues = {
   "history-page": SessionHistoryWorkerResult;
   "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
   "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
+  "transcript-watermark": { kind: "transcript-watermark"; watermark: SessionTranscriptWatermark };
   "session-activity-summary-source": {
     kind: "session-activity-summary-source";
     source: SessionActivitySummaryBatchResult;
@@ -629,6 +647,10 @@ export type SessionHistoryWorkerDatabase = {
     SessionHistoricalEvictionCandidatesWorkerInput,
     string[]
   >;
+  readArchivedEvictionCandidates: SessionHistoryReader<
+    SessionArchivedEvictionCandidatesWorkerInput,
+    ArchivedSessionEvictionBatch
+  >;
   readArchivePruning: SessionHistoryReader<
     SessionArchivePruningWorkerInput,
     PublishedSessionTranscriptArchive | null
@@ -645,6 +667,10 @@ export type SessionHistoryWorkerDatabase = {
   ) => Promise<SessionHistoryWorkerResult>;
   readPreview: SessionHistoryReader<SessionPreviewWorkerInput, SessionPreviewItem[]>;
   readTitleFields: SessionHistoryReader<SessionTitleFieldsWorkerInput, SessionTitleFields>;
+  readWatermark: SessionHistoryReader<
+    SessionTranscriptWatermarkWorkerInput,
+    SessionTranscriptWatermark
+  >;
   readActivitySummarySource: SessionHistoryReader<
     SessionActivitySummarySourceWorkerInput,
     SessionActivitySummaryBatchResult

@@ -968,6 +968,10 @@ const enSettings = {
       launchAtLogin: "Launch at login",
       launchAtLoginUnavailable:
         "Launch at login requires a bundled app without an active app profile.",
+      keepGatewayRunning: "Keep OpenClaw running when the app is closed",
+      keepGatewayRunningHint:
+        "Runs the Gateway as a background service so channels and automations keep working after you quit OpenClaw.",
+      keepGatewayRunningFailed: "Could not change Gateway hosting.",
       quickChat: "Quick Chat enabled",
       quickChatHint:
         "Show a floating composer for quick messages, summoned with a global shortcut.",

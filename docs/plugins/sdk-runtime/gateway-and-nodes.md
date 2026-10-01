@@ -59,7 +59,9 @@ the selected Gateway method still authorizes the request.
 
 `api.registerGatewayAccessPolicy({ authorize })` adds a plugin-owned access
 requirement to authenticated person admission. The callback receives the current
-configuration and the canonical profile's ID, email aliases, and assigned role.
+configuration and the canonical profile's ID, email aliases, optional verified
+`githubAccountIds`, and assigned role. Account IDs come from the existing identity
+owner; display logins and public email do not establish that binding.
 The Gateway resolves `requiredByRole` from the person's effective role and this
 plugin's ID; role-bound policies use that fact instead of inferring a binding
 from the default role's name.
@@ -155,15 +157,17 @@ applicable policy also requires fresh publication admission.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
 
-    `await api.runtime.gateway.withUserProfileIdentity({ profileId, emails }, run)`
+    `await api.runtime.gateway.withUserProfileIdentity({ profileId, emails, githubAccountIds }, run)`
     prepares the canonical profile's original binding lifetimes for up to 500
     selected email aliases under the existing `users.list` / `operator.read`
-    permission. The callback receives a synchronous `assertCurrent()` function.
+    permission. Optional `githubAccountIds` binds up to 500 positive safe numeric
+    account IDs to that same canonical profile. The callback receives a synchronous `assertCurrent()` function.
     Compose it with the action's own authorization in the store's final commit
     guard and immediately before dispatching an external mutation. It reads
     current facts published by the profile owner without querying SQLite on the
     calling thread. Moving an alias away and back, merging the selected profile,
     an unsettled profile mutation, or closing the caller invalidates the check.
+    Selected account IDs must remain verified members of that profile.
     Unselected email bindings can change independently. The preparation is
     released when the callback settles, and retained assertions then reject.
     This capability checks the selected identity; it does not grant permission

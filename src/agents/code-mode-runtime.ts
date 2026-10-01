@@ -227,6 +227,7 @@ export function resolveCodeModeHeadlessConfig(
 export function readCode(args: unknown): {
   code: string;
   restartSafe: boolean;
+  required: boolean;
 } {
   const params = asToolParamsRecord(args);
   // Full-schema tool calls can materialize an unused alias as blank.
@@ -245,6 +246,10 @@ export function readCode(args: unknown): {
       "Code Mode accepts JavaScript only. Remove language and typecheck; use API.read(...) for tool types.",
     );
   }
+  const required = params.required;
+  if (required !== undefined && typeof required !== "boolean") {
+    throw new ToolInputError("required must be a boolean.");
+  }
   const restartSafe = params.restartSafe;
   if (restartSafe !== undefined && typeof restartSafe !== "boolean") {
     throw new ToolInputError("restartSafe must be a boolean.");
@@ -252,6 +257,7 @@ export function readCode(args: unknown): {
   return {
     code,
     restartSafe: restartSafe === true,
+    required: required === true,
   };
 }
 

@@ -368,7 +368,7 @@ export async function deliverAgentCommandResult(
   const deliveryRequested = opts.deliver === true;
   const sourcePayloads =
     deliveryRequested && params.payloads
-      ? selectSourceDeliverablePayloads(params.payloads, opts.sourceReplyDeliveryMode)
+      ? selectSourceDeliverablePayloads(params.payloads, opts)
       : params.payloads;
   const suppressAutomaticDelivery =
     deliveryRequested &&

@@ -39,7 +39,6 @@ postures and maintenance modes documented on the other pages.
 - State integrity checks detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
 - Doctor scans historical `~/.openclaw/cron/jobs.json` stores and previously configured legacy store locations for old cron job shapes, imports jobs and quarantine records into SQLite, and archives the migrated JSON files.
 - Doctor reports cron jobs with an explicit `payload.model` override, including provider-namespace counts and mismatches against `agents.defaults.model`, so scheduled jobs that do not inherit the default model are visible during auth or billing investigations.
-- Doctor reports automatically captured job tool lists that contain no native capabilities when the configured backend supports native-tool capture. Older captures could omit native tools; deliberately restricted jobs can be left as is. Doctor never widens these lists, including with `--fix`. To change a list, use `openclaw cron edit <id> --tools "<complete list>" --json` from an authorized session that holds the tools, including every tool the job should retain.
 - Doctor reports cron jobs still marked in-flight (`state.runningAtMs`), which can make `openclaw cron list` show them as `running`. This check is read-only: if no Gateway is currently executing a marked job, the next cron service startup records the interrupted run and clears the marker.
 
 ## Tool and channel policy

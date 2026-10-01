@@ -39,7 +39,7 @@ function createMaintenanceTimerDeps() {
     scheduler,
     isNixMode: true,
     runWorktreeGc: vi.fn(async () => undefined),
-    runDeliveryQueueMediaGc: vi.fn(async () => undefined),
+    runDeliveryQueueMediaGc: undefined,
   };
 }
 
@@ -62,25 +62,9 @@ describe("delivery queue maintenance", () => {
     pruneOrphanedDeliveryQueueMediaMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("runs queue media cleanup at startup and hourly", async () => {
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const deps = createMaintenanceTimerDeps();
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await waitForMediaCleanupDrainsToSettle();
-    await clock.advanceBy(0);
-    expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(1);
-    await clock.advanceBy(60 * 60_000);
-    expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
-    expect(pruneExpiredDeliveryQueueTombstonesMock).not.toHaveBeenCalled();
-
-    await stopMaintenanceTimers(timers);
-  });
-
   it("runs tombstone expiry with default queue media cleanup at startup and hourly", async () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const { runDeliveryQueueMediaGc: _runDeliveryQueueMediaGc, ...deps } =
-      createMaintenanceTimerDeps();
+    const deps = createMaintenanceTimerDeps();
     const timers = startGatewayMaintenanceTimers(deps);
 
     await waitForMediaCleanupDrainsToSettle();
@@ -100,8 +84,7 @@ describe("delivery queue maintenance", () => {
     pruneExpiredDeliveryQueueTombstonesMock.mockReturnValueOnce(expiry.promise);
     pruneOrphanedDeliveryQueueMediaMock.mockReturnValueOnce(media.promise);
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const { runDeliveryQueueMediaGc: _runDeliveryQueueMediaGc, ...deps } =
-      createMaintenanceTimerDeps();
+    const deps = createMaintenanceTimerDeps();
     const timers = startGatewayMaintenanceTimers(deps);
     let stopped = false;
     await waitForMediaCleanupDrainsToSettle();

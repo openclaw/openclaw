@@ -228,13 +228,11 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     item.sendError = INTERRUPTED_SETTINGS_WAIT_ERROR;
   }
   // Keep this before sendAttempts: queue admission compares canonical JSON bytes.
-  const sendError = normalizeOptionalString(entry.sendError);
-  if (sendError) {
-    item.sendError = sendError;
-  }
-  const sendRunId = normalizeOptionalString(entry.sendRunId);
-  if (sendRunId) {
-    item.sendRunId = sendRunId;
+  for (const key of ["sendError", "sendRunId"] as const) {
+    const fieldValue = normalizeOptionalString(entry[key]);
+    if (fieldValue) {
+      item[key] = fieldValue;
+    }
   }
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;

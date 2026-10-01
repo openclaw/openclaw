@@ -16,7 +16,7 @@ import * as execution from "./update-command-execution.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
-import * as servicePlan from "./update-command-service-plan.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture, dirs } = installFreshUpdateFixture();
@@ -72,7 +72,7 @@ it.each([false, true])(
       ...(await prepare(opts)),
       timeoutMs: 30_000,
     }));
-    vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+    vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
       ok: true,
       value: { nodeRunner: process.execPath },
     });

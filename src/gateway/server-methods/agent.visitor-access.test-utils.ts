@@ -19,6 +19,7 @@ import { hasAgentRunContextExecutionOwner } from "../../infra/agent-run-registry
 import * as mutationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -36,6 +37,7 @@ import {
 import {
   GatewayOperatorAccessDeniedError,
   resolveGatewayOperatorAccessAuthority,
+  resumeGatewayOperatorAccessGrant,
 } from "../operator-access-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
@@ -338,6 +340,16 @@ describe("visitor access admitted caller", () => {
   it("reopens existing profiles and grants and repairs a missing Visitor model policy", async () => {
     await withOpenClawTestState(visitorTestStateOptions, async (state) => {
       const config = createVisitorGatewayConfig(state.workspaceDir);
+      expectDefined(config.gateway, "Gateway missing").auth = {
+        trustedProxy: {
+          userHeader: "cf-access-authenticated-user-email",
+          cloudflareAccessOidc: {
+            issuer: "https://example.cloudflareaccess.com",
+            providerId: "test-oidc",
+            githubAccountIdClaim: "github_id",
+          },
+        },
+      };
       config.tools = { allow: ["visitor_invite", "visitor_list", "visitor_revoke"] };
       const roles = expectDefined(config.gateway?.roles, "Gateway roles missing");
       const guestRole = expectDefined(roles.definitions.guest, "guest role missing");
@@ -530,14 +542,25 @@ describe("visitor access admitted caller", () => {
           const { text: listing, details: listedDetails } = await invoke("visitor_list");
           const listedGrants = z
             .object({
-              grants: z.array(z.object({ email: z.string(), githubLogin: z.string().optional() })),
+              grants: z.array(
+                z.object({
+                  email: z.string(),
+                  profileId: z.string().optional(),
+                  githubLogin: z.string().optional(),
+                }),
+              ),
             })
             .parse(listedDetails).grants;
-          const listedGithubLogin = expectDefined(
-            listedGrants.find((grant) => grant.email === active.email)?.githubLogin,
-            "listed verified GitHub identity missing",
+          const listedStaff = expectDefined(
+            listedGrants.find((grant) => grant.email === active.email),
+            "listed staff grant missing",
           );
-          expect(listedGithubLogin).toBe("verified-staff");
+          const listedProfileId = expectDefined(
+            listedStaff.profileId,
+            "listed staff profile missing",
+          );
+          expect(listedProfileId).toBe(staffId);
+          expect(listedStaff.githubLogin).toBe("verified-staff");
           expect(listing).toContain(`${active.email} | Verified GitHub: @verified-staff`);
           expect(listing).not.toContain(`@${active.githubLogin}`);
           expect(listing).toContain(`${retainedGuest.email} | Verified GitHub: unavailable`);
@@ -581,16 +604,22 @@ describe("visitor access admitted caller", () => {
           expect(getUserProfileListItem(owner.id)).toEqual(owner);
           expect(getUserProfileListItem(unassigned.id)).toEqual(unassigned);
           const fresh = getUserProfileListItem(
-            (await ensureCanonicalUserProfileForEmail(freshEmail)).id,
+            (
+              await syncCanonicalGitHubIdentity({
+                identity: { accountId: 42, login: "fresh-account" },
+                authenticationAlias: { kind: "email", email: freshEmail },
+              })
+            ).id,
           );
           expect(() => resolveGatewayOperatorAccessAuthority(fresh.id, repairedConfig)).toThrow(
             GatewayOperatorAccessDeniedError,
           );
-          expect((await invoke("visitor_invite", { email: freshEmail })).text).toContain(
+          expect((await invoke("visitor_invite", { github: "fresh-account" })).text).toContain(
             "restricted guest",
           );
           expect(await grants.lookup(retainedGuest.email)).toEqual(qualifiedGuest);
-          const freshGrantId = z.uuid().parse((await grants.lookup(freshEmail))?.grantId);
+          expect(await grants.lookup(freshEmail)).toBeUndefined();
+          const freshGrantId = z.uuid().parse((await grants.lookup("github:42"))?.grantId);
           for (const [profile, expectedGrantId] of [
             [unassigned, guestGrantId],
             [fresh, freshGrantId],
@@ -634,6 +663,13 @@ describe("visitor access admitted caller", () => {
                 grantId: expectedGrantId,
               });
               expect(captured.authority.gatewayAccessGrant).toEqual(access.gatewayAccessGrant);
+              expect(() =>
+                resumeGatewayOperatorAccessGrant(
+                  captureResidentUserProfileAccess(profile.id).readCurrentFacts(),
+                  repairedConfig,
+                  access.gatewayAccessGrant ?? null,
+                ),
+              ).not.toThrow();
               expect((await run("allowed")).result).toBe("allowed");
               await expect(run("forbidden")).rejects.toThrow("operator role cannot use this model");
               expect(execute.mock.calls.map((call) => call.slice(0, 2))).toEqual([
@@ -644,14 +680,12 @@ describe("visitor access admitted caller", () => {
               captured.release();
             }
           }
-          const revoked = await invoke("visitor_revoke", { github: listedGithubLogin });
+          const revoked = await invoke("visitor_revoke", { profileId: listedProfileId });
           expect(revoked.details).toMatchObject({ outcome: "revoked", emails: [active.email] });
           expect(await grants.lookup(active.email)).toBeUndefined();
           expect(await grants.lookup(retainedGuest.email)).toEqual(qualifiedGuest);
-          expect((await grants.lookup(freshEmail))?.grantId).toBe(freshGrantId);
-          expect(provider.emails().toSorted()).toEqual(
-            [retainedGuest.email, freshEmail, unmanaged].toSorted(),
-          );
+          expect((await grants.lookup("github:42"))?.grantId).toBe(freshGrantId);
+          expect(provider.emails().toSorted()).toEqual([retainedGuest.email, unmanaged].toSorted());
           expect(getUserProfileListItem(staffId)).toEqual(staff);
           expect(resolveGatewayOperatorAccessAuthority(staffId, repairedConfig)).toBeNull();
         } finally {

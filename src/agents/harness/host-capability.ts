@@ -22,7 +22,6 @@ import {
   readAdmittedRunOperatorAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
 } from "../admitted-run-context.js";
-import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import { bindAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import {
@@ -35,13 +34,8 @@ import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/type
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
-import { registerTrustedToolNoStartError } from "../tool-result-error.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -55,7 +49,9 @@ import {
   getCoreTtsToolResultMediaUrls,
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
+import { gateBoundTool } from "./host-bound-tool.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import { captureRequiredWorkspaceToolFloor } from "./host-capability-workspace.js";
 import { normalizeNativeOperationCwd, prepareAgentHarnessEnvironment } from "./host-environment.js";
 import { bindHarnessMedia } from "./host-media.js";
 import {
@@ -81,70 +77,6 @@ type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
 type AgentHarnessHostApprovalResult = NonNullable<
   Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>
 >;
-
-function gateBoundTool(
-  tool: AnyAgentTool,
-  assertActive: () => void,
-  observeResult: (result: unknown) => void,
-): AnyAgentTool {
-  const execute = tool.execute;
-  const sourcePreparer = getInternalToolExecutionPreparer(tool);
-  if (!execute && !sourcePreparer) {
-    return tool;
-  }
-  const gated: AnyAgentTool = {
-    ...tool,
-    ...(execute
-      ? {
-          execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
-            try {
-              assertActive();
-            } catch (error) {
-              // This gate precedes dispatch; a revoked owner must not look like
-              // a tool that started and failed in downstream terminal evidence.
-              throw registerTrustedToolNoStartError(error);
-            }
-            const result = await execute(...args);
-            assertActive();
-            observeResult(result);
-            return result;
-          },
-        }
-      : {}),
-  };
-  copyAgentToolMetadata(tool, gated, (source) =>
-    gateBoundTool(source, assertActive, observeResult),
-  );
-  if (sourcePreparer) {
-    attachInternalToolExecutionPreparer(gated, async (preparationParams) => {
-      assertActive();
-      const prepared = await sourcePreparer(preparationParams);
-      try {
-        assertActive();
-      } catch (error) {
-        prepared.dispose();
-        throw error;
-      }
-      if (prepared.kind === "immediate") {
-        if (prepared.outcome.kind === "result") {
-          observeResult(prepared.outcome.result);
-        }
-        return prepared;
-      }
-      return {
-        ...prepared,
-        execute: async (onImplementationStart) => {
-          assertActive();
-          const result = await prepared.execute(onImplementationStart);
-          assertActive();
-          observeResult(result);
-          return result;
-        },
-      };
-    });
-  }
-  return gated;
-}
 
 /** Creates a closure-bound capability before plugin invocation. */
 export function createAgentHarnessHostCapabilities(params: {
@@ -261,6 +193,8 @@ export function createAgentHarnessHostCapabilities(params: {
   };
   const config = attempt.config ? cloneSnapshot(attempt.config) : undefined;
   const hostSandboxEnabled = attempt.sandbox?.enabled === true;
+  const requiredWorkspace = captureRequiredWorkspaceToolFloor(attempt, params.pluginId, config);
+  const capturedWorkspaceOptions = requiredWorkspace?.apply();
   const media = bindHarnessMedia({
     attempt,
     config,
@@ -312,8 +246,13 @@ export function createAgentHarnessHostCapabilities(params: {
   const getInstalledSkills = bindHostSkillCatalog({
     snapshot: skillsSnapshot,
     workspaceDir:
-      attempt.bootstrapWorkspaceDir ?? attempt.workspaceDir ?? attempt.cwd ?? process.cwd(),
-    sandbox: attempt.sandbox,
+      capturedWorkspaceOptions?.workspaceDir ??
+      attempt.bootstrapWorkspaceDir ??
+      attempt.workspaceDir ??
+      attempt.cwd ??
+      process.cwd(),
+    sandbox: requiredWorkspace ? capturedWorkspaceOptions?.sandbox : attempt.sandbox,
+    requiredRoot: requiredWorkspace?.root,
     readable:
       attempt.operation !== "settled-tool-finalization" &&
       (!attempt.toolExecutionAllow || isToolExecutionAllowed(attempt.toolExecutionAllow, "read")),
@@ -512,6 +451,7 @@ export function createAgentHarnessHostCapabilities(params: {
     bindToolSurface,
     createToolSurface: (options, bindingOptions) => {
       assertActive();
+      const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
       // Only host-created core tools can seed TTS provenance. Plugin-bound tools
       // must not replay a retained core result into this attempt's authority set.
       const tools = bindTools(
@@ -519,17 +459,21 @@ export function createAgentHarnessHostCapabilities(params: {
           withInstallationTarget(installationTarget, () =>
             createOpenClawCodingToolsInternal(
               {
-                ...options,
+                ...effectiveOptions,
                 // Availability belongs to this prepared host, not mutable plugin inputs.
                 githubPublicationAvailable,
                 runtimePluginToolGrant,
                 skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
-                installedSkills: getInstalledSkills(options?.sandbox),
+                installedSkills: getInstalledSkills(
+                  effectiveOptions.sandbox,
+                  effectiveOptions.sessionPermissionPolicy?.root,
+                ),
                 skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
                 operationalRunInstance,
               },
               // Sandboxes use their materialized snapshot paths, never host library pins.
-              !hostSandboxEnabled &&
+              !requiredWorkspace &&
+                !hostSandboxEnabled &&
                 !options?.sandbox?.enabled &&
                 options?.includeCoreTools !== false &&
                 options?.toolConstructionPlan?.includeBaseCodingTools !== false

@@ -19,8 +19,6 @@ import type {
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { expandHomePrefix, resolveHomeRelativePath } from "./home-dir.js";
 
-const toStringOrUndefined = readStringValue;
-
 const execSecuritySchema = z.enum(["allowlist", "full", "deny"]);
 const execAskSchema = z.enum(["always", "off", "on-miss"]);
 const persistedExecApprovalPolicySchema = z.looseObject({
@@ -313,21 +311,19 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
   for (const item of allowlist) {
     if (typeof item === "string") {
       const trimmed = item.trim();
+      changed = true;
       if (trimmed) {
         result.push({ pattern: trimmed });
-        changed = true;
-      } else {
-        changed = true; // dropped empty string
       }
     } else if (item && typeof item === "object" && !Array.isArray(item)) {
       const pattern = (item as { pattern?: unknown }).pattern;
       if (typeof pattern === "string" && pattern.trim().length > 0) {
         result.push(item as ExecAllowlistEntry);
       } else {
-        changed = true; // dropped invalid entry
+        changed = true;
       }
     } else {
-      changed = true; // dropped invalid entry
+      changed = true;
     }
   }
   return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
@@ -358,9 +354,9 @@ function normalizeAllowlistMetadata(
 function sanitizeExecApprovalPolicy(
   policy: ExecApprovalsDefaults | ExecApprovalsAgent | undefined,
 ): ExecApprovalsDefaults {
-  const security = toStringOrUndefined(policy?.security)?.trim();
-  const ask = toStringOrUndefined(policy?.ask)?.trim();
-  const askFallback = toStringOrUndefined(policy?.askFallback)?.trim();
+  const security = readStringValue(policy?.security)?.trim();
+  const ask = readStringValue(policy?.ask)?.trim();
+  const askFallback = readStringValue(policy?.askFallback)?.trim();
   return {
     security:
       security === "deny" || security === "allowlist" || security === "full" ? security : undefined,
@@ -404,18 +400,15 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
     }
   }
   const sanitizedDefaults = sanitizeExecApprovalPolicy(file.defaults);
-  const normalized: ExecApprovalsFile = {
+  return {
     version: 1,
     socket: {
       path: socketPath && socketPath.length > 0 ? socketPath : undefined,
       token: token && token.length > 0 ? token : undefined,
     },
-    defaults: {
-      ...sanitizedDefaults,
-    },
+    defaults: sanitizedDefaults,
     agents,
   };
-  return normalized;
 }
 
 export function mergeExecApprovalsSocketDefaults(params: {

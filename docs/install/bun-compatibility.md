@@ -61,6 +61,8 @@ Candidates must meet the WAL safety floor and support extension loading before s
 
 SQLite storage workers inherit the main process's selected library. Opening another database or restarting a storage worker reuses that selection without repeating Bun's one-shot library initialization.
 
+Package-update recovery retains the library selected during Bun admission. On macOS, copy the printed recovery command including its `OPENCLAW_SQLITE_LIBRARY` prefix; it works from a fresh shell without the service environment or custom `HOMEBREW_PREFIX`. If recovery cannot meet the SQLite safety floor, it refuses before opening the journal and names the recorded library input to restore. The version-1 recovery journal format is unchanged.
+
 Set `OPENCLAW_SQLITE_LIBRARY` in the process environment before starting OpenClaw to override discovery:
 
 ```sh
@@ -134,7 +136,7 @@ healthy while leaving the invoking CLI unchanged. The routing and explicit
 Bun selection described above apply from the first updater containing the fix;
 a newer candidate cannot change the installed updater's first-hop behavior.
 
-Npm-sourced plugins use OpenClaw's bundled npm 11.20.0 CLI under Bun and do not require a separate Node or npm installation.
+Npm-sourced plugins use OpenClaw's bundled npm 12.1.0 CLI under Bun and do not require a separate Node or npm installation.
 
 ## SQLite worker lifecycle
 
@@ -177,6 +179,7 @@ config or state. Gateway startup logs include the decision and its reason.
 
 ## Known limitations
 
+- **Text boundaries:** OpenClaw works around a [JSC segment lookup bug](https://github.com/oven-sh/WebKit/pull/753) that can include the preceding cluster when a lookup starts on an emoji's high surrogate. Message chunking and terminal cells preserve the intended grapheme boundaries on Bun without runtime configuration changes.
 - **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.2's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
 - **Lifecycle scripts:** Bun blocks dependency lifecycle scripts unless explicitly trusted with `bun pm trust`.
 - **Package scripts:** Some scripts hardcode pnpm, so `bun run` still invokes pnpm internally.
@@ -201,7 +204,7 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 | Unreleased (main)                  | Updates owned split-root Bun Gateway installations in place, retains their runtime pins, and uses explicit Bun executables for package-manager probes and installs.                                   |
 | Unreleased (main)                  | Keeps Bun maintenance children and service runtime selection, and adds `OPENCLAW_PACKAGE_BUN_LAUNCHER` for preinstall validation of Bun-only installs and updater staging.                            |
 | Unreleased (main)                  | Headless node update checks read the npm registry in-process under Bun instead of running `npm view`. #160154                                                                                         |
-| Unreleased (main)                  | Runs the bundled npm 11.20.0 CLI under Bun for npm-sourced plugin installs, updates, and removal without a separate Node or npm installation.                                                         |
+| Unreleased (main)                  | Runs the bundled npm 12.1.0 CLI under Bun for npm-sourced plugin installs, updates, and removal without a separate Node or npm installation.                                                          |
 | Unreleased (main)                  | Implicit Gateway and managed node host reinstalls, update refresh, and Doctor's unloaded-service reinstall retain a supported recorded Bun executable without creating a runtime pin.                 |
 | Unreleased (main)                  | Tool Search code mode (`tool_search_code`) is retired; structured Tool Search needs no Node under Bun.                                                                                                |
 | Unreleased (main)                  | Starts the packaged Chrome DevTools MCP server with the current runtime, so existing-session browser profiles no longer require a Node installation under Bun.                                        |

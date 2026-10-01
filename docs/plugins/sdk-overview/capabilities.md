@@ -264,6 +264,23 @@ The provider receives the selected `model` and optional `agentId` in its evaluat
 context. Concurrent agent/model selections share provider health without retiring
 each other. A changed selection fences the affected request before returning it.
 
+Automatic consumers check the Labs opt-in at provider dispatch. Disabling it
+stops future evaluations, not already-dispatched work or use of its result. The
+host supplies `context.isAdmissible()` for ongoing consumer authority, model
+selection, and provider configuration/credential generation checks; the Labs
+toggle is not part of those ongoing checks. Providers performing external I/O
+must call it synchronously immediately before sending,
+after any lazy loading, DNS, or other awaited preparation. A false result closes
+that evaluation; a thrown authority assertion is terminal. The host remembers
+either observation across provider cleanup, so revocation cannot become a provider
+health failure or a later successful result. Omission preserves explicit
+`decision_evaluate` calls and older-host compatibility; it is not a Labs check for
+explicit calls. TypeSafe uses its guarded transport’s final `beforeRequest` hook.
+The host still checks before provider dispatch and before returning results, but
+cannot prevent I/O in third-party providers that ignore this callback. Local ONNX
+inference retains its existing signal-controlled worker lifecycle; it does not
+transmit evidence to an external service.
+
 Consumers share the selected provider's host-owned concurrency, circuit, and
 credential-refresh lifecycle; each plugin does not create its own provider client.
 No credential is returned to the consumer. Provider setup and refresh use the

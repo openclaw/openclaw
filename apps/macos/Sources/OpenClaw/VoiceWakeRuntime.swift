@@ -10,7 +10,25 @@ import AppKit
 
 /// Background listener that keeps the voice-wake pipeline alive outside the settings test view.
 actor VoiceWakeRuntime {
-    static let shared = VoiceWakeRuntime()
+    private let state: AppVoiceRuntime.State
+    private let sessions: VoiceSessionCoordinator
+    private let overlay: VoiceWakeOverlayController
+    private let permissions: VoicePermissions
+    private let forward: AppVoiceRuntime.Forward
+
+    init(
+        state: @escaping AppVoiceRuntime.State,
+        sessions: VoiceSessionCoordinator,
+        overlay: VoiceWakeOverlayController,
+        permissions: VoicePermissions,
+        forward: @escaping AppVoiceRuntime.Forward)
+    {
+        self.state = state
+        self.sessions = sessions
+        self.overlay = overlay
+        self.permissions = permissions
+        self.forward = forward
+    }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.runtime")
 
@@ -45,6 +63,8 @@ actor VoiceWakeRuntime {
     private var preDetectTask: Task<Void, Never>?
     private var isStarting: Bool = false
     private var triggerOnlyTask: Task<Void, Never>?
+    private var pauseLeases: Set<UUID> = []
+    private var refreshGeneration: UInt64 = 0
 
     /// Silence threshold once we've captured user speech (post-trigger).
     private let silenceWindow: TimeInterval = 2.0
@@ -91,6 +111,8 @@ actor VoiceWakeRuntime {
     }
 
     func refresh(state: AppState) async {
+        self.refreshGeneration &+= 1
+        let generation = self.refreshGeneration
         let snapshot = await MainActor.run { () -> (Bool, RuntimeConfig) in
             let enabled = state.swabbleEnabled
             let config = RuntimeConfig(
@@ -102,13 +124,14 @@ actor VoiceWakeRuntime {
                 triggersTalkMode: state.voiceWakeTriggersTalkMode)
             return (enabled, config)
         }
+        guard generation == self.refreshGeneration, self.pauseLeases.isEmpty else { return }
 
-        guard voiceWakeSupported, snapshot.0 else {
+        guard self.permissions.supported(), snapshot.0 else {
             self.stop()
             return
         }
 
-        guard PermissionManager.voiceWakePermissionsGranted() else {
+        guard self.permissions.granted() else {
             self.logger.debug("voicewake runtime not starting: permissions missing")
             self.stop()
             return
@@ -132,11 +155,12 @@ actor VoiceWakeRuntime {
         }
 
         self.stop()
-        await self.start(with: config)
+        self.start(with: config)
     }
 
-    private func start(with config: RuntimeConfig) async {
-        if self.isStarting { return }
+    private func start(with config: RuntimeConfig) {
+        // Scheduled restarts also enter here, without passing through refresh.
+        guard self.pauseLeases.isEmpty, !self.isStarting else { return }
         self.isStarting = true
         defer { self.isStarting = false }
         do {
@@ -254,11 +278,11 @@ actor VoiceWakeRuntime {
         let token = self.overlayToken
         self.overlayToken = nil
         guard dismissOverlay else { return }
-        Task { @MainActor in
+        Task { @MainActor [sessions, overlay] in
             if let token {
-                VoiceSessionCoordinator.shared.dismiss(token: token, reason: .explicit, outcome: .empty)
+                sessions.dismiss(token: token, reason: .explicit, outcome: .empty)
             } else {
-                VoiceWakeOverlayController.shared.dismiss()
+                overlay.dismiss()
             }
         }
     }
@@ -314,7 +338,7 @@ actor VoiceWakeRuntime {
                 let snapshot = self.committedTranscript + self.volatileTranscript
                 if let token = self.overlayToken {
                     await MainActor.run {
-                        VoiceSessionCoordinator.shared.updatePartial(
+                        self.sessions.updatePartial(
                             token: token,
                             text: snapshot,
                             attributed: attributed)
@@ -538,11 +562,13 @@ actor VoiceWakeRuntime {
         if config.triggersTalkMode {
             self.logger.info("voicewake trigger -> activating Talk Mode (skipping capture)")
             DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "triggerTalkMode")
+            let lease = UUID()
+            self.pauseForPushToTalk(lease: lease)
             if config.triggerChime != .none {
                 await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime, reason: "voicewake.trigger") }
             }
-            self.pauseForPushToTalk()
-            await AppStateStore.shared.setTalkEnabled(true)
+            await self.state()?.setTalkEnabled(true)
+            await self.resumeAfterPushToTalk(lease: lease)
             return
         }
         self.isCapturing = true
@@ -570,7 +596,8 @@ actor VoiceWakeRuntime {
             volatile: self.volatileTranscript,
             isFinal: false)
         self.overlayToken = await MainActor.run {
-            VoiceSessionCoordinator.shared.startSession(
+            guard self.state() != nil else { return nil as UUID? }
+            return self.sessions.startSession(
                 source: .wakeWord,
                 text: snapshot,
                 attributed: attributed,
@@ -579,7 +606,7 @@ actor VoiceWakeRuntime {
         }
 
         // Keep the "ears" boosted for the capture window so the status icon animates while recording.
-        await MainActor.run { AppStateStore.shared.earBoostActive = true }
+        await MainActor.run { self.state()?.earBoostActive = true }
 
         self.captureTask?.cancel()
         self.captureTask = Task { [weak self] in
@@ -638,15 +665,15 @@ actor VoiceWakeRuntime {
         self.triggerOnlyTask?.cancel()
         self.triggerOnlyTask = nil
 
-        await MainActor.run { AppStateStore.shared.earBoostActive = false }
+        await MainActor.run { self.state()?.earBoostActive = false }
         if let token = self.overlayToken {
-            await MainActor.run { VoiceSessionCoordinator.shared.updateLevel(token: token, 0) }
+            await MainActor.run { self.sessions.updateLevel(token: token, 0) }
         }
 
         let sendChime = finalTranscript.isEmpty ? .none : config.sendChime
         if let token = self.overlayToken {
             await MainActor.run {
-                VoiceSessionCoordinator.shared.finalize(
+                self.sessions.finalize(
                     token: token,
                     text: finalTranscript,
                     sendChime: sendChime,
@@ -657,10 +684,8 @@ actor VoiceWakeRuntime {
             if sendChime != .none {
                 await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "voicewake.send") }
             }
-            Task.detached {
-                await VoiceWakeForwarder.forwardToSelectedSession(
-                    transcript: finalTranscript,
-                    voiceWakeTrigger: triggerWord)
+            Task.detached { [forward] in
+                await forward(finalTranscript, triggerWord)
             }
         }
         self.overlayToken = nil
@@ -684,8 +709,8 @@ actor VoiceWakeRuntime {
         // Normalize against the adaptive threshold so the UI meter stays roughly 0...1 across devices.
         let clamped = min(1.0, max(0.0, rms / max(self.minSpeechRMS, threshold)))
         if let token = self.overlayToken {
-            Task { @MainActor in
-                VoiceSessionCoordinator.shared.updateLevel(token: token, clamped)
+            Task { @MainActor [sessions] in
+                sessions.updateLevel(token: token, clamped)
             }
         }
     }
@@ -695,12 +720,13 @@ actor VoiceWakeRuntime {
         let current = self.currentConfig
         self.stop(dismissOverlay: false, cancelScheduledRestart: false)
         if let current {
-            Task { await self.start(with: current) }
+            self.start(with: current)
         }
     }
 
-    private func restartRecognizerIfIdleAndOverlayHidden() async {
-        if self.isCapturing { return }
+    private func restartRecognizerIfIdleAndOverlayHidden() {
+        guard !Task.isCancelled, self.pauseLeases.isEmpty, !self.isCapturing else { return }
+        self.scheduledRestartTask = nil
         self.restartRecognizer()
     }
 
@@ -709,21 +735,24 @@ actor VoiceWakeRuntime {
         self.scheduledRestartTask = Task { [weak self] in
             guard await SimpleTaskSupport.waitForNextOperation(interval: max(0, delay)) else { return }
             guard let self else { return }
-            await self.consumeScheduledRestart()
             await self.restartRecognizerIfIdleAndOverlayHidden()
         }
     }
 
-    private func consumeScheduledRestart() {
-        self.scheduledRestartTask = nil
-    }
-
-    func applyPushToTalkCooldown() {
-        self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
-    }
-
-    func pauseForPushToTalk() {
+    func pauseForPushToTalk(lease: UUID) {
+        guard self.pauseLeases.insert(lease).inserted else { return }
+        self.refreshGeneration &+= 1
         self.stop(dismissOverlay: false)
+    }
+
+    func resumeAfterPushToTalk(lease: UUID) async {
+        guard self.pauseLeases.remove(lease) != nil else { return }
+        self.refreshGeneration &+= 1
+        guard self.pauseLeases.isEmpty else { return }
+        self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
+        if let state = await self.state() {
+            await self.refresh(state: state)
+        }
     }
 
     static func trimmedAfterTrigger(_ text: String, triggers: [String]) -> String {
