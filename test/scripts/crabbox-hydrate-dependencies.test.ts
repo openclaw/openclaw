@@ -48,7 +48,7 @@ function write(root: string, relative: string, contents: string, mode?: number) 
 
 describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", () => {
   it.each(["true", "false", "invalid"])(
-    "applies frozen policy before pnpm bootstrap (%s)",
+    "preserves frozen policy through pnpm bootstrap and workspace config (%s)",
     (frozen) => {
       const root = tempDirs.make("openclaw-frozen-bootstrap-");
       const bin = path.join(root, "bin");
@@ -62,7 +62,13 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
         "pnpm",
         `#!/bin/bash
 printf '%s\\n' "$*" >> "$PNPM_CALLS"
-if [ "\${PNPM_CONFIG_FROZEN_LOCKFILE:-}" != true ]; then
+# pnpm 10 applies workspace frozenLockfile:false after its environment settings.
+if [ "$1" = install ]; then
+  case " $* " in
+    *" --frozen-lockfile "*) ;;
+    *) printf 'rewritten\\n' > "$PNPM_LOCK" ;;
+  esac
+elif [ "\${PNPM_CONFIG_FROZEN_LOCKFILE:-}" != true ]; then
   printf 'rewritten\\n' > "$PNPM_LOCK"
 fi
 `,

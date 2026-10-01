@@ -21,6 +21,9 @@ install_args=(
   --config.enable-pre-post-scripts=true
   --config.side-effects-cache=true
 )
+if [ "$FROZEN_LOCKFILE" = "true" ]; then
+  install_args+=(--frozen-lockfile)
+fi
 if [ "$DEPENDENCY_CACHE" = "true" ] || {
   [ "${RUNNER_OS:-}" = "Linux" ] &&
     [ "${PNPM_CONFIG_STORE_DIR:-}" = "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store" ]
