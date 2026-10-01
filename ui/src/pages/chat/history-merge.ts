@@ -431,10 +431,20 @@ export function selectChatInputDisplay(
     inputIdentities.set(messages, identities);
   }
   const { inputIds, sendKeys } = identities;
-  const visibleInputs = inputs.filter(
+  // Interrupted custody must not hide the browser payload that owns Retry/Discard.
+  // Active Gateway custody and canonical consumption still take precedence.
+  const localRecovery = new Set(
+    queue
+      .filter((item) => item.sendState === "held" || item.sendState === "failed")
+      .map((item) => item.sendRunId),
+  );
+  const serverInputs = inputs.filter(
+    (input) => input.state !== "interrupted" || !input.runId || !localRecovery.has(input.runId),
+  );
+  const visibleInputs = serverInputs.filter(
     (input) => !inputIds.has(input.id) && asNullableRecord(input.message)?.display !== false,
   );
-  const accepted = new Set(inputs.map((input) => input.runId));
+  const accepted = new Set(serverInputs.map((input) => input.runId));
   return {
     queue: queue.filter(
       (item) =>
@@ -522,7 +532,9 @@ export function shouldDisplayChatSubmission(
 /** A retained submission has display ownership only until its own user receipt or custody. */
 export function admitChatSubmission(
   owner: ChatSessionProjectionOwner,
-  pendingInputs: ChatPendingInputsPage["items"] | undefined,
+  pendingInputs:
+    | { page: ChatPendingInputsPage; activeInputs: ChatPendingInputsPage["items"] }
+    | undefined,
   submission: RetainedChatSubmission | null | undefined = owner.chatSubmissions?.readInitial(
     owner.sessionKey,
     owner.client ?? null,
@@ -530,9 +542,11 @@ export function admitChatSubmission(
   ),
 ): boolean {
   // A pane can receive custody before the sender hands off its local display.
+  // The browsed retained page is not the complete active-custody snapshot.
   if (
     submission &&
-    (pendingInputs?.some((input) => input.runId === submission.pendingRunId) ||
+    (pendingInputs?.activeInputs.some((input) => input.runId === submission.pendingRunId) ||
+      pendingInputs?.page.items.some((input) => input.runId === submission.pendingRunId) ||
       (submission.kind === "initial" &&
         owner.chatMessages.some((message) =>
           isInitialSubmissionReceipt(submission, readSessionMessageIdentity(message)),

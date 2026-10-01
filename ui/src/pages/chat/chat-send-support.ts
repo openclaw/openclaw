@@ -123,7 +123,7 @@ function preserveDeliveredUserTurn(
       !state.currentSessionId ||
       submission.sessionId === state.currentSessionId
     ) {
-      admitChatSubmission(state, getChatPendingInputs(state)?.page.items, submission);
+      admitChatSubmission(state, getChatPendingInputs(state), submission);
     }
     return;
   }

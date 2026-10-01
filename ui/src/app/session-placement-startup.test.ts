@@ -474,7 +474,7 @@ describe("application session placement startup", () => {
         chatSubmissions,
         client: client as never,
       });
-      admitChatSubmission(pane, getChatPendingInputs(pane)?.page.items);
+      admitChatSubmission(pane, getChatPendingInputs(pane));
       expect(pane.chatMessages).toHaveLength(1);
       applyChatPendingInputs(pane, {
         total: 1,
@@ -494,7 +494,7 @@ describe("application session placement startup", () => {
         { type: "snapshotLoaded", messages: [] },
         { runActive: true },
       );
-      expect(admitChatSubmission(pane, getChatPendingInputs(pane)?.page.items)).toBe(false);
+      expect(admitChatSubmission(pane, getChatPendingInputs(pane))).toBe(false);
       expect(pane.chatMessages).toEqual([]);
       expect(sessions.invalidate).not.toHaveBeenCalled();
       startup.dispose();

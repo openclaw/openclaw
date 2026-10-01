@@ -335,7 +335,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
         }
-        admitChatSubmission(pageState, getChatPendingInputs(pageState)?.page.items);
+        admitChatSubmission(pageState, getChatPendingInputs(pageState));
       }
     }
     chatState.attach(pageState);
@@ -536,10 +536,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         // would vanish instead of offering a retry, and the accepted prompt would
         // stay hidden until the transcript bootstrap resolved.
         const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
-        const acceptedPrompt = admitChatSubmission(
-          this.state,
-          getChatPendingInputs(this.state)?.page.items,
-        );
+        const acceptedPrompt = admitChatSubmission(this.state, getChatPendingInputs(this.state));
         if (rejectedTurn) {
           this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;

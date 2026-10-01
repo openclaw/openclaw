@@ -366,7 +366,7 @@ describe("application placement delivery recovery", () => {
       };
       const publications: unknown[][] = [];
       const stop = startup.subscribe(() => {
-        admitChatSubmission(pane, getChatPendingInputs(pane)?.page.items);
+        admitChatSubmission(pane, getChatPendingInputs(pane));
         publications.push(visibleMessages());
       });
       try {
