@@ -437,7 +437,15 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
   const candidates = claims.map(({ input, generation }) => {
     const candidate = prepareModelRuntimeOwner(input, "configured", "static");
     candidate.generation = generation;
-    candidate.onPluginGenerationRetired = () => params.onPluginGenerationRetired(candidate);
+    // Before commit no reader sees the candidate, so a lost Gateway loan restarts this attempt;
+    // after commit it is a published configured owner and takes the normal recovery.
+    candidate.onPluginGenerationRetired = () => {
+      if (committed) {
+        params.onPluginGenerationRetired(candidate);
+      } else {
+        abortPreparation();
+      }
+    };
     return candidate;
   });
   const retireCandidates = () => {
@@ -471,6 +479,12 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
     }
     await params.commit(() => {
       assertCurrent();
+      // Any candidate retirement (lost loan or retired cache) leaves it unpublishable.
+      if (candidates.some((owner) => owner.needsRefresh || !owner.pluginGeneration)) {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          "A remote catalog candidate's plugin generation retired before publication",
+        );
+      }
       const commit = params.prepareCommit(candidates);
       assertCurrent();
       commit();
