@@ -334,8 +334,9 @@ export function createReplyOperation(params: {
     markTerminalRecovery() {
       terminalRecovery = true;
     },
-    markAcceptedSteeredInboundAudio() {
-      acceptedSteeredInboundAudio = true;
+    markSteeredInputAccepted({ inboundAudio }) {
+      acceptedSteeredInboundAudio ||= inboundAudio;
+      sourceReplyDelivered = false;
     },
     markSourceReplyDelivered() {
       sourceReplyDelivered = true;
