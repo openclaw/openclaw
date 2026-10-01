@@ -2139,9 +2139,11 @@ describe("killAllControlledSubagentRuns", () => {
       killed: 1,
       labels: ["current shadow task"],
     });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeTypeOf(
-      "number",
-    );
+    expect(subagentRuns.get(currentShadowRun.runId)).toMatchObject({
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      execution: { status: "terminal", endedAt: expect.any(Number) },
+    });
+    expect(subagentRuns.get(stale.runId)).toEqual(stale);
   });
 
   it("does not kill a newest finished bulk target when only a stale older row is still active", async () => {

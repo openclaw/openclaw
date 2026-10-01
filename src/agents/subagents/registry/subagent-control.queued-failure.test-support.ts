@@ -65,6 +65,7 @@ export function registerQueuedReservationFailureTests({
       });
     reserve();
     let writes = 0;
+    let rejectedWrite: number | undefined;
     resetRegistryLeafMocks();
     vi.mocked(runOpenClawStateWorkerOperation).mockImplementation((context, operation, options) =>
       runSubagentStateWorkerOperation(
@@ -73,30 +74,34 @@ export function registerQueuedReservationFailureTests({
           operation({
             ...scope,
             execute: async (command) => {
-              if (command.type === "subagents.persistChanges") {
-                writes += 1;
-                if (
-                  ["session replacement at intent", "session replacement release"].includes(
-                    failure,
-                  ) &&
-                  writes === 1
-                ) {
+              const writeNumber =
+                command.type === "subagents.persistChanges" ? ++writes : undefined;
+              if (writeNumber !== undefined) {
+                if (failure === "session replacement at intent" && writeNumber === 1) {
                   replaceSessionEntrySync(
                     { storePath, sessionKey: entry.childSessionKey },
                     { sessionId: "new-session", updatedAt: 2 },
                   );
                 }
                 if (
-                  (failure === "intent write" && writes === 1) ||
+                  (failure === "intent write" && writeNumber === 1) ||
                   (["tombstone write", "claim release", "session replacement release"].includes(
                     failure,
                   ) &&
-                    writes === 2)
+                    writeNumber === 2)
                 ) {
+                  rejectedWrite = writeNumber;
                   throw new Error("sqlite busy");
                 }
               }
-              return scope.execute(command);
+              const receipt = await scope.execute(command);
+              if (failure === "session replacement release" && writeNumber === 1) {
+                replaceSessionEntrySync(
+                  { storePath, sessionKey: entry.childSessionKey },
+                  { sessionId: "new-session", updatedAt: 2 },
+                );
+              }
+              return receipt;
             },
           }),
         options,
@@ -160,6 +165,12 @@ export function registerQueuedReservationFailureTests({
         expect(result.status).toBe(
           ["row replacement", "lifecycle rotation"].includes(failure) ? "ok" : "error",
         );
+        if (failure === "session replacement release") {
+          expect(rejectedWrite).toBe(2);
+          expect(result).toMatchObject({
+            error: expect.stringContaining("kill intent could not be released"),
+          });
+        }
       }
       if (["tombstone write", "claim release", "session replacement release"].includes(failure)) {
         expect(subagentRuns.get(entry.runId)?.killIntent).toMatchObject({ reason: "killed" });
