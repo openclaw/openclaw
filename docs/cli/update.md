@@ -227,6 +227,14 @@ worker-launch code; installing a corrected candidate cannot repair that first ho
 Source updates retain a retired workspace dependency link when only its ignored `node_modules` directory remains.
 An older installed updater that fails at `updater-runtime-retention` needs this correction in its running code before retrying; a newer candidate cannot repair that earlier step.
 
+Runtime retention excludes updater-owned package backups in the global module
+directory, including backup symlinks to source checkouts. An older installed
+updater such as `2026.9.6` can still follow a retained
+`.openclaw.package-backup-*` link and refuse an update with a host-owned plugin-link
+error. Preserve that historical link outside the global module directory, keeping
+its resolved target unchanged, before retrying. Do not delete its source checkout
+or move backups belonging to an active or unresolved update.
+
 The installed updater reads the candidate's `package.json` before running its
 pending lifecycle scripts. `openclaw.updateAdmissionProtocol: 1` advertises the
 internal admission command. Reading this marker does not execute candidate code.
@@ -378,6 +386,12 @@ and records their paths as a warning without undoing the verified installation.
 Cleanup checks this budget between filesystem operations and waits for operations
 already in flight to settle, so stalled storage can extend the cleanup wait.
 Ownership and path-identity failures remain distinct from cleanup expiry.
+
+A later verified package activation also retires historical package backups
+captured before that update began. Symlink retirement removes only the link;
+source checkouts remain untouched. Failed updates and rollbacks preserve those
+historical backups, and separately retained database snapshots keep their own
+recovery lifetime.
 
 Post-plugin config validation and readiness checks use the measured shared and
 agent database sizes after Doctor finishes, including WAL files. Post-core plugin

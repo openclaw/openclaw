@@ -17,7 +17,9 @@ and run its migrations first. Existing SQLite state remains authoritative.
 Doctor archives a retired Telegram `thread-bindings-*.json` file as a completed
 no-op only when it is a regular file containing exactly version `1` and an empty
 `bindings` array. Nonempty, malformed, symlinked, or otherwise uncertain files
-remain preserved for operator review.
+remain preserved for operator review. If archiving a verified empty file fails,
+Doctor keeps the original bytes for a later retry and reports a recoverable
+warning. This cleanup failure does not block an update.
 Retired `subagents/runs.json` files are also ignored and left untouched;
 transient runs are never restored from them.
 

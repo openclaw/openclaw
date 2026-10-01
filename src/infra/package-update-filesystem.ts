@@ -21,7 +21,10 @@ import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 export const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 const log = createSubsystemLogger("update/package-launchers");
 
-function assertPackagePathIdentity(filePath: string, expected: BigIntStats | undefined): void {
+export function assertPackagePathIdentity(
+  filePath: string,
+  expected: BigIntStats | undefined,
+): void {
   let current: BigIntStats | undefined;
   try {
     current = fsSync.lstatSync(filePath, { bigint: true, throwIfNoEntry: false });
