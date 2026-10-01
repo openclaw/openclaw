@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -169,6 +170,7 @@ export type SessionEntryPublicationRecord =
 export type PendingSessionEntryPublication = {
   superseded: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined>;
   metadataSuperseded: Set<string>;
+  ownerChanges: Map<string, Extract<SessionRowFacts, { kind: "owner" }>>;
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
   settled: boolean;

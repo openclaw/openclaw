@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   captureSessionStoreReadCandidates,
   prepareSessionStoreTargetInventory,
@@ -46,10 +46,7 @@ export function createSessionRowGenerationObservations(owner: {
   put: (row: records.Row) => void;
   remove: (id: string) => void;
   dirty: Set<string>;
-  mark: (
-    change: { agentId: string; sessionKey: string; storePath?: string },
-    prepared?: ReturnType<typeof readPreparedSessionEntryChange>,
-  ) => void;
+  mark: (change: { agentId: string; sessionKey: string; storePath?: string }) => void;
   ensureMaterialized: () => Promise<void>;
 }) {
   const observations = new Set<{
@@ -185,6 +182,10 @@ export function createSessionRowGenerationObservations(owner: {
           observation.dispose();
         }
       }
+      // Prepared identities follow row publication; replay would overwrite reentrant commits.
+      if (readPreparedSessionSharingChange(mutation) !== undefined) {
+        return;
+      }
       for (const key of mutation.previous.sessionKeys) {
         for (const row of owner.matching({ key, agentId: mutation.agentId })) {
           if (
@@ -197,19 +198,12 @@ export function createSessionRowGenerationObservations(owner: {
           }
           owner.markRelated(row);
           if ("current" in mutation && mutation.current.sessionKeys.includes(row.key)) {
-            const prepared = readPreparedSessionEntryChange(mutation, row.key);
-            const sharing = prepared?.sharing;
             // An unprepared reset cannot prove which lifecycle revision has already published.
             const published =
               mutation.kind !== "reset" &&
               row.publishedSource?.identity === mutation.databaseIdentity &&
               row.sharingEntry?.sessionId === mutation.current.sessionId;
-            if (
-              (!prepared && !published) ||
-              (sharing &&
-                (row.entry?.sessionId !== sharing.sessionId ||
-                  row.entry.lifecycleRevision !== sharing.lifecycleRevision))
-            ) {
+            if (!published) {
               owner.put(records.renewGeneration(row));
               owner.dirty.add(records.identity(row));
             }
@@ -220,7 +214,6 @@ export function createSessionRowGenerationObservations(owner: {
       }
       if ("current" in mutation) {
         for (const sessionKey of mutation.current.sessionKeys) {
-          const prepared = readPreparedSessionEntryChange(mutation, sessionKey);
           const committedRows = owner
             .matching({ key: sessionKey, agentId: mutation.agentId })
             .filter(
@@ -239,7 +232,7 @@ export function createSessionRowGenerationObservations(owner: {
               row.sharingEntry.sessionId !== mutation.previous.sessionId,
           );
           // Native row publication precedes its lifecycle notification, including reentrant writes.
-          if (!prepared && mutation.kind !== "reset" && (published || superseded)) {
+          if (mutation.kind !== "reset" && (published || superseded)) {
             continue;
           }
           const source = [...owner.stores().values()].find(
@@ -248,14 +241,11 @@ export function createSessionRowGenerationObservations(owner: {
           if (!source) {
             continue;
           }
-          owner.mark(
-            {
-              agentId: mutation.agentId,
-              sessionKey,
-              storePath: source.filename,
-            },
-            prepared,
-          );
+          owner.mark({
+            agentId: mutation.agentId,
+            sessionKey,
+            storePath: source.filename,
+          });
         }
       } else {
         void owner.ensureMaterialized().catch(() => {});

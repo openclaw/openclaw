@@ -446,20 +446,6 @@ export function index(
   }
 }
 
-export function changesRowStructure(row: Row, entry: Row["storedEntry"]): boolean {
-  const previous = row.storedEntry;
-  return (
-    !previous ||
-    !entry ||
-    previous.sessionId !== entry.sessionId ||
-    previous.lifecycleRevision !== entry.lifecycleRevision ||
-    previous.parentSessionKey !== entry.parentSessionKey ||
-    previous.spawnedBy !== entry.spawnedBy ||
-    previous.incognito !== entry.incognito ||
-    previous.archivedAt !== entry.archivedAt
-  );
-}
-
 export function isCurrentGeneration(row: Row, current: Row | undefined): boolean {
   return (
     current?.generation === row.generation &&

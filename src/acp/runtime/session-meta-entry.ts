@@ -98,6 +98,7 @@ export async function updateAcpSessionStoreEntry(params: {
               identity.physicalIdentity,
               published.previous,
               published.current,
+              published.prepared,
             );
           }
           if (unknown) {

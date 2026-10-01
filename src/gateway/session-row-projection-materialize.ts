@@ -68,7 +68,17 @@ export function createSessionRowPublication(owner: {
     owner.runAsOwner(() => {
       if (entry.archivedAt !== undefined && !owner.registryFactsReady()) {
         // Retain committed metadata while the independent lineage owner recovers.
-        owner.deferArchive({ ...row, storedEntry: entry, sharingEntry: entry });
+        const previous = row.storedEntry ?? row.entry;
+        const changedIdentity =
+          previous &&
+          (previous.sessionId !== entry.sessionId ||
+            previous.lifecycleRevision !== entry.lifecycleRevision);
+        owner.deferArchive({
+          ...(changedIdentity ? records.renewGeneration(row) : row),
+          publishedSource: row.publishedSource,
+          storedEntry: entry,
+          sharingEntry: entry,
+        });
         return;
       }
       owner.enqueue(owner.acquireEntry(row, entry));

@@ -275,6 +275,128 @@ it("settles publication before a successor writer and preserves metadata after w
   });
 });
 
+it.each(["session ID", "lifecycle revision"] as const)(
+  "preserves a newer native %s when an earlier worker identity listener replaces a later row",
+  async (replacement) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const firstKey = "agent:main:identity-batch-a";
+      const laterKey = "agent:main:identity-batch-b";
+      const scope = { agentId: "main", storePath: database.path, sessionKey: laterKey };
+      const original = {
+        sessionId: "later-session",
+        lifecycleRevision: "original-lifecycle",
+        updatedAt: 1,
+        visibility: "shared" as const,
+      };
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: firstKey },
+        { ...original, sessionId: "first-session" },
+      );
+      replaceSessionEntrySync(scope, original);
+      const newer = {
+        ...original,
+        sessionId: replacement === "session ID" ? "newer-session" : original.sessionId,
+        lifecycleRevision: "newer-native-lifecycle",
+        updatedAt: 3,
+        visibility: "draft" as const,
+        label: "newer native metadata",
+      };
+      const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      const query = { agentId: scope.agentId, storePath: scope.storePath, key: laterKey };
+      const observed: Array<{
+        entry: InternalSessionEntry | undefined;
+        storedEntry: InternalSessionEntry | undefined;
+        sharingEntry: InternalSessionEntry | undefined;
+      }> = [];
+      const callbackErrors: unknown[] = [];
+      let nativeReplacementStarted = false;
+      let inNativeReplacement = false;
+      let nativeCacheWasCold = false;
+      let stop = () => {};
+      try {
+        await projection.ensureMaterialized();
+        readSessionEntryCache(database, { cache: true });
+        stop = onSessionIdentityMutation((mutation) => {
+          if (!("current" in mutation)) {
+            return;
+          }
+          if (mutation.current.sessionKeys.includes(firstKey) && !nativeReplacementStarted) {
+            nativeReplacementStarted = true;
+            nativeCacheWasCold = readCommittedSessionEntryCache(database.db) === undefined;
+            inNativeReplacement = true;
+            try {
+              replaceSessionEntrySync(scope, newer);
+            } catch (error) {
+              callbackErrors.push(error);
+            } finally {
+              inNativeReplacement = false;
+            }
+            return;
+          }
+          if (
+            mutation.current.sessionKeys.includes(laterKey) &&
+            nativeReplacementStarted &&
+            !inNativeReplacement
+          ) {
+            const row = projection.capture(query);
+            observed.push(
+              structuredClone({
+                entry: row?.entry,
+                storedEntry: row?.storedEntry,
+                sharingEntry: projection.sharingTarget(query)?.entry,
+              }),
+            );
+          }
+        });
+        await applySessionEntryExactReplacements({
+          agentId: scope.agentId,
+          storePath: scope.storePath,
+          sessionKeys: [firstKey, laterKey],
+          update: (rows) => ({
+            result: undefined,
+            replacements: rows.map(({ sessionKey, entry }) => ({
+              sessionKey,
+              entry: {
+                ...entry,
+                lifecycleRevision: "worker-lifecycle",
+                updatedAt: 2,
+                label: "older worker metadata",
+              },
+            })),
+          }),
+        });
+        expect(callbackErrors).toEqual([]);
+        expect(nativeReplacementStarted).toBe(true);
+        // Cold native writes carry no revision comparable with the worker's prepared receipt.
+        expect(nativeCacheWasCold).toBe(true);
+        expect(observed).toHaveLength(1);
+        for (const entry of [observed[0]!.entry, observed[0]!.storedEntry]) {
+          if (entry !== undefined) {
+            expect(entry).toMatchObject(newer);
+          }
+        }
+        const expectedSharing = {
+          sessionId: newer.sessionId,
+          lifecycleRevision: newer.lifecycleRevision,
+          visibility: newer.visibility,
+        };
+        if (observed[0]!.sharingEntry !== undefined) {
+          expect(observed[0]!.sharingEntry).toMatchObject(expectedSharing);
+        }
+        expect(readExactSessionEntryRow(database, laterKey)?.entry).toMatchObject(newer);
+        await projection.ensureMaterialized();
+        expect(projection.capture(query)?.entry).toMatchObject(newer);
+        expect(projection.capture(query)?.storedEntry).toMatchObject(newer);
+        expect(projection.sharingTarget(query)?.entry).toMatchObject(expectedSharing);
+      } finally {
+        stop();
+        projection.dispose();
+      }
+    });
+  },
+);
+
 it("uses incognito transaction postimages for currency while delivery retains committed facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "main";
@@ -605,119 +727,192 @@ it.each([
   });
 });
 
-it("preserves a native owner assignment committed before an older worker reply publishes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:owner-publication-race",
-    };
-    const original = {
-      sessionId: "owner-publication-race",
-      lifecycleRevision: "retained-lifecycle",
-      updatedAt: 1,
-      label: "before",
-    };
-    replaceSessionEntrySync(scope, original);
-    const initialOwner = {
-      actor: { type: "human" as const, id: "initial-owner" },
-      assignedBy: { type: "system" as const, id: "fixture" },
-      assignedAt: 1,
-    };
-    assignSessionOwner(scope, {
-      owner: initialOwner.actor,
-      assignedBy: initialOwner.assignedBy,
-      assignedAt: initialOwner.assignedAt,
-    });
-    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (typeof identity !== "string") {
-      throw new Error("Expected durable owner fixture");
-    }
-    const sharing = retainPreparedSessionSharingFacts({
-      databaseIdentity: `file:${identity}`,
-      sessionKey: scope.sessionKey,
-      entry: projectSessionSharingEntry(
-        readExactSessionEntryRow(database, scope.sessionKey)!.entry,
-      ),
-      membership: new Set(),
-    });
-    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-    const query = { agentId: scope.agentId, storePath: scope.storePath, key: scope.sessionKey };
-    const newerOwner = {
-      ...initialOwner,
-      actor: { type: "human" as const, id: "newer-owner" },
-      assignedAt: 2,
-    };
-    const observed: Array<{
-      entryOwner: InternalSessionEntry["owner"];
-      storedOwner: InternalSessionEntry["owner"];
-      sharingOwner: InternalSessionEntry["owner"];
-    }> = [];
-    let stop = () => {};
-    try {
-      await projection.ensureMaterialized();
-      expect(projection.capture(query)?.storedEntry?.owner).toEqual(initialOwner);
-      expect(sharing.readCurrent()?.entry?.owner).toEqual(initialOwner);
-      stop = sessionChanges.subscribe((change) => {
-        if (!("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
-          return;
-        }
-        const row = projection.capture(query);
-        observed.push(
-          structuredClone({
-            entryOwner: row?.entry?.owner,
-            storedOwner: row?.storedEntry?.owner,
-            sharingOwner: sharing.readCurrent()?.entry?.owner,
-          }),
-        );
-      });
-      delivery.afterResult = () => {
-        expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry).toMatchObject({
-          label: "worker committed",
-          owner: initialOwner,
-        });
-        expect(
-          assignSessionOwner(scope, {
-            owner: newerOwner.actor,
-            assignedBy: newerOwner.assignedBy,
-            assignedAt: newerOwner.assignedAt,
-          }),
-        ).toEqual(newerOwner);
+it.each([
+  { boundary: "reply", reset: false },
+  { boundary: "reply", reset: true },
+  { boundary: "observer", reset: false },
+  { boundary: "observer", reset: true },
+])(
+  "preserves native owner changes during $boundary publication (reset=$reset)",
+  async ({ boundary, reset }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:owner-publication-race",
       };
-      await applySessionEntryExactReplacements({
-        agentId: scope.agentId,
-        storePath: scope.storePath,
-        sessionKeys: [scope.sessionKey],
-        update: ([row]) => ({
-          result: undefined,
-          replacements: [
-            { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "worker committed" } },
-          ],
-        }),
+      const original = {
+        sessionId: "owner-publication-race",
+        lifecycleRevision: "retained-lifecycle",
+        updatedAt: 1,
+        label: "before",
+      };
+      replaceSessionEntrySync(scope, original);
+      const initialOwner = {
+        actor: { type: "human" as const, id: "initial-owner" },
+        assignedBy: { type: "system" as const, id: "fixture" },
+        assignedAt: 1,
+      };
+      assignSessionOwner(scope, {
+        owner: initialOwner.actor,
+        assignedBy: initialOwner.assignedBy,
+        assignedAt: initialOwner.assignedAt,
       });
-      expect(observed.length).toBeGreaterThan(0);
-      for (const publication of observed) {
-        expect(publication).toEqual({
-          entryOwner: newerOwner,
-          storedOwner: newerOwner,
-          sharingOwner: newerOwner,
-        });
+      const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+      if (typeof identity !== "string") {
+        throw new Error("Expected durable owner fixture");
       }
-      expect(projection.capture(query)?.storedEntry?.owner).toEqual(newerOwner);
-      expect(sharing.readCurrent()?.entry?.owner).toEqual(newerOwner);
-      expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry).toMatchObject({
-        label: "worker committed",
-        owner: newerOwner,
+      const generation = await prepareSessionDeliveryGeneration({
+        ...scope,
+        sessionId: original.sessionId,
+        lifecycleRevision: original.lifecycleRevision,
       });
-    } finally {
-      delivery.afterResult = undefined;
-      stop();
-      projection.dispose();
-      sharing.release();
-    }
-  });
-});
+      const sharing = retainPreparedSessionSharingFacts({
+        databaseIdentity: `file:${identity}`,
+        sessionKey: scope.sessionKey,
+        entry: projectSessionSharingEntry(
+          readExactSessionEntryRow(database, scope.sessionKey)!.entry,
+        ),
+        membership: new Set(),
+      });
+      const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      const query = { agentId: scope.agentId, storePath: scope.storePath, key: scope.sessionKey };
+      const newerOwner = {
+        ...initialOwner,
+        actor: { type: "human" as const, id: "newer-owner" },
+        assignedAt: 2,
+      };
+      const lifecycleRevision = reset ? "worker-reset-lifecycle" : original.lifecycleRevision;
+      const observed: Array<{
+        entryOwner: InternalSessionEntry["owner"];
+        storedOwner: InternalSessionEntry["owner"];
+        sharingOwner: InternalSessionEntry["owner"];
+      }> = [];
+      const identityRows: Array<{
+        entry: InternalSessionEntry | undefined;
+        storedEntry: InternalSessionEntry | undefined;
+      }> = [];
+      let ownerAssigned = false;
+      let assignment: ReturnType<typeof assignSessionOwner> | undefined;
+      const assignNewOwner = () => {
+        ownerAssigned = true;
+        assignment = assignSessionOwner(scope, {
+          owner: newerOwner.actor,
+          assignedBy: newerOwner.assignedBy,
+          assignedAt: newerOwner.assignedAt,
+        });
+      };
+      let stop = () => {};
+      let stopIdentity = () => {};
+      try {
+        await projection.ensureMaterialized();
+        expect(projection.capture(query)?.storedEntry?.owner).toEqual(initialOwner);
+        expect(sharing.readCurrent()?.entry?.owner).toEqual(initialOwner);
+        generation.assertCurrent();
+        stop = sessionChanges.subscribe((change) => {
+          if (!("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
+            return;
+          }
+          if (boundary === "observer" && !ownerAssigned) {
+            assignNewOwner();
+          }
+          const row = projection.capture(query);
+          observed.push(
+            structuredClone({
+              entryOwner: row?.entry?.owner,
+              storedOwner: row?.storedEntry?.owner,
+              sharingOwner: sharing.readCurrent()?.entry?.owner,
+            }),
+          );
+        });
+        stopIdentity = onSessionIdentityMutation((mutation) => {
+          if (
+            !("current" in mutation) ||
+            !mutation.current.sessionKeys.includes(scope.sessionKey)
+          ) {
+            return;
+          }
+          const row = projection.capture(query);
+          identityRows.push(structuredClone({ entry: row?.entry, storedEntry: row?.storedEntry }));
+        });
+        delivery.afterResult = () => {
+          expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry).toMatchObject({
+            label: "worker committed",
+            lifecycleRevision,
+            owner: initialOwner,
+          });
+          expect(generation.assertCurrent).toThrow(
+            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+          );
+          if (boundary === "reply") {
+            assignNewOwner();
+            // An owner-only publication cannot restore the old lifecycle before settlement.
+            expect(generation.assertCurrent).toThrow(
+              expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+            );
+            if (reset) {
+              expect(sharing.readCurrent()).toBeUndefined();
+            }
+          }
+        };
+        await applySessionEntryExactReplacements({
+          agentId: scope.agentId,
+          storePath: scope.storePath,
+          sessionKeys: [scope.sessionKey],
+          update: ([row]) => ({
+            result: undefined,
+            replacements: [
+              {
+                sessionKey: scope.sessionKey,
+                entry: { ...row!.entry, label: "worker committed", lifecycleRevision },
+              },
+            ],
+          }),
+        });
+        expect(assignment).toEqual(newerOwner);
+        expect(observed.length).toBeGreaterThan(0);
+        if (reset) {
+          expect(generation.assertCurrent).toThrow(
+            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
+          );
+          expect(sharing.readCurrent()).toBeUndefined();
+        } else {
+          generation.assertCurrent();
+          for (const publication of observed) {
+            expect(publication).toEqual({
+              entryOwner: newerOwner,
+              storedOwner: newerOwner,
+              sharingOwner: newerOwner,
+            });
+          }
+          expect(sharing.readCurrent()?.entry?.owner).toEqual(newerOwner);
+        }
+        const committed = { label: "worker committed", lifecycleRevision, owner: newerOwner };
+        if (reset) {
+          expect(identityRows).toEqual([
+            {
+              entry: expect.objectContaining(committed),
+              storedEntry: expect.objectContaining(committed),
+            },
+          ]);
+        }
+        expect(projection.capture(query)?.entry).toMatchObject(committed);
+        expect(projection.capture(query)?.storedEntry).toMatchObject(committed);
+        expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry).toMatchObject(
+          committed,
+        );
+      } finally {
+        delivery.afterResult = undefined;
+        stop();
+        stopIdentity();
+        projection.dispose();
+        sharing.release();
+        generation.release();
+      }
+    });
+  },
+);
 
 it.each(["alias membership", "metadata only"] as const)(
   "invalidates unknown %s publication without a receipt",

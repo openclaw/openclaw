@@ -13,6 +13,7 @@ import {
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -85,7 +86,14 @@ it("settles a registry revision after persisting an already absent run", async (
   );
 });
 
-it.each(["existing", "new"] as const)(
+it.each([
+  "existing",
+  "new",
+  "native replacement",
+  "worker replacement",
+  "native reset",
+  "worker reset",
+] as const)(
   "retains a %s archive publication while unrelated compact recovery is pending",
   async (kind) => {
     await withOpenClawTestState(
@@ -97,13 +105,21 @@ it.each(["existing", "new"] as const)(
         const key = "agent:main:archive-during-recovery";
         const target = { agentId: "main", sessionKey: key };
         const sessionId = "archive-during-recovery";
+        const replacesIdentity = kind.endsWith("replacement");
+        const resetsIdentity = kind.endsWith("reset");
+        const changesIdentity = replacesIdentity || resetsIdentity;
+        const previousSessionId = replacesIdentity ? "archive-before-replacement" : sessionId;
         const anchorKey = "agent:main:archive-recovery-anchor";
         replaceSessionEntrySync(
           { agentId: "main", sessionKey: anchorKey },
           { sessionId: "archive-recovery-anchor", updatedAt: 1 },
         );
-        if (kind === "existing") {
-          replaceSessionEntrySync(target, { sessionId, updatedAt: 1 });
+        if (kind !== "new") {
+          replaceSessionEntrySync(target, {
+            sessionId: previousSessionId,
+            updatedAt: 1,
+            ...(resetsIdentity ? { lifecycleRevision: "before-reset" } : {}),
+          });
         }
         const previous = createSubagentRunRecord({
           runId: "previous-unrelated-run",
@@ -127,9 +143,8 @@ it.each(["existing", "new"] as const)(
           projection = await createSessionRowProjection({ cfg, context, modelCatalog: [] });
           bindSessionRowProjection(context, () => projection);
           await projection.ensureMaterialized();
-          expect(projection.capture({ agentId: "main", key })?.entry?.sessionId).toBe(
-            kind === "existing" ? sessionId : undefined,
-          );
+          const captured = projection.capture({ agentId: "main", key });
+          expect(captured?.entry?.sessionId).toBe(kind === "new" ? undefined : previousSessionId);
           const executeRead = stateReads.executeExistingOpenClawStateRead;
           vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
             async (...args) => {
@@ -176,18 +191,58 @@ it.each(["existing", "new"] as const)(
             });
             expect(respond).toHaveBeenCalledTimes(1);
             expect(respond.mock.calls[0]?.[0]).toBe(true);
+          } else if (changesIdentity) {
+            const entry = {
+              sessionId,
+              updatedAt: 2,
+              archivedAt: 2,
+              ...(resetsIdentity ? { lifecycleRevision: "after-reset" } : {}),
+            };
+            if (kind.startsWith("worker")) {
+              await updateSessionEntry(target, () => entry);
+            } else {
+              replaceSessionEntrySync(target, entry);
+            }
           } else {
             replaceSessionEntrySync(target, { sessionId, updatedAt: 2, archivedAt: 2 });
           }
           const archived = loadSessionEntry(target);
           expect(archived).toMatchObject({ sessionId, archivedAt: expect.any(Number) });
-          expect(projection.sharingTarget({ agentId: "main", key })?.entry).toMatchObject({
-            sessionId,
-            archivedAt: archived?.archivedAt,
-          });
+          if (kind === "native reset") {
+            expect(projection.sharingTarget({ agentId: "main", key })).toBeNull();
+          } else {
+            expect(projection.sharingTarget({ agentId: "main", key })?.entry).toMatchObject({
+              sessionId,
+              archivedAt: archived?.archivedAt,
+            });
+          }
+          if (changesIdentity) {
+            expect(captured).toBeDefined();
+            expect(projection.isCurrent(captured!)).toBe(false);
+            const pending = projection.capture({ agentId: "main", key });
+            expect(pending?.entry).toBeUndefined();
+            expect(pending?.storedEntry).toMatchObject({
+              sessionId,
+              archivedAt: archived?.archivedAt,
+              ...(resetsIdentity ? { lifecycleRevision: "after-reset" } : {}),
+            });
+            if (replacesIdentity) {
+              expect(
+                projection.findBySessionId({ agentId: "main", sessionId: previousSessionId }),
+              ).toEqual([]);
+            }
+          }
           release.resolve();
           expect(await recovery).toEqual({ value: [replacement.runId] });
           await projection.ensureMaterialized();
+          if (changesIdentity) {
+            expect(projection.isCurrent(captured!)).toBe(false);
+            expect(projection.capture({ agentId: "main", key })?.entry).toMatchObject({
+              sessionId,
+              archivedAt: archived?.archivedAt,
+              ...(resetsIdentity ? { lifecycleRevision: "after-reset" } : {}),
+            });
+          }
           const active = await listProjectedSessions({ projection, opts: { archived: false } });
           const archives = await listProjectedSessions({ projection, opts: { archived: true } });
           expect(active.sessions.map((row) => row.key)).toEqual([anchorKey]);
