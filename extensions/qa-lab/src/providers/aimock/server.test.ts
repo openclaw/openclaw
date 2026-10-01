@@ -167,6 +167,49 @@ describe("qa aimock server", () => {
     }
   });
 
+  it("keeps non-chat image journal entries out of chat debug state", async () => {
+    const server = await startQaAimockServer();
+    const prompt = "chat request remains the latest chat snapshot";
+    try {
+      const chat = await fetch(`${server.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "aimock/gpt-5.6-luna",
+          stream: false,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      expect(chat.status).toBe(200);
+      await chat.json();
+
+      const image = await fetch(`${server.baseUrl}/v1/images/generations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "dall-e-3" }),
+      });
+      expect(image.status).toBe(400);
+      await image.json();
+
+      expect(
+        await fetch(`${server.baseUrl}/debug/image-generations`).then((response) =>
+          response.json(),
+        ),
+      ).toEqual([{}]);
+      expect(
+        await fetch(`${server.baseUrl}/debug/request-cursor`).then((response) => response.json()),
+      ).toEqual({ cursor: 1 });
+      expect(
+        await fetch(`${server.baseUrl}/debug/requests`).then((response) => response.json()),
+      ).toEqual([expect.objectContaining({ prompt })]);
+      expect(
+        await fetch(`${server.baseUrl}/debug/last-request`).then((response) => response.json()),
+      ).toMatchObject({ prompt });
+    } finally {
+      await server.stop();
+    }
+  });
+
   it.each(["chat", "responses"])(
     "retains exact %s request facts when tool schemas exceed the upstream journal cap",
     async (dialect) => {

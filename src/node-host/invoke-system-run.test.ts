@@ -20,13 +20,12 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { deleteExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
+import * as approvalsStore from "../infra/exec-approvals-store.test-support.js";
 import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import {
   commitExecAuthorizationLocked,
   createExecApprovalPolicySnapshot,
   loadExecApprovals,
-  saveExecApprovals,
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import * as commandResolution from "../infra/exec-command-resolution.js";
@@ -91,14 +90,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   beforeEach(() => {
     previousOpenClawHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = sharedOpenClawHome;
-    execApprovalsStoreTesting.reset();
+    approvalsStore.testing.reset();
     // Cases isolate the canonical policy row, not shared-state schema bootstrap.
     deleteExecApprovalsConfigRow(openOpenClawStateDatabase().db);
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(() => {
-    execApprovalsStoreTesting.reset();
+    approvalsStore.testing.reset();
     clearRuntimeConfigSnapshot();
     if (previousOpenClawHome === undefined) {
       delete process.env.OPENCLAW_HOME;
@@ -302,8 +301,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   function allowlistPolicy(params?: {
     autoAllowSkills?: boolean;
-    agents?: Parameters<typeof saveExecApprovals>[0]["agents"];
-  }): Parameters<typeof saveExecApprovals>[0] {
+    agents?: Parameters<typeof approvalsStore.saveExecApprovals>[0]["agents"];
+  }): Parameters<typeof approvalsStore.saveExecApprovals>[0] {
     return {
       version: 1,
       defaults: {
@@ -320,8 +319,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     security: ExecSecurity,
     ask: ExecAsk,
     askFallback: ExecSecurity,
-    agents?: Parameters<typeof saveExecApprovals>[0]["agents"],
-  ): Parameters<typeof saveExecApprovals>[0] {
+    agents?: Parameters<typeof approvalsStore.saveExecApprovals>[0]["agents"],
+  ): Parameters<typeof approvalsStore.saveExecApprovals>[0] {
     return {
       version: 1,
       defaults: { security, ask, askFallback },
@@ -342,7 +341,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     );
     requireApprovalPlan(prepared, "expected a bound durable command");
     const commandPattern = createExactCommandPattern(prepared.plan.commandText);
-    saveExecApprovals(
+    approvalsStore.saveExecApprovals(
       policy(
         options.fallback ? "full" : "allowlist",
         options.fallback ? "always" : "on-miss",
@@ -383,7 +382,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return vi.fn(async (params) => {
       const current = loadExecApprovals();
       mutate(current);
-      saveExecApprovals(current);
+      approvalsStore.saveExecApprovals(current);
       return await commitExecAuthorizationLocked(params);
     });
   }
@@ -951,7 +950,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       await withPathTokenCommand(
         "openclaw-allowlist-path-pin-",
         async ({ link: _link, expected }) => {
-          saveExecApprovals(
+          approvalsStore.saveExecApprovals(
             policy("allowlist", "off", "deny", {
               main: {
                 allowlist: [{ pattern: expected }],
@@ -993,7 +992,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         const current = loadExecApprovals();
         current.defaults = { ...current.defaults, security: "deny", ask: "off" };
         current.agents = { ...current.agents, main: { security: "deny", ask: "off" } };
-        saveExecApprovals(current);
+        approvalsStore.saveExecApprovals(current);
       };
       let stdout = "";
       const invoke = await runLocal({
@@ -1188,7 +1187,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it("denies ./skill-bin even when autoAllowSkills trust entry exists", async () => {
     const { runCommand, sendInvokeResult, sendNodeEvent } = createInvokeSpies();
 
-    saveExecApprovals(allowlistPolicy({ autoAllowSkills: true }));
+    approvalsStore.saveExecApprovals(allowlistPolicy({ autoAllowSkills: true }));
     const tempHome = sharedOpenClawHome;
     const skillBinPath = path.join(tempHome, "skill-bin");
     fs.writeFileSync(skillBinPath, "#!/bin/sh\necho should-not-run\n", { mode: 0o755 });
@@ -1296,7 +1295,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       allowlistRules: [matchedEntry],
     };
 
-    saveExecApprovals(
+    approvalsStore.saveExecApprovals(
       policy("allowlist", "always", "deny", { main: { allowlist: [matchedEntry] } }),
     );
     let capturedAuthorization:
@@ -1307,7 +1306,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         capturedAuthorization = params.authorization;
         const current = loadExecApprovals();
         const main = current.agents?.main;
-        saveExecApprovals({
+        approvalsStore.saveExecApprovals({
           ...current,
           agents: {
             ...current.agents,
@@ -1352,7 +1351,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it.each([undefined, "auto-review"] as const)(
     "rejects tightened ask policy for source=%s during authorization commit",
     async (approvalSource) => {
-      saveExecApprovals(policy("full", "off", "deny"));
+      approvalsStore.saveExecApprovals(policy("full", "off", "deny"));
       const commitAuthorization = mutatePolicyOnCommit((current) => {
         current.defaults = { ...current.defaults, ask: "on-miss" };
       });
@@ -1376,7 +1375,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it("preserves exact-plan forwarded auto-review for strict inline eval", async () => {
     const plan = strictInlinePlan("openclaw-forwarded-inline-");
     setRuntimeConfigSnapshot({ tools: { exec: { strictInlineEval: true } } });
-    saveExecApprovals(policy("full", "on-miss", "deny"));
+    approvalsStore.saveExecApprovals(policy("full", "on-miss", "deny"));
     const commitAuthorization = vi.fn(commitExecAuthorizationLocked);
     const invoke = await runLocal({
       ask: "on-miss",
@@ -1395,7 +1394,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("does not commit allow-always state when local screen recording is unavailable", async () => {
-    saveExecApprovals(policy("full", "always", "deny"));
+    approvalsStore.saveExecApprovals(policy("full", "always", "deny"));
     const commitAuthorization = vi.fn(commitExecAuthorizationLocked);
     const invoke = await runLocal({
       ask: "always",
@@ -1419,7 +1418,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const prepared = prepareSession(["echo", "ok"], "agent:main:main");
     expect(prepared.ok).toBe(true);
     requireApprovalPlan(prepared, "unreachable");
-    saveExecApprovals(policy("full", "always", "full", {}));
+    approvalsStore.saveExecApprovals(policy("full", "always", "full", {}));
     const commitAuthorization = mutatePolicyOnCommit((current) => {
       current.defaults = { ...current.defaults, askFallback: "deny" };
     });
@@ -1475,7 +1474,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("rejects explicit approval when an allowlist rule is revoked after prepare", async () => {
-    saveExecApprovals(
+    approvalsStore.saveExecApprovals(
       policy("allowlist", "always", "deny", {
         main: {
           allowlist: [{ id: "rule-1", pattern: "/usr/bin/echo" }],
@@ -1492,7 +1491,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const policyBoundPlan = bindCurrentPolicyToPlan(prepared.plan);
     const current = loadExecApprovals();
     current.agents = { ...current.agents, main: { allowlist: [] } };
-    saveExecApprovals(current);
+    approvalsStore.saveExecApprovals(current);
     const commitAuthorization = vi.fn(commitExecAuthorizationLocked);
 
     const invoke = await runLocal({
@@ -1587,7 +1586,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const prepared = prepareSession(["echo", "ok"], "agent:main:main");
     expect(prepared.ok).toBe(true);
     requireApprovalPlan(prepared, "unreachable");
-    saveExecApprovals(policy("full", "always", "full", {}));
+    approvalsStore.saveExecApprovals(policy("full", "always", "full", {}));
     const invoke = await runMac({
       ask: "always",
       runViaResponse: macSuccess(),
@@ -1605,7 +1604,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it("does not let timeout fallback satisfy strict inline review", async () => {
     const plan = strictInlinePlan("openclaw-fallback-inline-");
     setRuntimeConfigSnapshot({ tools: { exec: { strictInlineEval: true } } });
-    saveExecApprovals(policy("full", "always", "full", {}));
+    approvalsStore.saveExecApprovals(policy("full", "always", "full", {}));
     const invoke = await runLocal({
       preparedPlan: plan,
       approvalSource: "ask-fallback",
@@ -1628,7 +1627,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   it("persists benign awk allow-always approvals in strict inline-eval mode without reopening inline carriers", async () => {
     setRuntimeConfigSnapshot({ tools: { exec: { strictInlineEval: true } } });
-    saveExecApprovals(allowlistPolicy());
+    approvalsStore.saveExecApprovals(allowlistPolicy());
     const tempDir = fixtureDir("openclaw-inline-eval-awk-");
     const executablePath = executable(tempDir, "gawk");
     fs.writeFileSync(path.join(tempDir, "script.awk"), "{ print }\n");
@@ -1680,7 +1679,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   it("does not persist allow-always approvals for strict inline-eval make carriers", async () => {
     setRuntimeConfigSnapshot({ tools: { exec: { strictInlineEval: true } } });
-    saveExecApprovals(allowlistPolicy());
+    approvalsStore.saveExecApprovals(allowlistPolicy());
     const tempDir = fixtureDir("openclaw-inline-eval-make-");
     const executablePath = executable(tempDir, "make");
     const makefilePath = path.join(tempDir, "Makefile");
@@ -1718,7 +1717,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         fs.writeFileSync(scriptPath, "@echo off\r\necho ok\r\n");
         const command = [...testCase.commandPrefix, `${scriptPath} --limit 5`];
 
-        saveExecApprovals(
+        approvalsStore.saveExecApprovals(
           allowlistPolicy({
             agents: {
               main: {
@@ -1767,7 +1766,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       requireApprovalPlan(prepared, "unreachable");
       const commandPattern = createExactCommandPattern(prepared.plan.commandText);
 
-      saveExecApprovals(
+      approvalsStore.saveExecApprovals(
         allowlistPolicy({
           agents: {
             main: {

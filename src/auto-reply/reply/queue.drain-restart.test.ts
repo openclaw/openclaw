@@ -19,17 +19,13 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import {
-  clearSessionQueues,
-  enqueueFollowupRun,
-  FollowupRunDeferredError,
-  scheduleFollowupDrain,
-} from "./queue.js";
+import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
 import {
   createQueueTestRun as createRun,
   createDrainRecorder,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
@@ -42,7 +38,8 @@ beforeEach(() => {
   key = `drain-restart-${++sequence}`;
 });
 afterEach(() => {
-  clearSessionQueues([key]);
+  clearFollowupQueue(key);
+  clearFollowupDrainCallback(key);
   resetGatewayWorkAdmission();
 });
 const nextTurn = () =>
@@ -115,11 +112,13 @@ describe("followup queue drain restart after idle window", () => {
       scheduleFollowupDrain(key, async () => {});
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
 
-      clearSessionQueues([key]);
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
 
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
-      clearSessionQueues([key]);
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
       env.restore();
     }
   });
@@ -183,7 +182,7 @@ describe("followup queue drain restart after idle window", () => {
       expect(calls[0]?.prompt).toBe("before-idle");
       expect(calls[1]?.prompt).toBe("after-idle");
     } finally {
-      clearSessionQueues([key]);
+      clearFollowupQueue(key);
       drainA.clearFollowupDrainCallback(key);
       resetRecentQueuedMessageIdDedupe();
     }
@@ -410,7 +409,8 @@ describe("followup queue drain restart after idle window", () => {
       }
       if (getExistingFollowupQueue(key)) {
         forcedCleanup = true;
-        clearSessionQueues([key]);
+        clearFollowupQueue(key);
+        clearFollowupDrainCallback(key);
       }
       await timer;
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));

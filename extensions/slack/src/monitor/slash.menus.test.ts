@@ -270,37 +270,8 @@ describe("Slack native command argument menus", () => {
       ),
     ).toBe(true);
     expect(configuredHarness.commands.has("/usage")).toBe(false);
-  });
-
-  it("does not register native argument handlers for a configured slash command", async () => {
-    const configuredHarness = createArgMenusHarness();
-    const slashCommand = (
-      configuredHarness.ctx as {
-        slashCommand: { enabled: boolean; name: string };
-      }
-    ).slashCommand;
-    slashCommand.enabled = true;
-    slashCommand.name = "acme";
-
-    await expect(
-      registerCommands(configuredHarness.ctx, configuredHarness.account),
-    ).resolves.toEqual({ mode: "single", name: "acme" });
-
     expect(configuredHarness.actions.size).toBe(0);
     expect(configuredHarness.options.size).toBe(0);
-  });
-
-  it("registers options handlers without losing app receiver binding", async () => {
-    const testHarness = createArgMenusHarness();
-    await registerCommands(testHarness.ctx, testHarness.account);
-    expect(testHarness.commands.size).toBeGreaterThan(0);
-    expect(
-      Array.from(testHarness.actions.keys()).some(
-        (key) => key instanceof RegExp && String(key) === String(/^openclaw_cmdarg/),
-      ),
-    ).toBe(true);
-    expect(testHarness.options.has("openclaw_cmdarg")).toBe(true);
-    expect(testHarness.optionsReceiverContexts[0]).toBe(testHarness.app);
   });
 
   it("registers unique plugin commands and silently keeps primary names on collision", async () => {
@@ -562,6 +533,10 @@ describe("Slack native command argument menus", () => {
     expect(longOption?.value?.length).toBeGreaterThan(75);
     expect(longOption?.value?.length).toBeLessThanOrEqual(150);
     expect(firstElement).toHaveProperty("confirm");
+    await runArgMenuAction(argMenuHandler, {
+      action: { selected_option: firstElement?.options?.[0] },
+    });
+    expectSingleDispatchedSlashBody("/reportlong day");
   });
 
   it("truncates button labels when static_select value limit would be exceeded", async () => {
@@ -779,57 +754,15 @@ describe("Slack native command argument menus", () => {
     expectSingleDispatchedSlashBody("/status");
   });
 
-  it("dispatches the command when a static_select option is chosen", async () => {
-    await runArgMenuAction(argMenuHandler, {
-      action: {
-        selected_option: {
-          value: encodeValue({ command: "tts", arg: "action", value: "status", userId: "U1" }),
-        },
-      },
-    });
-
-    expectSingleDispatchedSlashBody("/tts status");
-  });
-
-  it("shows an external_select menu when choices exceed static_select options max", async () => {
+  it("truncates served option labels on a surrogate boundary", async () => {
     const { respond, payload, blockId } =
       await runCommandAndResolveActionsBlock(reportExternalHandler);
-
     expect(respond).toHaveBeenCalledTimes(1);
-    const actions = findFirstActionsBlock(payload);
-    const element = actions?.elements?.[0];
+    const element = findFirstActionsBlock(payload)?.elements?.[0];
     expect(element?.type).toBe("external_select");
     expect(element?.action_id).toBe("openclaw_cmdarg");
-    expect(blockId).toContain("openclaw_cmdarg_ext:");
-    const token = (blockId ?? "").slice("openclaw_cmdarg_ext:".length);
-    expect(token).toMatch(/^[A-Za-z0-9_-]{24}$/);
-  });
-
-  it("serves filtered options for external_select menus", async () => {
-    const { blockId } = await runCommandAndResolveActionsBlock(reportExternalHandler);
-    expect(blockId).toContain("openclaw_cmdarg_ext:");
-
-    const ackOptions = vi.fn().mockResolvedValue(undefined);
-    await argMenuOptionsHandler({
-      ack: ackOptions,
-      body: {
-        user: { id: "U1" },
-        value: "period 12",
-        actions: [{ block_id: blockId }],
-      },
-    });
-
-    expect(ackOptions).toHaveBeenCalledTimes(1);
-    const optionsPayload = firstCallPayload(ackOptions, "options ack") as {
-      options?: Array<{ text?: { text?: string }; value?: string }>;
-    };
-    const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
-    expect(optionTexts.join("\n")).toContain("Period 12");
-  });
-
-  it("truncates served option labels on a surrogate boundary", async () => {
-    const { blockId } = await runCommandAndResolveActionsBlock(reportExternalHandler);
-    expect(blockId).toContain("openclaw_cmdarg_ext:");
+    expect(blockId).toMatch(/^openclaw_cmdarg_ext:[A-Za-z0-9_-]{24}$/);
+    expect(harness.optionsReceiverContexts[0]).toBe(harness.app);
 
     const ackOptions = vi.fn().mockResolvedValue(undefined);
     await argMenuOptionsHandler({
@@ -841,6 +774,7 @@ describe("Slack native command argument menus", () => {
       },
     });
 
+    expect(ackOptions).toHaveBeenCalledTimes(1);
     const optionsPayload = firstCallPayload(ackOptions, "options ack") as {
       options?: Array<{ text?: { text?: string }; value?: string }>;
     };
@@ -848,6 +782,7 @@ describe("Slack native command argument menus", () => {
     // option is served.
     const served = optionsPayload.options ?? [];
     expect(served).toHaveLength(1);
+    expect(decodeURIComponent(served[0]?.value?.split("|")[3] ?? "")).toBe("emoji-overflow");
     const text = served[0]?.text?.text ?? "";
     // Plain_text option labels are capped at 75 chars and must not end on a lone
     // surrogate half, which Slack rejects. The label was long enough to truncate.

@@ -3,13 +3,16 @@ import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
 import { buildLexicalIndex, scoreLexical, tokenizeDocument } from "./tool-search-ranking.js";
 import { ToolInputError } from "./tools/common.js";
 
-export type InstalledSkill = CodeModeSkill;
+export type InstalledSkill = CodeModeSkill & {
+  /** Prompt-listed instructions retain the shipped Code Mode whole-read contract. */
+  promptListed?: boolean;
+};
 
 const MAX_QUERY_CHARS = 1_000;
 const MAX_RESULTS = 20;
 const MAX_DESCRIPTION_CHARS = 512;
 const MAX_RESULT_CHARS = 16_000;
-const MAX_SKILL_INSTRUCTION_BYTES = 256 * 1024;
+export const MAX_SKILL_INSTRUCTION_BYTES = 256 * 1024;
 
 function buildIndex(skills: readonly InstalledSkill[]) {
   return buildLexicalIndex(
@@ -82,7 +85,7 @@ export async function readInstalledSkill(
     throw new ToolInputError(`Unknown installed skill ${JSON.stringify(name)}.`);
   }
   const content =
-    typeof skill.source.readContent !== "string" && !skill.reader
+    !skill.promptListed && typeof skill.source.readContent !== "string" && !skill.reader
       ? (
           await readLocalFileSafely({
             filePath: skill.source.filePath,
@@ -91,7 +94,7 @@ export async function readInstalledSkill(
         ).buffer.toString("utf8")
       : await readCodeModeSkill(skill, signal);
   signal?.throwIfAborted();
-  if (Buffer.byteLength(content, "utf8") > MAX_SKILL_INSTRUCTION_BYTES) {
+  if (!skill.promptListed && Buffer.byteLength(content, "utf8") > MAX_SKILL_INSTRUCTION_BYTES) {
     throw new ToolInputError(
       `Skill ${JSON.stringify(name)} exceeds the ${MAX_SKILL_INSTRUCTION_BYTES}-byte instruction limit.`,
     );

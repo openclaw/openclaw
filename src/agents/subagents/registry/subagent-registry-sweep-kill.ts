@@ -1,14 +1,16 @@
 import { getRuntimeConfig } from "../../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
+import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../../sessions/session-lifecycle-admission.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import {
+  prepareSubagentKillSession,
+  type SubagentKillSession,
+} from "./subagent-control-session.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -21,10 +23,14 @@ import {
   resolveSubagentRunDeadlineMs,
   resolveSubagentRunEffectiveEndedAt,
 } from "./subagent-run-timeout.js";
-import {
-  loadSubagentSessionEntry,
-  resolveCompletionFromSessionEntry,
-} from "./subagent-session-reconciliation.js";
+import { resolveSubagentSessionCompletion } from "./subagent-session-reconciliation.js";
+
+function hasSameRecordedChildOwner(left: SubagentRunRecord, right: SubagentRunRecord): boolean {
+  const selected = left.childAgentId;
+  const target = right.childAgentId;
+  // Unbound legacy rows retain their historical supersession behavior.
+  return !selected || !target || selected === target;
+}
 
 function findNextSubagentRunCreatedAt(
   candidates: Iterable<SubagentRunRecord>,
@@ -35,6 +41,7 @@ function findNextSubagentRunCreatedAt(
     if (
       candidate.runId === entry.runId ||
       candidate.childSessionKey !== entry.childSessionKey ||
+      !hasSameRecordedChildOwner(entry, candidate) ||
       compareSubagentRunGeneration(candidate, entry) <= 0
     ) {
       continue;
@@ -64,7 +71,10 @@ export async function reconcileDurableSubagentKillIntent(params: {
   if (params.runs.get(params.runId) !== params.entry) {
     return false;
   }
-  const childRuns = () => params.getRunsForChildSession(params.entry.childSessionKey);
+  const childRuns = () =>
+    [...params.getRunsForChildSession(params.entry.childSessionKey)].filter((candidate) =>
+      hasSameRecordedChildOwner(params.entry, candidate),
+    );
   const latest = getLatestSubagentRunByChildSessionKeyFromRuns(
     childRuns(),
     params.entry.childSessionKey,
@@ -97,14 +107,18 @@ export async function reconcileDurableSubagentKillIntent(params: {
     getLatestSubagentRunByChildSessionKeyFromRuns(childRuns(), params.entry.childSessionKey) ===
       params.entry;
   const cfg = getRuntimeConfig();
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-    agentId: resolveAgentIdFromSessionKey(params.entry.childSessionKey),
-  });
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params.entry, cfg);
+  let session: SubagentKillSession | undefined;
   const ownsSessionIncarnation = () => {
-    const current = loadSubagentSessionEntry({
-      childSessionKey: params.entry.childSessionKey,
-      cfg,
-    });
+    try {
+      session?.assertCurrent();
+    } catch (error) {
+      if (isSessionDeliveryGenerationRevokedError(error)) {
+        return false;
+      }
+      throw error;
+    }
+    const current = session?.entry;
     return (
       current?.sessionId === killIntent.sessionId &&
       current?.lifecycleRevision === killIntent.sessionLifecycleRevision
@@ -143,11 +157,25 @@ export async function reconcileDurableSubagentKillIntent(params: {
     if (!ownsCurrentGeneration() || isSessionLifecycleMutationActive(storePath, identities)) {
       return false;
     }
+    session = await prepareSubagentKillSession(
+      cfg,
+      params.entry.childSessionKey,
+      () => {
+        if (!ownsCurrentGeneration()) {
+          throw new Error("Subagent session preparation lost its original kill intent.");
+        }
+      },
+      undefined,
+      params.entry.childAgentId,
+    );
+    if (isSessionLifecycleMutationActive(session.storePath, identities)) {
+      return false;
+    }
     if (!ownsSessionIncarnation()) {
       return await completeKill(true);
     }
     return await runExclusiveSessionLifecycleMutation({
-      scope: storePath,
+      scope: session.storePath,
       identities,
       run: async () => {
         if (!ownsCurrentGeneration()) {
@@ -167,7 +195,17 @@ export async function reconcileDurableSubagentKillIntent(params: {
         if (!ownsSessionIncarnation()) {
           return await completeKill(true);
         }
-        runtime.clearSessionQueues([params.entry.childSessionKey, killIntent.sessionId]);
+        runtime.clearSessionLifecycleQueues({
+          keys: [params.entry.childSessionKey, killIntent.sessionId],
+          agentId,
+          sessionKey: params.entry.childSessionKey,
+          sessionId: killIntent.sessionId,
+          assertCurrent: () => {
+            if (!ownsCurrentGeneration() || !ownsSessionIncarnation()) {
+              throw new Error("Subagent queue cleanup lost its original kill intent.");
+            }
+          },
+        });
         if ((active || hasLiveRunContext) && !aborted) {
           return false;
         }
@@ -187,6 +225,8 @@ export async function reconcileDurableSubagentKillIntent(params: {
       childSessionKey: params.entry.childSessionKey,
     });
     return false;
+  } finally {
+    await session?.release();
   }
 }
 
@@ -213,7 +253,6 @@ export async function reconcileProvisionalSubagentKill(params: {
   // decision boundary so a newly registered generation can supersede this run.
   const findNextRunCreatedAt = () =>
     findNextSubagentRunCreatedAt(params.getRunsForChildSession(entry.childSessionKey), entry);
-  const nextRunCreatedAt = findNextRunCreatedAt();
   const hasStableTaskCancellation = killReconciliation.taskCancellationAccepted === true;
   const killedAt = killReconciliation.killedAt;
   const isCurrentKill = () =>
@@ -223,12 +262,21 @@ export async function reconcileProvisionalSubagentKill(params: {
   if (killedAt + PROVISIONAL_KILL_RECONCILIATION_MS > now) {
     return false;
   }
-  const sessionEntry = loadSubagentSessionEntry({
+  const completion = await resolveSubagentSessionCompletion({
     childSessionKey: entry.childSessionKey,
-  });
-  const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
+    childAgentId: entry.childAgentId,
+    fallbackEndedAt: now,
     notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
+    assertCurrent: () => {
+      if (!isCurrentKill()) {
+        throw new Error("Subagent completion read lost its provisional kill owner.");
+      }
+    },
   });
+  if (!isCurrentKill()) {
+    return false;
+  }
+  const nextRunCreatedAt = findNextRunCreatedAt();
   const completionEndedAt = completion
     ? resolveSubagentRunEffectiveEndedAt(entry, completion.endedAt, completion.startedAt)
     : undefined;

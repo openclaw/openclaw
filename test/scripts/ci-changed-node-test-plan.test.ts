@@ -294,7 +294,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("defers named process proofs without dropping mixed ordinary targets", () => {
-    const ordinary = "src/plugin-sdk/config-runtime.test.ts";
+    const ordinary = "src/plugin-sdk/plugin-config-runtime.test.ts";
     const shards = createChangedNodeTestShards([...CI_PROOF_TEST_FILES, ordinary]);
     expect(shards).not.toBeNull();
     const files = selectedFiles(shards);
@@ -322,7 +322,7 @@ describe("CI changed Node test plan", () => {
     const source = "src/infra/release-proof.ts";
     const helper = "src/infra/release-proof.test-support.ts";
     const deferred = "src/state/openclaw-database-preflight.lifecycle.test.ts";
-    const ordinary = "src/plugin-sdk/config-runtime.test.ts";
+    const ordinary = "src/plugin-sdk/plugin-config-runtime.test.ts";
     const unknown = "src/infra/unowned.ts";
     for (const [file, content] of [
       [source, "export {};\n"],
@@ -1010,7 +1010,7 @@ describe("CI changed Node test plan", () => {
   );
 
   it("retains ordinary and embedded targets beside a shared Git fixture's canonical family", () => {
-    const ordinary = "src/plugin-sdk/config-runtime.test.ts";
+    const ordinary = "src/plugin-sdk/plugin-config-runtime.test.ts";
     const embedded = "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts";
     const shards = createChangedNodeTestShards([
       "test/scripts/ci-git-owner.test-support.ts",

@@ -13,19 +13,23 @@ import {
 } from "../queue.test-helpers.js";
 import {
   clearSessionLifecycleQueues,
-  clearSessionQueues,
   hasSessionLifecycleQueueWork,
   prepareSessionFollowupCleanup,
 } from "./cleanup.js";
-import { kickFollowupDrainIfIdle } from "./drain.js";
+import { clearFollowupDrainCallback, kickFollowupDrainIfIdle } from "./drain.js";
 import { enqueueFollowupRun } from "./enqueue.js";
-import { FOLLOWUP_QUEUES } from "./state.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES } from "./state.js";
 
 installQueueRuntimeErrorSilencer();
 const key = "agent:main:queue-stop";
 const alias = "original-session";
 const keys = [key, alias];
-afterEach(() => clearSessionQueues(keys));
+afterEach(() => {
+  for (const queueKey of keys) {
+    clearFollowupQueue(queueKey);
+    clearFollowupDrainCallback(queueKey);
+  }
+});
 
 function source(prompt: string, sessionId = "original-session") {
   const item = createQueueTestRun({ prompt });
@@ -102,7 +106,8 @@ describe("session-owned pending followup cleanup", () => {
             : ["rejected", "fulfilled", "fulfilled", "fulfilled", "fulfilled"],
         );
       } finally {
-        clearSessionQueues([sharedKey]);
+        clearFollowupQueue(sharedKey);
+        clearFollowupDrainCallback(sharedKey);
         clearCommandLane(lane);
         setCommandLaneConcurrency(lane, 1);
         await settled;

@@ -35,6 +35,7 @@ function createResultFixture(params?: {
   didSendViaMessagingTool?: boolean;
   yieldDetected?: boolean;
   yieldAcknowledgment?: string;
+  yieldMessageWaitRegistered?: boolean;
   assistantTexts?: readonly string[];
   toolMetas?: Array<{
     toolName: string;
@@ -130,6 +131,7 @@ function createResultFixture(params?: {
       readYieldState: () => ({
         yieldDetected: params?.yieldDetected ?? false,
         yieldAcknowledgment: params?.yieldAcknowledgment,
+        yieldMessageWaitRegistered: params?.yieldMessageWaitRegistered,
       }),
     },
     prepared: {
@@ -196,6 +198,7 @@ describe("attempt result projection", () => {
       fixture.input.lifecycle.readYieldState = () => ({
         yieldDetected: true,
         yieldAcknowledgment: "later yield",
+        yieldMessageWaitRegistered: true,
       });
     });
 
@@ -216,6 +219,7 @@ describe("attempt result projection", () => {
     expect(result.attemptUsage).toBeUndefined();
     expect(result).toHaveProperty("yieldDetected", undefined);
     expect(result).toHaveProperty("yieldAcknowledgment", undefined);
+    expect(result).toHaveProperty("yieldMessageWaitRegistered", undefined);
     expect(result).not.toHaveProperty("beforeAgentFinalizeRevisionReason");
   });
 
@@ -518,17 +522,22 @@ describe("attempt result projection", () => {
     },
   );
 
-  it("carries the explicit yield acknowledgment separately from continuation context", () => {
-    expect(
-      completeResult({
+  it.each([true, false, undefined])(
+    "carries yield acknowledgment and owner-recorded message wait (%s) separately from private context",
+    (yieldMessageWaitRegistered) => {
+      expect(
+        completeResult({
+          yieldDetected: true,
+          yieldAcknowledgment: "Waiting for a continuation.",
+          yieldMessageWaitRegistered,
+        }),
+      ).toMatchObject({
         yieldDetected: true,
-        yieldAcknowledgment: "Research started; results will follow.",
-      }),
-    ).toMatchObject({
-      yieldDetected: true,
-      yieldAcknowledgment: "Research started; results will follow.",
-    });
-  });
+        yieldAcknowledgment: "Waiting for a continuation.",
+        yieldMessageWaitRegistered,
+      });
+    },
+  );
 
   it("defaults missing replay metadata to replay-unsafe", () => {
     const attempt = completeResult();

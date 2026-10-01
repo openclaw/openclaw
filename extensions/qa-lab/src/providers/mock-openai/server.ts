@@ -121,6 +121,7 @@ import {
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
 } from "./mock-openai-contracts.js";
+import { planCronBlockedOutcomeTurn } from "./mock-openai-cron-blocked-outcome.js";
 import { planCronFailureRepairTurn } from "./mock-openai-cron-failure-repair.js";
 import {
   extractExactReplyDirective,
@@ -535,6 +536,10 @@ async function buildResponsesPayload(
   const cronFailureRepairTurn = planCronFailureRepairTurn(prompt, input);
   if (cronFailureRepairTurn) {
     return cronFailureRepairTurn;
+  }
+  const cronBlockedOutcomeTurn = planCronBlockedOutcomeTurn(prompt);
+  if (cronBlockedOutcomeTurn) {
+    return cronBlockedOutcomeTurn;
   }
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.

@@ -5,7 +5,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  expectIntegrityDriftRejected,
   mockNpmViewMetadataResult,
   npmCommandFailureCases,
 } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -29,6 +28,7 @@ import {
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
 import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { registerNpmUpdateMetadataTests } from "./update-npm-metadata.test-support.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const resolveOpenClawPackageRootSyncMock = vi.fn();
@@ -578,6 +578,15 @@ beforeEach(() => {
 });
 
 describe("installPluginFromNpmSpec", () => {
+  registerNpmUpdateMetadataTests({
+    getNpmRoot: () => npmRoot,
+    installPluginFromNpmSpec,
+    isManagedNpmInstallCommand,
+    mockNpmViewAndInstallMany,
+    runCommandWithTimeoutMock,
+    writeInstalledNpmPlugin,
+  });
+
   it.each(npmCommandFailureCases.filter(({ label }) => label === "signal without output"))(
     "classifies metadata failures with $label",
     async ({ npmResult, expectedDetail }) => {
@@ -2614,31 +2623,6 @@ describe("installPluginFromNpmSpec", () => {
       runCommandWithTimeoutMock.mock.calls.some(
         (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
       ),
-    ).toBe(false);
-  });
-
-  it("aborts when integrity drift callback rejects the fetched artifact", async () => {
-    mockNpmViewMetadataResult(runCommandWithTimeoutMock, {
-      name: "@openclaw/voice-call",
-      version: "0.0.1",
-      integrity: "sha512-new",
-      shasum: "newshasum",
-    });
-
-    const onIntegrityDrift = vi.fn(async () => false);
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call@0.0.1",
-      expectedIntegrity: "sha512-old",
-      onIntegrityDrift,
-    });
-    expectIntegrityDriftRejected({
-      onIntegrityDrift,
-      result,
-      expectedIntegrity: "sha512-old",
-      actualIntegrity: "sha512-new",
-    });
-    expect(
-      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
     ).toBe(false);
   });
 

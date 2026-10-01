@@ -669,7 +669,7 @@ export async function runOxlint(
   const run = async (ownedDirectory?: string) => {
     if (shouldPrepareOxlintArtifacts(argv) && env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1") {
       // Source-backed core lint skips plugin declarations, not generated schema types.
-      await ensureKyselyTypes(process.cwd());
+      await ensureKyselyTypes(process.cwd(), false, { allowPartialCheckout: true });
     }
     if (needsArtifactPreparation) {
       // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
