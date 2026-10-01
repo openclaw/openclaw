@@ -159,6 +159,14 @@ Turning **Git co-author credit** off stops attribution for future runs. Gateway-
 
 ## Merging duplicate profiles
 
+The Gateway directory method `users.list` requires `operator.read`. Its optional
+`githubAccountIds` filter accepts up to 500 unique positive safe integers. The
+response retains `profiles` and adds `githubProfiles` containing only requested
+verified account IDs and their canonical, non-merged `profileId` matches. Missing
+IDs have no match; other linked accounts are not returned. Omitting the filter
+preserves the ordinary directory response. This lookup reads existing identity
+bindings; it does not link accounts or grant access.
+
 Use [`openclaw users`](/cli/users) to list profile IDs and merge duplicate profiles
 belonging to the same person. Both linking and merging require `operator.admin`.
 
