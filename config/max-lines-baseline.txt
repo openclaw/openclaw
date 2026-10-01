@@ -256,7 +256,6 @@ src/agents/command/attempt-execution.ts
 src/agents/command/cli-compaction.test.ts
 src/agents/command/delivery.test.ts
 src/agents/command/delivery.ts
-src/agents/command/session-store.test.ts
 src/agents/embedded-agent-runner-extraparams.test.ts
 src/agents/embedded-agent-runner.cache.live.test.ts
 src/agents/embedded-agent-runner.e2e.test.ts
