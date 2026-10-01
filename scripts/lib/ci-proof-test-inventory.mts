@@ -653,8 +653,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/msteams/src/conversation-store.shared.test.ts",
   "extensions/msteams/src/monitor-handler.adaptive-card.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.authz.test.ts",
-  "extensions/msteams/src/monitor-handler/message-handler.conversation-authz.test.ts",
-  "extensions/msteams/src/monitor-handler/message-handler.dm-media.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.history.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.ingress-lifecycle.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.media.test.ts",
