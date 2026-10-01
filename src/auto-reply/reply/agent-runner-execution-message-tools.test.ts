@@ -380,6 +380,43 @@ describe("executeAgentTurn: message tool progress", () => {
     expect(result).toMatchObject({ kind: "final", payload: { text: "NO_REPLY" } });
   });
 
+  it("does not fallback after a plugin harness returns a completed source receipt", async () => {
+    state.runEmbeddedAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "NO_REPLY" }],
+        sourceReplyDelivered: true,
+        meta: { error: { message: "native finalization failed after delivery" } },
+      })
+      .mockRejectedValueOnce(new Error("401 Unauthorized"));
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run("codex", "gpt-5.4", initialFallbackAttemptOptions(params));
+      expect(params.canFallbackAfterError?.()).toBe(false);
+      return { result, provider: "codex", model: "gpt-5.4", attempts: [] };
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    const result = await executeAgentTurn({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: {} satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      ...createAgentTurnExecutionDefaults(),
+      resolvedVerboseLevel: "on",
+    });
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      kind: "success",
+      runResult: {
+        payloads: [{ text: "NO_REPLY" }],
+        sourceReplyDelivered: true,
+      },
+    });
+  });
+
   it.each(["progress", "partial delivery"])(
     "keeps fallback available after unfinished source %s",
     async (sourceReplyKind) => {
