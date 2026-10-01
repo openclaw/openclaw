@@ -166,7 +166,7 @@ export class InferenceWorkerClient {
       windowsHide: true,
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
-    const { promise: closed, resolve: resolveClosed } = createDeferred<void>();
+    const { promise: closed, resolve: resolveClosed } = createDeferred();
     const worker: Worker = {
       child,
       ready: false,
