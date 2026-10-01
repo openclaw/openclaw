@@ -35,6 +35,7 @@ import {
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeCatalog,
 } from "./prepared-model-runtime.js";
+import { CREDENTIAL_ONLY_PROVIDER_ID } from "./test-helpers/prepared-model-catalog-credential-only.test-support.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
 import {
   observeSyntheticAuth,
@@ -111,6 +112,24 @@ describe("prepared model catalog worker plugin scope", () => {
     expect(retainedStore.runtimePersistedProfileIds ?? []).not.toContain(MINIMAX_CLI_PROFILE_ID);
     expect(retainedStore.order?.[provider]).toEqual(expectedStore.order?.[provider]);
     expect(fixture.snapshot.isCurrent()).toBe(true);
+  });
+
+  it("captures runtime synthetic auth for credential-only providers before full refresh", async () => {
+    const fixture = await createStaticSnapshot(0, {}, { credentialOnlySyntheticAuth: true });
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+
+    // The provider's catalog emits this row only when its stored token resolves.
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({
+        provider: CREDENTIAL_ONLY_PROVIDER_ID,
+        id: "credential-only-model",
+      }),
+    );
+    // The worker read the parent's captured answer; it never ran the hook itself.
+    expect(
+      fs.readFileSync(path.join(fixture.root, "credential-only-auth-owner.txt"), "utf8"),
+    ).toMatch(/^(parent\n)+$/u);
   });
 
   it.for([

@@ -48,7 +48,7 @@ import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.lifecycle.js";
 import {
-  listPreparedSyntheticAuthProviderRefs,
+  listRegistrySyntheticAuthProviderRefs,
   scopeSyntheticAuthProviderRefs,
 } from "./prepared-model-runtime.synthetic-auth.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
@@ -592,9 +592,7 @@ export function createPreparedModelCatalogWorker(
                     // Full discovery also runs credential-only providers, whose runtime hooks can
                     // answer for refs no manifest declares (such as the provider's own id). The
                     // closed worker cannot probe those refs, so capture them here.
-                    ...listPreparedSyntheticAuthProviderRefs(
-                      params.pluginRegistry?.providers.map(({ provider }) => provider) ?? [],
-                    ),
+                    ...listRegistrySyntheticAuthProviderRefs(params.pluginRegistry),
                     ...workerInput.providerIds,
                   ]
                 : [
