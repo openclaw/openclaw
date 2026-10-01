@@ -160,6 +160,116 @@ URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
 cache is `~/.openclaw/models/llama.cpp`. A configured `modelCacheDir` remains
 authoritative for managed setup.
 
+## Managed local OCR and vision
+
+Run this on the Gateway host:
+
+```bash
+openclaw models auth login --provider llama-cpp --method local-media
+```
+
+Setup recommends separate OCR and vision recipes from the Gateway's hardware,
+current available memory, supported runtime backend, and free disk. It shows the
+host, backend, model and projector downloads, memory budget, rejected candidates,
+and degraded modes before asking permission. No download occurs before consent.
+
+The initial automatic media setup scope is **Linux x64 with CPU execution**. Other
+managed backends remain available for chat and embeddings, but automatic OCR and
+vision activation on those hosts waits for matching end-to-end verification.
+
+The curated recipes use pinned repository revisions, sizes and SHA-256 checksums
+for **both** the model and multimodal projector. The existing managed installer
+verifies the llama.cpp runtime. Setup then runs two real images through the
+registered image provider: transcription of `OPENCLAW OCR 4827`, and a question
+about a red square above a blue circle, with no text in the second image.
+Both checks must pass before configuration is saved. Cancellation or failure
+retains the previous configuration and removes the candidate preset. Verified
+downloads remain cached for retry.
+
+| Role   | Recipe               | Model + projector download | Model memory budget |
+| ------ | -------------------- | -------------------------- | ------------------- |
+| OCR    | GLM-OCR Q8_0         | About 1.43 GB              | 4 GiB               |
+| Vision | SmolVLM2 2.2B Q4_K_M | About 1.71 GB              | 5 GiB               |
+
+A complete pair needs at least 6 GiB host RAM, sufficient **available** memory
+after headroom, and disk for missing files plus runtime staging. These are
+eligibility floors, not guarantees of speed or accuracy. Only one router model
+is resident at a time, including existing chat and embedding models. Switching
+tasks can incur model-loading latency. No additional model process manager is
+installed.
+
+### Choose the image task
+
+The `local_image` tool accepts a local path or `media://` reference and an explicit
+task:
+
+```json
+{ "path": "./receipt.png", "task": "ocr" }
+```
+
+```json
+{
+  "path": "./diagram.png",
+  "task": "vision",
+  "prompt": "Explain the relationship between these shapes."
+}
+```
+
+Omitting `task` selects vision. OCR transcribes visible text; it does not replace
+visual interpretation of photographs, charts, maps or interfaces. The tool maps
+the typed task to the installed model and uses the same registered provider as
+normal image understanding. Prompt keywords never select the route. Local file
+permissions, input limits, cancellation and output limits still apply. The tool
+is unavailable in sandboxes because it requires the host's local file access.
+
+Setup records these selections in `models.providers.llama-cpp.params.mediaModels`,
+adds the two image-capable models to the existing inventory, sets an explicit
+image route in `tools.media.models`, and selects local vision as
+`agents.defaults.imageModel` with no fallbacks. Existing chat defaults, embedding
+configuration, model inventory, provider settings and retained preset comments
+remain intact. Existing media entries need explicit `capabilities` so setup can
+preserve audio/video routes while replacing image routes. External servers and
+managed direct-model commands must first be configured as managed routers.
+
+The CLI can also select the installed OCR route explicitly:
+
+```bash
+openclaw infer image describe --file ./receipt.png \
+  --model llama-cpp/glm-ocr-q8_0 --timeout-ms 600000 --json
+```
+
+<Accordion title="Example terminal setup">
+
+These sanitized terminal captures show an isolated CPU setup with previously
+verified artifacts in cache, before activation and after both image checks pass.
+The completion warning appears because this example had no running Gateway to
+refresh; restart your Gateway after saving configuration when prompted.
+
+![Local media hardware, recipes, download budget, and consent](/images/llama-cpp-local-media-consent.png)
+
+![OCR and vision verification completed before configuration was saved](/images/llama-cpp-local-media-verified.png)
+
+</Accordion>
+
+### Privacy and limits
+
+The managed image routes use the loopback server without remote fallback.
+They reject explicit request proxies and environment proxy routing for that
+address. If your host uses an HTTP proxy, include the managed server address in
+`NO_PROXY` (for example, `127.0.0.1,::1`) before setup and inference.
+Inference never downloads missing models or projectors; rerun setup to repair
+the cache. Original media remains available to the normal pipeline. **An existing
+cloud chat model can still receive original images under its native-vision
+policy.** Local image preprocessing does not change the main chat provider.
+
+The initial models process one image per request, with a 10 MiB input ceiling and
+bounded image encoding and output. Dense text may need separate crops. GLM-OCR
+does not install document layout detection or PDF rendering. Small vision models
+can misinterpret complex diagrams and spatial relationships; setup checks basic
+functionality, not general accuracy. Each verification request has a deadline of
+up to ten minutes to accommodate CPU inference; a shorter configured image
+timeout still applies.
+
 ## Existing llama-server
 
 Choose **Existing llama-server** when another terminal, container, service
