@@ -142,6 +142,7 @@ describe("searchSessionTranscripts", () => {
         { message: { role: "user", content: [{ type: "text", text: "readonly search needle" }] } },
       );
       const databasePath = storePath ?? resolveOpenClawAgentSqlitePath({ agentId, env: env() });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
 
       expect(
