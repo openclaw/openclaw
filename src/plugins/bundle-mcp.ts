@@ -144,14 +144,14 @@ function absolutizeBundleMcpServer(params: {
   baseDir: string;
   server: BundleMcpServerConfig;
   pluginDataDir?: string;
-  agentFormat?: boolean;
 }): BundleMcpServerConfig {
   const next: BundleMcpServerConfig = { ...params.server };
 
+  // Remote transports have no process cwd; native runners reject that stdio-only field.
   if (
+    typeof next.command === "string" &&
     typeof next.cwd !== "string" &&
-    typeof next.workingDirectory !== "string" &&
-    (!params.agentFormat || typeof next.command === "string")
+    typeof next.workingDirectory !== "string"
   ) {
     next.cwd = params.baseDir;
   }
@@ -435,7 +435,6 @@ function loadBundleFileBackedMcpConfig(params: {
             baseDir,
             server,
             pluginDataDir: agentLoaded?.pluginDataDir,
-            agentFormat: params.bundleFormat === "agent",
           }),
         ]),
       ),

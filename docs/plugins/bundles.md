@@ -102,6 +102,8 @@ the Codex-compatible case.
 #### MCP for embedded OpenClaw
 
 - Enabled bundles can contribute MCP server config.
+- Stdio commands default their working directory to the plugin config directory.
+  Remote HTTP servers do not receive an implicit working directory.
 - OpenClaw merges bundle MCP config into the effective embedded OpenClaw
   settings as `mcpServers`.
 - OpenClaw exposes supported bundle MCP tools during embedded OpenClaw agent

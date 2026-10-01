@@ -157,6 +157,39 @@ describe("loadEnabledBundleMcpConfig", () => {
     );
   });
 
+  it("keeps file-backed HTTP bundle servers free of implicit stdio fields", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-bundle-remote-mcp",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginRoot = await writeClaudeBundleManifest({
+          homeDir,
+          pluginId: "remote-bundle",
+          manifest: { name: "remote-bundle" },
+        });
+        await writeBundleTextFiles(pluginRoot, {
+          ".mcp.json": JSON.stringify({
+            mcpServers: {
+              http: { type: "http", url: "https://example.test/mcp" },
+              sse: { type: "sse", url: "https://example.test/sse" },
+            },
+          }),
+        });
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["remote-bundle"]),
+        });
+
+        expectNoDiagnostics(loaded.diagnostics);
+        expect(loaded.config.mcpServers).toEqual({
+          http: { type: "http", url: "https://example.test/mcp" },
+          sse: { type: "sse", url: "https://example.test/sse" },
+        });
+      },
+    );
+  });
+
   it("uses a provided manifest registry instead of rediscovering bundle plugins", async () => {
     const homeDir = await tempHarness.createTempDir("openclaw-bundle-mcp-home-");
     const workspaceDir = await tempHarness.createTempDir("openclaw-bundle-mcp-workspace-");
@@ -217,6 +250,8 @@ describe("loadEnabledBundleMcpConfig", () => {
                 command: "node",
                 args: ["./mcp-server.js"],
               },
+              remote: { transport: "streamable-http", url: "https://example.test/mcp" },
+              events: { transport: "sse", url: "https://example.test/sse" },
             },
           },
         ],
@@ -229,6 +264,14 @@ describe("loadEnabledBundleMcpConfig", () => {
       command: "node",
       args: [path.join(pluginRoot, "mcp-server.js")],
       cwd: pluginRoot,
+    });
+    expect(loaded.config.mcpServers.remote).toEqual({
+      transport: "streamable-http",
+      url: "https://example.test/mcp",
+    });
+    expect(loaded.config.mcpServers.events).toEqual({
+      transport: "sse",
+      url: "https://example.test/sse",
     });
   });
 
