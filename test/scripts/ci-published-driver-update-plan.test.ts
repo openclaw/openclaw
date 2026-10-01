@@ -20,14 +20,27 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("published-driver update selection", () => {
   it.each([
     "src/infra/update-runner.ts",
+    "src/infra/update-managed-service-handoff.ts",
     "src/cli/update-cli/update-command.ts",
+    "src/cli/startup-trace.ts",
+    "src/gateway/server-startup-trace.ts",
+    "src\\infra\\update-runner.ts",
+  ])("requires the cross-version cell for %s", (file) => {
+    expect(shouldRunPublishedDriverUpdate([file])).toBe(true);
+  });
+
+  it.each([
+    "docs/install/updating.md",
+    "src/agents/context-window-guard.ts",
+    "src/state/openclaw-state-schema.ts",
+    "src/plugins/plugin-manifest.ts",
+    "scripts/format-docs.mts",
+    "ui/src/app.ts",
     "src/state/openclaw-state-lease.ts",
     "src/state/openclaw-state-lease-identity.ts",
     "src/state/openclaw-state-db-open.ts",
     "src/infra/sqlite-file-identity.ts",
     "src/plugins/plugin-native-assignments.ts",
-    "src/cli/startup-trace.ts",
-    "src/gateway/server-startup-trace.ts",
     "scripts/update-gateway.sh",
     "scripts/lib/source-update-build.mts",
     "scripts/lib/update-compat-chunks.mts",
@@ -43,21 +56,11 @@ describe("published-driver update selection", () => {
     "scripts/package-openclaw-for-docker.mts",
     "scripts/e2e/published-driver-update-docker.sh",
     "scripts/lib/ci-published-driver-update-plan.mts",
+    "test/scripts/ci-published-driver-update-plan.test.ts",
     ".github/workflows/ci-published-driver-update.yml",
     ".github/workflows/ci.yml",
     "src\\state\\openclaw-state-lease.ts",
-  ])("requires the cross-version cell for %s", (file) => {
-    expect(shouldRunPublishedDriverUpdate([file])).toBe(true);
-  });
-
-  it.each([
-    "docs/install/updating.md",
-    "src/agents/context-window-guard.ts",
-    "src/state/openclaw-state-schema.ts",
-    "src/plugins/plugin-manifest.ts",
-    "scripts/format-docs.mts",
-    "ui/src/app.ts",
-  ])("omits unrelated owner %s", (file) => {
+  ])("defers %s to hourly main and full release validation", (file) => {
     expect(shouldRunPublishedDriverUpdate([file])).toBe(false);
   });
 
@@ -69,12 +72,21 @@ describe("published-driver update selection", () => {
   );
 
   it.each([
-    { eventName: "pull_request", file: "src/state/openclaw-state-lease.ts", selected: true },
+    {
+      eventName: "pull_request",
+      file: "src/infra/update-managed-service-handoff.ts",
+      selected: true,
+    },
+    { eventName: "pull_request", file: "src/state/openclaw-state-lease.ts", selected: false },
     { eventName: "pull_request", file: "src/agents/context-window-guard.ts", selected: false },
     { eventName: "push", file: "src/agents/context-window-guard.ts", selected: true },
-    { eventName: "workflow_dispatch", file: "src/agents/context-window-guard.ts", selected: true },
-    { eventName: "schedule", file: "src/agents/context-window-guard.ts", selected: true },
-    { eventName: "pull_request", file: "scripts/update-gateway.sh", selected: true },
+    {
+      eventName: "workflow_dispatch",
+      file: "src/plugins/plugin-native-assignments.ts",
+      selected: true,
+    },
+    { eventName: "schedule", file: "src/state/openclaw-state-db-open.ts", selected: true },
+    { eventName: "pull_request", file: "scripts/update-gateway.sh", selected: false },
   ] as const)("connects $eventName $file to the required job", ({ eventName, file, selected }) => {
     const result = runCiManifestFixture({
       bundledPlanner: true,
@@ -209,6 +221,7 @@ describe("published-driver update selection", () => {
           PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
           CELL_DEADLINE_EPOCH_SECONDS: expired ? "999" : "1525",
           CANDIDATE_SHA256: expectedSha256,
+          DRIVER_VERSION: "2026.9.7",
           GITHUB_STEP_SUMMARY: summary,
         },
       });
@@ -234,6 +247,54 @@ describe("published-driver update selection", () => {
       }
     },
   );
+
+  it.each<{
+    eventName: Parameters<typeof evaluateWorkflowExpression>[1]["eventName"];
+    ref: string;
+    hit: string;
+    allowed: boolean;
+    repository?: string;
+  }>([
+    { eventName: "pull_request", ref: "refs/pull/42/merge", hit: "false", allowed: false },
+    { eventName: "pull_request_target", ref: "refs/heads/main", hit: "false", allowed: false },
+    { eventName: "schedule", ref: "refs/heads/main", hit: "false", allowed: true },
+    { eventName: "push", ref: "refs/heads/main", hit: "false", allowed: true },
+    { eventName: "workflow_dispatch", ref: "refs/heads/main", hit: "false", allowed: true },
+    { eventName: "workflow_dispatch", ref: "refs/heads/release", hit: "false", allowed: false },
+    { eventName: "schedule", ref: "refs/heads/main", hit: "true", allowed: false },
+    {
+      eventName: "push",
+      ref: "refs/heads/main",
+      hit: "false",
+      allowed: false,
+      repository: "contributor/openclaw",
+    },
+  ])("writes driver cache for $eventName $ref hit=$hit: $allowed", (scenario) => {
+    const job = readWorkflow(".github/workflows/ci-published-driver-update.yml").jobs.update;
+    const prepare = job.steps.find(
+      (step: WorkflowStep) => step.name === "Prepare main published driver seed",
+    );
+    const save = job.steps.find((step: WorkflowStep) =>
+      step.uses?.startsWith("actions/cache/save@"),
+    );
+    const restore = job.steps.find((step: WorkflowStep) =>
+      step.uses?.startsWith("actions/cache/restore@"),
+    );
+    for (const step of [prepare, save]) {
+      expect(
+        evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+          eventName: scenario.eventName,
+          ref: scenario.ref,
+          repository: scenario.repository ?? "openclaw/openclaw",
+          runAttempt: 1,
+          steps: { driver_cache: { outputs: { "cache-hit": scenario.hit } } },
+        }),
+      ).toBe(scenario.allowed);
+    }
+    expect(save.with.key).toBe(restore.with.key);
+    expect(save.with.key).toContain("steps.driver.outputs.version");
+    expect(restore.with["restore-keys"]).toBeUndefined();
+  });
 
   it.each([0, 42])("removes the private runtime volume after container exit %i", (commandExit) => {
     const root = tempDirs.make("openclaw-published-driver-volume-");

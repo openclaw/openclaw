@@ -38,13 +38,22 @@ IMAGE_NAME="$(docker_e2e_resolve_image openclaw-published-driver-update-e2e)"
 docker_e2e_build_or_reuse "$IMAGE_NAME" published-driver-update \
   "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
+DRIVER_CACHE_ARGS=()
+if [[ "$DRIVER_TAG" != */* && "$DRIVER_TAG" != . && "$DRIVER_TAG" != .. ]]; then
+  driver_seed="$ROOT_DIR/.cache/published-driver-install/$DRIVER_TAG/driver.tar"
+  if [ -f "$driver_seed" ]; then
+    DRIVER_CACHE_ARGS=(-v "$driver_seed:/tmp/published-driver-cache/driver.tar:ro")
+  fi
+fi
 # OverlayFS makes the published updater copy its entire retained runtime. Keep
 # the disposable installation and retention tree on one native filesystem.
 RUNTIME_VOLUME="$(docker_e2e_docker_cmd volume create)"
 docker_e2e_run_with_harness \
   --init \
   -e CELL_DEADLINE_EPOCH_SECONDS \
+  -e GITHUB_EVENT_NAME \
   --mount "type=volume,source=$RUNTIME_VOLUME,target=/tmp" \
+  "${DRIVER_CACHE_ARGS[@]}" \
   -v "$ARTIFACT_DIR:/tmp/published-driver-artifacts" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
