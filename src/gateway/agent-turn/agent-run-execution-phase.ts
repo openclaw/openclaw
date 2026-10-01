@@ -529,6 +529,8 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
                 },
                 internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
                 internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
+                internalDeliverySuppressErrors:
+                  params.client?.internal?.internalDeliverySuppressErrors,
                 suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
                 userTurnTranscriptRecorder,
                 cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,

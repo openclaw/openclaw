@@ -383,6 +383,34 @@ describe("deliverAgentCommandResult payload normalization", () => {
     ]);
   });
 
+  it("keeps runtime error payloads out of a host-owned turn that delivers authored output only", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    const timeout = {
+      text: "Request timed out before a response was generated. Please try again.",
+      isError: true,
+    };
+
+    await deliverAgentCommandResultForTest({ payloads: [timeout] });
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({ text: timeout.text }),
+    ]);
+
+    deliverOutboundPayloadsMock.mockClear();
+    await deliverAgentCommandResultForTest({
+      opts: { internalDeliverySuppressErrors: true },
+      payloads: [timeout],
+    });
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+
+    await deliverAgentCommandResultForTest({
+      opts: { internalDeliverySuppressErrors: true },
+      payloads: [{ text: "Fixed scripts/sync.md." }, timeout],
+    });
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({ text: "Fixed scripts/sync.md." }),
+    ]);
+  });
+
   it("normalizes reply-media paths before outbound delivery", async () => {
     const normalizerFn = vi.fn(async (payload: ReplyPayload): Promise<ReplyPayload> => ({
       ...payload,
