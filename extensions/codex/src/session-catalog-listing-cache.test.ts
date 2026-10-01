@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   commandRpcMocks,
   createCodexSessionCatalogControl,
+  createCodexSessionCatalogControlFactory,
   config,
   idleThread,
   resolveDefaultAgentDir,
@@ -10,22 +11,34 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex supervision catalog", () => {
-  it("memoizes cloned request options until runtime config identity changes", async () => {
+  it("bounds fleet config snapshots across agents and homes until config identity changes", async () => {
     let runtimeConfig = { agents: { defaults: { workspace: "/workspace/a" } } } as OpenClawConfig;
     commandRpcMocks.codexControlRequest.mockResolvedValue({ thread: idleThread() });
-    const control = createCodexSessionCatalogControl({
+    const factory = createCodexSessionCatalogControlFactory({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       getRuntimeConfig: () => runtimeConfig,
     });
+    const home = factory.homesForAgent("main")[0]!;
+    const controls = ["main", "another"].flatMap((agentId) =>
+      ["first", "second"].map((sourceHomeId) =>
+        factory.forRequest(agentId, { ...home, sourceHomeId }),
+      ),
+    );
     const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    const initialConfig = runtimeConfig;
 
-    await control.readThread("thread-1");
-    await control.readThread("thread-1");
-    expect(cloneSpy).toHaveBeenCalledTimes(2);
+    for (const control of controls) {
+      await control.readThread("thread-1");
+      await control.readThread("thread-1");
+    }
+    expect(cloneSpy.mock.calls.filter(([value]) => value === initialConfig)).toHaveLength(1);
 
     runtimeConfig = { agents: { defaults: { workspace: "/workspace/b" } } } as OpenClawConfig;
-    await control.readThread("thread-1");
-    expect(cloneSpy).toHaveBeenCalledTimes(4);
+    for (const agentId of ["main", "another"]) {
+      await factory.forRequest(agentId).readThread("thread-1");
+    }
+    expect(cloneSpy.mock.calls.filter(([value]) => value === runtimeConfig)).toHaveLength(1);
+    expect(cloneSpy.mock.calls.filter(([value]) => value === initialConfig)).toHaveLength(1);
   });
 
   it("serves an expired page while one background refresh updates the next poll", async () => {
