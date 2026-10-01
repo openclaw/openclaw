@@ -94,6 +94,28 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
   }
 }
 
+/** Loads only the listed jobs, leaving unrelated rows of the partition untouched. */
+export async function loadCronJobsStoreRowsByIds(
+  storePath: string,
+  jobIds: readonly string[],
+): Promise<LoadedCronStore> {
+  if (jobIds.length === 0) {
+    // An empty id set widens to `job_id in ()`, which selects nothing rather than one row.
+    throw new Error("cron.loadMutable requires at least one jobId");
+  }
+  const storeKey = cronStoreKey(storePath);
+  const context = captureOpenClawStateWorkerContext();
+  // No revision is noted here: this read commits nothing, and a failure is settled by the
+  // caller's forceReload fallback. Bumping would invalidate every snapshot and defeat the point.
+  return runOpenClawStateWorkerOperation(context, async (scope) => {
+    const result = await scope.execute({ type: "cron.loadMutable", input: { storeKey, jobIds } });
+    if (!result.ok) {
+      throw restoreCronLoadError(result.error);
+    }
+    return result.loaded;
+  });
+}
+
 export function assertCronJobsStoreUnchanged(
   db: DatabaseSync,
   storePath: string,
