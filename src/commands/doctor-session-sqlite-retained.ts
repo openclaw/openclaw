@@ -295,6 +295,9 @@ export async function archiveConflictingRetainedSessionSources(
         dependencies: [],
         disposal: { state: "retained" },
       };
+      if (params.verifiedEmpty && move.artifact.identity.size !== 0) {
+        throw new Error("Retained transcript is no longer empty; source needs verification");
+      }
       for (const owner of targets) {
         recordPlannedMigrationMoves(run, owner, [move]);
       }

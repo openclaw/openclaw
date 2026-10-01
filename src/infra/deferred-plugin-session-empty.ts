@@ -31,6 +31,9 @@ export async function recoverEmptyRetainedTranscript(params: {
     .map((name) => path.join(path.dirname(source.originalPath), name));
   const manual = `Preserve ${source.path} and the backup candidates (${candidates.join(", ") || `${source.originalPath}.bak-<pid>-<timestamp>: none found`}). Restore a complete verified transcript at ${source.originalPath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against this same state directory. Canonical database: ${target.sqlitePath}.`;
   try {
+    if (original.size !== 0) {
+      throw new Error("Retained transcript is no longer empty");
+    }
     const snapshot = readOnlySqliteValidationSnapshot(target);
     if (!snapshot.ok) {
       throw snapshot.error;
@@ -57,6 +60,7 @@ export async function recoverEmptyRetainedTranscript(params: {
       }
       for (const [index, backup] of backups.entries()) {
         if (
+          params.sessionIds.length === 0 &&
           readLegacyPrimaryTranscriptIdentity(backup.path, source.originalPath, undefined, true)
             ?.sessionId !== sessionId
         ) {
