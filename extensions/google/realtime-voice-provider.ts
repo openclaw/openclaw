@@ -752,10 +752,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     try {
       const session = this.session;
-      const canSendImmediately = Boolean(
-        session && (!this.resumingSession || this.sessionConfigured),
-      );
-      if (session && canSendImmediately) {
+      if (session && (!this.resumingSession || this.sessionConfigured)) {
         session.sendToolResponse({
           functionResponses: [normalizedResponse],
         });

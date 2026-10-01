@@ -392,7 +392,11 @@ describe("subagent registry lifecycle error grace", () => {
       status: "yielded",
     });
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Wait for the visible dashboard child", undefined);
+    expect(onYield).toHaveBeenCalledWith(
+      "Wait for the visible dashboard child",
+      undefined,
+      undefined,
+    );
 
     await settleYieldedCliTurn({
       requesterTurnRunId,

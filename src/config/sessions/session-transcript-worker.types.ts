@@ -22,6 +22,10 @@ import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "./activity-summary-source.types.js";
+import type {
+  ArchivedSessionEvictionBatch,
+  ArchivedSessionEvictionQuery,
+} from "./disk-budget.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
@@ -335,6 +339,15 @@ type SessionEntryListWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+type SessionStoreSummaryWorkerInput = {
+  kind: "session-store-summary";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  agentIds: readonly string[];
+  recentLimit: number;
+  continuation?: CanonicalSessionReaderContinuation;
+};
+
 export type SessionExactEntriesWorkerInput = {
   kind: "session-exact-entries";
   database: { agentId: string; path: string };
@@ -460,9 +473,15 @@ type SessionHistoricalEvictionCandidatesWorkerInput = {
   preserveRecentMs?: number | null;
 };
 
+type SessionArchivedEvictionCandidatesWorkerInput = Omit<
+  SessionHistoricalEvictionCandidatesWorkerInput,
+  "admissionIdentities" | "preserveRecentMs"
+> & { archived: ArchivedSessionEvictionQuery };
+
 export type SessionHistoryWorkerInput =
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
   | SessionHistoricalEvictionCandidatesWorkerInput
+  | SessionArchivedEvictionCandidatesWorkerInput
   | SessionArchivePruningWorkerInput
   | SessionPendingArchivesWorkerInput
   | SessionArchivePresenceWorkerInput
@@ -484,6 +503,7 @@ export type SessionHistoryWorkerInput =
   | SessionEntryReadWorkerInput
   | SessionEntryCurrentWorkerInput
   | SessionDiagnosticTextWorkerInput
+  | SessionStoreSummaryWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
   | SessionStoreTargetWorkerInput
@@ -511,10 +531,10 @@ export type SessionTranscriptWorkerValues = {
   prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
   "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };
-  "historical-eviction-candidates": {
-    kind: "historical-eviction-candidates";
-    sessionIds: string[];
-  };
+  "historical-eviction-candidates": { kind: "historical-eviction-candidates" } & (
+    | { sessionIds: string[] }
+    | { batch: ArchivedSessionEvictionBatch }
+  );
   "session-archive-pruning": {
     kind: "session-archive-pruning";
     result: PublishedSessionTranscriptArchive | null;
@@ -544,6 +564,12 @@ export type SessionTranscriptWorkerValues = {
     receipts: ReturnType<typeof listSessionPendingInputReceipts>;
   };
   "session-entry-list": { kind: "session-entry-list"; entries: SessionEntrySummary[] };
+  "session-store-summary": {
+    kind: "session-store-summary";
+    summary: ReturnType<
+      typeof import("./session-accessor.sqlite-summary.js").readSessionStoreSummaryReadOnly
+    >;
+  };
   "session-entry-read": SessionEntryReadWorkerResult;
   "session-entry-current": SessionEntryCurrentWorkerResult;
   "session-diagnostic-text": {
@@ -613,6 +639,10 @@ export type SessionHistoryWorkerDatabase = {
     SessionHistoricalEvictionCandidatesWorkerInput,
     string[]
   >;
+  readArchivedEvictionCandidates: SessionHistoryReader<
+    SessionArchivedEvictionCandidatesWorkerInput,
+    ArchivedSessionEvictionBatch
+  >;
   readArchivePruning: SessionHistoryReader<
     SessionArchivePruningWorkerInput,
     PublishedSessionTranscriptArchive | null
@@ -656,6 +686,10 @@ export type SessionHistoryWorkerDatabase = {
     scope: SessionEntryListWorkerInput["scope"],
     continuation?: CanonicalSessionReaderContinuation,
   ) => Promise<SessionEntrySummary[]>;
+  readStoreSummary: SessionHistoryReader<
+    SessionStoreSummaryWorkerInput,
+    SessionTranscriptWorkerValues["session-store-summary"]["summary"]
+  >;
   readEntryResult: SessionHistoryReader<
     SessionEntryReadWorkerInput,
     import("@openclaw/normalization-core/result").Result<

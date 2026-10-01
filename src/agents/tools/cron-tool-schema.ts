@@ -425,6 +425,9 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         description:
           'Run mode for action="run": omitted defaults to "due"; use "force" to trigger now.',
       }),
+      runId: Type.Optional(
+        Type.String({ description: 'Run id from action="run" to read with action="runs"' }),
+      ),
       contextMessages: Type.Optional(
         Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
       ),
@@ -453,10 +456,10 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       "includeDisabled",
       "jobId",
       "id",
-      ...(managementOnly ? [] : ["in"]),
+      ...(managementOnly ? [] : ["in", "runId"]),
     ]);
   }
   return managementOnly
-    ? Type.Omit(schema, ["in", "text", "mode", "contextMessages", "sessionKey"])
+    ? Type.Omit(schema, ["in", "text", "mode", "contextMessages", "sessionKey", "runId"])
     : schema;
 }

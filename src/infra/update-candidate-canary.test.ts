@@ -64,26 +64,14 @@ const admission = vi.hoisted(
     beforeGrant?: (stage: string) => void;
   } => ({ active: false }),
 );
-vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./sqlite-worker-operation-admission.js")>();
-  return {
-    ...actual,
-    createSqliteWorkerOperationAdmission: (
-      ...args: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
-    ) => {
-      const [admit, attachment] = args;
-      return actual.createSqliteWorkerOperationAdmission((request, grant) => {
-        admission.active = true;
-        try {
-          admission.beforeGrant?.(request.stage);
-          admit(request, grant);
-        } finally {
-          admission.active = false;
-        }
-      }, attachment);
-    },
-  };
-});
+vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) =>
+  (
+    await import("./update-candidate-canary-mocks.test-support.js")
+  ).mockCanarySqliteOperationAdmission(
+    await importOriginal<typeof import("./sqlite-worker-operation-admission.js")>(),
+    admission,
+  ),
+);
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     admission.beforeGrant = undefined;

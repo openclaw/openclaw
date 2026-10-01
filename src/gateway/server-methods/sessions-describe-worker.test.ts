@@ -28,7 +28,8 @@ import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -159,19 +160,23 @@ async function whilePaused(
 ) {
   await initializeSessionReadContext(context);
   const projection = getSessionRowProjection(context)!;
-  const ensure = projection.ensureMaterialized.bind(projection);
+  const prepare = projection.prepareSelection.bind(projection);
   const paused = createDeferredCore();
   const released = createDeferredCore();
-  const readiness = vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-    await ensure();
-    paused.resolve();
-    await released.promise;
-  });
+  const readiness = vi
+    .spyOn(projection, "prepareSelection")
+    .mockImplementationOnce(async (...args) => {
+      const result = await prepare(...args);
+      paused.resolve();
+      await released.promise;
+      return result;
+    });
   const request = start();
   try {
     expect(
       await Promise.race([paused.promise.then(() => "paused"), request.then(() => "responded")]),
     ).toBe("paused");
+    expect(readiness).toHaveBeenCalledOnce();
     await change();
     released.resolve();
     return await request;

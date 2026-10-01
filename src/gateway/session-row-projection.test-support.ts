@@ -212,6 +212,10 @@ export function createSessionRowProjectionFixture(params: {
       return row;
     },
     ensureMaterialized: () => Promise.resolve(),
+    prepareSelection: () => undefined,
+    withSelectionPreparation: (consume) => consume(),
+    needsSelectionPreparation: () => false,
+    isMaterialized: (query) => describe(query) !== undefined,
     prepareMembership: () => Promise.resolve(),
     needsMembershipPreparation: () => false,
     sessionGroupTargets: () => {

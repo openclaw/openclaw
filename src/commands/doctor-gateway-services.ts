@@ -116,14 +116,6 @@ async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promi
   return false;
 }
 
-function extractDetailPath(detail: string, prefix: string): string | null {
-  if (!detail.startsWith(prefix)) {
-    return null;
-  }
-  const value = detail.slice(prefix.length).trim();
-  return value.length > 0 ? value : null;
-}
-
 async function filterInactiveExtraGatewayServices(
   services: ExtraGatewayService[],
 ): Promise<ExtraGatewayService[]> {
@@ -205,7 +197,7 @@ async function cleanupLegacyDarwinServices(
   const failed: string[] = [];
 
   for (const svc of services) {
-    const plistPath = extractDetailPath(svc.detail, "plist:");
+    const plistPath = svc.sourcePath;
     if (!plistPath) {
       failed.push(`${svc.label} (missing plist path)`);
       continue;

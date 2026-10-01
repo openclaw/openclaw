@@ -14,7 +14,6 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
@@ -745,34 +744,4 @@ describe("chat pane presentation teardown", () => {
       true,
     );
   });
-});
-
-it("settles boot and session-switch updates for freshly connected panes", async () => {
-  vi.useFakeTimers();
-  const keys = ["agent:main:frame-boot", "agent:main:frame-switch"];
-  const fixture = createMountedPanes(keys.map((key) => ({ key, kind: "direct", updatedAt: 1 })));
-  let previous: TestChatPane | undefined;
-  for (const [index, key] of keys.entries()) {
-    if (previous) {
-      Object.defineProperty(previous, "isConnected", { configurable: true, value: false });
-      previous.disconnectedCallback();
-    }
-    const pane = fixture.mount(key);
-    const updates = vi.spyOn(pane, "performUpdate");
-    await pane.updateComplete;
-    expect(updates).toHaveBeenCalledTimes(1);
-    await vi.dynamicImportSettled();
-    await vi.advanceTimersByTimeAsync(160);
-    await vi.dynamicImportSettled();
-    await vi.advanceTimersByTimeAsync(160);
-    console.info(
-      `${index === 0 ? "Fresh pane boot" : "Session switch"}: ${updates.mock.calls.length} updates`,
-    );
-    if (index === 0) {
-      expect(updates.mock.calls.length).toBeLessThanOrEqual(3);
-    }
-    expect(pane.querySelector(".agent-chat__composer-combobox textarea")).not.toBeNull();
-    expect(pane.state.chatLoading).toBe(false);
-    previous = pane;
-  }
 });

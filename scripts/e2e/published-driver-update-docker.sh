@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz published-driver-update "${1:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}")"
+trap 'docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"' EXIT
+ARTIFACT_DIR="${2:-$ROOT_DIR/.artifacts/published-driver-update}"
+DRIVER_TAG="${3:-latest}"
+mkdir -p "$ARTIFACT_DIR"
+ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
+# The shared image's disposable account owns these synthetic diagnostics.
+chmod a+rwx "$ARTIFACT_DIR"
+IMAGE_NAME="$(docker_e2e_resolve_image openclaw-published-driver-update-e2e)"
+docker_e2e_build_or_reuse "$IMAGE_NAME" published-driver-update \
+  "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
+docker_e2e_run_with_harness \
+  --init \
+  -v "$ARTIFACT_DIR:/tmp/published-driver-artifacts" \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  "$IMAGE_NAME" \
+  node scripts/e2e/lib/upgrade-survivor/published-driver.mjs \
+    /tmp/openclaw-current.tgz /tmp/published-driver-artifacts "$DRIVER_TAG"

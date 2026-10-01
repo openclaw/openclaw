@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -14,17 +16,20 @@ vi.mock("./node-sqlite.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    process.argv = originalArgv;
+    process.exitCode = originalExitCode;
+    __setFsSafeTestHooksForTest(undefined);
+    vi.restoreAllMocks();
+    cleanup();
+  });
+});
 beforeEach(() => {
   // Runtime setup can preload SQLite owners before this file's native-open mock.
   vi.resetModules();
-});
-afterEach(() => {
-  process.argv = originalArgv;
-  process.exitCode = originalExitCode;
-  vi.restoreAllMocks();
 });
 
 async function inspectFailure(
@@ -59,12 +64,12 @@ async function inspectFailure(
     vi.spyOn(actual.requireNodeSqlite(), "backup").mockRejectedValue(failure);
   }
   if (operation === "snapshot-copy") {
-    const open = fs.openSync;
-    vi.spyOn(fs, "openSync").mockImplementation((...args) => {
-      if (args[1] === "wx") {
-        throw failure;
-      }
-      return open(...args);
+    __setFsSafeTestHooksForTest({
+      beforeRootStatObservation: (targetPath) => {
+        if (targetPath === root) {
+          throw failure;
+        }
+      },
     });
   }
   const diagnostics = await import("./sqlite-error-diagnostics.js");
@@ -82,22 +87,30 @@ async function inspectFailure(
     sourcePath,
     stagingRoot,
   ];
-  await import("./sqlite-readonly-location.worker.js");
-  await completed.promise;
-  expect(process.exitCode).toBe(1);
-  expect(format).toHaveBeenCalledOnce();
-  const [observedFailure] = expectDefined(format.mock.calls[0], "inspection failure");
-  expect(opened.every((database) => !database.isOpen)).toBe(true);
-  expect(fs.readdirSync(stagingRoot)).toEqual([]);
-  expect(fs.readFileSync(sourcePath)).toEqual(before);
-  const read = actual.openNodeSqliteDatabase(sourcePath, { readOnly: true });
   try {
-    expect(read.prepare("SELECT id FROM present").get()).toEqual({ id: 7 });
-    expect(read.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    await import("./sqlite-readonly-location.worker.js");
+    await completed.promise;
+    expect(process.exitCode).toBe(1);
+    expect(format).toHaveBeenCalledOnce();
+    const [observedFailure] = expectDefined(format.mock.calls[0], "inspection failure");
+    expect(opened.every((database) => !database.isOpen)).toBe(true);
+    expect(fs.readdirSync(stagingRoot)).toEqual([]);
+    expect(fs.readFileSync(sourcePath)).toEqual(before);
+    const read = actual.openNodeSqliteDatabase(sourcePath, { readOnly: true });
+    try {
+      expect(read.prepare("SELECT id FROM present").get()).toEqual({ id: 7 });
+      expect(read.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    } finally {
+      read.close();
+    }
+    return { write, observedFailure };
   } finally {
-    read.close();
+    for (const database of opened) {
+      if (database.isOpen) {
+        database.close();
+      }
+    }
   }
-  return { write, observedFailure };
 }
 
 describe("registered SQLite read-only worker operation diagnostics", () => {
@@ -109,7 +122,7 @@ describe("registered SQLite read-only worker operation diagnostics", () => {
   ] as const)(
     "preserves frozen %s failures, identity, native codes and cleanup",
     async (operation, context) => {
-      const failure = Object.freeze(
+      const nativeFailure = Object.freeze(
         Object.assign(new Error("unable to open database file"), {
           code: "ERR_SQLITE_ERROR",
           errcode: 14,
@@ -118,12 +131,20 @@ describe("registered SQLite read-only worker operation diagnostics", () => {
           path: "hidden path",
         }),
       );
+      const failure =
+        operation === "snapshot-copy"
+          ? Object.freeze(
+              new FsSafeError("helper-failed", "native copy failed", { cause: nativeFailure }),
+            )
+          : nativeFailure;
       const { write, observedFailure } = await inspectFailure(operation, failure);
       expect(observedFailure).toBe(failure);
+      const message =
+        operation === "snapshot-copy" ? "native copy failed" : "unable to open database file";
       expect(write).toHaveBeenCalledExactlyOnceWith(
         JSON.stringify({
           ok: false,
-          message: `failed while ${context}: unable to open database file (code=ERR_SQLITE_ERROR, errcode=14)`,
+          message: `failed while ${context}: ${message} (code=ERR_SQLITE_ERROR, errcode=14)`,
         }),
       );
     },

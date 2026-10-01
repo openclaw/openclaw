@@ -349,6 +349,8 @@ export type CronServiceState = {
   /** Owns scheduled-tick exclusion until startup catch-up publishes deferred slots. */
   startupCatchup?: object;
   activeManualRunJobIds: Set<string>;
+  /** Accepted manual runs until their terminal history row is written, keyed by runId. */
+  queuedManualRuns: Map<string, Promise<unknown>>;
   manualSetupTimeoutNotified: boolean;
   /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
   runAdmission: CronRunAdmission;
@@ -384,6 +386,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     schedulingPaused: false,
     schedulerStarted: false,
     activeManualRunJobIds: new Set<string>(),
+    queuedManualRuns: new Map<string, Promise<unknown>>(),
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [], capacityListener: null },
     queuedRunReservationsByJobId: new Map<string, QueuedCronRunReservation>(),

@@ -8,7 +8,7 @@ import {
   type VitestWorkerManifest,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -49,9 +49,9 @@ it("keeps the runner event loop responsive while verifying a completed generatio
   }
 });
 
-it.each(["inputs", "outputs"] as const)(
+it.for(["inputs", "outputs"] as const)(
   "drains active %s reads before failed verification releases the generation",
-  async (group) => {
+  async (group, { signal }) => {
     const owner = createVitestWorkerRun();
     const directory = owner.descriptor.directory;
     const files = group === "inputs" ? directory : path.join(directory, "dist");
@@ -100,10 +100,13 @@ it.each(["inputs", "outputs"] as const)(
         completed = true;
       });
     try {
-      await withTestTimeout(
-        Promise.all([started.promise, failedRead.promise]),
-        5_000,
-        "verification did not admit both reads",
+      await withinTest(
+        awaitGateBeforeSettlement(
+          Promise.all([started.promise, failedRead.promise]),
+          disposal,
+          "verification did not admit both reads",
+        ),
+        signal,
       );
       await nextTurn();
       expect(completed).toBe(false);

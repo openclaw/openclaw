@@ -418,9 +418,15 @@ function holdLease() {
       process.exit(0);
     }
   };
-  // Watch the owned root before rereading: replacing or retiring the lease
-  // must wake actors immediately, including a change during registration.
-  fs.watch(root, checkLease);
+  // Watch the lease itself before rereading: replacing or retiring it must wake
+  // actors immediately, including a change during registration. macOS serves
+  // directory watches through FSEvents, which can drop the unlink under load;
+  // a file watch is kernel-delivered. A lease already gone fails the reread.
+  try {
+    fs.watch(lease, checkLease);
+  } catch (error) {
+    if (error.code !== "ENOENT" && error.code !== "EPERM") throw error;
+  }
   setTimeout(checkLease, Math.max(0, deadline - Date.now()));
   checkLease();
   return deadline;
@@ -1483,15 +1489,7 @@ source "$2"`,
     }
     if (options.cancelDuringBackoff) {
       try {
-        await until(
-          () =>
-            Boolean(stopping) ||
-            shell.exitCode !== null ||
-            shell.signalCode !== null ||
-            fs.existsSync(path.join(root, "backoff-ready.json")),
-          "owned backoff readiness",
-          operationDeadline,
-        );
+        await ready("backoff-ready.json");
         if (!stopping && shell.exitCode === null && shell.signalCode === null) {
           await boundary("backoff-cancel");
           shell.kill("SIGTERM");

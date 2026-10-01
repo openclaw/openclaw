@@ -205,16 +205,15 @@ async function downloadFalVideo(url: string, maxBytes: number): Promise<Generate
 }
 
 function resolveFalQueueBaseUrl(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    if (url.hostname === "fal.run") {
-      url.hostname = "queue.fal.run";
-      return url.toString().replace(/\/$/, "");
-    }
-    return baseUrl.replace(/\/$/, "");
-  } catch {
+  const url = URL.parse(baseUrl);
+  if (!url) {
     return DEFAULT_FAL_QUEUE_BASE_URL;
   }
+  if (url.hostname === "fal.run") {
+    url.hostname = "queue.fal.run";
+    return url.toString().replace(/\/$/, "");
+  }
+  return baseUrl.replace(/\/$/, "");
 }
 
 function isFalSeedance2Model(model: string): boolean {

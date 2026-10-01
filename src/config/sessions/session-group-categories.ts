@@ -99,5 +99,11 @@ export function updateSessionGroupCategoriesInWorker(params: {
         }
       });
     },
+    () => {
+      // The prepared keys bound category writes, but a concurrent structural publication
+      // requires the original store-wide fence. Our own recovery must not supersede itself.
+      releasePublicationFence?.();
+      return superseded.size === 0 ? keys : undefined;
+    },
   ).finally(() => releasePublicationFence?.());
 }

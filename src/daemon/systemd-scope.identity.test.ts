@@ -4,18 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findInstalledSystemdGatewayScope, isNonFatalSystemdInstallProbeError } from "./systemd.js";
 
 const findSystemGatewayServicesMock = vi.hoisted(() =>
-  vi.fn<
-    () => Promise<
-      Array<{
-        platform: "linux";
-        label: string;
-        detail: string;
-        scope: "user" | "system";
-        marker?: "openclaw" | "clawdbot";
-        legacy?: boolean;
-      }>
-    >
-  >(async () => []),
+  vi.fn<typeof import("./inspect.js").findSystemGatewayServices>(async () => []),
 );
 
 vi.mock("./inspect.js", () => ({
@@ -81,6 +70,7 @@ describe("systemd gateway identity (openclaw#119648)", () => {
         platform: "linux",
         label: "openclaw.service",
         detail: "unit: /etc/systemd/system/openclaw.service",
+        sourcePath: "/etc/systemd/system/openclaw.service",
         scope: "system",
         marker: "openclaw",
       },
@@ -100,6 +90,7 @@ describe("systemd gateway identity (openclaw#119648)", () => {
         platform: "linux",
         label: "openclaw-darlene.service",
         detail: "unit: /etc/systemd/system/openclaw-darlene.service",
+        sourcePath: "/etc/systemd/system/openclaw-darlene.service",
         scope: "system",
         marker: "openclaw",
       },
@@ -118,6 +109,7 @@ describe("systemd gateway identity (openclaw#119648)", () => {
         platform: "linux",
         label: "openclaw-gateway-lisa.service",
         detail: "unit: /etc/systemd/system/openclaw-gateway-lisa.service",
+        sourcePath: "/etc/systemd/system/openclaw-gateway-lisa.service",
         scope: "system",
         marker: "openclaw",
       },
@@ -136,6 +128,7 @@ describe("systemd gateway identity (openclaw#119648)", () => {
         platform: "linux",
         label: "my-custom-gateway.service",
         detail: "unit: /etc/systemd/system/my-custom-gateway.service",
+        sourcePath: "/etc/systemd/system/my-custom-gateway.service",
         scope: "system",
         marker: "openclaw",
       },
@@ -216,6 +209,7 @@ describe("systemd gateway identity (openclaw#119648)", () => {
           platform: "linux",
           label,
           detail: `unit: /etc/systemd/system/${label}`,
+          sourcePath: `/etc/systemd/system/${label}`,
           scope: "system",
           marker: "openclaw",
         },
@@ -243,6 +237,7 @@ describe("systemd gateway identity (openclaw#119648)", () => {
         platform: "linux",
         label: "openclaw@.service",
         detail: "unit: /etc/systemd/system/openclaw@.service",
+        sourcePath: "/etc/systemd/system/openclaw@.service",
         scope: "system",
         marker: "openclaw",
       },
@@ -265,6 +260,7 @@ describe("systemd gateway identity (openclaw#119648)", () => {
         platform: "linux",
         label: "openclaw@other.service",
         detail: "unit: /etc/systemd/system/openclaw@other.service",
+        sourcePath: "/etc/systemd/system/openclaw@other.service",
         scope: "system",
         marker: "openclaw",
       },
@@ -303,6 +299,7 @@ describe("systemd gateway identity (openclaw#119648)", () => {
         platform: "linux",
         label: "openclaw-darlene.service",
         detail: "unit: /etc/systemd/system/openclaw-darlene.service",
+        sourcePath: "/etc/systemd/system/openclaw-darlene.service",
         scope: "system",
         marker: "openclaw",
       },

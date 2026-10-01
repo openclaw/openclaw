@@ -1,0 +1,35 @@
+name: Published driver update
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    name: Published driver update
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Build candidate package
+        run: |
+          pnpm build:ci-artifacts
+          node scripts/package-openclaw-for-docker.mjs --skip-build --allow-unreleased-changelog --output-dir .artifacts/published-driver-package --output-name openclaw-candidate.tgz
+      - name: Update published driver to candidate
+        run: bash scripts/e2e/published-driver-update-docker.sh .artifacts/published-driver-package/openclaw-candidate.tgz .artifacts/published-driver-update
+      - name: Preserve synthetic update diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: published-driver-update
+          path: .artifacts/published-driver-update
+          retention-days: 7

@@ -39,7 +39,7 @@ import {
   validateWorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
-import { notifyListeners } from "../shared/listeners.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
   createPendingRequestRegistry,
   type PendingRequestEntry,
@@ -146,18 +146,15 @@ export class WorkerConnectionFrameDispatcher {
   constructor(private readonly options: WorkerConnectionFrameDispatcherOptions) {}
 
   onGatewayToolUpdate(listener: (frame: WorkerGatewayToolUpdateFrame) => void): () => void {
-    this.gatewayToolUpdateListeners.add(listener);
-    return () => this.gatewayToolUpdateListeners.delete(listener);
+    return registerListener(this.gatewayToolUpdateListeners, listener);
   }
 
   onInferenceEvent(listener: (frame: WorkerInferenceEventFrame) => void): () => void {
-    this.inferenceEventListeners.add(listener);
-    return () => this.inferenceEventListeners.delete(listener);
+    return registerListener(this.inferenceEventListeners, listener);
   }
 
   onInferenceTerminal(listener: (frame: WorkerInferenceTerminalFrame) => void): () => void {
-    this.inferenceTerminalListeners.add(listener);
-    return () => this.inferenceTerminalListeners.delete(listener);
+    return registerListener(this.inferenceTerminalListeners, listener);
   }
 
   dispatchReadyFrame(frame: unknown, socket: WebSocket): void {

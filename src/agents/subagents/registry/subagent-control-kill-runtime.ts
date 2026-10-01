@@ -582,7 +582,19 @@ export async function killSubagentRun(params: {
         if (declinedBeforeQueueClear) {
           return stopAccepted ? await settleTargetCancellation() : declinedBeforeQueueClear;
         }
-        const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
+        const cleared = runtime.clearSessionLifecycleQueues({
+          keys: [childSessionKey, sessionId],
+          agentId: resolved.agentId,
+          sessionKey: childSessionKey,
+          sessionId,
+          assertCurrent: () => {
+            assertState();
+            params.cancellationControl?.assertCurrent();
+            if (!killOwnerCurrent()) {
+              throw new Error("Subagent queue cleanup lost its original kill claim.");
+            }
+          },
+        });
         if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
           logVerbose(
             `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
