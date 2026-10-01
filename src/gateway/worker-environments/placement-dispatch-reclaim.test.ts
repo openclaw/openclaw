@@ -1061,7 +1061,9 @@ describe("worker placement dispatch reclaim", () => {
     await locked.promise;
     const competing = harness.service.reclaim(REQUEST);
     await queued.promise;
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
     resume.resolve();
     try {
       expect(await owner).toMatchObject({ state: "reclaimed" });
