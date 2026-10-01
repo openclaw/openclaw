@@ -221,6 +221,23 @@ describe("resolveBuildAllStep", () => {
 });
 
 describe("resolveBuildAllSteps", () => {
+  it.each(["full", "package", "ciArtifacts"])(
+    "generates native protocol models before compiling %s",
+    async (profile) => {
+      const runner = buildRunner();
+      expect((await runBuildAllSteps(profile, { ...runner, cacheEnabled: false })).exitCode).toBe(0);
+      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const generation = invocations.findIndex(({ args }) =>
+        args.includes("scripts/prepare-native-protocol.mjs"),
+      );
+      const compilation = invocations.findIndex(({ args }) =>
+        args.includes("scripts/tsdown-build.mts"),
+      );
+      expect(generation).toBeGreaterThanOrEqual(0);
+      expect(compilation).toBeGreaterThan(generation);
+    },
+  );
+
   it("rebuilds UI after runtime cleanup without reusing stale build metadata", () => {
     const steps = resolveBuildAllSteps("full");
     const labels = steps.map(({ label }) => label);
