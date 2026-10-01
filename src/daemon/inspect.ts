@@ -89,9 +89,7 @@ export function renderGatewayServiceCleanupHints(
   for (const service of services) {
     switch (service.platform) {
       case "darwin": {
-        const plistPath = service.detail.startsWith("plist:")
-          ? service.detail.slice("plist:".length).trim()
-          : undefined;
+        const plistPath = service.sourcePath;
         // Global LaunchAgents still run in a GUI domain; only LaunchDaemons
         // belong to the system domain regardless of their shared file scope.
         const domain =
@@ -184,6 +182,7 @@ async function scanLaunchdDir(params: {
       platform: "darwin",
       label,
       detail: `plist: ${fullPath}`,
+      sourcePath: fullPath,
       scope: params.scope,
       marker,
       legacy: marker !== "openclaw" || isLegacyLabel(label),
@@ -506,6 +505,7 @@ async function scanGatewayServices(
                 platform: "linux",
                 label: unit.name,
                 detail: `unit: ${unit.fragmentPath}`,
+                sourcePath: unit.fragmentPath,
                 scope,
                 marker: marker ?? "openclaw",
                 legacy: marker === "clawdbot",

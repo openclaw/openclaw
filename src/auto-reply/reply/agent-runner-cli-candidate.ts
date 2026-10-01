@@ -27,6 +27,7 @@ import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-ou
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
 import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
+import { buildReplyRouteThreadingToolContext } from "./agent-runner-utils.js";
 import { prepareCliReplyPayload } from "./cli-reply-payload.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
@@ -89,8 +90,22 @@ export async function runCliFallbackCandidate(
     originatingChannel: turn.followupRun.originatingChannel,
     provider: turn.sessionCtx.Provider,
   });
-  const cliCurrentThreadId =
-    turn.followupRun.originatingThreadId ?? turn.sessionCtx.MessageThreadId;
+  // Thread-originated turns take the channel adapter's thread target and reply
+  // mode, as on the embedded path. A configured replyToMode "off" would otherwise
+  // post untargeted message-tool sends at the channel root.
+  const cliThreadingContext = buildReplyRouteThreadingToolContext({
+    run: params.candidateRun,
+    replyRoute: turn.followupRun,
+    sessionCtx: turn.sessionCtx,
+    hasRepliedRef: turn.opts?.hasRepliedRef,
+  });
+  const cliThreadRequired = cliThreadingContext.sameChannelThreadRequired === true;
+  const cliCurrentThreadId = cliThreadRequired
+    ? cliThreadingContext.currentThreadTs
+    : (turn.followupRun.originatingThreadId ?? turn.sessionCtx.MessageThreadId);
+  const cliReplyToMode = cliThreadRequired
+    ? cliThreadingContext.replyToMode
+    : (turn.followupRun.originatingReplyToMode ?? turn.sessionCtx.ReplyToMode);
   const isRestartSentinelContinuation =
     turn.sessionCtx.InputProvenance?.kind === "internal_system" &&
     turn.sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
@@ -422,7 +437,7 @@ export async function runCliFallbackCandidate(
             channelContext: turn.followupRun.run.channelContext,
             currentThreadTs: cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
             currentMessageId: cliCurrentMessageId,
-            replyToMode: turn.followupRun.originatingReplyToMode ?? turn.sessionCtx.ReplyToMode,
+            replyToMode: cliReplyToMode,
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
             senderIsOwner: turn.followupRun.run.senderIsOwner,

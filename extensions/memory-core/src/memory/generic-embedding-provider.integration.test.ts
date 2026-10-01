@@ -254,15 +254,12 @@ const ZHIPU_REJECTION_BODY = JSON.stringify({
 });
 
 // Keep batching, splitting, retry classification, and timeout ownership real.
-function createMemoryEmbeddingOwner(params: {
-  provider: NonNullable<Awaited<ReturnType<typeof createEmbeddingProvider>>["provider"]>;
-  providerRuntime: Awaited<ReturnType<typeof createEmbeddingProvider>>["runtime"];
-  database: MemoryIndexDatabase;
-}) {
+function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration) {
   return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
-    provider: params.provider,
-    providerRuntime: params.providerRuntime,
-    publishedDatabase: params.database,
+    provider: generation.provider,
+    providerRuntime: generation.runtime,
+    publishedDatabase: generation.database,
+    syncProviderGeneration: generation,
     cache: { enabled: false },
     settings: { sync: {} },
     markLocalEmbeddingProviderDegraded: () => {},
@@ -271,6 +268,7 @@ function createMemoryEmbeddingOwner(params: {
     embedChunksInBatches: (
       candidates: Array<MemoryIndexWorkItem & { chunk: IndexedMemoryChunk }>,
       generation: MemorySemanticProviderGeneration,
+      maxTokens: number,
     ) => Promise<number[][]>;
   };
 }
@@ -293,11 +291,7 @@ async function createMemoryEmbeddingOwnerForServer(baseUrl: string, database: Da
     identities: [],
   };
   return {
-    owner: createMemoryEmbeddingOwner({
-      provider,
-      providerRuntime: created.runtime,
-      database: indexDatabase,
-    }),
+    owner: createMemoryEmbeddingOwner(generation),
     generation,
   };
 }
@@ -342,7 +336,11 @@ describe("memory-core embedding batch recovery over real transport", () => {
         server.baseUrl,
         database,
       );
-      const embeddings = await owner.embedChunksInBatches(distinctCandidates(100), generation);
+      const embeddings = await owner.embedChunksInBatches(
+        distinctCandidates(100),
+        generation,
+        8000,
+      );
 
       expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual([
         100, 50, 50,
@@ -377,7 +375,7 @@ describe("memory-core embedding batch recovery over real transport", () => {
         database,
       );
       await expect(
-        owner.embedChunksInBatches(distinctCandidates(100), generation),
+        owner.embedChunksInBatches(distinctCandidates(100), generation, 8000),
       ).rejects.toMatchObject({
         code: "MEMORY_EMBEDDING_OPERATION_FAILED",
         operation: "batch",

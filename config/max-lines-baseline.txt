@@ -177,7 +177,6 @@ extensions/slack/src/monitor/message-handler/prepare.test.ts
 extensions/slack/src/monitor/message-handler/prepare.ts
 extensions/slack/src/monitor/provider.ts
 extensions/slack/src/monitor/replies.test.ts
-extensions/slack/src/monitor/slash.test.ts
 extensions/slack/src/monitor/slash.ts
 extensions/slack/src/send.ts
 extensions/telegram/src/action-runtime.ts

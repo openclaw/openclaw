@@ -460,8 +460,7 @@ async function findMarkerOwnedSystemSystemdUnit(
     ) {
       continue;
     }
-    const match = /^unit:\s*(.+)$/.exec(svc.detail.trim());
-    const unitPath = match?.[1]?.trim();
+    const unitPath = svc.sourcePath;
     if (unitPath) {
       const target: SystemdServiceReadTarget = {
         scope: "system",

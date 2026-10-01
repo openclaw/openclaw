@@ -9,6 +9,7 @@ import type { AgentRunClientContext, AgentRunMessageContext } from "./command/sh
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
+import type { InstalledSkill } from "./installed-skill-catalog.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -18,6 +19,8 @@ import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Complete model-discoverable catalog, prepared by the current host. */
+  installedSkills?: readonly InstalledSkill[];
   /**
    * How this run shows a blocking question tool's prompt. Harnesses that run tools
    * through the embedded tool lifecycle reserve the prompt themselves and leave this

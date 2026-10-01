@@ -112,6 +112,19 @@ describe("typed lint Kysely prerequisites", () => {
     );
   });
 
+  it.each([
+    { name: "direct", args: direct },
+    { name: "striped", args: striped },
+  ])("reports schema generation failures before $name core lint", ({ args }) => {
+    const fixture = createLintFixture();
+    fixture.write("src/state/openclaw-state-schema.sql", "not valid SQL");
+    fixture.write("src/state/consumer.ts", "export const valid = true;\n");
+    const result = fixture.run(args);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain("syntax error");
+    expect(fs.existsSync(path.join(fixture.root, ".artifacts/kysely"))).toBe(false);
+  });
+
   it("leaves preparation to skip-prepare callers and skips syntax-only and metadata commands", () => {
     const fixture = createLintFixture();
     const skipped = fixture.run(direct, { OPENCLAW_OXLINT_SKIP_PREPARE: "1" });

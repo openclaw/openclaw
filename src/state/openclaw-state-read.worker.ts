@@ -88,6 +88,7 @@ import {
   readAgentDatabaseDeletionSnapshotInDatabase,
   readAgentDeletionJournalStatusInDatabase,
 } from "./agent-deletion-journal.read.js";
+import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
@@ -342,6 +343,9 @@ serveOwnedWorkerTasks(
                 type: command.type,
                 record: inspectCurrentConversationBindingRecordInDatabase(db, command.conversation),
               };
+            }
+            if (command.type === "backup.runs") {
+              return { type: command.type, runs: readBackupRunsInDatabase(db) };
             }
             if (isCronStateReadCommand(command)) {
               return readCronStateCommandInDatabase(db, command);
