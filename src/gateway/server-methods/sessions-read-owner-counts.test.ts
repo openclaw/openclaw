@@ -14,7 +14,8 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
-import { ensureProfileForEmail, mergeProfiles } from "../../state/user-profiles.js";
+import { mergeProfiles } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {

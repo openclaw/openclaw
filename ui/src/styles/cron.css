@@ -15,8 +15,6 @@
   overflow: visible;
 }
 
-/* ── Compact overview chrome ── */
-
 .cron-page[data-panel-mode="overview"] .settings-page {
   gap: var(--space-4);
 }
@@ -51,8 +49,6 @@
   gap: var(--space-4);
   min-width: 0;
 }
-
-/* ── List toolbar ── */
 
 .cron-toolbar {
   display: flex;
@@ -483,8 +479,6 @@
   line-height: 1.45;
 }
 
-/* ── Detail view ── */
-
 .cron-back-row {
   display: flex;
 }
@@ -591,8 +585,6 @@
   height: 13px;
 }
 
-/* ── Editor ── */
-
 /* Bare fieldset wrapper so busy-state disabling covers every section. */
 .cron-editor {
   display: flex;
@@ -693,7 +685,6 @@
   border-color: var(--danger);
 }
 
-/* Human-readable schedule line under the schedule rows. */
 .cron-schedule-summary {
   display: flex;
   align-items: center;
@@ -769,8 +760,6 @@
   margin-top: var(--space-3);
 }
 
-/* Validation status */
-
 .cron-form-status {
   border: 1px solid var(--danger-subtle);
   background: var(--danger-subtle);
@@ -832,8 +821,6 @@
   line-height: 1.4;
 }
 
-/* Job actions menu */
-
 .cron-job-menu {
   position: relative;
 }
@@ -873,8 +860,6 @@
 .cron-job-menu__item.danger {
   color: var(--danger);
 }
-
-/* ── Run history ── */
 
 .cron-runs {
   display: flex;
@@ -1149,8 +1134,6 @@
     -webkit-overflow-scrolling: touch;
   }
 }
-
-/* ── Responsive ── */
 
 @media (max-width: 900px) {
   /* Keep every table fact, but label and arrange it as a compact card. */

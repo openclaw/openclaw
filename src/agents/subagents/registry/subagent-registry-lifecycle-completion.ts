@@ -155,6 +155,7 @@ export async function completeSubagentRunAttempt(
         entry.childSessionKey,
         assertCurrent,
         entry.execution.transcriptTarget,
+        entry.childAgentId,
       );
       if (
         (completeParams.recoveryCurrent && !(await completeParams.recoveryCurrent.prepare())) ||

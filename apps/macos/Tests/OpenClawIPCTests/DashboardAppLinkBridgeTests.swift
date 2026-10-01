@@ -17,11 +17,10 @@ private final class DashboardAppLinkRecorder: NSObject, WKScriptMessageHandler {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardAppLinkBridgeTests {
-    // Event waits have no deadline of their own; the limit only bounds a lost event.
-    @Test(.timeLimit(.minutes(2)), arguments: ["_self", "_blank"])
+    @Test(arguments: ["_self", "_blank"])
     func `native app-link activation is isolated from page scripts`(_ target: String) async throws {
         let server = try await DashboardHTTPFixture.start(
             html: "<html><body><a id='launch' href='openclaw://dashboard' target='\(target)'>Open</a></body></html>")

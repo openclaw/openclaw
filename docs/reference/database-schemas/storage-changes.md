@@ -700,8 +700,14 @@ Doctor awaits quarantined Cron rows through the shared-state read worker. The
 existing query order and payload decoder remain with the Cron store; captured
 source ownership, inherited snapshots, schema errors, and missing-database
 behavior come from the existing reader. Observing quarantine never creates or
-migrates storage. Quarantine writes and Doctor repair transactions retain their
-existing owners; this read cut changes no stored representation or retention.
+migrates storage. Standalone quarantine registration captures its original source
+and serializes the recovery records before awaiting the existing Cron writer.
+Doctor waits for that registration before archiving a legacy quarantine file;
+refusal or an uncertain write outcome leaves the file available for recovery.
+The same synchronous batch kernel remains inside full-store repair transactions.
+Legacy sequence ordering, first recovery timestamps, record identities, and
+retention are unchanged. Other Doctor fingerprint and metadata transaction hooks
+retain their native owner.
 
 iMessage outbound receipt recovery reads the external Messages SQLite database
 through the shared worker broker. Its plugin owns the read-only GUID queries;
@@ -2156,6 +2162,15 @@ not authorize writes: live caller admission and transaction-held session and
 cross-store catalog checks remain with the mutation owners. Process-local
 incognito databases retain their native owner. Schema, stored bytes, retention,
 and update behavior are unchanged.
+
+Upstream session monitoring uses its scheduler scope to cancel future probes and
+join accepted work. Session reads use the existing read worker; event recording
+and marker settlement revalidate the idle session at transaction and commit
+admission. The shared-state worker compares the complete scanned upstream link
+before advancing its marker or removing a missing source. Durable event insertion
+or deduplication still precedes marker settlement. Failed event recording leaves
+the marker available for the next probe. Schemas, stored bytes, retention, provider
+contracts, and update behavior are unchanged; no migration is required.
 
 ## Review checkpoint for material changes
 

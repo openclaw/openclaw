@@ -70,7 +70,6 @@ beforeEach(() => {
       },
     },
   };
-  setRuntimeConfigSnapshot(config);
 });
 
 afterEach(() => {
@@ -79,6 +78,7 @@ afterEach(() => {
 });
 
 function run(override: { provider?: string; model?: string }) {
+  setRuntimeConfigSnapshot(config);
   const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
   const runtime = createGatewaySubagentRuntime(
     () => context,

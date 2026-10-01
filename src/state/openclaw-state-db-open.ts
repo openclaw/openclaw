@@ -22,6 +22,7 @@ import {
   configureSqlitePreSchemaPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerExistingDatabaseIdentity } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -131,7 +132,7 @@ function openNativeStateDatabase(
         !current.isFile() ||
         current.dev !== original.dev ||
         current.ino !== original.ino ||
-        current.birthtimeNs !== original.birthtimeNs
+        readDatabaseIdentityBirthtime(current) !== readDatabaseIdentityBirthtime(original)
       ) {
         throw new Error(`Existing shared-state database generation changed: ${params.pathname}`);
       }

@@ -460,13 +460,15 @@ export function bindPreparedUserProfileIdentity(
     assertCurrent: (profileId: string) => void;
     release: () => void;
   },
+  emailTargets?: readonly string[],
 ): PreparedUserProfileIdentity {
   const { rows, bindings } = catalog;
-  const initial = [...bindings.byEmail.values()].filter(
-    (binding) => binding.profileId === profileId,
-  );
+  const initial =
+    emailTargets === undefined
+      ? [...bindings.byEmail.values()].filter((binding) => binding.profileId === profileId)
+      : [...new Set(emailTargets)].map((email) => bindings.byEmail.get(email));
   const ids = Object.freeze(
-    initial.flatMap((binding) => (binding.bindingId ? [binding.bindingId] : [])).toSorted(),
+    initial.flatMap((binding) => (binding?.bindingId ? [binding.bindingId] : [])).toSorted(),
   );
   const assertCurrent = (requiredEmailBindingIds: readonly string[] = []) => {
     catalog.assertCurrent(profileId);
@@ -485,7 +487,11 @@ export function bindPreparedUserProfileIdentity(
     readCurrentProfile,
     get emailBindingIds() {
       assertCurrent();
-      if (initial.some((binding) => binding.bindingId === null)) {
+      if (
+        initial.some(
+          (binding) => !binding || binding.profileId !== profileId || binding.bindingId === null,
+        )
+      ) {
         throw new UserProfileNotFoundError(profileId);
       }
       return ids;

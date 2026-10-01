@@ -557,6 +557,12 @@ checkout directory's name.
 Registering the same resolved repository root again returns its existing project ID and
 display name. Passing a different `name` does not rename an existing project.
 
+`projects.list` returns recorded projects without probing Git. Operators with
+`operator.write` can request `{"includeObserved":true}` to discover additional
+checkouts from visible sessions and managed worktrees. Concurrent discovery of
+the same checkout set shares one bounded Git pass; subsequent requests read
+fresh repository metadata, including external remote changes and moved checkouts.
+
 **Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL. For a remote destination, creation records that source and the runner fetches it during dispatch; no Gateway project clone is required. For Gateway execution, the picker clones into the Gateway-managed projects area. Recent repository sources retain their URL without inventing a local path. Public repository search and cloning work anonymously. Private remote checkout uses the effective shared `tools.github` identity; the discovery credential below only grants picker access. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. When it is omitted, the Gateway still uses its shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback from the shared process environment. When it is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
 
 Use the Effort menu to choose Fast Mode before creating a session. New Session persists that choice before the first local or remote turn starts.

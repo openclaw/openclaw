@@ -444,10 +444,10 @@ export async function startGatewayCoreRuntime(input: {
       listPluginNodeCapabilities(pluginRuntime.registry),
       isCoreCanvasHostEnabled(getRuntimeConfig()),
     );
-  const prepareAttachedPluginRuntime = async (loaded: {
-    pluginRegistry: typeof pluginRuntime.registry;
-    gatewayMethods: string[];
-  }) => {
+  const prepareAttachedPluginRuntime = async (
+    loaded: { pluginRegistry: typeof pluginRuntime.registry; gatewayMethods: string[] },
+    trackActivationCleanup: (completion: Promise<void>) => void,
+  ) => {
     const { activatePluginRegistry } = await import("../plugins/loader-shared.js");
     const nextMethodRegistry = buildAttachedGatewayMethodRegistry(loaded.pluginRegistry);
     const nextMethods = uniqueStrings([
@@ -466,6 +466,7 @@ export async function startGatewayCoreRuntime(input: {
           "gateway-bindable",
           runtime.pluginWorkspaceDir,
           pluginRuntime.registry,
+          trackActivationCleanup,
         );
         pluginRuntime.publish(loaded.pluginRegistry);
         pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;

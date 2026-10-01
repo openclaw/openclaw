@@ -59,6 +59,7 @@ const PUBLIC_CODES = new Set<string>([
   "restart-unavailable",
   ...UPDATE_ENVIRONMENT_FAILURE_REASONS,
   "swap-failed",
+  "package-integrity-changed",
   "baseline-scan-failed",
   "verification-result-missing",
   "finalization-timeout",

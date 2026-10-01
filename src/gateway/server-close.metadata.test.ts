@@ -53,7 +53,6 @@ it.each(["success", "failure"] as const)(
           pluginMetadataSnapshot: kernel.getPluginMetadataSnapshot(),
           resolveGatewayContext: kernel.resolvePluginGatewayContext,
           loadIntent: "startup",
-          log: { info() {}, warn() {}, error() {}, debug() {} },
           env: fixture.state.env,
         });
       } finally {
@@ -168,7 +167,7 @@ it.each(["success", "failure"] as const)(
         nextConfig: first.cfgAtStart,
         sourceConfig: first.cfgAtStart,
         changedPaths: [],
-        prepareConfigEffects: () => async () => {},
+        prepareConfigEffects: () => ({ retire: () => {}, rollback: async () => {} }),
         pluginLifecycle: {
           reason: "reload",
           operationId: "concurrent-bootstrap",

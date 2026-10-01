@@ -20,6 +20,7 @@ import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
+  splitFailoverAggregateLegs,
 } from "./message-patterns.js";
 import {
   classifyProviderRequestFacets,
@@ -107,9 +108,20 @@ export function renderRateLimitOrOverloadedCopy(params: {
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
-  return params.reason === "overloaded"
-    ? OVERLOADED_ERROR_USER_MESSAGE
-    : (extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE);
+  if (params.reason === "overloaded") {
+    return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  const direct = extractProviderRateLimitMessage(raw);
+  if (direct) {
+    return direct;
+  }
+  for (const leg of splitFailoverAggregateLegs(raw)) {
+    const fromLeg = extractProviderRateLimitMessage(leg);
+    if (fromLeg) {
+      return fromLeg;
+    }
+  }
+  return RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
@@ -404,6 +416,15 @@ export function renderRateLimitReplyCopy(params: {
       return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
     }
     return RATE_LIMIT_RETRY_MESSAGE;
+  }
+  for (const attempt of attempts) {
+    if (attempt.reason !== "rate_limit" || !attempt.error) {
+      continue;
+    }
+    const hint = extractProviderRateLimitMessage(attempt.error);
+    if (hint) {
+      return params.sanitizeText?.(attempt.error) ?? hint;
+    }
   }
   const expiry = params.cooldownExpiry;
   const nowMs = params.nowMs ?? Date.now();

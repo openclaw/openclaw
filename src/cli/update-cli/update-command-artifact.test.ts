@@ -304,7 +304,7 @@ it.each([
     }
     const activated = action === "activate" || action === "directory";
     expect(await fs.readdir(canonicalTmp)).toEqual([]);
-    expect(await fs.readdir(canonicalState)).toEqual(
+    expect((await fs.readdir(canonicalState)).toSorted()).toEqual(
       activated ? ["openclaw.json", "openclaw.json.pre-update"] : ["openclaw.json"],
     );
     expect(isolatedHome).toBeDefined();

@@ -93,7 +93,7 @@ export function registerQueuedReservationFailureTests({
         return ["abort refusal", "claim release"].includes(failure);
       },
       abortEmbeddedAgentRun: () => !["abort refusal", "claim release"].includes(failure),
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
     const reservationReleases: Promise<void>[] = [];
     try {

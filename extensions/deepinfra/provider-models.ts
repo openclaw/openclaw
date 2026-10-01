@@ -285,7 +285,6 @@ async function loadDeepInfraSurfaces(): Promise<DeepInfraDiscoveredCatalog> {
         providerId: "deepinfra",
         endpoint: DEEPINFRA_MODELS_URL,
         timeoutMs: DISCOVERY_TIMEOUT_MS,
-        buildRequestHeaders: () => ({ Accept: "application/json" }),
         auditContext: "deepinfra-model-discovery",
         fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
       });
@@ -316,7 +315,6 @@ async function discoverDeepInfraPricing() {
         providerId: "deepinfra",
         endpoint: DEEPINFRA_PRICING_URL,
         timeoutMs: DISCOVERY_TIMEOUT_MS,
-        buildRequestHeaders: () => ({ Accept: "application/json" }),
         auditContext: "deepinfra-pricing-discovery",
         fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
         readRows: (body) => {

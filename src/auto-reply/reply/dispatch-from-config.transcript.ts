@@ -1,9 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  type SessionTranscriptDeliveryMirror,
-} from "../../config/sessions/transcript.js";
+import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";

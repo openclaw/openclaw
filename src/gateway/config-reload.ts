@@ -34,7 +34,10 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import type { GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { hashStableJson } from "../plugins/installed-plugin-index-hash.js";
-import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  withPluginInstallRecords,
+} from "../plugins/installed-plugin-index-records.js";
 import {
   getPluginRuntimeGeneration,
   PluginRuntimeApplicationError,
@@ -59,6 +62,10 @@ import {
   resolvePluginInstallReloadMetadata,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
+import {
+  createConfigPluginDrainTracker,
+  isConfigReloadSuperseded,
+} from "./config-reload-plugin-drain.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import type {
   GatewayConfigReloader,
@@ -82,24 +89,6 @@ const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
 const LEASE_RETRY_INITIAL_DELAY_MS = 250;
 const LEASE_RETRY_MAX_DELAY_MS = 5_000;
-
-function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
-  return {
-    plugins: {
-      installs: records,
-    },
-  };
-}
-
-function isConfigReloadSuperseded(error: unknown): boolean {
-  // Only completed rollback preserves the direct cause. Cleanup failures and
-  // published replacements must settle instead of transferring the write.
-  const cause =
-    error instanceof PluginRuntimeApplicationError && !error.details.committed
-      ? error.cause
-      : error;
-  return cause instanceof GatewayConfigReloadSupersededError;
-}
 
 export function startGatewayConfigReloader(
   opts: GatewayConfigReloaderOptions,
@@ -246,6 +235,7 @@ export function startGatewayConfigReloader(
         installRecords: PluginInstallRecords;
       }
     | undefined;
+  const pluginDrain = createConfigPluginDrainTracker();
   const readPluginInstallRecords = opts.readPluginInstallRecords ?? readCurrentInstallRecords;
   const appliedRevision = createConfigAppliedRevisionTracker({
     onConfigApplied: opts.onConfigApplied,
@@ -506,8 +496,8 @@ export function startGatewayConfigReloader(
     );
     await checkpoint();
     assertCurrent();
-    const previousPluginInstallConfig = asPluginInstallConfig(currentPluginInstallRecords);
-    const nextPluginInstallConfig = asPluginInstallConfig(nextPluginInstallRecords);
+    const previousPluginInstallConfig = withPluginInstallRecords({}, currentPluginInstallRecords);
+    const nextPluginInstallConfig = withPluginInstallRecords({}, nextPluginInstallRecords);
     const pluginInstallRecordChangedPaths = diffConfigPaths(
       previousPluginInstallConfig,
       nextPluginInstallConfig,
@@ -694,6 +684,7 @@ export function startGatewayConfigReloader(
     };
     if (changedPaths.length === 0 && !pluginLifecycle) {
       await commitReloadBaseline();
+      pluginDrain.applied();
       publishedSource?.commit?.();
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
       settleRuntimeApplication();
@@ -757,6 +748,7 @@ export function startGatewayConfigReloader(
       return completeApplication();
     }
 
+    pluginDrain.assertCanApply(plan);
     // No-op plans also publish the runtime snapshot before its applied receipt.
     const applyRuntime = isNoopGatewayReloadPlan(plan) ? opts.onNoopConfigCommit : opts.onHotReload;
     await opts.onConfigChange?.(plan, nextConfig);
@@ -765,6 +757,7 @@ export function startGatewayConfigReloader(
       applicationStatus = await applyRuntime(plan, nextConfig, ownership, nextSourceConfig);
     } catch (error) {
       ownership.rollbackRuntimeEnv();
+      pluginDrain.recordFailure(plan, error);
       throw error;
     }
     await checkpoint();
@@ -776,6 +769,7 @@ export function startGatewayConfigReloader(
       typeof applicationStatus === "object" && applicationStatus.status === "applied"
         ? applicationStatus.runtime
         : undefined;
+    pluginDrain.applied(plan, runtime);
     if (runtime) {
       completedPluginApplication = {
         runtime,
@@ -1061,8 +1055,10 @@ export function startGatewayConfigReloader(
       }
       if (superseded) {
         opts.log.info(`config reload superseded: ${String(err)}`);
-      } else {
+      } else if (pluginDrain.shouldReport(err)) {
         opts.log.error(`config reload failed: ${String(err)}`);
+      } else {
+        opts.log.info("config reload deferred: retry the failed plugin reload with --wait");
       }
     } finally {
       running = false;

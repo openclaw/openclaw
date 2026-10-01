@@ -8,10 +8,7 @@ import {
 } from "@openclaw/fs-safe/watch";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  resolveFsObservationMode,
-  resolveFsObservationIntervalMs,
-} from "../../infra/fs-observation-mode.js";
+import { resolveFsObservationMode } from "../../infra/fs-observation-mode.js";
 import { admitObservationRoot } from "../../infra/fs-observation-root.js";
 import { readObservationSnapshot } from "../../infra/fs-observation-snapshot.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -24,7 +21,10 @@ import {
   type WorkspaceSkillSourcePlan,
 } from "../loading/workspace-skill-sources.js";
 import { createSkillFileScheduler } from "./refresh-file-stability.js";
-import { skillsObservationScope } from "./refresh-observation-source.js";
+import {
+  skillsObservationScope,
+  skillsObservationTransport,
+} from "./refresh-observation-source.js";
 import {
   closeRemoteSkillsWatchers,
   disposeRemoteSkillsWatcher,
@@ -304,11 +304,11 @@ function createSkillsPathWatcher(
       if (!isCurrent()) {
         return;
       }
-      const mode = resolveFsObservationMode();
+      const { mode, pollIntervalMs, reportHealth } = skillsObservationTransport(target.path);
       subscription = watch(authority, {
         scopes: [scope],
         mode,
-        pollIntervalMs: resolveFsObservationIntervalMs(),
+        pollIntervalMs,
         signal: lifetime.signal,
         exclude: (entry) => {
           if (plannedScope?.kind === "entry" && entry.path === plannedScope.path) {
@@ -402,6 +402,9 @@ function createSkillsPathWatcher(
           }
         },
         onHealth: (health) => {
+          if (isCurrent()) {
+            reportHealth(health);
+          }
           if (health.state === "starting" || health.state === "reconciling") {
             scannedKinds = new Map();
           } else if (health.state === "ready") {

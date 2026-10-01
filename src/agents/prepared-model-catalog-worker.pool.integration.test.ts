@@ -4,7 +4,20 @@ import path from "node:path";
 import { setImmediate as checkpoint } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
+import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginMetadataSnapshotCache, retirePluginCache } from "../plugins/plugin-cache.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -36,9 +49,23 @@ import {
   usePreparedCatalogWorkerFixtures,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir } = usePreparedCatalogWorkerFixtures();
+const { makeTempDir, observeCatalogEntry: observeEntry } = usePreparedCatalogWorkerFixtures({
+  observeCatalogWork: true,
+});
 
-const createFleetFixture = createCatalogFleetFixture(makeTempDir);
+let receipts: FixtureReceiptChannel;
+const createFleetFixture = createCatalogFleetFixture(makeTempDir, () => receipts.broadcastName);
+
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+function observeCatalogEntry(marker: string, agentDir: string) {
+  return observeEntry(receipts, { marker, agentDir });
+}
 
 describe("Gateway catalog worker pool", () => {
   beforeEach(() => {
@@ -92,7 +119,9 @@ describe("Gateway catalog worker pool", () => {
     }
   });
 
-  it("retains only the admitted renewal failure when queued auth observes pool closure first", async () => {
+  it("retains only the admitted renewal failure when queued auth observes pool closure first", async ({
+    signal,
+  }) => {
     const spawned: Worker[] = [];
     const workerChannel = channel("worker_threads");
     const recordWorker = (message: unknown) => {
@@ -141,11 +170,11 @@ describe("Gateway catalog worker pool", () => {
         agentDir: fixture.snapshots[0]!.agentDir,
       };
       expect(custody.threadId).toBeGreaterThan(0);
-      const before = fs.readFileSync(fixture.marker, "utf8");
+      const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
       fs.writeFileSync(`${fixture.marker}.hold`, "");
       renewal = fixture.snapshots[0]!.loadFullModelCatalog!({ refresh: true });
       void renewal.catch(() => undefined);
-      await expect.poll(() => fs.readFileSync(fixture.marker, "utf8")).not.toBe(before);
+      await entered(renewal, signal);
       expect(JSON.parse(fs.readFileSync(`${fixture.marker}.worker`, "utf8"))).toEqual(custody);
       expect(fixture.snapshots[0]!.readFullModelCatalog!()).toBe(accepted[0]);
       queuedAuth = loadPreparedModelRuntimeAuth(fixture.snapshots[1]!, {
@@ -269,11 +298,11 @@ describe("Gateway catalog worker pool", () => {
             agentDir: original.agentDir,
             config: fixture.config,
           })!;
-        const before = fs.readFileSync(fixture.marker, "utf8");
+        const entered = observeCatalogEntry(fixture.marker, original.agentDir);
         fs.writeFileSync(`${fixture.marker}.hold`, "");
         renewal = original.loadFullModelCatalog!({ refresh: true });
         void renewal.catch(() => undefined);
-        await expect.poll(() => fs.readFileSync(fixture.marker, "utf8")).not.toBe(before);
+        await entered(renewal, signal);
         // The foreground deadline returns retained data while acquisition stays behind the barrier.
         await expect(renewal).resolves.toBe(accepted);
         const worker = spawned[0]!;
@@ -403,7 +432,7 @@ describe("Gateway catalog worker pool", () => {
 
   it.for(["shutdown", "plugin retirement"])(
     "does not report renewal failure during warm %s",
-    async (reason) => {
+    async (reason, { signal }) => {
       const fixture = await createFleetFixture(undefined, true);
       await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
       const failures: Error[] = [];
@@ -412,14 +441,14 @@ describe("Gateway catalog worker pool", () => {
           failures.push(event.error);
         }
       });
-      const before = fs.readFileSync(fixture.marker, "utf8");
+      const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
       fs.writeFileSync(`${fixture.marker}.hold`, "");
       const renewal = fixture.snapshots[0]!.loadFullModelCatalog!({ refresh: true });
       void renewal.catch(() => undefined);
       let queued: ReturnType<typeof loadCompletedFullCatalog> | undefined;
       let closing: Promise<void> | ReturnType<typeof retirePluginCache> | undefined;
       try {
-        await expect.poll(() => fs.readFileSync(fixture.marker, "utf8")).not.toBe(before);
+        await entered(renewal, signal);
         queued = fixture.snapshots[1]!.loadFullModelCatalog!({ refresh: true });
         void queued.catch(() => undefined);
         closing =
@@ -452,7 +481,7 @@ describe("Gateway catalog worker pool", () => {
     },
   );
 
-  it("retires a queued agent without closing its sibling catalog worker", async () => {
+  it("retires a queued agent without closing its sibling catalog worker", async ({ signal }) => {
     const fixture = await createFleetFixture();
     await Promise.all(
       fixture.snapshots.map((snapshot) =>
@@ -467,15 +496,13 @@ describe("Gateway catalog worker pool", () => {
       pendingTasks: 0,
     });
     const marker = fixture.marker;
-    const before = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "";
+    const entered = observeCatalogEntry(marker, fixture.snapshots[0]!.agentDir);
     fs.writeFileSync(`${marker}.hold`, "");
     const first = loadCompletedFullCatalog(fixture.snapshots[0]!, { refresh: true });
     let retired: ReturnType<typeof loadPreparedModelRuntimeAuth> | undefined;
     let sibling: ReturnType<typeof loadPreparedModelRuntimeAuth> | undefined;
     try {
-      await expect
-        .poll(() => (fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : ""))
-        .not.toBe(before);
+      await entered(first, signal);
       expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
         activeTasks: 1,
         pendingTasks: 1,
@@ -566,10 +593,12 @@ describe("Gateway catalog worker pool", () => {
     }
   });
 
-  it("keeps replacement preparation alive when the preceding catalog finishes", async () => {
+  it("keeps replacement preparation alive when the preceding catalog finishes", async ({
+    signal,
+  }) => {
     const fixture = await createFleetFixture();
     await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
-    const before = fs.readFileSync(fixture.marker, "utf8");
+    const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
     fs.writeFileSync(`${fixture.marker}.hold`, "");
     const previousCatalog = fixture.snapshots[0]!.loadFullModelCatalog!({ refresh: true });
     void previousCatalog.catch(() => {});
@@ -586,7 +615,7 @@ describe("Gateway catalog worker pool", () => {
       });
     let publication: Promise<void> | undefined;
     try {
-      await expect.poll(() => fs.readFileSync(fixture.marker, "utf8")).not.toBe(before);
+      await entered(previousCatalog, signal);
       publication = refreshPreparedModelRuntimeSnapshots(fixture.config, {
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
@@ -729,22 +758,22 @@ describe("Gateway catalog worker pool", () => {
       }
     },
   );
-  it("keeps a queued deadline local and accepts the same agent's next request", async () => {
+  it("keeps a queued deadline local and accepts the same agent's next request", async ({
+    signal,
+  }) => {
     const fixture = await createFleetFixture();
     await Promise.all(
       fixture.snapshots.map((snapshot) =>
         loadPreparedModelRuntimeAuth(snapshot, { providerIds: [] }),
       ),
     );
-    const before = fs.existsSync(fixture.marker) ? fs.readFileSync(fixture.marker, "utf8") : "";
+    const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
     fs.writeFileSync(`${fixture.marker}.hold`, "");
     const first = loadCompletedFullCatalog(fixture.snapshots[0]!, { refresh: true });
     let expired: ReturnType<typeof loadPreparedModelRuntimeAuth> | undefined;
     let duplicate: ReturnType<typeof loadPreparedModelRuntimeAuth> | undefined;
     try {
-      await expect
-        .poll(() => (fs.existsSync(fixture.marker) ? fs.readFileSync(fixture.marker, "utf8") : ""))
-        .not.toBe(before);
+      await entered(first, signal);
       // The already-created pool owns native timers. Advance only the queued caller's outer
       // deadline while the sibling's worker and its admitted execution budget remain live.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

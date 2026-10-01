@@ -7,26 +7,15 @@ import { Header } from "tar";
 import { afterEach, expect, it, vi } from "vitest";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import {
-  createPackagedOwnerLoader as createLoader,
   verifyPackageMember,
   type PackagedOwnerEvidence,
 } from "../../scripts/lib/windows-repair-package.mts";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
-const loaders = new Set<Awaited<ReturnType<typeof createLoader>>>();
-afterEach(() => {
-  for (const loader of loaders) {
-    loader[Symbol.dispose]();
-  }
-  loaders.clear();
-});
-async function createPackagedOwnerLoader(packageRoot: string, tarball: string) {
-  const loader = await createLoader(packageRoot, tarball);
-  loaders.add(loader);
-  return loader;
-}
+const nodeExecPath = requireNodeTool("node");
 
 async function fixture(
   files: Record<string, string>,
@@ -63,15 +52,44 @@ async function fixture(
   return { packageRoot, tarball };
 }
 
-async function loadPackagedOwner(
+async function inspectPackagedOwner(
   packageRoot: string,
   tarball: string,
-  stem: string,
-  names: string[],
-  evidence: PackagedOwnerEvidence[],
-) {
-  const loadOwner = await createPackagedOwnerLoader(packageRoot, tarball);
-  return loadOwner(stem, names, evidence);
+  stem = "",
+  names: string[] = [],
+): Promise<{
+  loaderType: string;
+  values: Record<string, unknown>;
+  evidence: PackagedOwnerEvidence[];
+}> {
+  // Package integrity hooks belong to the Node-hosted repair tooling.
+  return JSON.parse(
+    execFileSync(
+      nodeExecPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `const { createPackagedOwnerLoader } = await import(process.argv[1]);
+         const loadOwner = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
+         const evidence = [];
+         const values = {};
+         try {
+           if (process.argv[4]) {
+             const names = JSON.parse(process.argv[5]);
+             const owner = await loadOwner(process.argv[4], names, evidence);
+             for (const name of names) values[name] = owner[name]();
+           }
+           process.stdout.write(JSON.stringify({ loaderType: typeof loadOwner, values, evidence }));
+         } finally { loadOwner[Symbol.dispose](); }`,
+        pathToFileURL(path.resolve("scripts/lib/windows-repair-package.mts")).href,
+        packageRoot,
+        tarball,
+        stem,
+        JSON.stringify(names),
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    ),
+  );
 }
 
 it("verifies a package member without system tar and rejects changed installed bytes", async () => {
@@ -140,16 +158,12 @@ it.each([
         }
       : { "executor-fixture.mjs": rootSource };
     const { packageRoot, tarball } = await fixture(files);
-    const evidence: PackagedOwnerEvidence[] = [];
-    const owner = await loadPackagedOwner(
-      packageRoot,
-      tarball,
-      "executor",
-      ["admit", "finish"],
-      evidence,
-    );
-    expect(owner.admit?.()).toBe("owned");
-    expect(owner.finish?.()).toBe("finished");
+    const { evidence, values } = await inspectPackagedOwner(packageRoot, tarball, "executor", [
+      "admit",
+      "finish",
+    ]);
+    expect(values.admit).toBe("owned");
+    expect(values.finish).toBe("finished");
     const expected: PackagedOwnerEvidence[] = [
       {
         file: "dist/executor-fixture.mjs",
@@ -180,7 +194,7 @@ it("authenticates every selected chunk before importing any owner", async () => 
     'function finish() { return "changed"; } export { finish as f };',
   );
   await expect(
-    loadPackagedOwner(packageRoot, tarball, "executor", ["admit", "finish"], []),
+    inspectPackagedOwner(packageRoot, tarball, "executor", ["admit", "finish"]),
   ).rejects.toThrow("Installed module differs from the bound package");
 });
 
@@ -230,7 +244,7 @@ it.each([
           ? 'module.exports = "changed";'
           : 'export const value = "changed";');
     const result = spawnSync(
-      process.execPath,
+      nodeExecPath,
       [
         "--input-type=module",
         "-e",
@@ -288,7 +302,7 @@ it.each(["alias", "self", "absolute"])(
       'console.log("UNVERIFIED_MODULE_EVALUATED"); module.exports = "changed";',
     );
     const result = spawnSync(
-      process.execPath,
+      nodeExecPath,
       [
         "--input-type=module",
         "-e",
@@ -330,7 +344,7 @@ it("scopes import hooks to their loader lifetime while preserving external depen
   await fs.writeFile(path.join(external, "package.json"), '{"name":"external","main":"index.cjs"}');
   await fs.writeFile(path.join(external, "index.cjs"), 'module.exports = "-external";');
   const result = spawnSync(
-    process.execPath,
+    nodeExecPath,
     [
       "--input-type=module",
       "-e",
@@ -374,7 +388,7 @@ it.each(["added", "missing", "pending lifecycle", "nested dependency"])(
     } else {
       await fs.rm(path.join(packageRoot, "dist", "implementation.mjs"));
     }
-    await expect(createPackagedOwnerLoader(packageRoot, tarball)).rejects.toThrow(
+    await expect(inspectPackagedOwner(packageRoot, tarball)).rejects.toThrow(
       kind === "missing" ? "Missing installed package members" : "Unbound installed package member",
     );
   },
@@ -408,9 +422,9 @@ it.each(["original", "changed", "missing", "added", "nested shadow"])(
       await fs.mkdir(shadow, { recursive: true });
       await fs.writeFile(path.join(shadow, "index.js"), "module.exports = 3;");
     }
-    const loaded = createPackagedOwnerLoader(packageRoot, tarball);
+    const loaded = inspectPackagedOwner(packageRoot, tarball);
     if (kind === "original") {
-      await expect(loaded).resolves.toBeTypeOf("function");
+      await expect(loaded).resolves.toMatchObject({ loaderType: "function" });
     } else {
       await expect(loaded).rejects.toThrow(
         kind === "changed"
@@ -452,6 +466,7 @@ it("authenticates a bundled package after npm pack and offline installation", as
     [consumer, ["install", "--no-audit", "--no-fund", tarball]],
   ] as const) {
     const npm = resolveNpmRunner({
+      execPath: nodeExecPath,
       npmArgs: [...args, "--offline", "--ignore-scripts", "--cache", path.join(root, "npm-cache")],
     });
     const result = spawnSync(npm.command, npm.args, {
@@ -465,12 +480,14 @@ it("authenticates a bundled package after npm pack and offline installation", as
     expect(result.status, result.stderr || result.stdout).toBe(0);
   }
   const installed = path.join(consumer, "node_modules", "proof-fixture");
-  await expect(createPackagedOwnerLoader(installed, tarball)).resolves.toBeTypeOf("function");
+  await expect(inspectPackagedOwner(installed, tarball)).resolves.toMatchObject({
+    loaderType: "function",
+  });
   await fs.writeFile(
     path.join(installed, "node_modules", "bundled", "index.js"),
     "module.exports = 2;",
   );
-  await expect(createPackagedOwnerLoader(installed, tarball)).rejects.toThrow(
+  await expect(inspectPackagedOwner(installed, tarball)).rejects.toThrow(
     "Installed module differs from the bound package",
   );
 });
@@ -482,7 +499,7 @@ it("rejects a linked package directory before loading an owner", async () => {
   const originalDist = path.join(packageRoot, "..", "original-dist");
   await fs.rename(path.join(packageRoot, "dist"), originalDist);
   await fs.symlink(originalDist, path.join(packageRoot, "dist"), "junction");
-  await expect(createPackagedOwnerLoader(packageRoot, tarball)).rejects.toThrow(
+  await expect(inspectPackagedOwner(packageRoot, tarball)).rejects.toThrow(
     "Unbound installed package member: dist",
   );
 });
@@ -496,7 +513,7 @@ it.each(["absent", "ambiguous"])("refuses an %s packaged authority owner", async
           "executor-second.mjs": "function admit() {} export { admit as b };",
         };
   const { packageRoot, tarball } = await fixture(files);
-  await expect(loadPackagedOwner(packageRoot, tarball, "executor", ["admit"], [])).rejects.toThrow(
+  await expect(inspectPackagedOwner(packageRoot, tarball, "executor", ["admit"])).rejects.toThrow(
     "Expected one packaged executor owner",
   );
 });

@@ -53,6 +53,9 @@ OpenClaw distinguishes started work from requested work:
 - Validation or policy outcomes finalized before the parallel checkpoint remain truthful. Only executable calls that did not start receive the steering skip result.
 - The transcript stays append-only and structurally paired: assistant tool calls, real or synthetic tool results, then the steering user message.
 
+A tool skipped for steering does not trigger a failure warning. A genuine tool
+failure remains reportable even if a later call is skipped.
+
 Stopping already-running work is a different intent from redirecting future work. Use `/queue interrupt` (or `/stop`) when the newest message should abort the active run instead of steering it.
 
 ## Modes

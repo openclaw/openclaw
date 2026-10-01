@@ -8,10 +8,10 @@ import {
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
+import type { DeviceBootstrapOperations } from "./device-bootstrap.worker-kernel.js";
 import type {
   CloudWorkerSetupMutationAdmission,
   DeviceBootstrapMutationAdmission,
-  DeviceBootstrapOperations,
 } from "./device-bootstrap.worker-types.js";
 import { loadBoundDeviceBootstrapContextReadOnly } from "./device-pairing-store-readonly.js";
 import {

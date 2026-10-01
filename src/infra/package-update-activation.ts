@@ -129,7 +129,12 @@ export async function preparePackageActivation(
     return undefined;
   }
   const prepared = await preparePackageActivationJournal({ ...params, options }, assertOriginal);
-  const owner = createPublicationOwner(prepared.anchor, prepared.journal, assertOriginal);
+  const owner = createPublicationOwner(
+    prepared.anchor,
+    prepared.journal,
+    assertOriginal,
+    prepared.initial,
+  );
   return { ...prepared, ...owner };
 }
 

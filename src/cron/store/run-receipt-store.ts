@@ -408,6 +408,7 @@ export function claimCronRunReceiptInDatabase(params: {
         config_revision: handle.configRevision,
         agent_id: handle.agentId,
         request_run_id: params.prepared.requestRunId ?? null,
+        delivery_attempt_state: "not-started",
         status: "running",
         owner_pid: handle.ownerPid,
         owner_start_time: handle.ownerStartTime,

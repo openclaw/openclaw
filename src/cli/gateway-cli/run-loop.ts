@@ -179,7 +179,7 @@ export async function runGatewayLoop(params: {
     // Graceful signal/restart paths call process.exit(), which skips beforeExit.
     if (!foregroundUpdateClosed) {
       await eagerLifecycleRuntime
-        .stopGatewayManagedProviderLocalServices()
+        .stopActiveManagedProviderLocalServices()
         .catch((error: unknown) => {
           gatewayLog.warn(`managed local service shutdown failed: ${formatErrorMessage(error)}`);
         });
@@ -397,7 +397,7 @@ export async function runGatewayLoop(params: {
     if (foregroundHandoff) {
       // Finish lazy old-runtime cleanup while activation is still fenced by the helper.
       try {
-        await eagerLifecycleRuntime.stopGatewayManagedProviderLocalServices();
+        await eagerLifecycleRuntime.stopActiveManagedProviderLocalServices();
       } catch (error) {
         gatewayLog.error(
           `foreground update cancelled after provider cleanup failed: ${formatErrorMessage(error)}`,

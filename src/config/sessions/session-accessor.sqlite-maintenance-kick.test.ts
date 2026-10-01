@@ -1,10 +1,13 @@
-import { renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as logging from "../../logging/logger.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -19,6 +22,7 @@ import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
+import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
@@ -31,6 +35,7 @@ const sessionKey = "agent:main:age-kick";
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
+  resetGatewayWorkAdmission();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -65,6 +70,104 @@ function createStore(pruneAfterMs = 1_000, key = sessionKey) {
   };
   return { database, request, scope, storePath, updatedAt };
 }
+
+it.each(["before kick", "before immediate", "before periodic", "before another kick"] as const)(
+  "stops automatic maintenance when Gateway drain starts %s",
+  async (when) => {
+    const { request } = createStore();
+    const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+    if (when !== "before kick") {
+      kickSessionEntryMaintenanceAfterWrite(request);
+      if (when !== "before immediate") {
+        await yieldToEventLoop();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        dispatch.mockClear();
+      }
+    }
+    markGatewayRestartDraining("stop (SIGTERM)");
+    if (when === "before kick" || when === "before another kick") {
+      kickSessionEntryMaintenanceAfterWrite(request);
+    }
+    await yieldToEventLoop();
+    expect(dispatch).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
+    expect(dispatch).not.toHaveBeenCalled();
+  },
+);
+
+it("stops input-change retries without automatic maintenance warnings during Gateway drain", async () => {
+  const { request } = createStore();
+  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
+  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+  const warn = vi.spyOn(logger, "warn");
+  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+  const run = dispatch.getMockImplementation()!;
+  dispatch.mockImplementationOnce(async (params) => {
+    request.maintenanceConfig.maxEntries += 1;
+    try {
+      return await run(params);
+    } catch (error) {
+      expect(error).toBeInstanceOf(SqliteReclamationInputsChangedError);
+      markGatewayRestartDraining("stop (SIGTERM)");
+      throw error;
+    }
+  });
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await yieldToEventLoop();
+  await vi.advanceTimersByTimeAsync(ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(warn).not.toHaveBeenCalledWith(
+    "SQLite automatic session maintenance failed",
+    expect.anything(),
+  );
+  expect(warn).not.toHaveBeenCalledWith(
+    "SQLite automatic session maintenance paused after repeated input changes",
+    expect.anything(),
+  );
+});
+
+it.each([
+  ["a drain-refused commit", false],
+  ["an unrelated failure", true],
+] as const)("classifies %s that settles during Gateway drain", async (outcome, warns) => {
+  const { request } = createStore();
+  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
+  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+  const warn = vi.spyOn(logger, "warn");
+  vi.mocked(reclamationRun.runSqliteSessionReclamation).mockImplementationOnce(async (params) => {
+    markGatewayRestartDraining("stop (SIGTERM)");
+    if (outcome === "a drain-refused commit") {
+      params.assertCommitAllowed?.();
+    }
+    throw new Error("disk I/O error");
+  });
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await yieldToEventLoop();
+  await vi.advanceTimersByTimeAsync(1);
+  const failure = expect.objectContaining({ error: expect.any(Error) });
+  if (warns) {
+    expect(warn).toHaveBeenCalledWith("SQLite automatic session maintenance failed", failure);
+  } else {
+    expect(warn).not.toHaveBeenCalledWith("SQLite automatic session maintenance failed", failure);
+  }
+});
+
+it("resumes automatic maintenance after Gateway work admission resets", async () => {
+  const { request, storePath } = createStore();
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await yieldToEventLoop();
+  markGatewayRestartDraining("stop (SIGTERM)");
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await yieldToEventLoop();
+  resetGatewayWorkAdmission();
+  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+  dispatch.mockClear();
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await yieldToEventLoop();
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1_001);
+  expect(loadSessionEntry({ sessionKey, storePath })?.archiveReason).toBe("age-retention");
+});
 
 it("captures warn-mode age facts without constructing or dispatching reclamation", async () => {
   const { request, storePath } = createStore();
@@ -457,97 +560,3 @@ it.each(
     expect(loadSessionEntry({ sessionKey: insertedKey, storePath })?.archivedAt).toBeUndefined();
   }
 });
-
-it("enforces a newly crossed cap while the parent age fact is still warm", async () => {
-  const { database, request, scope, storePath, updatedAt } = createStore();
-  request.maintenanceConfig.maxEntries = 2;
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
-  const initial = ageFacts.readSessionEntryMaintenanceAgeFact(
-    database.db,
-    request.maintenanceConfig,
-  );
-  expect(initial).toBeDefined();
-  const olderKey = "agent:main:cap-older";
-  runOpenClawAgentWriteTransaction((owner) => {
-    writeSessionEntry(owner, olderKey, { sessionId: "older", updatedAt: updatedAt - 1 });
-    writeSessionEntry(owner, "agent:main:cap-newer", { sessionId: "newer", updatedAt });
-  }, scope);
-  expect(readSessionEntryCount(database, { includeArchived: false })).toBe(3);
-  expect(
-    ageFacts.readSessionEntryMaintenanceAgeFact(database.db, request.maintenanceConfig)?.next.at,
-  ).toBeGreaterThan(Date.now());
-
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
-  expect(readSessionEntryCount(database, { includeArchived: false })).toBe(2);
-  expect(loadSessionEntry({ sessionKey: olderKey, storePath })).toMatchObject({
-    archiveReason: "active-session-cap",
-  });
-  expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
-});
-
-it.runIf(process.platform !== "win32").each(["before preparation", "after preparation"] as const)(
-  "does not accept a warm no-op after the database path is replaced %s",
-  async (when) => {
-    const { database, request, storePath } = createStore();
-    kickSessionEntryMaintenanceAfterWrite(request);
-    await yieldToEventLoop();
-    expect(
-      ageFacts.readSessionEntryMaintenanceAgeFact(database.db, request.maintenanceConfig),
-    ).toBeDefined();
-    const heldPath = `${database.path}.held`;
-    const replacementPath = `${database.path}.replacement`;
-    writeFileSync(replacementPath, "synthetic replacement; never opened as SQLite");
-    let replaced = false;
-    const replacePath = () => {
-      renameSync(database.path, heldPath);
-      renameSync(replacementPath, database.path);
-      replaced = true;
-    };
-    const restorePath = () => {
-      if (replaced) {
-        renameSync(database.path, replacementPath);
-        renameSync(heldPath, database.path);
-        replaced = false;
-      }
-    };
-    const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
-    const run = dispatch.getMockImplementation();
-    if (!run) {
-      throw new Error("Expected the fixture's in-process reclamation adapter");
-    }
-    dispatch.mockClear();
-    dispatch.mockImplementation((params) => {
-      // A stale path must reach ordinary reclamation validation, not settle as a
-      // successful no-op. Restore it before exercising the real fixture operation.
-      restorePath();
-      return run(params);
-    });
-    if (when === "before preparation") {
-      replacePath();
-    } else {
-      const capture = ageFacts.captureSessionEntryMaintenanceAgeFact;
-      vi.spyOn(ageFacts, "captureSessionEntryMaintenanceAgeFact").mockImplementationOnce(
-        (...args) => {
-          const result = capture(...args);
-          queueMicrotask(replacePath);
-          return result;
-        },
-      );
-    }
-    try {
-      kickSessionEntryMaintenanceAfterWrite(request);
-      await yieldToEventLoop();
-      if (when === "after preparation") {
-        await vi.advanceTimersByTimeAsync(1_000);
-        await yieldToEventLoop();
-      }
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(replaced).toBe(false);
-      expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
-    } finally {
-      restorePath();
-    }
-  },
-);

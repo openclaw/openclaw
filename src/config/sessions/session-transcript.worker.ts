@@ -324,7 +324,7 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "session-entry-read") {
         const { loadSessionEntryReadOnlyResultInScope } =
-          await import("./session-accessor.sqlite-entry.js");
+          await import("./session-accessor.sqlite-exact-read.js");
         let source: SessionTranscriptWorkerValues["session-entry-read"]["source"];
         const read = loadSessionEntryReadOnlyResultInScope(
           {
@@ -358,10 +358,28 @@ serveOwnedWorkerTasks(
           await import("./session-accessor.sqlite-entry-list.read.js");
         return {
           kind: "session-entry-list" as const,
-          entries: listSessionEntriesReadOnly({
-            ...request.scope,
-            env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-          }),
+          entries: listSessionEntriesReadOnly(
+            {
+              ...request.scope,
+              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+            },
+            { continuation: request.continuation },
+          ),
+        };
+      }
+      if (request.kind === "session-store-summary") {
+        const { readSessionStoreSummaryReadOnly } =
+          await import("./session-accessor.sqlite-summary.js");
+        return {
+          kind: "session-store-summary" as const,
+          summary: readSessionStoreSummaryReadOnly(
+            {
+              agentId: request.database.agentId,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.env),
+            },
+            request,
+          ),
         };
       }
       if (request.kind === "usage-cache") {

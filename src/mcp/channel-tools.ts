@@ -27,7 +27,6 @@ export function getChannelMcpCapabilities(claudeChannelMode: "off" | "on" | "aut
   };
 }
 
-/** Register all channel MCP tools against a server instance. */
 export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChannelBridge): void {
   server.tool(
     "conversations_list",

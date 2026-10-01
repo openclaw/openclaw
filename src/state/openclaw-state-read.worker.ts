@@ -88,6 +88,7 @@ import {
   readAgentDatabaseDeletionSnapshotInDatabase,
   readAgentDeletionJournalStatusInDatabase,
 } from "./agent-deletion-journal.read.js";
+import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
@@ -118,6 +119,7 @@ import {
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
+import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
@@ -341,6 +343,9 @@ serveOwnedWorkerTasks(
                 type: command.type,
                 record: inspectCurrentConversationBindingRecordInDatabase(db, command.conversation),
               };
+            }
+            if (command.type === "backup.runs") {
+              return { type: command.type, runs: readBackupRunsInDatabase(db) };
             }
             if (isCronStateReadCommand(command)) {
               return readCronStateCommandInDatabase(db, command);
@@ -596,6 +601,14 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 values: selectUserPreferenceValues(db, command.profileIds, command.key),
+              };
+            }
+            if (command.type === "userModelAccounts.links") {
+              return {
+                type: command.type,
+                links: runSqliteDeferredTransactionSync(db, () =>
+                  listUserProfileAuthLinksInDatabase(db, command.profileId),
+                ),
               };
             }
             if (command.type === "userProfiles.email.resolve") {

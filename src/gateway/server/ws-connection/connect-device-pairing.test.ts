@@ -37,11 +37,11 @@ import {
   readUserGitHubConnection,
   updateUserGitHubConnection,
 } from "../../../state/user-github-connections.js";
+import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { repairMergedGatewayOwnerProfile } from "../../../state/user-profiles-owner-migration.js";
 import {
   ensureProfileForEmail,
   hasMultipleSessionSharingIdentities,
-  setUserProfileRole,
 } from "../../../state/user-profiles.js";
 import {
   GatewayClient,

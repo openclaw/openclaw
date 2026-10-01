@@ -10,8 +10,8 @@ import {
   selectAcpSessionRow,
   selectLegacyFreeAcpSessionRows,
   upsertAcpSessionMetaRow,
-  type AcpSessionsTable,
 } from "./session-meta-keys.js";
+import type { AcpSessionsTable } from "./session-meta-read.types.js";
 import type { AcpSessionMutationCommit } from "./session-meta-write.types.js";
 
 export function bindAcpSessionMeta(params: {

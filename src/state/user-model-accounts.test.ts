@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { constants } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
@@ -23,6 +23,7 @@ import {
   isUserModelAuthProfileOwner,
   listUserModelAccounts,
   listUserProfileAuthLinks,
+  listUserProfileAuthLinksAsync,
   readUserModelAccountSummary,
   readUserModelAuthProfile,
   resolveUserProfileAuthLink,
@@ -30,7 +31,8 @@ import {
   updateUserModelAuthProfile,
 } from "./user-model-accounts.js";
 import { captureUserProfileModelAccountLinksAuthority } from "./user-profile-events.js";
-import { ensureProfileForEmail, linkEmail, setAvatar } from "./user-profiles.js";
+import { linkEmail, setAvatar } from "./user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 const tempDirs = createTempDirTracker();
@@ -87,6 +89,26 @@ function connectToken(
 }
 
 describe("personal model accounts", () => {
+  it("observes foreign default-link commits on the next worker read", async () => {
+    const options = stateOptions();
+    const alice = ensureProfileForEmail("worker-links@example.test", options);
+    const { authProfileId } = connectToken(alice.id, options);
+    await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([
+      expect.objectContaining({ provider: "anthropic", authProfileId }),
+    ]);
+    const external = new DatabaseSync(options.path);
+    try {
+      external
+        .prepare(
+          "UPDATE secret_store_entries SET value = ? WHERE scope_kind = 'identity' AND scope_id = ? AND name = 'model-accounts'",
+        )
+        .run(JSON.stringify({ version: 1, links: {} }), alice.id);
+      await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([]);
+    } finally {
+      external.close();
+    }
+  });
+
   it("publishes default-link authority only on commit and never revives an old selection", () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("link-alice@example.test", options);

@@ -230,6 +230,9 @@ describe("container image replacement Doctor repair and startup readiness", () =
       fs.copyFileSync(mainPath, auxiliaryPath, fs.constants.COPYFILE_EXCL);
       const auxiliary = new DatabaseSync(auxiliaryPath);
       try {
+        auxiliary.exec(
+          "PRAGMA foreign_keys=OFF; CREATE TABLE probe_parent(id INTEGER PRIMARY KEY); CREATE TABLE probe_child(parent_id REFERENCES probe_parent(id)); INSERT INTO probe_child VALUES (42);",
+        );
         auxiliary
           .prepare("UPDATE session_nodes SET entry_json = ?")
           .run(JSON.stringify({ sessionId: "upgrade", updatedAt: 1, label: "Unique history" }));
@@ -240,6 +243,11 @@ describe("container image replacement Doctor repair and startup readiness", () =
 
       await repairContainerState();
       expect(fs.readFileSync(auxiliaryPath)).toEqual(preservedBytes);
+      expect(
+        fs
+          .readdirSync(path.dirname(auxiliaryPath))
+          .filter((name) => name.includes("pre-startup-migration")),
+      ).toEqual([]);
       const main = openOpenClawAgentDatabase({ agentId: "main" });
       expect(main.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
         OPENCLAW_AGENT_SCHEMA_VERSION,

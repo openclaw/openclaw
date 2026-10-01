@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { FILE_LOCK_TIMEOUT_ERROR_CODE, resetFileLockStateForTest } from "../../infra/file-lock.js";
+import {
+  FILE_LOCK_TIMEOUT_ERROR_CODE,
+  resetFileLockStateForTest,
+} from "../../plugin-sdk/file-lock.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,

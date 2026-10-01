@@ -151,7 +151,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
   mocks.prepareInputs.mockReset().mockResolvedValue({ files: [], mappingText: "" });
-  mocks.uploadInputs.mockReset().mockResolvedValue(undefined);
+  mocks.uploadInputs.mockReset().mockResolvedValue({ status: "uploaded" });
   mocks.collectOutputs.mockReset().mockResolvedValue([]);
   mocks.resolvePrompt.mockReset().mockImplementation((prompt) => prompt);
   mocks.fetch.mockImplementation(async ({ url }) => {
@@ -171,6 +171,39 @@ afterEach(() => {
 });
 
 describe("Agents API attempt environment selection", () => {
+  it.each([
+    { nativeTools: [] },
+    {
+      nativeTools: [
+        { type: "web_search", mode: "cached", allowed_domains: ["example.com"] },
+        { type: "programmatic_tool_calling", enabled: false },
+        { type: "future_native_tool", options: { feature: true } },
+      ],
+    },
+  ])(
+    "forwards native tools $nativeTools unchanged only when creating a session",
+    async ({ nativeTools }) => {
+      const created = await attempt(undefined, undefined, undefined, undefined, { nativeTools });
+
+      expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
+      expect(await requestBody(0)).toHaveProperty("agent.tools", nativeTools);
+      mocks.fetch.mockClear();
+
+      const continued = await attempt(
+        undefined,
+        created.bind.mock.calls[0]![0],
+        undefined,
+        undefined,
+        {
+          nativeTools: nativeTools.length ? [] : [{ type: "web_search", mode: "live" }],
+        },
+      );
+
+      expect(continued.result).toMatchObject({ terminal: { kind: "ok" } });
+      expect(await requestBody(0)).toEqual({ agent: { reasoning: { effort: null } } });
+    },
+  );
+
   it.each([
     { access: "enabled" },
     { access: "disabled", allowed_domains: null },
@@ -272,7 +305,13 @@ describe("Agents API attempt environment selection", () => {
           environment === "self_hosted"
             ? { type: "self_hosted", workspace_directory: path.resolve(workspaceDir) }
             : { type: "openai_hosted" },
-        agent: { model: "fixture-model", tools: [{ type: "web_search", mode: "live" }] },
+        agent: {
+          model: "fixture-model",
+          tools: [
+            { type: "web_search", mode: "live" },
+            { type: "programmatic_tool_calling", enabled: true },
+          ],
+        },
       });
       if (environment === "self_hosted") {
         expect(createRequest).toHaveProperty("environment", {
@@ -456,9 +495,16 @@ describe("Agents API attempt environment selection", () => {
       replacePrompt: false,
       recorderMedia: true,
     },
+    {
+      name: "inline document pages with a hook-replaced prompt",
+      preparedPrompt: true,
+      replacePrompt: true,
+      recorderMedia: false,
+      images: [{ type: "image" as const, data: "cGFnZQ==", mimeType: "image/png" }],
+    },
   ])(
     "stages managed attachments for new and resumed self-hosted turns with $name",
-    async ({ preparedPrompt, replacePrompt, recorderMedia }) => {
+    async ({ preparedPrompt, replacePrompt, recorderMedia, images }) => {
       const fixture = await workspaceAttachmentFixture();
       let binding: AgentsApiBinding | undefined;
       try {
@@ -508,6 +554,7 @@ describe("Agents API attempt environment selection", () => {
             undefined,
             priorNote ? `${prompt}\n\n${priorNote}` : prompt,
             recorder,
+            images,
           );
 
           expect(submitted.result.terminal).toEqual({ kind: "ok" });
@@ -523,6 +570,15 @@ describe("Agents API attempt environment selection", () => {
           for (const [index, attachmentPath] of attachmentPaths.entries()) {
             expect(attachmentPath.startsWith(`${fixture.remoteRoot}${path.sep}`)).toBe(true);
             expect(await fs.readFile(attachmentPath)).toEqual(contents[index]);
+          }
+          if (images) {
+            expect(text).toContain("The Agents API harness does not support inline image inputs.");
+            expect(text).toContain(
+              "Original attachments are available at the prepared execution paths above.",
+            );
+            expect(text).toContain(
+              "inspect those files with available tools to try another approach",
+            );
           }
           expect(media).toEqual(originalMedia);
           binding ??= submitted.bind.mock.calls[0]![0];
@@ -636,6 +692,7 @@ async function attempt(
   pluginConfig?: Record<string, unknown>,
   prompt = "Fixture prompt",
   userTurnTranscriptRecorder?: AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"],
+  images?: AgentHarnessAttemptParamsV2["images"],
 ) {
   // Authentication/tool construction are host-prepared and mocked at their boundaries.
   const authStorage = AuthStorage.inMemory();
@@ -649,6 +706,7 @@ async function attempt(
     timeoutMs: 1_000,
     prompt,
     media,
+    images,
     userTurnTranscriptRecorder,
     provider: "openai",
     modelId: "fixture-model",

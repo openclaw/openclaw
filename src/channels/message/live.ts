@@ -8,7 +8,7 @@ import {
 import type { LiveMessageState, MessageReceipt, RenderedMessageBatch } from "./types.js";
 
 /** A transport-owned preview. discardPending must stop new work before awaiting in-flight work. */
-export type LivePreviewFinalizerDraft<TId> = {
+type LivePreviewFinalizerDraft<TId> = {
   flush: () => Promise<void>;
   id: () => TId | undefined;
   seal?: () => Promise<void>;
@@ -23,7 +23,7 @@ export type LivePreviewDraft<TId> = Omit<LivePreviewFinalizerDraft<TId>, "clear"
 export type LivePreviewDeliveryResult = ChannelDeliveryResult & { visibleReplySent: boolean };
 type PreviewSendResult = LivePreviewDeliveryResult | boolean | void;
 
-export type LivePreviewFinalizerResultKind =
+type LivePreviewFinalizerResultKind =
   | "normal-delivered"
   | "normal-skipped"
   | "preview-finalized"
@@ -80,18 +80,6 @@ type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = Omit<
   buildFinalEdit?: (payload: TPayload) => TEdit | undefined;
   editFinal?: (id: TId, edit: TEdit) => Promise<void | LivePreviewDeliveryResult>;
   deliverSupplemental?: (payload: TPayload) => Promise<PreviewSendResult>;
-};
-
-type PublishedPreviewDeliveryParams<TPayload, TId, TEdit> = PublishedPreviewAdapter<
-  TPayload,
-  TId,
-  TEdit
-> & {
-  kind: "tool" | "block" | "final";
-  payload: TPayload;
-  liveState?: LiveMessageState<TPayload>;
-  deliverNormally: (payload: TPayload) => Promise<boolean | void>;
-  onNormalDelivered?: () => Promise<void> | void;
 };
 
 type PreviewDeliveryOwner<TPayload> = {
@@ -360,13 +348,6 @@ async function deliverPreview<TPayload, TId, TEdit>(
     }
     throw error;
   }
-}
-
-/** Published stateless contract. Bundled channels use createLivePreviewLifecycle. */
-export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(
-  params: PublishedPreviewDeliveryParams<TPayload, TId, TEdit>,
-): Promise<LivePreviewFinalizerResult<TPayload>> {
-  return await deliverPreview(params);
 }
 
 /** Published adapter contract; shares the stateful owner's delivery implementation. */

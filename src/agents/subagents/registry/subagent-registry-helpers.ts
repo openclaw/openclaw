@@ -305,7 +305,6 @@ export async function safeRemoveAttachmentsDir(
   }
 }
 
-/** Resolves the completed subagent archive delay from config. */
 function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
   const minutes =

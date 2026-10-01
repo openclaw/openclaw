@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import type { AcpSessionReadInput, AcpSessionRow } from "../acp/runtime/session-meta-keys.js";
+import type { AcpSessionReadInput, AcpSessionRow } from "../acp/runtime/session-meta-read.types.js";
 import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type {
   SandboxBrowserRegistryEntry,
@@ -98,6 +98,7 @@ import type {
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
 } from "./agent-deletion-journal.types.js";
+import type { BackupRunRecord } from "./backup-run-records.contract.js";
 import type {
   SharedGitHubPublicationReadInput,
   GitHubPublicationReceiptTarget,
@@ -142,6 +143,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | { type: "backup.runs" }
   | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
   | { type: "capture.readOnlyEvents"; sessionId: string; limit?: number }
@@ -209,6 +211,7 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
+  | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | {
       type: "githubPublication.lifecycle";
@@ -265,6 +268,7 @@ export type OpenClawStateReadRequest = {
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
 export type OpenClawStateReadResult =
+  | { type: "backup.runs"; runs: BackupRunRecord[] }
   | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | {
       type: "tui.lastSession.read";
@@ -420,6 +424,10 @@ export type OpenClawStateReadResult =
       values: Map<string, unknown>;
     }
   | {
+      type: "userModelAccounts.links";
+      links: import("./user-model-accounts.js").UserProfileAuthLink[];
+    }
+  | {
       type: "userProfiles.reconcile";
       profile: ProfileDisplayRow | undefined;
       emailBindings: UserProfileEmailBinding[];
@@ -551,6 +559,8 @@ export type OpenClawStateReadOptions = {
   context?: OpenClawStateWorkerContext;
   /** Publication and authority reads must not inherit an inspection snapshot. */
   current?: boolean;
+  /** Active writers may observe live rows; their lifecycle drains the retained reader. */
+  live?: true;
   /** Named committed-status readers may reopen the matching retained warm source. */
   preferIndependentWarmRead?: true;
   mapError?: (error: unknown, phase: OpenClawStateReadPhase) => unknown;

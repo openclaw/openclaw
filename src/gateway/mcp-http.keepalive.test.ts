@@ -34,8 +34,12 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
 });
 afterEach(async () => {
-  await closeMcpLoopbackServer();
-  vi.useRealTimers();
+  try {
+    await closeMcpLoopbackServer();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 async function startClient() {
@@ -96,10 +100,12 @@ describe("MCP HTTP keepalive", () => {
         };
       });
       const send = await startClient();
+      const serverTimers = vi.getTimerCount();
       const responsePromise = send("POST", toolCall);
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       try {
         await within(entered.promise);
+        expect(vi.getTimerCount()).toBe(serverTimers + 1);
         await vi.advanceTimersByTimeAsync(30_000);
         const response = await within(responsePromise);
         expect(response.headers.get("content-type")).toBe("application/json");
@@ -140,7 +146,7 @@ describe("MCP HTTP keepalive", () => {
               },
         );
         expect(execute).toHaveBeenCalledOnce();
-        expect(vi.getTimerCount()).toBe(0);
+        expect(vi.getTimerCount()).toBe(serverTimers);
       } finally {
         release.resolve();
         if (reader) {
@@ -192,10 +198,12 @@ describe("MCP HTTP keepalive", () => {
       return { content: [{ type: "text", text: "completed" }] };
     });
     const send = await startClient();
+    const serverTimers = vi.getTimerCount();
     const { id: _id, ...notification } = toolCall;
     const pending = send("POST", notification);
     try {
       await within(entered.promise);
+      expect(vi.getTimerCount()).toBe(serverTimers);
       await vi.advanceTimersByTimeAsync(60_000);
     } finally {
       release.resolve();
@@ -203,6 +211,6 @@ describe("MCP HTTP keepalive", () => {
     const response = await within(pending);
     expect(response.status).toBe(202);
     expect(await response.text()).toBe("");
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(serverTimers);
   });
 });

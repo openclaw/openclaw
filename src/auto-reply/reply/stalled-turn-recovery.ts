@@ -1,4 +1,5 @@
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
+import { SkillLibraryError } from "../../skills/library/errors.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -26,6 +27,7 @@ export function isReplyOperationStalledBeforeOutput(
 
 /** Builds the one recovery run that answers a stalled turn over its persisted transcript. */
 export function buildStalledTurnRecoveryRun(base: FollowupRun): FollowupRun {
+  const source = base.queuedFollowupReplyDisposition;
   return {
     ...base,
     prompt: formatSystemTurnPrompt(STALLED_TURN_GUIDANCE),
@@ -47,6 +49,30 @@ export function buildStalledTurnRecoveryRun(base: FollowupRun): FollowupRun {
     turnAdoptionLifecycle: undefined,
     replyOperationRunStates: undefined,
     onQueueDisposition: undefined,
-    run: { ...base.run, suppressNextUserMessagePersistence: true },
+    // Delivers through the source's queued reply owner, like any follow-up it queued.
+    queuedFollowupReplyDisposition:
+      source?.kind === "deliver"
+        ? { kind: "deliver", deliver: source.deliver.createSourceRetry?.() ?? source.deliver }
+        : source,
+    // A recovery run never inherits skill-library authoring: the grant is bound
+    // to the stalled run's admission and refuses a replacement run. An expired
+    // personal-only grant also keeps the Workshop from falling back to the
+    // wider workspace tool, while every other tool stays available.
+    run: {
+      ...base.run,
+      suppressNextUserMessagePersistence: true,
+      skillLibraryAuthoring: base.run.skillLibraryAuthoring && {
+        target: "personal",
+        defaultTarget: "personal",
+        multipleProfiles: base.run.skillLibraryAuthoring.multipleProfiles,
+        bind: () => {},
+        invoke: async () => {
+          throw new SkillLibraryError(
+            "AUTHORITY_EXPIRED",
+            "Skill authoring is unavailable while recovering an interrupted turn. Send a fresh message requesting the change.",
+          );
+        },
+      },
+    },
   };
 }

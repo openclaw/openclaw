@@ -303,11 +303,20 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-diagnostic-text", ...input }),
       (value) => value.text,
     ),
-    readEntries: reader(
-      "session-entry-list",
-      "entries",
-      (scope) => ({ kind: "session-entry-list", scope }),
-      (value) => value.entries,
+    readEntries: async (scope, continuation) =>
+      runRequest(
+        () => ({ kind: "session-entry-list", scope, continuation }),
+        JSON.stringify({ scope, continuation }).length * 2,
+        (value) => {
+          assertResultKind(value, "session-entry-list", "entries");
+          return value.entries;
+        },
+      ),
+    readStoreSummary: reader(
+      "session-store-summary",
+      "a store summary",
+      (input) => ({ kind: "session-store-summary", ...input }),
+      (value) => value.summary,
     ),
     readIdentityEvidence: reader(
       "session-identity-evidence",

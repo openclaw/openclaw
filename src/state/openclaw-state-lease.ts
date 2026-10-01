@@ -35,7 +35,6 @@ import { registerProcessExitLeaseCleanup } from "./openclaw-state-lease-process-
 import {
   prepareLeaseDatabase,
   resolveLeaseDatabasePath,
-  acquireLease,
   renewOpenClawStateLease as renew,
   verifyOpenClawStateLeaseOwnership as verifyLeaseOwnership,
   releaseOpenClawStateLease as release,
@@ -43,7 +42,10 @@ import {
   type OpenClawStateLeaseOwnerIdentity as LeaseIdentity,
 } from "./openclaw-state-lease-storage.js";
 import { createOpenClawStateLeaseWorkerOwner } from "./openclaw-state-lease-worker-owner.js";
-import { createOpenClawStateLeaseWorkerStorage } from "./openclaw-state-lease-worker-storage.js";
+import {
+  acquireLease,
+  createOpenClawStateLeaseWorkerStorage,
+} from "./openclaw-state-lease-worker-storage.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 export type {

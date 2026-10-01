@@ -79,7 +79,7 @@ type PublishVerifiedSqliteFileOptions = {
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
 };
 
-type VerifiedSqliteSnapshot = {
+type VerifiedSqliteSnapshot = SqliteFileContent & {
   path: string;
   userVersion: number;
 };
@@ -344,6 +344,13 @@ function assertSynchronousCallbackResult(result: unknown, label: string): void {
 export async function publishVerifiedSqliteFile(
   options: PublishVerifiedSqliteFileOptions,
 ): Promise<void> {
+  return publishSqliteFile(options, false);
+}
+
+async function publishSqliteFile(
+  options: PublishVerifiedSqliteFileOptions,
+  consumeOwnedSource: boolean,
+): Promise<void> {
   await assertTargetAbsent(options.targetPath);
   const targetDirectory = path.resolve(path.dirname(options.targetPath));
   const targetDirectoryPin = await pinDirectory(targetDirectory, {
@@ -371,7 +378,47 @@ export async function publishVerifiedSqliteFile(
     await fs.chmod(stagingDir, 0o700);
     source = await fs.open(options.sourcePath, "r");
     await assertOpenFileIdentity(source, options.sourcePath, options.sourceIdentity);
-    const staged = await copyFileExclusive(source, stagedPath);
+    // Snapshot creation owns this closed private image. Transfer that image into
+    // publication custody instead of allocating another database-sized file.
+    // Public callers retain their independently mutable source and still copy it.
+    let staged: { content: SqliteFileContent; identity: Stats };
+    if (
+      consumeOwnedSource &&
+      options.sourceIdentity.dev !== 0 &&
+      options.sourceIdentity.ino !== 0 &&
+      options.sourceIdentity.dev === stagingIdentity.dev
+    ) {
+      const moved = await publishFileExclusive({
+        sourcePath: options.sourcePath,
+        targetPath: stagedPath,
+        expectedSourceIdentity: options.sourceIdentity,
+        strategy: "link-or-copy",
+      });
+      requireDirectorySync(moved.directorySync, "SQLite staging transfer directory");
+      const content = await hashPublishedFile(stagedPath, moved.identity);
+      assertExpectedContent(content, options.expectedContent, stagedPath);
+      // The shared publisher falls back to copying on filesystems without hard
+      // links. Retire only our still-pinned source name, never a replacement.
+      const opened = fsSync.fstatSync(source.fd, { bigint: true });
+      const current = fsSync.lstatSync(options.sourcePath, { bigint: true });
+      if (
+        !current.isFile() ||
+        opened.dev === 0n ||
+        opened.ino === 0n ||
+        current.dev !== opened.dev ||
+        current.ino !== opened.ino
+      ) {
+        throw new Error(`SQLite snapshot source changed during transfer: ${options.sourcePath}`);
+      }
+      fsSync.unlinkSync(options.sourcePath);
+      const identity = await fs.lstat(stagedPath);
+      if (!sameFileStatFingerprint(moved.identity, identity)) {
+        throw new Error(`SQLite snapshot staging file changed during transfer: ${stagedPath}`);
+      }
+      staged = { content, identity };
+    } else {
+      staged = await copyFileExclusive(source, stagedPath);
+    }
     const expectedContent = options.expectedContent;
     assertExpectedContent(staged.content, expectedContent, options.targetPath);
     await source.close();
@@ -638,35 +685,38 @@ async function verifyAndPublishSqliteSnapshot(
       await syncFile(stagedPath);
       stagedIdentity = await fs.lstat(stagedPath);
       const expectedContent = await hashPublishedFile(stagedPath, stagedIdentity);
-      await publishVerifiedSqliteFile({
-        sourceIdentity: stagedIdentity,
-        sourcePath: stagedPath,
-        targetPath: options.targetPath,
-        expectedContent,
-        beforePublish: options.beforePublish,
-        afterPublish: options.afterPublish,
-        validatePublished: async (publishedPath) => {
-          const published = openNodeSqliteDatabase(publishedPath, {
-            allowExtension: true,
-            readOnly: true,
-          });
-          try {
-            published.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
-            await loadSqliteVecExtension({ db: published });
-            assertSqliteIntegrity(published, options.targetPath);
-            options.validate?.(published, options.targetPath);
-            const publishedUserVersion = readSqliteUserVersion(published);
-            if (publishedUserVersion !== userVersion) {
-              throw new Error(
-                `SQLite snapshot user_version changed during publication: expected ${userVersion}, got ${publishedUserVersion}`,
-              );
+      await publishSqliteFile(
+        {
+          sourceIdentity: stagedIdentity,
+          sourcePath: stagedPath,
+          targetPath: options.targetPath,
+          expectedContent,
+          beforePublish: options.beforePublish,
+          afterPublish: options.afterPublish,
+          validatePublished: async (publishedPath) => {
+            const published = openNodeSqliteDatabase(publishedPath, {
+              allowExtension: true,
+              readOnly: true,
+            });
+            try {
+              published.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
+              await loadSqliteVecExtension({ db: published });
+              assertSqliteIntegrity(published, options.targetPath);
+              options.validate?.(published, options.targetPath);
+              const publishedUserVersion = readSqliteUserVersion(published);
+              if (publishedUserVersion !== userVersion) {
+                throw new Error(
+                  `SQLite snapshot user_version changed during publication: expected ${userVersion}, got ${publishedUserVersion}`,
+                );
+              }
+            } finally {
+              published.close();
             }
-          } finally {
-            published.close();
-          }
+          },
         },
-      });
-      return { path: options.targetPath, userVersion };
+        true,
+      );
+      return { path: options.targetPath, userVersion, ...expectedContent };
     } finally {
       if (snapshot.isOpen) {
         snapshot.close();

@@ -59,12 +59,62 @@ describe("retired Telegram state", () => {
     expect(result.changes).toEqual([]);
     expect(result.warnings).toHaveLength(paths.length);
     expect(result.warningDisposition).toBeUndefined();
+    expect(
+      result.warnings.every((warning) => warning.includes("Run openclaw doctor --fix on 2026.9.5")),
+    ).toBe(true);
     for (const source of paths) {
       expect(result.warnings).toContainEqual(
-        expect.stringContaining(`${source}. Run openclaw doctor --fix on 2026.9.5`),
+        expect.stringContaining(`Preserved retired Telegram JSON state at ${source}.`),
       );
       expect(await fs.readFile(source, "utf8")).toBe("unparsed legacy bytes\n");
     }
+  });
+
+  it("archives a verified empty version-1 thread bindings file", async () => {
+    const sourcePath = path.join(stateDir, "telegram", "thread-bindings-default.json");
+    const source = '{"version":1,"bindings":[]}\n';
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, source);
+
+    expect(await migration.detectLegacyState(input)).toEqual({
+      preview: [expect.stringContaining(sourcePath)],
+    });
+
+    const result = await migration.migrateLegacyState(input);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      `Archived empty Telegram thread bindings legacy source -> ${sourcePath}.migrated`,
+    ]);
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toBe(source);
+    await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(migration.detectLegacyState(input)).resolves.toBeNull();
+  });
+
+  it.each([
+    {
+      name: "nonempty bindings",
+      source: '{"version":1,"bindings":[{"chatId":"123"}]}\n',
+    },
+    {
+      name: "an unknown field",
+      source: '{"version":1,"bindings":[],"metadata":{}}\n',
+    },
+    {
+      name: "a duplicate escaped bindings key",
+      source: '{"version":1,"bindings":[{"chatId":"123"}],"\\u0062indings":[]}\n',
+    },
+  ])("preserves a version-1 thread bindings file with $name", async ({ source }) => {
+    const sourcePath = path.join(stateDir, "telegram", "thread-bindings-default.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, source);
+
+    const result = await migration.migrateLegacyState(input);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining(sourcePath)]);
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
+    await expect(fs.stat(`${sourcePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("refuses an unreadable source directory instead of certifying inspection", async () => {

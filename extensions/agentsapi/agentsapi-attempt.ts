@@ -33,13 +33,17 @@ import { AgentsApiClient } from "./agentsapi-client.js";
 import * as files from "./agentsapi-files.js";
 import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
-import { buildAgentsApiInstructions, buildAgentsApiTurnInput } from "./agentsapi-prompt.js";
+import {
+  buildAgentsApiInstructions,
+  buildAgentsApiTurnInput,
+  HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK,
+} from "./agentsapi-prompt.js";
 import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
-import { resolveAgentsApiEnvironment } from "./config.js";
+import { agentsApiConfigSchema, resolveAgentsApiEnvironment } from "./config.js";
 
 export async function runAgentsApiAttempt(
   params: AgentHarnessAttemptParamsV2,
@@ -188,8 +192,9 @@ export async function runAgentsApiAttempt(
       if (!native?.isAvailable()) {
         throw new Error("Agents API turn is not ready for steering");
       }
-      if (options?.images?.length) {
-        throw new Error("Agents API MVP accepts text steering only");
+      if (options?.images?.length || options?.media?.length) {
+        // The queued followup owns attachment preparation; steering can carry only text.
+        throw new Error("Agents API attachments require a separate turn");
       }
       await native.queueMessage(
         buildCurrentInboundPrompt({ context: options?.currentInboundContext, prompt: text }),
@@ -216,7 +221,8 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
-    const environment = resolveAgentsApiEnvironment(readPluginConfig(), params.workspaceDir);
+    const pluginConfig = agentsApiConfigSchema.parse(readPluginConfig() ?? {});
+    const environment = resolveAgentsApiEnvironment(pluginConfig, params.workspaceDir);
     const surface = buildAgentsApiToolSurface(
       runParams,
       controller.signal,
@@ -251,10 +257,15 @@ export async function runAgentsApiAttempt(
       }
       await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
     }
+    const inputMedia =
+      environment.type === "openai_hosted" && params.hostCapabilities.resolveInputAttachmentMedia
+        ? await params.hostCapabilities.resolveInputAttachmentMedia()
+        : params.media;
+    assertCurrent();
     const inputs =
       environment.type === "openai_hosted"
         ? await files.prepareInputs(
-            params.media,
+            inputMedia,
             params.workspaceDir,
             assertCurrent,
             controller.signal,
@@ -267,11 +278,9 @@ export async function runAgentsApiAttempt(
       ? await buildAgentsApiInstructions(params, surface.declarations, environment)
       : "";
     assertCurrent();
-    const admittedMessage =
-      params.userTurnTranscriptRecorder?.message ??
-      (await params.userTurnTranscriptRecorder?.resolveMessage());
-    assertCurrent();
     const recorder = params.userTurnTranscriptRecorder;
+    const admittedMessage = recorder?.message ?? (await recorder?.resolveMessage());
+    assertCurrent();
     const historyLimits = resolveAgentHarnessHistoryLimits(
       params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
     );
@@ -326,6 +335,7 @@ export async function runAgentsApiAttempt(
         promptBuild.developerInstructions,
         params.model.id,
         {
+          nativeTools: pluginConfig.nativeTools,
           functions: surface.declarations,
           mcpTools,
           files: inputs.files,
@@ -354,13 +364,20 @@ export async function runAgentsApiAttempt(
       });
     }
     if (!creatingSession && inputs.files.length) {
-      await files.uploadInputs(
+      const uploaded = await files.uploadInputs(
         client,
         remoteSessionId,
         inputs.files,
         assertCurrent,
         controller.signal,
       );
+      if (uploaded.status === "unavailable") {
+        // Native recovery can replace the workspace, including earlier files in this batch.
+        inputs.mappingText = "";
+        inputs.feedbackText = [inputs.feedbackText, HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK]
+          .filter(Boolean)
+          .join("\n");
+      }
     }
     projection = new AgentsApiMessageProjection(
       projectionSettlement.params,
@@ -455,6 +472,7 @@ export async function runAgentsApiAttempt(
         promptBuild.prompt,
         inputs.mappingText,
         environment.type,
+        inputs.feedbackText,
       ),
       async () => {
         await params.userTurnTranscriptRecorder?.persistApproved();

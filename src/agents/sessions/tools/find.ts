@@ -180,7 +180,6 @@ export function createFindToolDefinition(
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             // One extra candidate distinguishes an exact-size result from a truncated one.
             const observationLimit = effectiveLimit + 1;
-            // If custom operations provide glob(), use that instead of fd.
             if (customOps?.glob) {
               if (!(await customOps.exists(searchPath))) {
                 settle(() => reject(new Error(`Path not found: ${searchPath}`)));
@@ -222,7 +221,6 @@ export function createFindToolDefinition(
               return;
             }
 
-            // Default implementation uses fd.
             const fdPath = await ensureTool("fd", true);
             if (signal?.aborted) {
               settle(() => reject(new Error("Operation aborted")));

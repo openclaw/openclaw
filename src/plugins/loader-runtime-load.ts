@@ -20,6 +20,7 @@ import {
   retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { inheritPluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
@@ -92,6 +93,24 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   return loadOpenClawPluginsCore(options, loaderBindings);
 }
 
+/** Publishes synchronously, then joins every accepted health write before returning to its host. */
+export async function loadAndActivateRootPluginRegistry(
+  options: PluginLoadOptions = {},
+): Promise<PluginRegistry> {
+  const cleanup: Promise<void>[] = [];
+  try {
+    return loadOpenClawPluginsCore(
+      { ...options, activate: true },
+      loaderBindings,
+      undefined,
+      undefined,
+      (completion) => cleanup.push(completion),
+    );
+  } finally {
+    await Promise.allSettled(cleanup);
+  }
+}
+
 /** Acquires a fresh discovery registry; release waits for its registration resources. */
 export async function acquirePluginRegistryForInspection(
   options: Omit<PluginLoadOptions, "activate" | "cache"> = {},
@@ -127,7 +146,9 @@ async function acquireRegistryResources(
         .map((instance) => instance.dispose()),
     );
     const failures: unknown[] = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : result.value.errors,
+      result.status === "rejected"
+        ? [new PluginRuntimeCloseRetainedError(result.reason)]
+        : result.value.errors,
     );
     for (const instance of instances) {
       releasePluginCacheInstance(instance, cache);
@@ -136,12 +157,14 @@ async function acquireRegistryResources(
       const retired = await retirePluginCache(cache);
       failures.push(...retired.failures.map((failure) => failure.error));
     } catch (reason) {
-      failures.push(reason);
+      failures.push(new PluginRuntimeCloseRetainedError(reason));
     }
     if (failures.length) {
-      throw new PluginRuntimeCloseRetainedError(
-        new AggregateError(failures, "Plugin inspection instances failed to retire"),
-      );
+      const error = new AggregateError(failures, "Plugin inspection instances failed to retire");
+      // Settled callback faults are diagnostics; timed-out disposal still owns physical cleanup.
+      throw failures.some((failure) => failure instanceof PluginInstanceDrainTimeoutError)
+        ? new PluginRuntimeCloseRetainedError(error)
+        : error;
     }
   });
   try {

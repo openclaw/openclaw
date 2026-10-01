@@ -50,7 +50,7 @@ vi.mock("../state/openclaw-state-lease.js", () => ({
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
 }));
-vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
+vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
     _lease: unknown,
     context: unknown,

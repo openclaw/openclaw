@@ -507,10 +507,11 @@ describe("ui package vitest config", () => {
     expect(selected.toSorted()).toEqual(expected);
   });
 
-  it("keeps the standalone ui package on thread workers without broad isolation", () => {
+  it("keeps the standalone ui package on native runtime workers without broad isolation", () => {
     const testConfig = requireTestConfig(uiConfig);
+    const expectedPool = process.versions.bun ? "forks" : "threads";
 
-    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.pool).toBe(expectedPool);
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.projects).toHaveLength(5);
     expect(testConfig.maxWorkers).toBeGreaterThan(0);
@@ -520,7 +521,7 @@ describe("ui package vitest config", () => {
       const projectTestConfig = requireTestConfig(project);
       expect((project as { extends?: boolean }).extends).toBe(false);
       expect(projectTestConfig.clearMocks).toBe(false);
-      expect(projectTestConfig.pool).toBe("threads");
+      expect(projectTestConfig.pool).toBe(expectedPool);
       // Project overrides would defeat CI's explicit --maxWorkers limit.
       expect(projectTestConfig.maxWorkers).toBeUndefined();
       expect(projectTestConfig.setupFiles).toEqual(["./src/test-helpers/lit-warnings.setup.ts"]);

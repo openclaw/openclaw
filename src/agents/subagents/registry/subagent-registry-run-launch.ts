@@ -6,7 +6,11 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import {
+  normalizeAgentIdStrict,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
@@ -77,6 +81,17 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
     const requesterAgentId = resolveSubagentRequesterAgentId(cfg, registerParams);
     const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
+    const keyAgentId = parseAgentSessionKey(childSessionKey)?.agentId;
+    const explicitChildAgentId =
+      registerParams.childAgentId === undefined
+        ? undefined
+        : normalizeAgentIdStrict(registerParams.childAgentId);
+    if (explicitChildAgentId && !explicitChildAgentId.ok) {
+      throw new Error("Subagent registration has an invalid child agent id.");
+    }
+    if (keyAgentId && explicitChildAgentId && keyAgentId !== explicitChildAgentId.value) {
+      throw new Error("Subagent registration child agent disagrees with its session key.");
+    }
     const previous = this.options.runs.get(runId);
     const previousGeneration = previous?.generation;
     const previousCreatedAt = previous?.createdAt;
@@ -113,6 +128,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           },
           cfg,
         );
+    const childAgentId = previous
+      ? previous.childAgentId
+      : keyAgentId
+        ? undefined
+        : explicitChildAgentId?.value;
     const queued = registerParams.queued === true;
     const queuedContext = queued ? captureOpenClawStateWorkerContext() : undefined;
     const workerContext =
@@ -161,6 +181,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         });
         entry.requesterStorePath = requesterStorePath;
         entry.controllerStorePath = controllerStorePath;
+        entry.childAgentId = childAgentId;
         if (completionAuthority?.operatorAuthority) {
           subagentRuns.bindCompletionAuthority(entry, completionAuthority);
           custodyTransferred = true;

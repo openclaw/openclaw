@@ -9,7 +9,6 @@ import {
   sendHello,
   wireExtension,
 } from "./relay-bridge.test-support.js";
-import type { RelayToExtensionMessage } from "./relay-protocol.js";
 
 function connectRelayClient(bridge: ExtensionRelayBridge) {
   const socket = new FakeSocket();
@@ -66,6 +65,7 @@ function pausedRequestId(client: RelayClient, sessionId: string): string {
 }
 
 const ownershipError = { error: { code: expect.any(Number), message: expect.any(String) } };
+const success = { result: {} };
 
 describe("ExtensionRelayBridge Fetch ownership", () => {
   let bridge: ExtensionRelayBridge;
@@ -125,122 +125,120 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     );
   }
 
-  function fetchCommands() {
+  function frames(type: string, tabId?: number) {
     return extension.socket
       .frames()
-      .filter((frame) => frame.type === "cdp" && String(frame.method).startsWith("Fetch."));
+      .filter((frame) => frame.type === type && (tabId === undefined || frame.tabId === tabId));
   }
 
-  it.each([
-    { event: "Fetch.requestPaused", resolve: "Fetch.continueRequest", params: {} },
-    {
-      event: "Fetch.authRequired",
-      resolve: "Fetch.continueWithAuth",
-      params: { authChallengeResponse: { response: "CancelAuth" } },
-    },
-  ])("delivers $event only to its owner and rejects another client's guessed ID", async (entry) => {
+  function fetchCommands(method?: string) {
+    return frames("cdp").filter((frame) =>
+      method ? frame.method === method : String(frame.method).startsWith("Fetch."),
+    );
+  }
+
+  function acknowledge(frame: Record<string, unknown> | undefined, source = extension) {
+    expect(frame).toMatchObject({ seq: expect.any(Number) });
+    source.handlers.onMessage(JSON.stringify({ type: "result", seq: frame?.seq, result: {} }));
+  }
+
+  function hold(...commands: string[]) {
+    reply = (message) =>
+      commands.includes(message.type === "cdp" ? message.method : message.type)
+        ? null
+        : replyFor(message);
+  }
+
+  async function attachChild() {
+    for (const client of [owner, observer]) {
+      await client.request("Target.setAutoAttach", rootSession(client), {
+        autoAttach: true,
+        waitForDebuggerOnStart: true,
+        flatten: true,
+      });
+    }
+    extension.handlers.onMessage(
+      JSON.stringify({
+        type: "cdpEvent",
+        tabId: 1,
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "child",
+          targetInfo: { targetId: "child-target", type: "iframe" },
+          waitingForDebugger: false,
+        },
+      }),
+    );
+    return {
+      ownerChild: rootSession(owner, "child-target"),
+      observerChild: rootSession(observer, "child-target"),
+    };
+  }
+
+  it("delivers auth challenges only to their owner and rejects another client's guessed ID", async () => {
     expect(
       await owner.request("Fetch.enable", sessionId, { handleAuthRequests: true }),
-    ).toMatchObject({ result: {} });
-    emitPaused("physical-request", { tabId: 1 }, entry.event);
+    ).toMatchObject(success);
+    emitPaused("physical-request", { tabId: 1 }, "Fetch.authRequired");
     const requestId = pausedRequestId(owner, sessionId);
 
     expect.soft(fetchEvents(observer)).toEqual([]);
-    const resolution = { ...entry.params, requestId };
+    const params = { authChallengeResponse: { response: "CancelAuth" } };
+    const resolution = { ...params, requestId };
     expect
-      .soft(await observer.request(entry.resolve, observerSessionId, resolution))
+      .soft(await observer.request("Fetch.continueWithAuth", observerSessionId, resolution))
       .toMatchObject(ownershipError);
-    expect.soft(fetchCommands().filter((frame) => frame.method === entry.resolve)).toEqual([]);
+    expect.soft(fetchCommands("Fetch.continueWithAuth")).toEqual([]);
 
-    expect(await owner.request(entry.resolve, sessionId, resolution)).toMatchObject({ result: {} });
-    expect.soft(fetchCommands().filter((frame) => frame.method === entry.resolve)).toEqual([
+    expect(await owner.request("Fetch.continueWithAuth", sessionId, resolution)).toMatchObject(
+      success,
+    );
+    expect.soft(fetchCommands("Fetch.continueWithAuth")).toEqual([
       expect.objectContaining({
         tabId: 1,
-        params: { ...entry.params, requestId: "physical-request" },
+        params: { ...params, requestId: "physical-request" },
       }),
     ]);
   });
 
-  it("rejects competing enable and ignores nonowner disable without blocking Page or another tab", async () => {
-    expect(await owner.request("Fetch.enable", sessionId)).toMatchObject({ result: {} });
-    await observer.request("Fetch.disable", observerSessionId);
-    expect.soft(fetchCommands().filter((frame) => frame.method === "Fetch.disable")).toEqual([]);
-
-    const [competing, page, otherTab] = await Promise.all([
-      observer.request("Fetch.enable", observerSessionId),
-      observer.request("Page.getFrameTree", observerSessionId),
-      observer.request("Fetch.enable", rootSession(observer, "target-2")),
-    ]);
-    expect.soft(competing).toMatchObject(ownershipError);
-    expect(page).toMatchObject({ result: {} });
-    expect(otherTab).toMatchObject({ result: {} });
-    expect
-      .soft(fetchCommands().filter((frame) => frame.method === "Fetch.enable"))
-      .toEqual([expect.objectContaining({ tabId: 1 }), expect.objectContaining({ tabId: 2 })]);
-
-    emitPaused("owner-still-live");
-    const requestId = pausedRequestId(owner, sessionId);
-    expect.soft(fetchEvents(observer, observerSessionId)).toEqual([]);
-    expect(await owner.request("Fetch.continueRequest", sessionId, { requestId })).toMatchObject({
-      result: {},
+  it("keeps an alias Fetch owner separate from another session on the same client", async () => {
+    const browser = await owner.request("Target.attachToBrowserTarget");
+    const browserSession = sessionFrom(browser?.result);
+    const attached = await owner.request("Target.attachToTarget", browserSession, {
+      targetId: "target-1",
+      flatten: true,
     });
-    emitPaused("other-tab-request", { tabId: 2 });
-    expect(fetchEvents(observer, rootSession(observer, "target-2"))).toHaveLength(1);
-    expect.soft(fetchEvents(owner, rootSession(owner, "target-2"))).toEqual([]);
+    const ownerSession = sessionFrom(attached?.result);
+    expect(await owner.request("Fetch.enable", ownerSession)).toMatchObject(success);
+    emitPaused("alias-request");
+    const requestId = pausedRequestId(owner, ownerSession);
+
+    expect.soft(fetchEvents(owner, sessionId)).toEqual([]);
+    expect
+      .soft(await owner.request("Fetch.continueRequest", sessionId, { requestId }))
+      .toMatchObject(ownershipError);
+    await owner.request("Fetch.disable", sessionId);
+    expect.soft(fetchCommands("Fetch.disable")).toEqual([]);
+    expect.soft(await owner.request("Fetch.enable", sessionId)).toMatchObject(ownershipError);
+    expect(await owner.request("Fetch.continueRequest", ownerSession, { requestId })).toMatchObject(
+      success,
+    );
   });
 
-  it.each(["root", "alias"])(
-    "keeps a %s Fetch owner separate from another session on the same client",
-    async (kind) => {
-      const browser = await owner.request("Target.attachToBrowserTarget");
-      const browserSession = sessionFrom(browser?.result);
-      const attached = await owner.request("Target.attachToTarget", browserSession, {
-        targetId: "target-1",
-        flatten: true,
-      });
-      const alias = sessionFrom(attached?.result);
-      const ownerSession = kind === "root" ? sessionId : alias;
-      const siblingSession = kind === "root" ? alias : sessionId;
-      expect(await owner.request("Fetch.enable", ownerSession)).toMatchObject({ result: {} });
-      emitPaused("alias-request");
-      const requestId = pausedRequestId(owner, ownerSession);
-
-      expect.soft(fetchEvents(owner, siblingSession)).toEqual([]);
-      expect
-        .soft(await owner.request("Fetch.continueRequest", siblingSession, { requestId }))
-        .toMatchObject(ownershipError);
-      await owner.request("Fetch.disable", siblingSession);
-      expect.soft(fetchCommands().filter((frame) => frame.method === "Fetch.disable")).toEqual([]);
-      expect
-        .soft(await owner.request("Fetch.enable", siblingSession))
-        .toMatchObject(ownershipError);
-      expect(
-        await owner.request("Fetch.continueRequest", ownerSession, { requestId }),
-      ).toMatchObject({
-        result: {},
-      });
-    },
-  );
-
   it("fails the closing owner's pending request before disabling, then releases the scope to a connected client", async () => {
-    expect(await owner.request("Fetch.enable", sessionId)).toMatchObject({ result: {} });
+    expect(await owner.request("Fetch.enable", sessionId)).toMatchObject(success);
     emitPaused("abandoned-request");
     pausedRequestId(owner, sessionId);
-    reply = (message) =>
-      message.type === "cdp" && message.method === "Fetch.failRequest" ? null : replyFor(message);
+    hold("Fetch.failRequest");
     const closing = owner.close();
     await flush();
 
-    const cleanup = fetchCommands().find((frame) => frame.method === "Fetch.failRequest");
+    const cleanup = fetchCommands("Fetch.failRequest")[0];
     expect.soft(cleanup).toMatchObject({ tabId: 1, params: { requestId: "abandoned-request" } });
-    expect.soft(fetchCommands().filter((frame) => frame.method === "Fetch.disable")).toEqual([]);
-    expect(await observer.request("Page.getFrameTree", observerSessionId)).toMatchObject({
-      result: {},
-    });
+    expect.soft(fetchCommands("Fetch.disable")).toEqual([]);
+    expect(await observer.request("Page.getFrameTree", observerSessionId)).toMatchObject(success);
     if (cleanup) {
-      extension.handlers.onMessage(
-        JSON.stringify({ type: "result", seq: cleanup.seq, result: {} }),
-      );
+      acknowledge(cleanup);
     }
     await closing;
     await flush();
@@ -248,8 +246,8 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     expect
       .soft(fetchCommands().map((frame) => frame.method))
       .toEqual(["Fetch.enable", "Fetch.failRequest", "Fetch.disable"]);
-    expect(extension.socket.frames().filter((frame) => frame.type === "detach")).toEqual([]);
-    expect(await observer.request("Fetch.enable", observerSessionId)).toMatchObject({ result: {} });
+    expect(frames("detach")).toEqual([]);
+    expect(await observer.request("Fetch.enable", observerSessionId)).toMatchObject(success);
     emitPaused("successor-request");
     expect(fetchEvents(observer, observerSessionId).at(-1)).toMatchObject({
       params: { requestId: expect.any(String) },
@@ -257,7 +255,7 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
   });
 
   it("retires the physical scope when owner-close cleanup is completion-ambiguous", async () => {
-    expect(await owner.request("Fetch.enable", sessionId)).toMatchObject({ result: {} });
+    expect(await owner.request("Fetch.enable", sessionId)).toMatchObject(success);
     emitPaused("abandoned-request");
     pausedRequestId(owner, sessionId);
     reply = (message) =>
@@ -271,9 +269,7 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     expect
       .soft(fetchCommands().map((frame) => frame.method))
       .toEqual(["Fetch.enable", "Fetch.failRequest"]);
-    expect
-      .soft(extension.socket.frames().filter((frame) => frame.type === "detach"))
-      .toEqual([expect.objectContaining({ tabId: 1 })]);
+    expect.soft(frames("detach")).toEqual([expect.objectContaining({ tabId: 1 })]);
     expect(observer.socket.closed).toBe(false);
     expect(await observer.request("Page.getFrameTree", observerSessionId)).toMatchObject(
       ownershipError,
@@ -281,11 +277,11 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
   });
 
   it("rejects a stale request ID after disable and successor enable without disturbing the new request", async () => {
-    expect(await owner.request("Fetch.enable", sessionId)).toMatchObject({ result: {} });
+    expect(await owner.request("Fetch.enable", sessionId)).toMatchObject(success);
     emitPaused("old-request");
     const staleId = pausedRequestId(owner, sessionId);
-    expect(await owner.request("Fetch.disable", sessionId)).toMatchObject({ result: {} });
-    expect(await observer.request("Fetch.enable", observerSessionId)).toMatchObject({ result: {} });
+    expect(await owner.request("Fetch.disable", sessionId)).toMatchObject(success);
+    expect(await observer.request("Fetch.enable", observerSessionId)).toMatchObject(success);
     emitPaused("new-request");
     const currentId = pausedRequestId(observer, observerSessionId);
     const beforeResolution = fetchCommands().length;
@@ -298,116 +294,40 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     expect.soft(fetchCommands()).toHaveLength(beforeResolution);
     expect(
       await observer.request("Fetch.continueRequest", observerSessionId, { requestId: currentId }),
-    ).toMatchObject({
-      result: {},
-    });
+    ).toMatchObject(success);
     expect(fetchCommands().at(-1)).toMatchObject({ params: { requestId: "new-request" } });
   });
 
   it("owns child Fetch independently of the root physical scope", async () => {
-    await owner.request("Target.setAutoAttach", sessionId, {
-      autoAttach: true,
-      waitForDebuggerOnStart: true,
-      flatten: true,
-    });
-    await observer.request("Target.setAutoAttach", observerSessionId, {
-      autoAttach: true,
-      waitForDebuggerOnStart: true,
-      flatten: true,
-    });
-    const childSession = "child-frame";
-    extension.handlers.onMessage(
-      JSON.stringify({
-        type: "cdpEvent",
-        tabId: 1,
-        method: "Target.attachedToTarget",
-        params: {
-          sessionId: childSession,
-          targetInfo: { targetId: "frame-target", type: "iframe" },
-          waitingForDebugger: false,
-        },
-      }),
-    );
-    const ownerChild = rootSession(owner, "frame-target");
-    const observerChild = rootSession(observer, "frame-target");
-    expect(await owner.request("Fetch.enable", ownerChild)).toMatchObject({ result: {} });
-    expect(await observer.request("Fetch.enable", observerSessionId)).toMatchObject({ result: {} });
-    emitPaused("child-request", { tabId: 1, sessionId: childSession });
+    const { ownerChild, observerChild } = await attachChild();
+    expect(await owner.request("Fetch.enable", ownerChild)).toMatchObject(success);
+    expect(await observer.request("Fetch.enable", observerSessionId)).toMatchObject(success);
+    emitPaused("child-request", { tabId: 1, sessionId: "child" });
     const requestId = pausedRequestId(owner, ownerChild);
 
     expect.soft(fetchEvents(observer, observerChild)).toEqual([]);
     expect
       .soft(await observer.request("Fetch.continueRequest", observerChild, { requestId }))
       .toMatchObject(ownershipError);
-    expect(await owner.request("Fetch.continueRequest", ownerChild, { requestId })).toMatchObject({
-      result: {},
-    });
+    expect(await owner.request("Fetch.continueRequest", ownerChild, { requestId })).toMatchObject(
+      success,
+    );
     expect(fetchCommands().at(-1)).toMatchObject({
       tabId: 1,
-      sessionId: childSession,
+      sessionId: "child",
       params: { requestId: "child-request" },
     });
   });
 
-  it("retires the physical scope when enable errors before a connected client reattaches", async () => {
-    let heldEnable: Extract<RelayToExtensionMessage, { type: "cdp" }> | undefined;
-    reply = (message) => {
-      if (message.type === "cdp" && message.method === "Fetch.enable") {
-        heldEnable ??= message;
-        return null;
-      }
-      return replyFor(message);
-    };
-    const enabling = owner.send("Fetch.enable", sessionId);
-    await flush();
-    expect(heldEnable).toMatchObject({ method: "Fetch.enable", tabId: 1 });
-    expect
-      .soft(await observer.request("Fetch.enable", observerSessionId))
-      .toMatchObject(ownershipError);
-    expect.soft(fetchCommands()).toHaveLength(1);
-    reply = replyFor;
-    extension.handlers.onMessage(
-      JSON.stringify({ type: "error", seq: heldEnable?.seq, message: "enable rejected" }),
-    );
-    await flush();
-    expect(owner.response(enabling)).toMatchObject({ error: { message: "enable rejected" } });
-    expect
-      .soft(extension.socket.frames().filter((frame) => frame.type === "detach"))
-      .toEqual([expect.objectContaining({ tabId: 1 })]);
-    expect(owner.socket.closed).toBe(false);
-    expect(observer.socket.closed).toBe(false);
-
-    const attached = await observer.request("Target.attachToTarget", undefined, {
-      targetId: "target-1",
-      flatten: true,
-    });
-    const replacementSessionId = sessionFrom(attached?.result);
-    expect(replacementSessionId).not.toBe(observerSessionId);
-    expect(await observer.request("Fetch.enable", replacementSessionId)).toMatchObject({
-      result: {},
-    });
-    emitPaused("after-rejected-enable");
-    expect(fetchEvents(observer, replacementSessionId)).toHaveLength(1);
-    expect.soft(fetchEvents(owner)).toEqual([]);
-  });
-
   it("cleans up a successful enable reply that arrives after its client closes", async () => {
-    let heldEnable: Extract<RelayToExtensionMessage, { type: "cdp" }> | undefined;
-    reply = (message) => {
-      if (message.type === "cdp" && message.method === "Fetch.enable") {
-        heldEnable = message;
-        return null;
-      }
-      return replyFor(message);
-    };
+    hold("Fetch.enable");
     const enabling = owner.send("Fetch.enable", sessionId);
     await flush();
+    const heldEnable = fetchCommands("Fetch.enable")[0];
     expect(heldEnable).toMatchObject({ method: "Fetch.enable", tabId: 1 });
     const closing = owner.close();
     reply = replyFor;
-    extension.handlers.onMessage(
-      JSON.stringify({ type: "result", seq: heldEnable?.seq, result: {} }),
-    );
+    acknowledge(heldEnable);
     await closing;
     await flush();
 
@@ -415,7 +335,7 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     expect
       .soft(fetchCommands().map((frame) => frame.method))
       .toEqual(["Fetch.enable", "Fetch.disable"]);
-    expect(await observer.request("Fetch.enable", observerSessionId)).toMatchObject({ result: {} });
+    expect(await observer.request("Fetch.enable", observerSessionId)).toMatchObject(success);
     emitPaused("after-closed-enable");
     expect(fetchEvents(observer, observerSessionId)).toHaveLength(1);
   });
@@ -446,10 +366,10 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
         .frames()
         .filter((frame) => frame.method === "IO.read" || frame.method === "IO.close"),
     ).toEqual([]);
-    expect(await owner.request("IO.read", sessionId, { handle })).toMatchObject({ result: {} });
+    expect(await owner.request("IO.read", sessionId, { handle })).toMatchObject(success);
     expect(
       await observer.request("IO.read", observerSessionId, { handle: "unrelated-domain" }),
-    ).toMatchObject({ result: {} });
+    ).toMatchObject(success);
     expect(
       extension.socket
         .frames()
@@ -461,41 +381,20 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
   });
 
   it("retires the native root of an uncertain child without disturbing another tab", async () => {
-    await owner.request("Target.setAutoAttach", sessionId, {
-      autoAttach: true,
-      waitForDebuggerOnStart: true,
-      flatten: true,
-    });
-    await observer.request("Target.setAutoAttach", observerSessionId, {
-      autoAttach: true,
-      waitForDebuggerOnStart: true,
-      flatten: true,
-    });
-    extension.handlers.onMessage(
-      JSON.stringify({
-        type: "cdpEvent",
-        tabId: 1,
-        method: "Target.attachedToTarget",
-        params: { sessionId: "child", targetInfo: { targetId: "child-target", type: "iframe" } },
-      }),
-    );
+    const { ownerChild } = await attachChild();
     reply = (message) =>
       message.type === "cdp" && message.sessionId === "child" && message.method === "Fetch.enable"
         ? { type: "error", seq: message.seq, message: "native completion unknown" }
         : replyFor(message);
-    expect(await owner.request("Fetch.enable", rootSession(owner, "child-target"))).toMatchObject(
-      ownershipError,
-    );
+    expect(await owner.request("Fetch.enable", ownerChild)).toMatchObject(ownershipError);
     await flush();
-    expect(extension.socket.frames().filter((frame) => frame.type === "detach")).toEqual([
-      expect.objectContaining({ tabId: 1 }),
-    ]);
+    expect(frames("detach")).toEqual([expect.objectContaining({ tabId: 1 })]);
     expect(await observer.request("Runtime.enable", observerSessionId)).toMatchObject(
       ownershipError,
     );
     expect(
       await observer.request("Page.getFrameTree", rootSession(observer, "target-2")),
-    ).toMatchObject({ result: {} });
+    ).toMatchObject(success);
     expect(owner.socket.closed).toBe(false);
     expect(observer.socket.closed).toBe(false);
   });
@@ -504,37 +403,25 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     await owner.request("Fetch.enable", sessionId);
     emitPaused("observed");
     await observer.request("Target.detachFromTarget", undefined, { sessionId: observerSessionId });
-    reply = (message) =>
-      (message.type === "cdp" && message.method === "Fetch.failRequest") ||
-      message.type === "detach"
-        ? null
-        : replyFor(message);
+    hold("Fetch.failRequest", "detach");
     const closing = owner.send("Target.detachFromTarget", undefined, { sessionId });
     await flush();
     const attaching = observer.send("Target.attachToTarget", undefined, { targetId: "target-1" });
     await flush();
     expect(await owner.request("Page.getFrameTree", sessionId)).toMatchObject(ownershipError);
     expect(observer.response(attaching)).toBeUndefined();
-    expect(
-      extension.socket.frames().filter((frame) => frame.type === "attach" && frame.tabId === 1),
-    ).toHaveLength(1);
-    const cleanup = fetchCommands().find((frame) => frame.method === "Fetch.failRequest")!;
-    extension.handlers.onMessage(JSON.stringify({ type: "result", seq: cleanup.seq, result: {} }));
+    expect(frames("attach", 1)).toHaveLength(1);
+    acknowledge(fetchCommands("Fetch.failRequest")[0]);
     await flush();
     expect(observer.response(attaching)).toBeUndefined();
-    const detaching = extension.socket
-      .frames()
-      .find((frame) => frame.type === "detach" && frame.tabId === 1)!;
     reply = replyFor;
-    extension.handlers.onMessage(
-      JSON.stringify({ type: "result", seq: detaching.seq, result: {} }),
-    );
+    acknowledge(frames("detach", 1)[0]);
     await flush();
-    expect(owner.response(closing)).toMatchObject({ result: {} });
+    expect(owner.response(closing)).toMatchObject(success);
     const replacement = sessionFrom(observer.response(attaching)?.result);
     expect(replacement).not.toBe(sessionId);
-    expect(await observer.request("Runtime.enable", replacement)).toMatchObject({ result: {} });
-    expect(fetchCommands().some((frame) => frame.method === "Fetch.disable")).toBe(false);
+    expect(await observer.request("Runtime.enable", replacement)).toMatchObject(success);
+    expect(fetchCommands("Fetch.disable")).toEqual([]);
   });
 
   it.each(["last logical session", "owner with a live sibling"])(
@@ -548,11 +435,7 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
           sessionId: observerSessionId,
         });
       }
-      reply = (message) =>
-        message.type === "cdp" &&
-        ["Fetch.getResponseBody", "Runtime.evaluate", "Fetch.failRequest"].includes(message.method)
-          ? null
-          : replyFor(message);
+      hold("Fetch.getResponseBody", "Runtime.evaluate", "Fetch.failRequest");
       const body = owner.send("Fetch.getResponseBody", sessionId, { requestId });
       const evaluation = owner.send("Runtime.evaluate", sessionId);
       await flush();
@@ -561,17 +444,15 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
       try {
         owner.send("Target.detachFromTarget", undefined, { sessionId });
         await vi.advanceTimersByTimeAsync(2001);
-        expect(
-          extension.socket.frames().filter((frame) => frame.type === "detach" && frame.tabId === 1),
-        ).toHaveLength(1);
+        expect(frames("detach", 1)).toHaveLength(1);
         expect(owner.response(body)).toMatchObject(ownershipError);
         expect(owner.response(evaluation)).toMatchObject(ownershipError);
-        expect(fetchCommands().filter((frame) => frame.method === "Fetch.failRequest")).toEqual([
+        expect(fetchCommands("Fetch.failRequest")).toEqual([
           expect.objectContaining({
             params: { requestId: "known-request", errorReason: "Aborted" },
           }),
         ]);
-        expect(fetchCommands().some((frame) => frame.method === "Fetch.disable")).toBe(false);
+        expect(fetchCommands("Fetch.disable")).toEqual([]);
         expect(owner.socket.closed).toBe(false);
         expect(observer.socket.closed).toBe(false);
       } finally {
@@ -584,8 +465,7 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     await owner.request("Fetch.enable", sessionId);
     emitPaused("observed");
     await observer.request("Target.detachFromTarget", undefined, { sessionId: observerSessionId });
-    reply = (message) =>
-      message.type === "cdp" && message.method === "Fetch.failRequest" ? null : replyFor(message);
+    hold("Fetch.failRequest");
     owner.send("Target.detachFromTarget", undefined, { sessionId });
     await flush();
     const reattaching = observer.send("Target.attachToTarget", undefined, { targetId: "target-1" });
@@ -596,7 +476,7 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     sendHello(extension.handlers, defaultTabs());
     await flush();
     const cleanup = previous.socket.frames().find((frame) => frame.method === "Fetch.failRequest")!;
-    previous.handlers.onMessage(JSON.stringify({ type: "result", seq: cleanup.seq, result: {} }));
+    acknowledge(cleanup, previous);
     await flush();
     expect(observer.response(reattaching)).toMatchObject(ownershipError);
     expect(

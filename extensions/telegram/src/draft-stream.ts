@@ -661,13 +661,6 @@ export function createTelegramDraftStream(params: {
     updateDraft(text);
   };
 
-  const requestLazyDraftUpdate = (resolveText: () => string | undefined) => {
-    if (streamState.stopped || streamState.final) {
-      return;
-    }
-    updateDraft({ resolveText });
-  };
-
   const updatePreview = (preview: TelegramDraftPreview) => {
     const text = preview.text.trimEnd();
     if (!text) {
@@ -813,7 +806,6 @@ export function createTelegramDraftStream(params: {
   };
 
   const clear = async () => {
-    // Capture before the stop; takeMessageIdAfterStop resets streamVisibleSinceMs.
     const visibleSince = streamVisibleSinceMs;
     const messageId = await takeMessageIdAfterStop({
       stopForClear,
@@ -862,7 +854,7 @@ export function createTelegramDraftStream(params: {
         options?.onPlatformSendDispatch,
         options?.assertPlatformSendAuthorized,
       ),
-    updateLazy: requestLazyDraftUpdate,
+    updateLazy: (resolveText) => updateDraft({ resolveText }),
     updatePreview,
     flush,
     waitForInFlight,

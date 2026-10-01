@@ -54,5 +54,17 @@ export function configurePrepareGitHooks(params = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  if (existsSync(join(DEFAULT_PACKAGE_ROOT, "src/state/openclaw-state-schema.sql"))) {
+    // Source preparation uses the generator CLI; packaged installs have no schemas.
+    const generated = spawnSync(process.execPath, [join(scriptDir, "generate-kysely-types.mts")], {
+      stdio: "inherit",
+    });
+    if (generated.error) {
+      throw generated.error;
+    }
+    if (generated.status !== 0) {
+      process.exit(generated.status ?? 1);
+    }
+  }
   configurePrepareGitHooks();
 }

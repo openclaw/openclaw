@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { gzip } from "pako";
 import type { Plugin, ResolveModulePreloadDependenciesFn, UserConfig } from "vite";
+import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../scripts/lib/control-ui-i18n-config.ts";
 import {
   CONTROL_UI_ASSET_MANIFEST_FILENAME,
@@ -19,6 +20,7 @@ import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../src/gateway/control-ui-root-as
 import { controlUiBootPreloadsPlugin } from "./config/control-ui-boot-preloads.ts";
 import {
   controlUiCodeSplitting,
+  controlUiIsolatedDesktopRuntimePlugin,
   controlUiLocaleConfigHintsChunkPrefix,
 } from "./config/control-ui-chunking.ts";
 import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
@@ -625,6 +627,13 @@ export default function controlUiViteConfig(
   };
   return {
     base,
+    worker: {
+      format: "iife",
+      plugins: () => [mermaidClassicBundlePlugin()],
+      rolldownOptions: {
+        output: { codeSplitting: false },
+      },
+    },
     define: {
       "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
       "globalThis.OPENCLAW_UI_DEV_GATEWAY": devGateway
@@ -677,6 +686,8 @@ export default function controlUiViteConfig(
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
+      mermaidClassicBundlePlugin(),
+      controlUiIsolatedDesktopRuntimePlugin(),
       {
         name: "control-ui-static-import-preloads",
         generateBundle(_options, bundle) {

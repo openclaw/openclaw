@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -496,7 +497,12 @@ describe("AppSidebar session attention", () => {
         failedRow(failedKey, { label: "Source review", spawnedBy: childKey }),
       ] satisfies GatewaySessionRow[]
     ).map((row) => Object.assign({}, row, { agentId: "main" }));
-    const { sidebar, sessions: sessionsHarness, result } = await mountRoster(TWO_AGENTS, rows);
+    const {
+      sidebar,
+      sessions: sessionsHarness,
+      result,
+      context,
+    } = await mountRoster(TWO_AGENTS, rows);
     const parentRow = () => sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
     const childFailure = "Child session Source review failed: Provider credits exhausted";
     expect(parentRow().textContent).toContain(childFailure);
@@ -519,6 +525,7 @@ describe("AppSidebar session attention", () => {
       row.key === failedKey ? Object.assign({}, row, { lastReadAt: 2 }) : row,
     );
     setRows(sessionsHarness, result.sessions);
+    await rosterActivityStore(context).refresh();
     await waitForFast(() => {
       expect(parentRow()).not.toBeNull();
       expect(parentRow().querySelector('[data-session-attention="error"]')).toBeNull();

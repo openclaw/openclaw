@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.takeCodePoints
@@ -666,8 +667,6 @@ private fun JsonObject.optionalBooleanParam(name: String): Boolean? {
 }
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyGatewayException("invalid_response", "$method returned an invalid response")
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonObject.stringOrNull(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 

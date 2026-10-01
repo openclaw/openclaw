@@ -208,6 +208,7 @@ export function completeEmbeddedAttemptResult(
     contextBudgetStatus: prompt.contextBudgetStatus,
     yieldDetected: input.lifecycle.readYieldState().yieldDetected,
     yieldAcknowledgment: input.lifecycle.readYieldState().yieldAcknowledgment,
+    yieldMessageWaitRegistered: input.lifecycle.readYieldState().yieldMessageWaitRegistered,
     didDeliverSourceReplyViaMessageTool: hasDeliveredSourceReply(),
   };
   const terminal = projectAgentRunAttemptTerminal(state.terminal);

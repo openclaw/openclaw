@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
@@ -8,6 +10,8 @@ import {
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import type { SkillStatusReport } from "../skills/discovery/status.js";
+import type * as SourceInstall from "../skills/lifecycle/source-install.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
 const originalTty = [process.stdin, process.stdout].map((stream) =>
@@ -320,6 +324,30 @@ describe("skills cli commands", () => {
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.sourceInstall).not.toHaveBeenCalled();
   });
+  it("fails a source install with --as when its description cannot be parsed", async () => {
+    await withTestDir({ prefix: "openclaw-skills-cli-invalid-source-" }, async (root) => {
+      const sourceDir = path.join(root, "source");
+      const workspaceDir = path.join(root, "workspace");
+      await fs.mkdir(sourceDir);
+      await fs.writeFile(
+        path.join(sourceDir, "SKILL.md"),
+        "name: invisible\ndescription: unfenced\n\n---\n",
+      );
+      const { installSkillFromSource } = await vi.importActual<typeof SourceInstall>(
+        "../skills/lifecycle/source-install.js",
+      );
+      mocks.sourceInstall.mockImplementation(installSkillFromSource);
+      mocks.workspace.mockReturnValue(workspaceDir);
+
+      await expect(runCommand(["install", sourceDir, "--as", "invisible"])).rejects.toThrow(
+        "__exit__:1",
+      );
+      expect(mocks.errors.join("\n")).toContain("description is required");
+      expect(mocks.runtime.log.mock.calls.flat().join("\n")).not.toContain("Installed");
+      await expect(fs.access(path.join(workspaceDir, "skills", "invisible"))).rejects.toThrow();
+    });
+  });
+
   it("installs a source under --as with noninteractive policy acknowledgement", async () => {
     setTty(false);
     mocks.sourceInstall.mockResolvedValue({

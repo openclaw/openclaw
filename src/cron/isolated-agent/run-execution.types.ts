@@ -41,7 +41,13 @@ export type CronRunExecutionParams = Pick<
 > &
   Pick<
     RunCronAgentTurnParams,
-    "cfg" | "job" | "lane" | "onLaneWait" | "executionIdentity" | "admissionSource"
+    | "cfg"
+    | "job"
+    | "lane"
+    | "onLaneWait"
+    | "executionIdentity"
+    | "admissionSource"
+    | "deliveryAttemptFence"
   > & {
     runId: string;
     agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];

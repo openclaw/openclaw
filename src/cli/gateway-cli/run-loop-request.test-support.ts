@@ -32,7 +32,6 @@ export function registerGatewayRequestTests({
   cancelShutdownHardExitWatchdog,
   consumeGatewayRestartIntent,
   consumeGatewayRestartIntentPayloadSync,
-  peekGatewayRestartReason,
   managedUpdateSuccessorOwner,
   commitManagedServiceUpdateHandoff,
   waitForSystemServiceUpdateHandoffs,
@@ -555,47 +554,4 @@ export function registerGatewayRequestTests({
       });
     },
   );
-
-  it.each([
-    { signal: "SIGTERM", restartReason: undefined, reason: "stop (SIGTERM)" },
-    { signal: "SIGINT", restartReason: undefined, reason: "stop (SIGINT)" },
-    { signal: "SIGUSR2", restartReason: undefined, reason: "restart (SIGUSR2)" },
-    {
-      signal: "SIGUSR2",
-      restartReason: "config reload: gateway.bind",
-      reason: "restart (SIGUSR2: config reload: gateway.bind)",
-    },
-    {
-      signal: "SIGTERM",
-      restartReason: "update.run",
-      reason: "restart (SIGTERM: update.run)",
-    },
-  ] as const)("names the shutdown trigger: $reason", async ({ signal, restartReason, reason }) => {
-    vi.clearAllMocks();
-    if (signal === "SIGTERM" && restartReason) {
-      consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: restartReason });
-    } else {
-      peekGatewayRestartReason.mockReturnValueOnce(restartReason);
-    }
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const close = createCloseMock();
-      const { start, started } = createSignaledStart(close);
-      const { runtime, exited } = createRuntimeWithExitSignal();
-      const completeBoot = vi.fn();
-      await runLoopWithStart({ start, runtime, completeBoot });
-      await waitForStart(started);
-      captureSignal(signal)();
-      if (signal === "SIGUSR2") {
-        await waitForLoopCondition(() => start.mock.calls.length === 2, "restart did not finish");
-        captureSignal("SIGINT")();
-      }
-      await expect(exited).resolves.toBe(0);
-      expect(gatewayLog.info).toHaveBeenCalledWith(`admission closed: ${reason}`);
-      expect(gatewayLog.info).not.toHaveBeenCalledWith("admission closed: restart drain");
-      expect(completeBoot).toHaveBeenCalledWith({
-        outcome: reason.startsWith("restart") ? "planned_restart" : "clean_stop",
-        reason,
-      });
-    });
-  });
 }

@@ -19,6 +19,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
 import * as userProfileList from "../state/user-profile-list.js";
+import { setAvatar } from "../state/user-profile-writes.worker.js";
 import * as userProfiles from "../state/user-profiles.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 import * as managedOutgoingMedia from "./managed-image-attachments.js";
@@ -373,9 +374,7 @@ describe("chat.history cursor catch-up", () => {
     try {
       const avatarUrls: string[] = [];
       for (const byte of [1, 2]) {
-        expect(userProfiles.setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(
-          true,
-        );
+        expect(setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(true);
         const { avatarRevision } = userProfiles.getUserProfileDisplay(profile.id);
         const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
         avatarUrls.push(avatarUrl);

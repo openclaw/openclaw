@@ -21,8 +21,10 @@ vi.mock("../../agents/mcp-app-sandbox.js", () => ({
   buildMcpAppSandboxPath: () => "mcp-app-sandbox",
 }));
 vi.mock("../../agents/agent-bundle-mcp-manager-api.js", () => ({
-  completeDeferredSessionMcpRuntimeRetirement: mocks.completeDeferredSessionMcpRuntimeRetirement,
   peekSessionMcpRuntime: mocks.peekSessionMcpRuntime,
+}));
+vi.mock("../../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
+  completeDeferredSessionMcpRuntimeRetirement: mocks.completeDeferredSessionMcpRuntimeRetirement,
 }));
 vi.mock("../mcp-app-reconstruction.js", () => ({
   restoreMcpAppView: mocks.restoreMcpAppView,

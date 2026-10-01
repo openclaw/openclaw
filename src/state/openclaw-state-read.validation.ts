@@ -29,6 +29,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.id === undefined || typeof input.command.id === "string") &&
       (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
       input.command.type === "acpSessions.list" ||
+      input.command.type === "backup.runs" ||
       (input.command.type === "acpSessions.metadata" &&
         Array.isArray(input.command.entries) &&
         input.command.entries.length <= 64 &&
@@ -174,6 +175,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             typeof input.command.input.cursor.changedAtMs === "number" &&
             typeof input.command.input.cursor.environmentId === "string"))) ||
       input.command.type === "userProfiles.catalog" ||
+      (input.command.type === "userModelAccounts.links" &&
+        typeof input.command.profileId === "string") ||
       (input.command.type === "userPreferences.values" &&
         typeof input.command.key === "string" &&
         Array.isArray(input.command.profileIds) &&

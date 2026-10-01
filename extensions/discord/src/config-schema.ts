@@ -9,7 +9,6 @@ import {
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
-  ChannelStreamingProgressSchema,
   ProviderCommandsSchema,
   refineChannelDmPolicy,
   TtsConfigSchema,
@@ -24,9 +23,6 @@ import { z } from "zod";
 import { discordChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SecretInputSchema = buildSecretInputSchema();
-const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  progress: ChannelStreamingProgressSchema.optional(),
-}).strict();
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
@@ -202,7 +198,7 @@ const DiscordVoiceSchema = z
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
   omit: ["groupAllowFrom"],
   allowFrom: DiscordIdListSchema.optional(),
-  streaming: DiscordPreviewStreamingConfigSchema.optional(),
+  streaming: ChannelPreviewStreamingConfigSchema.optional(),
 });
 
 const DiscordAccountSchemaBase = z

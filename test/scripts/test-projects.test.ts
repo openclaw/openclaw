@@ -40,6 +40,7 @@ import {
 } from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
@@ -77,10 +78,11 @@ describe("Windows CI partitions", () => {
     assert(first && second);
     const targets = [...first.targets, ...second.targets];
     expect(new Set(targets).size).toBe(targets.length);
-    // Tooling owns the long compiler fixtures; the extension catch-all retains
+    // Tooling and infra own shared fixtures; the extension catch-all retains
     // separate plugin processes. The other projects share setup within one part.
     expect([...first.configs].filter((config) => second.configs.has(config))).toEqual([
       "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.infra.config.ts",
       "test/vitest/vitest.extensions.config.ts",
     ]);
   });
@@ -2128,12 +2130,14 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("prints wrapper help for --help without starting a broad local suite", () => {
     const helpFlag = "--help";
+    const nodeExecPath = requireNodeTool("node");
     withTinyFileTree({}, (tempDir) => {
       const result = spawnSync(
-        process.execPath,
+        nodeExecPath,
         [
           ...resolveRuntimeWorkerArgv(
             resolveRuntimeWorkerUrl(scriptModuleEntrypoints.testProjects),
+            nodeExecPath,
           ),
           helpFlag,
         ],
@@ -3138,7 +3142,7 @@ describe("test selector native source facts", () => {
           fs.realpathSync(cwd),
           "scripts/lib/test-selector-source-facts.mts",
         );
-        const native = spawnSync(process.execPath, [scanner], {
+        const native = spawnSync(requireNodeTool("node"), [scanner], {
           cwd,
           input: JSON.stringify({ files, terms: ["scripts/tool.mts", "scripts/tool"] }),
           encoding: "utf8",
@@ -3206,7 +3210,7 @@ describe("test selector native source facts", () => {
         "Test selector source scan failed",
       );
       const result = spawnSync(
-        process.execPath,
+        requireNodeTool("node"),
         [path.resolve("scripts/lib/test-selector-source-facts.mts")],
         {
           cwd,

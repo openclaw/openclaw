@@ -3,6 +3,7 @@ import type {
   SystemAgentWizardCancel,
   WizardAnswer,
 } from "../../packages/gateway-protocol/src/index.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   cleanupSystemAgentSession,
@@ -231,16 +232,23 @@ export class SystemAgentChatEngine {
     facts: SystemAgentGreetingFacts;
     timeoutMs: number;
   }): Promise<SystemAgentGreetingPlan | null> {
-    const planner = this.options.planGreeting;
-    const plan = planner
-      ? await planner(params)
-      : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
-          planSystemAgentGreetingWithConfiguredModel({
-            ...params,
-            verifiedInference: this.verifiedInference,
-            deps: this.options.deps,
-          }),
-        );
+    const runPlanner = async () => {
+      const planner = this.options.planGreeting;
+      return planner
+        ? await planner(params)
+        : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
+            planSystemAgentGreetingWithConfiguredModel({
+              ...params,
+              verifiedInference: this.verifiedInference,
+              deps: this.options.deps,
+            }),
+          );
+    };
+    const requesterAgentId = this.options.requesterAgentId?.trim();
+    const plan =
+      requesterAgentId && requesterAgentId !== this.verifiedInference.execution.agentId
+        ? await runOutsidePreparedModelRuntimePluginGenerationScope(runPlanner)
+        : await runPlanner();
     if (plan) {
       await this.requireVerifiedInference();
     }

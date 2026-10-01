@@ -48,7 +48,6 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
 }
 
-/** Returns true when the workspace appears to lack canonical memory guidance. */
 export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<boolean> {
   const entries = await listWorkspaceEntries(workspaceDir);
   if (entries.has(CANONICAL_ROOT_MEMORY_FILENAME)) {
@@ -126,7 +125,6 @@ async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> 
   }
 }
 
-/** Detects canonical and legacy root memory files in a workspace. */
 async function detectRootMemoryFiles(workspaceDir: string): Promise<RootMemoryFilesDetection> {
   const resolvedWorkspace = path.resolve(workspaceDir);
   const canonicalPath = resolveCanonicalRootMemoryPath(resolvedWorkspace);
@@ -155,7 +153,6 @@ function formatBytes(bytes?: number): string {
   return typeof bytes === "number" ? `${bytes} bytes` : "size unknown";
 }
 
-/** Formats the warning for split canonical/legacy root memory files. */
 function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection): string | null {
   if (detection.canonicalExists && detection.legacyExists) {
     return [
@@ -317,7 +314,6 @@ type WorkspaceMemoryDoctorScope = {
   labelAgent: boolean;
 };
 
-/** Emits workspace root-memory health warnings. */
 export async function noteWorkspaceMemoryHealth(
   cfg: OpenClawConfig,
   scope?: WorkspaceMemoryDoctorScope,

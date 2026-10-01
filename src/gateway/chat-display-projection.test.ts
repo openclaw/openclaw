@@ -4,10 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { getMediaDir } from "../media/store.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
-import {
-  projectChatDisplayMessages,
-  sanitizeChatHistoryMessages,
-} from "./chat-display-projection.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./server-methods/chat-history-budget.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 

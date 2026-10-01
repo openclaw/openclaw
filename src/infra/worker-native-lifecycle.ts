@@ -59,6 +59,7 @@ type NativeSource = RetainedNativeWorkerSource & {
   runtimeGeneration?: RuntimeWorkerGeneration;
   runtime?: NativeRuntime;
   broker?: SpawnBrokerHost;
+  automaticBrokerClose?: Promise<void>;
   brokerModuleUrl: URL;
   closing: boolean;
   close(): Promise<void>;
@@ -78,6 +79,26 @@ const lifetime = resolveGlobalSingleton(
     await state.defaultSource?.close();
   },
 );
+
+function forgetNativeSource(source: NativeSource): void {
+  if (source.runtimeGeneration) {
+    if (lifetime.sources.get(source.runtimeGeneration) === source) {
+      lifetime.sources.delete(source.runtimeGeneration);
+    }
+  } else if (lifetime.defaultSource === source) {
+    lifetime.defaultSource = undefined;
+  }
+}
+
+function closeNativeBroker(source: NativeSource): Promise<void> {
+  try {
+    return source.broker?.close() ?? Promise.resolve();
+  } catch (error) {
+    const failed = createDeferredCore();
+    failed.reject(error);
+    return failed.promise;
+  }
+}
 
 function nativeRuntime(source: NativeSource): NativeRuntime {
   if (source.closing) {
@@ -116,14 +137,19 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         return;
       }
       source.runtime = undefined;
-      if (source.runtimeGeneration) {
-        if (lifetime.sources.get(source.runtimeGeneration) === source) {
-          lifetime.sources.delete(source.runtimeGeneration);
-        }
-      } else if (lifetime.defaultSource === source) {
-        lifetime.defaultSource = undefined;
+      if (!source.broker) {
+        forgetNativeSource(source);
+        return;
       }
-      void source.broker?.close().catch(ownerJoined.reject);
+      if (!source.automaticBrokerClose) {
+        source.automaticBrokerClose = closeNativeBroker(source);
+        void source.automaticBrokerClose.then(
+          () => forgetNativeSource(source),
+          () => {
+            // Keep the original failed attempt reachable through the source's finalizer.
+          },
+        );
+      }
     };
     const terminateOwner = () => {
       if (terminating) {
@@ -386,15 +412,25 @@ export function captureRetainedNativeWorkerSource(options?: {
     source.closing = true;
     void (async () => {
       await source.runtime?.close();
-      await source.broker?.close();
-      if (captured.runtimeGeneration) {
-        if (lifetime.sources.get(captured.runtimeGeneration) === source) {
-          lifetime.sources.delete(captured.runtimeGeneration);
-        }
-      } else if (lifetime.defaultSource === source) {
-        lifetime.defaultSource = undefined;
+      const automatic = source.automaticBrokerClose;
+      // Preserve the existing explicit retry when automatic close refused before broker memoization.
+      const closing = closeNativeBroker(source);
+      const attempts = automatic && automatic !== closing ? [automatic, closing] : [closing];
+      const outcomes = await Promise.allSettled(attempts);
+      // Child exit does not certify cleanup. A terminal memoized failure stays sealed until restart.
+      if (outcomes.at(-1)?.status === "fulfilled") {
+        forgetNativeSource(source);
+        owners.clear();
       }
-      owners.clear();
+      const failures = outcomes.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : [],
+      );
+      if (failures.length > 1 && !Object.is(failures[0], failures[1])) {
+        throw new AggregateError(failures, "Automatic and final native broker cleanup failed");
+      }
+      // Await the original promises to preserve even undefined/null rejection identity.
+      await automatic;
+      await closing;
     })().then(joined.resolve, joined.reject);
   };
   if (captured.runtimeGeneration) {

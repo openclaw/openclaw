@@ -120,12 +120,6 @@ export function resolveExecApprovalsDisplayPath(env: NodeJS.ProcessEnv = process
     : path.join(stateDir, locator);
 }
 
-export function resolveExecApprovalsTranscriptPath(): string {
-  return process.env.OPENCLAW_STATE_DIR?.trim()
-    ? "$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config"
-    : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/state/openclaw.sqlite#exec_approvals_config`;
-}
-
 export function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
   return normalizeExecApprovalsInternal({
     version: 1,

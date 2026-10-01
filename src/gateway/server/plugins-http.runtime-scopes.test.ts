@@ -11,7 +11,8 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setControlUiPluginAuthCookie } from "../control-ui-plugin-auth-cookie.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
@@ -29,7 +30,7 @@ import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { withTempConfig } from "../test-temp-config.js";
-import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
+import { createGatewayTestRegistry, createRoute } from "./__tests__/test-utils.js";
 import {
   createGatewayPluginRequestHandler,
   createGatewayPluginUpgradeHandler,
@@ -41,26 +42,6 @@ const SECURE_ADMIN_HOOK_PATH = "/secure-admin-hook";
 type PluginHttpRoute = ReturnType<typeof createRoute>;
 type PluginRequestHandler = ReturnType<typeof createGatewayPluginRequestHandler>;
 type PluginRequestAuthContext = NonNullable<Parameters<PluginRequestHandler>[3]>;
-
-function createRoute(params: {
-  path: string;
-  auth: "gateway" | "plugin";
-  match?: "exact" | "prefix";
-  gatewayRuntimeScopeSurface?: "write-default" | "trusted-operator";
-  gatewayMethodDispatchAllowed?: boolean;
-  handler?: (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>;
-}) {
-  return {
-    pluginId: "route",
-    path: params.path,
-    auth: params.auth,
-    gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface,
-    gatewayMethodDispatchAllowed: params.gatewayMethodDispatchAllowed,
-    match: params.match ?? "exact",
-    handler: params.handler ?? (() => true),
-    source: "route",
-  };
-}
 
 function createMockLogger(): SubsystemLogger {
   const child = vi.fn<(name: string) => SubsystemLogger>();

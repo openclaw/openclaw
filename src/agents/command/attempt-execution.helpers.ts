@@ -267,9 +267,7 @@ export function resolveFallbackRetryPrompt(params: {
 const CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET = 8_000;
 const CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS = 64;
 
-type FallbackTurnLikeMessage = Record<string, unknown>;
-
-function extractFallbackTurnText(message: FallbackTurnLikeMessage): string {
+function extractFallbackTurnText(message: ClaudeCliFallbackSeed["recentTurns"][number]): string {
   const content = message.content;
   if (typeof content === "string") {
     return content;
@@ -311,7 +309,7 @@ function extractFallbackTurnText(message: FallbackTurnLikeMessage): string {
 }
 
 function formatFallbackTurns(
-  turns: ReadonlyArray<FallbackTurnLikeMessage>,
+  turns: Readonly<ClaudeCliFallbackSeed["recentTurns"]>,
   remainingBudget: number,
 ): string {
   if (turns.length === 0 || remainingBudget <= 0) {
@@ -372,10 +370,7 @@ function formatClaudeCliFallbackPrelude(
     }
   }
   if (remaining > CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS && seed.recentTurns.length > 0) {
-    const text = formatFallbackTurns(
-      seed.recentTurns as ReadonlyArray<FallbackTurnLikeMessage>,
-      remaining - 32,
-    );
+    const text = formatFallbackTurns(seed.recentTurns, remaining - 32);
     if (text) {
       sections.push(`\nRecent turns:\n${text}`);
     }
@@ -410,8 +405,6 @@ export function createAcpVisibleTextAccumulator() {
   let pendingSilentPrefix = "";
   let visibleText = "";
   let rawVisibleText = "";
-  const startsWithWordChar = (chunk: string): boolean => /^[\p{L}\p{N}]/u.test(chunk);
-
   const resolveNextCandidate = (base: string, chunk: string): string => {
     if (!base) {
       return chunk;
@@ -419,7 +412,7 @@ export function createAcpVisibleTextAccumulator() {
     if (
       isSilentReplyText(base, SILENT_REPLY_TOKEN) &&
       !chunk.startsWith(base) &&
-      startsWithWordChar(chunk)
+      /^[\p{L}\p{N}]/u.test(chunk)
     ) {
       return chunk;
     }

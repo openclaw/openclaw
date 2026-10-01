@@ -7,19 +7,7 @@ import {
   createNativeTypeScriptParser,
   type NativeTypeScriptParser,
 } from "./lib/native-typescript.mts";
-import {
-  compareRatchetCounts,
-  listRatchetRenames,
-  loadRatchetReference,
-  loadRatchetSnapshot,
-  loadRatchetSources,
-  parseRatchetArgs,
-  parseRatchetCounts,
-  reportRatchetFailures,
-  reportRatchetSuccess,
-  resolveRatchetBase,
-  type RatchetCountDelta,
-} from "./lib/shrink-ratchet.mts";
+import { loadRatchetSources, runPerFileCountRatchet } from "./lib/shrink-ratchet.mts";
 import {
   TYPE_ASSERTION_PRODUCTION_ROOTS,
   isSkippedTypeAssertionTestPath,
@@ -137,47 +125,6 @@ export function countUnsafeAssertions(
   return count;
 }
 
-function parseAssertionBaseline(source: string) {
-  return parseRatchetCounts(source, BASELINE_PATH);
-}
-
-function formatBaseline(counts: ReadonlyMap<string, number>) {
-  const entries = [...counts]
-    .filter(([, count]) => count > 0)
-    .toSorted(([left], [right]) => compareStrings(left, right))
-    .map(([filePath, count]) => `${filePath}\t${count}`);
-  return BASELINE_HEADER + entries.join("\n") + (entries.length > 0 ? "\n" : "");
-}
-
-function baselineWithVerifiedRenames(
-  root: string,
-  baseRef: string,
-  staged: boolean,
-  baseline: ReadonlyMap<string, number>,
-  baseBaseline: ReadonlyMap<string, number>,
-) {
-  const allowed = new Map(baseBaseline);
-  for (const { from, to } of listRatchetRenames(
-    root,
-    baseRef,
-    staged,
-    TYPE_ASSERTION_PRODUCTION_ROOTS,
-  )) {
-    const oldCount = baseBaseline.get(from);
-    const newCount = baseline.get(to);
-    if (
-      oldCount !== undefined &&
-      newCount !== undefined &&
-      newCount <= oldCount &&
-      !baseline.has(from)
-    ) {
-      allowed.delete(from);
-      allowed.set(to, oldCount);
-    }
-  }
-  return allowed;
-}
-
 export function collectCurrentAssertionSafetyCounts(
   root = process.cwd(),
   options: { staged?: boolean } = {},
@@ -222,152 +169,36 @@ export function collectCurrentAssertionSafetyCounts(
   return counts;
 }
 
-function allowanceWithExistingBaseCounts(
-  root: string,
-  baseRef: string,
-  proposed: ReadonlyMap<string, number>,
-  allowed: ReadonlyMap<string, number>,
-) {
+export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
   using parser = createNativeTypeScriptParser({ cwd: root });
-  const effective = new Map(allowed);
-  for (const [filePath, count] of proposed) {
-    if (count <= (effective.get(filePath) ?? 0)) {
-      continue;
-    }
-    try {
-      const source = execFileSync("git", ["show", `${baseRef}:${filePath}`], {
+  return runPerFileCountRatchet(root, argv, {
+    baselinePath: BASELINE_PATH,
+    baselineHeader: BASELINE_HEADER,
+    renameSourceRoots: TYPE_ASSERTION_PRODUCTION_ROOTS,
+    collectCurrent: (options) => collectCurrentAssertionSafetyCounts(root, options),
+    countAtRef(ref, filePath) {
+      const source = execFileSync("git", ["show", `${ref}:${filePath}`], {
         cwd: root,
         encoding: "utf8",
         maxBuffer: GIT_MAX_BUFFER,
         stdio: ["ignore", "pipe", "ignore"],
       });
-      const baseCount = countUnsafeAssertions(
+      return countUnsafeAssertions(
         source,
         filePath,
         parser.parseSourceFile(filePath, source),
         parser,
       );
-      if (baseCount > (effective.get(filePath) ?? 0)) {
-        effective.set(filePath, baseCount);
-      }
-    } catch {
-      // Missing base paths are branch additions and receive no allowance.
-    }
-  }
-  return effective;
-}
-
-function writeBaseline(root: string, counts: ReadonlyMap<string, number>) {
-  fs.writeFileSync(path.join(root, BASELINE_PATH), formatBaseline(counts));
-}
-
-function formatDeltas(entries: RatchetCountDelta[], comparison: ">" | "<") {
-  return entries.map((entry) => `${entry.entry}: ${entry.current} ${comparison} ${entry.allowed}`);
-}
-
-function totalCount(counts: ReadonlyMap<string, number>) {
-  return [...counts.values()].reduce((total, count) => total + count, 0);
-}
-
-export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
-  try {
-    const args = parseRatchetArgs(argv);
-    if (args.staged && args.prune) {
-      throw new Error("--prune cannot be combined with --staged");
-    }
-
-    const baseRef = resolveRatchetBase(root, { base: args.base, staged: args.staged });
-    const baseBaseline = baseRef
-      ? loadRatchetReference(root, baseRef, BASELINE_PATH, parseAssertionBaseline)
-      : null;
-    const current = collectCurrentAssertionSafetyCounts(root, { staged: args.staged });
-
-    let baseline;
-    try {
-      baseline = loadRatchetSnapshot(root, BASELINE_PATH, args.staged, parseAssertionBaseline);
-    } catch {
-      if (args.prune && !args.staged && baseBaseline === null) {
-        writeBaseline(root, current);
-        reportRatchetSuccess(
-          `Initialized ${BASELINE_PATH}: ${current.size} files, ${totalCount(current)} assertions.`,
-        );
-        return 0;
-      }
-      throw new Error("Missing " + BASELINE_PATH + (args.staged ? " in the index" : ""));
-    }
-
-    if (args.prune && !args.staged && baseBaseline === null) {
-      writeBaseline(root, current);
-      reportRatchetSuccess(
-        `Refreshed initial ${BASELINE_PATH}: ${current.size} files, ${totalCount(current)} assertions.`,
-      );
-      return 0;
-    }
-    const allowedBaseline =
-      baseRef && baseBaseline
-        ? baselineWithVerifiedRenames(root, baseRef, args.staged, baseline, baseBaseline)
-        : baseBaseline;
-    const currentAllowance =
-      baseRef && baseBaseline
-        ? allowanceWithExistingBaseCounts(root, baseRef, current, baseline)
-        : baseline;
-    const expansionAllowance =
-      baseRef && allowedBaseline
-        ? allowanceWithExistingBaseCounts(root, baseRef, baseline, allowedBaseline)
-        : allowedBaseline;
-    const increases = compareRatchetCounts(current, currentAllowance).increased;
-    const expanded = expansionAllowance
-      ? compareRatchetCounts(baseline, expansionAllowance).increased
-      : [];
-
-    if (
-      reportRatchetFailures(
-        [
-          {
-            entries: formatDeltas(increases, ">"),
-            title: "Uncommented type assertions exceed the grandfathered per-file baseline:",
-          },
-          {
-            entries: formatDeltas(expanded, ">"),
-            title: "The assertion SAFETY baseline may only shrink:",
-          },
-        ],
+    },
+    messages: {
+      increaseTitle: "Uncommented type assertions exceed the grandfathered per-file baseline:",
+      expansionTitle: "The assertion SAFETY baseline may only shrink:",
+      guidance:
         "Every new non-const type assertion needs // SAFETY: <invariant> above it or on the same line.",
-      )
-    ) {
-      return 1;
-    }
-
-    if (args.prune) {
-      const oldFiles = baseline.size;
-      const oldAssertions = totalCount(baseline);
-      writeBaseline(root, current);
-      reportRatchetSuccess(
-        `Pruned ${BASELINE_PATH}: ${oldFiles} -> ${current.size} files; ${oldAssertions} -> ${totalCount(current)} assertions.`,
-      );
-      return 0;
-    }
-
-    const stale = compareRatchetCounts(current, baseline).decreased;
-    if (
-      reportRatchetFailures([
-        {
-          entries: formatDeltas(stale, "<"),
-          title: `Shrink ${BASELINE_PATH} entries (or run with --prune):`,
-        },
-      ])
-    ) {
-      return 1;
-    }
-
-    reportRatchetSuccess(
-      `assertion SAFETY ratchet OK: ${current.size} files, ${totalCount(current)} grandfathered assertions.`,
-    );
-    return 0;
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    return 1;
-  }
+      countNoun: "assertions",
+      successTitle: "assertion SAFETY ratchet OK",
+    },
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

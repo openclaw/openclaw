@@ -5,13 +5,12 @@ import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/
 import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { confirm, select } from "./configure.shared.js";
+import { createConfigurePrompts } from "./configure.prompts.js";
 import { gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import { GATEWAY_DAEMON_RUNTIME_OPTIONS, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { prepareGatewayServiceInstall } from "./gateway-service-setup.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
-import { guardCancel } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 export type DaemonSetupOutcome = "succeeded" | "failed" | "skipped";
@@ -22,6 +21,7 @@ export async function maybeInstallDaemon(params: {
   port: number;
   daemonRuntime?: GatewayDaemonRuntime;
 }): Promise<DaemonSetupOutcome> {
+  const prompts = createConfigurePrompts(params.runtime);
   const service = resolveGatewayService();
   let loaded;
   try {
@@ -34,18 +34,14 @@ export async function maybeInstallDaemon(params: {
   }
   let shouldInstall = true;
   if (loaded) {
-    const action = guardCancel(
-      await select({
-        message: "Gateway service already installed",
-        options: [
-          { value: "restart", label: "Restart" },
-          { value: "reinstall", label: "Reinstall" },
-          { value: "skip", label: "Skip" },
-        ],
-      }),
-      params.runtime,
-      1,
-    );
+    const action = await prompts.select({
+      message: "Gateway service already installed",
+      options: [
+        { value: "restart", label: "Restart" },
+        { value: "reinstall", label: "Reinstall" },
+        { value: "skip", label: "Skip" },
+      ],
+    });
     if (action === "restart") {
       await withProgress(
         { label: "Gateway service", indeterminate: true, delayMs: 0 },
@@ -79,15 +75,11 @@ export async function maybeInstallDaemon(params: {
         if (GATEWAY_DAEMON_RUNTIME_OPTIONS.length === 1) {
           return GATEWAY_DAEMON_RUNTIME_OPTIONS[0]?.value ?? suggested;
         }
-        return guardCancel(
-          await select({
-            message: "Gateway service runtime",
-            options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-            initialValue: suggested,
-          }),
-          params.runtime,
-          1,
-        ) as GatewayDaemonRuntime;
+        return await prompts.select<GatewayDaemonRuntime>({
+          message: "Gateway service runtime",
+          options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
+          initialValue: suggested,
+        });
       },
     });
     await withProgress(
@@ -140,7 +132,7 @@ export async function maybeInstallDaemon(params: {
   await ensureSystemdUserLingerInteractive({
     runtime: params.runtime,
     prompter: {
-      confirm: async (p) => guardCancel(await confirm(p), params.runtime, 1),
+      confirm: prompts.confirm,
       note,
     },
     reason:

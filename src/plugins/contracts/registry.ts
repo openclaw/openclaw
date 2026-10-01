@@ -57,6 +57,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       providerIds: [...entry.providerIds],
       providerEnvVars: normalizeProviderEnvVars(entry.providerEnvVars),
       workerProviderIds: [...entry.workerProviderIds],
+      storageProviderIds: [...entry.storageProviderIds],
       embeddingProviderIds: [...entry.embeddingProviderIds],
       speechProviderIds: [...entry.speechProviderIds],
       realtimeTranscriptionProviderIds: [...entry.realtimeTranscriptionProviderIds],
@@ -81,6 +82,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
         (plugin.cliBackends.length > 0 ||
           plugin.providers.length > 0 ||
           (plugin.contracts?.workerProviders?.length ?? 0) > 0 ||
+          (plugin.contracts?.storageProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.embeddingProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.speechProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0 ||
@@ -103,6 +105,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       providerIds: normalizeContractStringValues(plugin.providers),
       providerEnvVars: resolvePluginProviderEnvVars(plugin),
       workerProviderIds: normalizeContractStringValues(plugin.contracts?.workerProviders ?? []),
+      storageProviderIds: normalizeContractStringValues(plugin.contracts?.storageProviders ?? []),
       embeddingProviderIds: normalizeContractStringValues(
         plugin.contracts?.embeddingProviders ?? [],
       ),

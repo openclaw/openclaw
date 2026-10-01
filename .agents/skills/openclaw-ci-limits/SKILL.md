@@ -270,7 +270,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   API and job deadlines remain unchanged.
   The aggregate preserves failure-triggered PR cancellation through the
   `pr-fail-fast` cause outputs; superseded runs without a failure cause still
-  skip the aggregate. PR Node matrices use native fail-fast. The same-repository
+  skip the aggregate. Canonical PR Node matrices disable native fail-fast on
+  every attempt; reruns complete every leg so inherited main failures leave the
+  remaining admin-landing proof intact. Native fail-fast applies only to PRs in
+  other workflow repositories. Historical runs retain their tested policy. The same-repository
   PR first-attempt monitor alone has `actions: write` and adds one 4-class registration per
   eligible PR, or uses hosted Ubuntu under the outage override. Main/manual
   matrices remain complete. The monitor starts after preflight, observes failures

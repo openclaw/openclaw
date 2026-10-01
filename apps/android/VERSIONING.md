@@ -77,37 +77,120 @@ group with ordinary store releases.
 
 Internal distributions retain the same live version planning, generated phone
 and Wear notes, signing, artifact validation, atomic upload, and immutable
-source-ref recording. They publish only to `internal` and `wear:internal`, skip
+source-ref recording. They publish to `internal` and `wear:internal`, then upload
+the exact same signed phone and Wear AABs to Firebase App Distribution. They skip
 screenshot capture and its emulator/image tooling, and leave the store listing
-metadata and images unchanged. The existing Play review-submission settings stay
-in effect; production promotion remains manual.
+metadata and images unchanged. Internal distributions omit
+`changesNotSentForReview` so Play handles review automatically, and disable
+Fastlane's review-setting fallback. Ordinary store releases retain their
+configured review settings; production promotion remains manual.
+
+Google Play can also submit changes already staged in Play Console when an API
+edit commits. Resolve unrelated pending store changes before running an internal
+distribution or enabling its daily schedule; skipping listing uploads does not
+isolate those staged changes. See Google's
+[concurrency guidance](https://developers.google.com/android-publisher/concurrency-considerations).
 
 To configure unattended runs:
 
 1. Create the `android-internal` GitHub environment, restrict deployment to
    `main`, and allow unattended jobs without required reviewers or wait timers.
-2. Make `GH_APP_PRIVATE_KEY`, `MATCH_PASSWORD`, `OPENAI_API_KEY`, and
-   `GOOGLE_PLAY_JSON_KEY_DATA` available to that environment through environment,
+2. Make `GH_APP_PRIVATE_KEY`, `MATCH_PASSWORD`, `OPENAI_API_KEY`,
+   `GOOGLE_PLAY_JSON_KEY_DATA`, and `FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA`
+   available to that environment through environment,
    repository, or organization secrets. Use the same signing identity and Google
    Play application as the ordinary store release.
 3. Configure the Google Play Internal testing audience for the app in Play
-   Console. The workflow distributes to the existing tracks; it does not manage
-   tester membership.
-4. From `main`, run **Android Store Release** with `operation=internal` and verify
-   that the phone and Wear builds reach their Internal testing tracks.
-5. Set the repository variable `ANDROID_INTERNAL_ENABLED=true` to enable daily
+   Console. Enable Firebase App Distribution for the same Android package, link
+   it to Google Play, accept Internal App Sharing terms, and register Firebase's
+   Internal App Sharing certificate in Play's Android developer verification.
+   The Firebase AAB integration must report `INTEGRATED`.
+4. Create a Firebase tester group and its self-service invitation link. Set
+   `FIREBASE_APP_ID` and `FIREBASE_TESTER_GROUPS` (comma-separated group aliases)
+   consistently in the workflow and local environment. The workflow uses the
+   existing OpenClaw app and `android-daily` group. The Firebase JSON key belongs
+   to a dedicated service account with `roles/firebaseappdistro.admin` on the
+   Firebase project. No Firebase SDK or configuration file is needed in the app.
+5. From `main`, run **Android Store Release** with `operation=internal` and verify
+   that the phone and Wear builds reach both their Internal testing tracks and
+   the Firebase group.
+6. Set the repository variable `ANDROID_INTERNAL_ENABLED=true` to enable daily
    runs. Set it to `false` to pause them. Manual `internal` runs do not depend on
    this flag.
 
 The local equivalent, from a clean `main` matching `origin/main`, is:
 
 ```bash
+# Inject FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA from the secret manager,
+# alongside the existing Play, signing, and release-note credentials.
+export FIREBASE_APP_ID="1:627614795142:android:3daa833ca787ca67959807"
+export FIREBASE_TESTER_GROUPS="android-daily"
 pnpm android:release:upload -- --destination internal
 ```
 
 Omitting `--destination` keeps the ordinary `play-store` path, including
 screenshots and listing updates. Both paths retain the saved plan, notes, and
 signed artifacts for the same failure investigation and recovery process.
+
+### Firebase distribution and recovery
+
+Internal runs check Firebase credentials, AAB integration, and group access before
+building or uploading to Play. Preflight connections close before the build;
+publishing opens fresh connections afterward. Authentication and read-only checks
+retry transient connection failures, HTTP 408/429, and temporary server errors up
+to four total attempts with exponential backoff and jitter. Reads have a 30-second
+attempt timeout and a two-minute total budget, including any `Retry-After` delay.
+Permanent errors, including HTTP 401/403, fail immediately. Retry diagnostics show
+only the operation, safe error code or HTTP status, and attempt count.
+
+Uploads, release-note writes, and notification requests are not automatically
+retried; their existing recovery receipts preserve any uncertain outcome.
+Once the atomic Play upload and source-ref record succeed, Firebase receives the
+retained signed AABs, checked against their SHA-256
+sidecars. Wear is uploaded and distributed first; Phone follows after Wear
+finishes so Phone appears first in Firebase's default latest-release ordering.
+Notes identify **Phone** and **Wear OS — watch only**. Each successful group
+distribution sends Firebase's new-build email notification. Share the group's
+invitation URL for self-service enrollment; the release command does not manage
+membership or create invitation links.
+
+Firebase serves AAB installs through Google Play Internal App Sharing, which uses
+a test signing certificate. The original Play Internal testing builds remain
+eligible for manual production promotion. Test phone/watch communication using
+the same distribution channel on both devices because Wear's Data Layer requires
+matching signatures. Firebase is a tester delivery channel, not a production
+promotion source.
+
+A Firebase failure leaves the successful Play upload in place and fails the run.
+Keep both Actions artifacts: `android-release-recovery-<run>-<attempt>` contains
+`android-plan.json`, `release-notes.json`, and `firebase-result.json`;
+`android-release-artifacts-<run>-<attempt>` contains the signed AABs and SHA-256
+sidecars. For local recovery, place the JSON files in one recovery directory and
+the AABs and sidecars directly in its `artifacts/` subdirectory.
+
+After inspecting the failure, run the shared Firebase-only recovery command with
+the original Firebase app/group settings and JSON credential:
+
+```bash
+node scripts/mobile-release.mjs firebase --platform android \
+  --recovery-dir /path/to/android-release-recovery
+```
+
+This command verifies the existing Play source ref and retained artifact hashes.
+It does not plan a version, generate notes, build, upload to Play, or promote to
+production. The receipt binds the original plan, notes, app, groups, and artifacts;
+completed distributions are skipped. An interrupted upload resumes its recorded
+operation, or reuploads only the exact same bytes using Firebase's binary deduplication.
+Known rejected notification requests can be retried. A `distribution-pending`
+state means notification delivery is uncertain: recovery stops instead of sending
+another email. Inspect that release and its group in Firebase before a maintainer
+reconciles the receipt; never delete the receipt to force a replay.
+
+Concurrent recovery from one directory is refused. If a killed local process
+leaves `firebase-result.json.lock`, verify that publisher has stopped before
+removing only that stale lock. Use one recovery directory and one publisher per
+release; copying a receipt does not coordinate separate publishers. Keep the
+original failure and recovery artifacts until both destinations are confirmed.
 
 ### Gateway APK publication and upload recovery
 

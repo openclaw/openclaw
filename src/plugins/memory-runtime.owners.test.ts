@@ -397,7 +397,7 @@ it.each([
       await expect(reload.close()).resolves.toMatchObject({
         errors: [
           expect.objectContaining({
-            message: expect.stringContaining(`Plugin ${targetId} was reloaded or disabled`),
+            message: `Plugin ${targetId} is retiring`,
           }),
         ],
       });

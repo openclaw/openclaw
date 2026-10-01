@@ -16,7 +16,8 @@ import {
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withTempHomeConfig, writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {

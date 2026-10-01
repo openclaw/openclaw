@@ -109,9 +109,6 @@ const formatInventoryHuman = (inventory: PluginExtensionInventoryEntry[]) =>
     inventory,
   );
 
-/**
- * Runs the plugin-extension import boundary check.
- */
 async function runPluginExtensionImportBoundaryCheck(): Promise<0 | 1> {
   const actual = await collectPluginExtensionImportBoundaryInventory();
 
