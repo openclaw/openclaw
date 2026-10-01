@@ -6,6 +6,7 @@ import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { tryReadJson, writeJson } from "../../infra/json-files.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -19,6 +20,7 @@ import type {
 } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { serializeByKey } from "./serialize.js";
+import { ensureWritableSkillDirectories } from "./skill-directory-modes.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { loadMergedWorkspaceSkills, loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
@@ -249,7 +251,17 @@ export async function syncWorkspaceSkills(params: {
     );
     for (const child of await fsp.readdir(targetSkillsDir)) {
       if (!preservedDestinations.has(child)) {
-        await fsp.rm(path.join(targetSkillsDir, child), { recursive: true, force: true });
+        const childPath = path.join(targetSkillsDir, child);
+        try {
+          await fsp.rm(childPath, { recursive: true, force: true });
+        } catch (error) {
+          const permissionDenied = hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM");
+          if (process.platform === "win32" || !permissionDenied) {
+            throw error;
+          }
+          await ensureWritableSkillDirectories(targetSkillsDir, child);
+          await fsp.rm(childPath, { recursive: true, force: true });
+        }
       }
     }
 
@@ -271,6 +283,7 @@ export async function syncWorkspaceSkills(params: {
               return !(name === ".git" || name === "node_modules");
             },
           });
+          await ensureWritableSkillDirectories(targetSkillsDir, path.basename(destinationPath));
         } catch (error) {
           copyFailed = true;
           const message = error instanceof Error ? error.message : JSON.stringify(error);
