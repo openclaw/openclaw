@@ -490,9 +490,9 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               : opts?.creatorToolAllowlistCaptureRef;
             capCronJobToolsAllowOnCreate(job, creatorToolAllowlist);
             assertInheritedCronToolCaptureReady(job, creatorToolAllowlistCaptureRef);
-            const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
+            const { alias } = resolveMainSessionAlias(runtimeConfig);
             const resolvedSessionKey = opts?.agentSessionKey
-              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias })
               : undefined;
             const sessionTarget = normalizeLowercaseStringOrEmpty(job.sessionTarget);
             if (!("sessionKey" in job) && resolvedSessionKey && sessionTarget !== "isolated") {
@@ -678,11 +678,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 : "next-heartbeat";
             // An omitted target wakes the originating conversation, not the
             // heartbeat lane. Gateway owns target validation and authorization.
-            const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
+            const { alias } = resolveMainSessionAlias(runtimeConfig);
             const explicitSessionKey = readToolStringParam(params, "sessionKey");
             const explicitAgentId = readToolStringParam(params, "agentId");
             const inferredSessionKey = opts?.agentSessionKey
-              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias })
               : undefined;
             const sessionKey = explicitSessionKey ?? inferredSessionKey;
             // Pair an explicit session with its own agent; caller defaults must

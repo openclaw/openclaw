@@ -149,8 +149,8 @@ function normalizeRequesterSessionKey(
   if (!cleaned) {
     return undefined;
   }
-  const { mainKey, alias } = resolveMainSessionAlias(cfg);
-  return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(cfg);
+  return resolveInternalSessionKey({ key: cleaned, alias });
 }
 
 export async function stopSubagentsForRequester(params: {
