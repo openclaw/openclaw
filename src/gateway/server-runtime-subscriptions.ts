@@ -39,6 +39,7 @@ import {
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import type { LiveActivityCoordinator } from "./live-activity-coordinator.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import type {
   ChatRunState,
@@ -105,6 +106,7 @@ export function startGatewayEventSubscriptions(params: {
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   terminalSessions: Pick<TerminalSessionManager, "closeTaskSessions">;
   refreshConnectedUserProfiles: () => void;
+  liveActivityCoordinator?: LiveActivityCoordinator;
 }) {
   // The worker always runs retention maintenance. audit.enabled only controls
   // producer subscriptions, so disabling collection cannot strand expired rows.
@@ -484,6 +486,7 @@ export function startGatewayEventSubscriptions(params: {
     void dispatch.then(() => agentEventDispatches.delete(dispatch));
   });
   const agentUnsub = async () => {
+    params.liveActivityCoordinator?.beginClose();
     unsubscribeAgentEvents();
     sessionCompanion.dispose();
     sessionObserver.dispose();
@@ -504,6 +507,7 @@ export function startGatewayEventSubscriptions(params: {
       ?.then((handler) => handler.dispose())
       .catch(() => undefined);
     await sessionLifecyclePersistence.drain();
+    await params.liveActivityCoordinator?.stop();
     await auditRecorder.stop();
   };
 

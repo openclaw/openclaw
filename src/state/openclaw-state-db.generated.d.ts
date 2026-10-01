@@ -84,6 +84,43 @@ export interface AgentProvenance {
   creator_agent_id: string | null;
 }
 
+export interface ApnsLiveActivities {
+  activity_id: string;
+  agent_id: string;
+  claim_authorized_at_ms: number | null;
+  claim_deadline_ms: number | null;
+  claim_id: string | null;
+  claim_runtime_id: string | null;
+  created_at_ms: number;
+  delivery_revision: number;
+  delivery_timestamp_s: number | null;
+  destination_json: string | null;
+  device_id: string;
+  dispatch_revision: number;
+  gateway_id: string;
+  last_attempt_at_ms: number | null;
+  last_dispatch_timestamp_s: number | null;
+  lease_expires_at_ms: number;
+  lifecycle_revision: string | null;
+  next_attempt_at_ms: number | null;
+  node_id: string;
+  pairing_generation: string;
+  profile_id: string;
+  public_run_id: string;
+  registration_id: string;
+  retired_at_ms: number | null;
+  retirement_reason: string | null;
+  rotation_revision: number;
+  session_id: string;
+  session_key: string;
+  snapshot_json: string | null;
+  source_incarnation: string;
+  state: string;
+  terminal_deadline_ms: number | null;
+  tombstone_expires_at_ms: number | null;
+  updated_at_ms: number;
+}
+
 export interface ApnsRegistrationTombstones {
   deleted_at_ms: number;
   node_id: string;
@@ -1719,6 +1756,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
   agent_provenance: AgentProvenance;
+  apns_live_activities: ApnsLiveActivities;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;

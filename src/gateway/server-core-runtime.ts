@@ -4,12 +4,14 @@ import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { adoptPluginHttpRouteHandoffs } from "../plugins/http-registry.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
 import { restartRunningChannelAccounts, type ThawRestartTarget } from "./channel-thaw-restart.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
+import { createLiveActivityCoordinator } from "./live-activity-coordinator.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
@@ -237,8 +239,27 @@ export async function startGatewayCoreRuntime(input: {
         import("./server-runtime-startup-services.js"),
       ]),
     );
-  const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } =
-    await startupTrace.measure("runtime.subscriptions", () =>
+  const liveActivityCoordinator = createLiveActivityCoordinator({
+    gatewayIdentity: loadOrCreateProcessDeviceIdentity(),
+    chatAbortControllers,
+    getRuntimeConfig,
+    log,
+  });
+  const activityLifetime = runtime.connectionWork.signal;
+  activityLifetime.addEventListener("abort", liveActivityCoordinator.beginClose, { once: true });
+  if (activityLifetime.aborted) {
+    liveActivityCoordinator.beginClose();
+  }
+  // General sidecars stop before the agent persistence drain. Only fence here;
+  // agentUnsub owns the final join and store close after committed terminals.
+  kernel.addGatewayLifetimeSidecar({
+    stop: () => {
+      liveActivityCoordinator.beginClose();
+      activityLifetime.removeEventListener("abort", liveActivityCoordinator.beginClose);
+    },
+  });
+  const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } = await startupTrace
+    .measure("runtime.subscriptions", () =>
       startGatewayEventSubscriptions({
         log,
         broadcast,
@@ -254,8 +275,14 @@ export async function startGatewayCoreRuntime(input: {
         terminalSessions,
         refreshConnectedUserProfiles: () =>
           resolvePluginGatewayContext()?.refreshConnectedUserProfile?.(),
+        liveActivityCoordinator,
       }),
-    );
+    )
+    .catch(async (error: unknown) => {
+      activityLifetime.removeEventListener("abort", liveActivityCoordinator.beginClose);
+      await liveActivityCoordinator.stop();
+      throw error;
+    });
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
   await startupTrace.measure("runtime.services", () =>

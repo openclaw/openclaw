@@ -890,6 +890,75 @@ CREATE TABLE IF NOT EXISTS apns_registration_tombstones (
   deleted_at_ms INTEGER NOT NULL
 ) STRICT;
 
+-- Activity destinations are independent of ordinary device registrations.
+-- Pairing rewrites its table, so ownership is revalidated rather than cascaded.
+CREATE TABLE IF NOT EXISTS apns_live_activities (
+  registration_id TEXT NOT NULL PRIMARY KEY,
+  gateway_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  node_id TEXT NOT NULL,
+  pairing_generation TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  public_run_id TEXT NOT NULL,
+  activity_id TEXT NOT NULL,
+  source_incarnation TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'terminal_pending', 'tombstone')),
+  destination_json TEXT CHECK (
+    destination_json IS NULL
+    OR (json_valid(destination_json) AND length(CAST(destination_json AS BLOB)) <= 8192)
+  ),
+  snapshot_json TEXT CHECK (
+    snapshot_json IS NULL
+    OR (json_valid(snapshot_json) AND length(CAST(snapshot_json AS BLOB)) <= 2048)
+  ),
+  rotation_revision INTEGER NOT NULL CHECK (rotation_revision BETWEEN 1 AND 9007199254740991),
+  delivery_revision INTEGER NOT NULL CHECK (delivery_revision BETWEEN 0 AND 9007199254740991),
+  dispatch_revision INTEGER NOT NULL CHECK (dispatch_revision BETWEEN 0 AND 9007199254740991),
+  delivery_timestamp_s INTEGER CHECK (delivery_timestamp_s BETWEEN 0 AND 9007199254740),
+  last_dispatch_timestamp_s INTEGER CHECK (last_dispatch_timestamp_s BETWEEN 0 AND 9007199254740),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms BETWEEN 0 AND 9007199254740991),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms BETWEEN created_at_ms AND 9007199254740991),
+  lease_expires_at_ms INTEGER NOT NULL CHECK (lease_expires_at_ms > created_at_ms AND lease_expires_at_ms <= 9007199254740991),
+  terminal_deadline_ms INTEGER CHECK (terminal_deadline_ms BETWEEN 0 AND lease_expires_at_ms),
+  next_attempt_at_ms INTEGER CHECK (next_attempt_at_ms BETWEEN 0 AND 9007199254740991),
+  last_attempt_at_ms INTEGER CHECK (last_attempt_at_ms BETWEEN 0 AND 9007199254740991),
+  claim_id TEXT,
+  claim_runtime_id TEXT,
+  claim_deadline_ms INTEGER CHECK (
+    claim_deadline_ms BETWEEN created_at_ms AND lease_expires_at_ms
+    AND (terminal_deadline_ms IS NULL OR claim_deadline_ms <= terminal_deadline_ms)
+  ),
+  claim_authorized_at_ms INTEGER CHECK (claim_authorized_at_ms BETWEEN 0 AND 9007199254740991),
+  retired_at_ms INTEGER CHECK (retired_at_ms BETWEEN 0 AND 9007199254740991),
+  tombstone_expires_at_ms INTEGER CHECK (tombstone_expires_at_ms BETWEEN retired_at_ms AND 9007199254740991),
+  retirement_reason TEXT CHECK (retirement_reason IN (
+    'revoked', 'owner-retired', 'lease-expired', 'terminal-expired', 'terminal-delivered', 'delivery-rejected'
+  )),
+  UNIQUE (gateway_id, device_id, activity_id),
+  CHECK ((claim_id IS NULL AND claim_runtime_id IS NULL AND claim_deadline_ms IS NULL AND claim_authorized_at_ms IS NULL)
+    OR (claim_id IS NOT NULL AND claim_runtime_id IS NOT NULL AND claim_deadline_ms IS NOT NULL)),
+  CHECK (snapshot_json IS NOT NULL OR delivery_timestamp_s IS NULL),
+  CHECK (claim_id IS NULL OR delivery_timestamp_s IS NOT NULL),
+  CHECK (
+    (state = 'tombstone' AND destination_json IS NULL AND snapshot_json IS NULL
+      AND claim_id IS NULL AND next_attempt_at_ms IS NULL AND retired_at_ms IS NOT NULL
+      AND tombstone_expires_at_ms IS NOT NULL AND retirement_reason IS NOT NULL)
+    OR
+    (state <> 'tombstone' AND destination_json IS NOT NULL AND retired_at_ms IS NULL
+      AND tombstone_expires_at_ms IS NULL AND retirement_reason IS NULL)
+  ),
+  CHECK (state <> 'terminal_pending' OR (terminal_deadline_ms IS NOT NULL AND snapshot_json IS NOT NULL))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_apns_live_activities_device
+  ON apns_live_activities(gateway_id, device_id, state);
+CREATE INDEX IF NOT EXISTS idx_apns_live_activities_expiry
+  ON apns_live_activities(state, lease_expires_at_ms, terminal_deadline_ms, tombstone_expires_at_ms);
+
 -- Node-host-owned launch journal. The descriptor and its credential remain
 -- process memory only; this table records bounded supervision facts.
 CREATE TABLE IF NOT EXISTS node_worker_launches (
