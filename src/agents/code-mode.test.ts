@@ -2,8 +2,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
@@ -340,9 +343,9 @@ it("searches and reads eligible skills through the worker bridge and normal tool
   });
 });
 
-it.each([undefined, "skills_read", "skills_search", "shadowed", "revoked"] as const)(
+it.for([undefined, "skills_read", "skills_search", "shadowed", "revoked"] as const)(
   "keeps disk-backed skill discovery within the harness read authority: %s",
-  async (denied) =>
+  async (denied, { signal: testSignal }) =>
     withTempDir("code-mode-skill-authority-", async (dir) => {
       const filePath = path.join(dir, "SKILL.md");
       await writeFile(filePath, "Private instructions");
@@ -421,14 +424,13 @@ it.each([undefined, "skills_read", "skills_search", "shadowed", "revoked"] as co
       `,
         });
         if (denied === "revoked") {
-          await racePromiseWithAbortSignal(
-            Promise.race([
+          await withinTest(
+            awaitGateBeforeSettlement(
               readStarted.promise,
-              pending.then(() => {
-                throw new Error("Skill search completed before reading its instruction file");
-              }),
-            ]),
-            AbortSignal.timeout(5_000),
+              pending,
+              "Skill search completed before reading its instruction file",
+            ),
+            testSignal,
           );
           effectiveTools = skillTools.filter((tool) => tool.name !== "skills_read");
           runtime.compactTools(effectiveTools, {
