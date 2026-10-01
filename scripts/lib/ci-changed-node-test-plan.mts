@@ -108,6 +108,8 @@ type ChangedTargetValidation = {
   dedicatedCoreTypeChecks?: boolean;
   dedicatedNativeChecks?: { macos: boolean; ios: boolean; android: boolean };
   onFallback?: PlanDiagnostic;
+  selectionMode?: "full" | "aggressive";
+  onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
 };
 const BROWSER_EXTENSION_E2E_TEST_FILE =
   "extensions/browser/chrome-extension/bootstrap.chromium.test.ts";
@@ -461,6 +463,8 @@ export function resolveChangedNodeTestTargets(
 ): string[] {
   const cwd = options.cwd ?? process.cwd();
   const paths = changedPaths.filter((file) => !isIndependentlyCheckedDocumentation(file, cwd));
+  const selections: { rule: string; input: string; targets: string[] }[] = [];
+  const recordSelection = (selection: (typeof selections)[number]) => selections.push(selection);
   const targetPlan = resolveChangedTestTargetPlan(paths, {
     cwd,
     broad: false,
@@ -469,6 +473,7 @@ export function resolveChangedNodeTestTargets(
     resolveAliases: true,
     runtimeOnly: true,
     includeExtensionImpact: false,
+    onSelection: options.onSelection ? recordSelection : undefined,
   });
   if (paths.length > 0 && targetPlan.mode !== "targets") {
     throw new Error(`Unresolved changed-owner test plan: ${targetPlan.mode}`);
@@ -485,12 +490,23 @@ export function resolveChangedNodeTestTargets(
         forceFull: true,
         resolveAliases: true,
         runtimeOnly: true,
+        maxDepth: options.selectionMode === "aggressive" ? 2 : undefined,
       }).filter((file) => protectedRuntimeTestFiles.has(file));
-  const ownerOptIns = [
-    ...PR_PROTECTED_RUNTIME_TEST_FILES.filter((file) => globalProtection || ownsFile(file)),
-    ...affectedProtectedTests,
-    ...listPrExemptRuntimeTestFiles(cwd).filter(ownsFile),
-  ];
+  const ownerOptIns =
+    options.selectionMode === "aggressive"
+      ? affectedProtectedTests
+      : [
+          ...PR_PROTECTED_RUNTIME_TEST_FILES.filter((file) => globalProtection || ownsFile(file)),
+          ...affectedProtectedTests,
+          ...listPrExemptRuntimeTestFiles(cwd).filter(ownsFile),
+        ];
+  recordSelection({ rule: "protected-owner", input: paths.join(", "), targets: ownerOptIns });
+  recordSelection({
+    rule: "policy-watch",
+    input: paths.join(", "),
+    targets: resolvePolicyTestTargets(paths),
+  });
+  recordSelection({ rule: "fixed-smoke", input: "PR", targets: PR_SMOKE_TEST_FILES });
   const owners = [
     ...new Set([
       ...targetPlan.targets,
@@ -512,7 +528,7 @@ export function resolveChangedNodeTestTargets(
       cwd,
     ));
   const optInTargets = new Set([...paths, ...PR_SMOKE_TEST_FILES, ...ownerOptIns]);
-  const files = owners.flatMap((target) => {
+  const expandTarget = (target: string): string[] => {
     if (isTestFileTarget(target)) {
       optInTargets.add(target);
       return [target];
@@ -544,8 +560,10 @@ export function resolveChangedNodeTestTargets(
     }
     // Mapped globs are owner contracts; ordinary source names are not test globs.
     return target.includes("*") ? allFiles().filter((file) => path.matchesGlob(file, target)) : [];
-  });
-  return [...new Set([...files, ...PR_SMOKE_TEST_FILES])]
+  };
+  const expanded = new Map(owners.map((target) => [target, expandTarget(target)]));
+  const files = [...expanded.values()].flat();
+  const selected = [...new Set([...files, ...PR_SMOKE_TEST_FILES])]
     .filter(
       (file) =>
         isTestFileTarget(file) &&
@@ -557,6 +575,23 @@ export function resolveChangedNodeTestTargets(
         lstatSync(path.join(cwd, file), { throwIfNoEntry: false })?.isFile(),
     )
     .toSorted();
+  if (options.onSelection) {
+    const selectedSet = new Set(selected);
+    const explained = new Set<string>();
+    for (const selection of selections) {
+      const targets = [
+        ...new Set(selection.targets.flatMap((target) => expanded.get(target) ?? [target])),
+      ].filter((file) => selectedSet.has(file));
+      targets.forEach((file) => explained.add(file));
+      options.onSelection({ ...selection, targets });
+    }
+    options.onSelection({
+      rule: "config-owner",
+      input: paths.join(", "),
+      targets: selected.filter((file) => !explained.has(file)),
+    });
+  }
+  return selected;
 }
 
 function resolvePreciseChangedTargets(targets: readonly string[], cwd: string) {

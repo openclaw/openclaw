@@ -23,21 +23,6 @@ extension TalkModeRuntime {
         case ready
     }
 
-    private static let realtimeStableSessionSeconds: TimeInterval = 30
-    private static let realtimeRestartDelaysNanoseconds: [UInt64] = [500_000_000, 2_000_000_000]
-
-    static func realtimeRestartAttempt(
-        previousRapidRestarts: Int,
-        activeDuration: TimeInterval) -> Int
-    {
-        activeDuration >= self.realtimeStableSessionSeconds ? 1 : previousRapidRestarts + 1
-    }
-
-    static func realtimeRestartDelayNanoseconds(attempt: Int) -> UInt64? {
-        guard attempt > 0, attempt <= self.realtimeRestartDelaysNanoseconds.count else { return nil }
-        return self.realtimeRestartDelaysNanoseconds[attempt - 1]
-    }
-
     func stop(
         reconfigurationGeneration expectedReconfigurationGeneration: UInt64?,
         lifecycleGeneration expectedLifecycleGeneration: Int?) async
@@ -252,16 +237,7 @@ extension TalkModeRuntime {
                     "brain=\(realtimeBrain ?? "missing", privacy: .public); using native fallback")
             return false
         }
-        return Self.shouldUseRealtimeRelay(
-            localOptIn: macOSRealtimeRelayOptIn,
-            hasGatewayRealtimeRelayTuple: hasGatewayRealtimeRelayTuple)
-    }
-
-    static func shouldUseRealtimeRelay(
-        localOptIn: Bool,
-        hasGatewayRealtimeRelayTuple: Bool) -> Bool
-    {
-        localOptIn && hasGatewayRealtimeRelayTuple
+        return true
     }
 
     func startRealtimeRelay(generation: Int) async throws {
@@ -578,10 +554,10 @@ extension TalkModeRuntime {
         realtimeSessionReadyAt = nil
         phase = .idle
         let shouldRecover = isEnabled && !isPaused
-        let attempt = Self.realtimeRestartAttempt(
+        let attempt = RealtimeTalkRecovery.restartAttempt(
             previousRapidRestarts: rapidRealtimeRestartCount,
             activeDuration: activeDuration)
-        let delay = Self.realtimeRestartDelayNanoseconds(attempt: attempt)
+        let delay = RealtimeTalkRecovery.restartDelayNanoseconds(attempt: attempt)
         guard await self.projectRealtimeRelay(terminalGeneration, nil, {
             TalkModeController.shared.updateLevel(0)
             TalkModeController.shared.updateSpeakingLevel(nil)

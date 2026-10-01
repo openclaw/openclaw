@@ -120,6 +120,11 @@ export type WebhookContext = {
   remoteAddress?: string;
 };
 
+export type ToolHandlerContext = {
+  partialUserTranscript?: string;
+  abortSignal?: AbortSignal;
+};
+
 export type ProviderWebhookParseResult = {
   events: NormalizedEvent[];
   providerResponseBody?: string;

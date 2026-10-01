@@ -1,14 +1,20 @@
 import { statSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, matchesGlob, relative, resolve } from "node:path";
 import { stateStartupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
-import { uiE2eRealGatewayTestFiles } from "../../test/vitest/vitest.ui-paths.mjs";
-import { UI_E2E_OWNER_WATCHES, UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
+import {
+  controlUiE2eTestGlobs,
+  uiE2eRealGatewayTestFiles,
+} from "../../test/vitest/vitest.ui-paths.mjs";
+import { UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
+import { listTrackedTestFiles } from "./list-test-files.mts";
 
-const ownerSelectedUiE2eTests = new Set(
-  UI_E2E_OWNER_WATCHES.map(({ testFile }) => testFile).filter(
-    (file) => !uiE2eRealGatewayTestFiles.includes(file) && !UI_E2E_SMOKE_TEST_FILES.includes(file),
-  ),
-);
+function isOwnerSelectedUiE2eTest(file: string): boolean {
+  return (
+    controlUiE2eTestGlobs.some((glob) => matchesGlob(file, glob)) &&
+    !uiE2eRealGatewayTestFiles.includes(file) &&
+    !UI_E2E_SMOKE_TEST_FILES.includes(file)
+  );
+}
 
 // Complete process/lifecycle proofs stay outside PR CI. Main retains runtime
 // owners; manual/release validation also retains the tooling owner.
@@ -72,6 +78,7 @@ export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/gateway/server.catalog-startup.test.ts",
   "src/gateway/server.cron.test.ts",
   "src/gateway/server.labs-hot-reload.test.ts",
+  "src/gateway/server.mcp-session-owner.test.ts",
   "src/gateway/server.message-buffer-caption.test.ts",
   "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
   "src/gateway/server.sessions.create.projects.test.ts",
@@ -1332,7 +1339,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/sessions/session-manager-static-notes.test.ts",
   "src/agents/sessions/session-manager.fork-rebase.test.ts",
   "src/agents/sessions/session-manager.persistence-compat.test.ts",
-  "src/agents/sessions/session-manager.user-idempotency.test.ts",
   "src/agents/sessions/settings-storage.test.ts",
   "src/agents/sessions/tools/bash-termination.test.ts",
   "src/agents/sessions/tools/bash.test.ts",
@@ -4612,7 +4618,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/styles/cursor-policy.node.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
   "ui/src/test-helpers/control-ui-e2e-suite.test.ts",
-].filter((file) => !ownerSelectedUiE2eTests.has(file));
+].filter((file) => !isOwnerSelectedUiE2eTest(file));
 
 // Measured integration proofs and slower owner matrices run hourly on main and
 // in full release validation. PRs opt in for edited tests or resolved source owners.
@@ -5522,17 +5528,17 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/styles/cursor-policy.browser.test.ts",
 ] as const;
 
-const prExemptRuntimeTestFiles = new Set<string>([
-  ...PR_EXEMPT_RUNTIME_TEST_FILES,
-  ...ownerSelectedUiE2eTests,
-]);
+const prExemptRuntimeTestFiles = new Set<string>(PR_EXEMPT_RUNTIME_TEST_FILES);
 
 export function listPrExemptRuntimeTestFiles(cwd = process.cwd()): string[] {
-  return [...prExemptRuntimeTestFiles].filter((file) =>
+  const uiE2eFiles = listTrackedTestFiles(cwd)
+    .map((file) => (isAbsolute(file) ? relative(cwd, file) : file))
+    .filter(isOwnerSelectedUiE2eTest);
+  return [...new Set([...prExemptRuntimeTestFiles, ...uiE2eFiles])].filter((file) =>
     statSync(resolve(cwd, file), { throwIfNoEntry: false })?.isFile(),
   );
 }
 
 export function isPrExemptRuntimeTestFile(file: string): boolean {
-  return prExemptRuntimeTestFiles.has(file);
+  return prExemptRuntimeTestFiles.has(file) || isOwnerSelectedUiE2eTest(file);
 }

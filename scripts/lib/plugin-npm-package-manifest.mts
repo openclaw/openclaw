@@ -1204,19 +1204,19 @@ function withPluginNpmManifestOverlay<T>(
     resolvedPackageJson.changed && resolvedPackageJson.packageJson
       ? fs.readFileSync(resolvedPackageJson.packageJsonPath, "utf8")
       : undefined;
-  if (resolvedManifest.changed && resolvedManifest.manifest) {
-    console.error(
-      `[plugin-npm-publish] overlaying plugin manifest metadata for ${resolvedManifest.pluginId}`,
-    );
-    writeJsonFile(resolvedManifest.manifestPath, resolvedManifest.manifest);
-  }
-  if (resolvedPackageJson.changed && resolvedPackageJson.packageJson) {
-    console.error(
-      `[plugin-npm-publish] overlaying package-local runtime metadata for ${resolvedPackageJson.pluginDir}`,
-    );
-    writeJsonFile(resolvedPackageJson.packageJsonPath, resolvedPackageJson.packageJson);
-  }
   try {
+    if (resolvedManifest.changed && resolvedManifest.manifest) {
+      console.error(
+        `[plugin-npm-publish] overlaying plugin manifest metadata for ${resolvedManifest.pluginId}`,
+      );
+      writeJsonFile(resolvedManifest.manifestPath, resolvedManifest.manifest);
+    }
+    if (resolvedPackageJson.changed && resolvedPackageJson.packageJson) {
+      console.error(
+        `[plugin-npm-publish] overlaying package-local runtime metadata for ${resolvedPackageJson.pluginDir}`,
+      );
+      writeJsonFile(resolvedPackageJson.packageJsonPath, resolvedPackageJson.packageJson);
+    }
     if (bundleDependencies && resolvedPackageJson.packageJson) {
       installPackageLocalBundledDependencies({
         packageDir,

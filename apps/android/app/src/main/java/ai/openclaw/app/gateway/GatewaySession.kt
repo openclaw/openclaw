@@ -1,5 +1,6 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import android.os.SystemClock
@@ -2717,8 +2718,6 @@ private fun formatGatewayAuthorityHost(host: String): String {
   val normalizedHost = host.trim().trim('[', ']')
   return if (normalizedHost.contains(":")) "[$normalizedHost]" else normalizedHost
 }
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? =
   when (this) {

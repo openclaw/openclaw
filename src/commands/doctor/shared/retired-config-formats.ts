@@ -1,9 +1,5 @@
 import { formatCliCommand } from "../../../cli/command-format.js";
-import {
-  isRecord,
-  visitAgentConfigScopes,
-  visitChannelEntries,
-} from "./legacy-config-record-shared.js";
+import { isRecord, visitChannelEntries } from "./legacy-config-record-shared.js";
 
 export function findRetiredConfigUpgradeRequirement(
   config: unknown,
@@ -24,7 +20,6 @@ export function findRetiredConfigUpgradeRequirement(
   };
   checkKeys(config, "", ["heartbeat"]);
   checkKeys(config.routing, "routing", ["allowFrom", "groupChat"]);
-  checkKeys(config.gateway, "gateway", ["webchat"]);
   const channels = isRecord(config.channels) ? config.channels : {};
   checkKeys(channels, "channels", ["webchat"]);
   checkKeys(channels.telegram, "channels.telegram", ["requireMention"]);
@@ -40,16 +35,9 @@ export function findRetiredConfigUpgradeRequirement(
   });
   const session = isRecord(config.session) ? config.session : {};
   checkKeys(session.threadBindings, "session.threadBindings", ["ttlHours"]);
-  visitAgentConfigScopes(config, (scope, configPath) => {
-    checkKeys(
-      scope,
-      configPath,
-      configPath === "agents.defaults"
-        ? ["llm", "embeddedPi", "embeddedHarness"]
-        : ["embeddedPi", "embeddedHarness"],
-    );
-    checkKeys(scope.sandbox, `${configPath}.sandbox`, ["perSession"]);
-  });
+  checkKeys(isRecord(config.agents) ? config.agents.defaults : undefined, "agents.defaults", [
+    "llm",
+  ]);
   if (retired.length === 0) {
     return undefined;
   }

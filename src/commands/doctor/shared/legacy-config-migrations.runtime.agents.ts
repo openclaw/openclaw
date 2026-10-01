@@ -19,12 +19,12 @@ import {
 } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
-import { visitAgentConfigScopes, visitAgentEntries } from "./legacy-config-record-shared.js";
+import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENT_POLICY } from "./legacy-config-migrations.runtime.agent-policy.js";
 import {
-  modelEntryWithRuntimePolicy,
-  selectedCanonicalModelRefsForRuntimePolicy,
-} from "./legacy-runtime-model-policy.js";
-import { resolveLegacyCliRuntimeAlias } from "./legacy-runtime-model-providers.js";
+  someAgentEntry,
+  visitAgentConfigScopes,
+  visitAgentEntries,
+} from "./legacy-config-record-shared.js";
 
 const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
   { legacyKey: "chunkSize", parentKey: "chunking", canonicalKey: "tokens" },
@@ -129,17 +129,6 @@ function getAgentMemorySearchRecord(
   return getRecord(agent.memorySearch) ?? getRecord(getRecord(agent.memory)?.search);
 }
 
-function someAgentEntry(
-  value: unknown,
-  predicate: (agent: Record<string, unknown>) => boolean,
-): boolean {
-  let matched = false;
-  visitAgentEntries({ agents: value }, (agent) => {
-    matched ||= predicate(agent);
-  });
-  return matched;
-}
-
 const UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults", "sandbox", "browser", "network"],
@@ -155,26 +144,6 @@ const UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES: LegacyConfigRule[] = [
       someAgentEntry(value, (agent) =>
         isUnsupportedSandboxBrowserNetwork(getSandboxBrowserConfig(agent)?.network),
       ),
-  },
-];
-
-const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "agentRuntime", "fallback"],
-    message:
-      'agents.defaults.agentRuntime is ignored; set models.providers.<provider>.agentRuntime or a model-scoped agentRuntime instead. Run "openclaw doctor --fix".',
-  },
-  {
-    path: ["agents", "defaults", "agentRuntime"],
-    message:
-      'agents.defaults.agentRuntime is ignored; set models.providers.<provider>.agentRuntime or a model-scoped agentRuntime instead. Run "openclaw doctor --fix".',
-    match: (value) => getRecord(value) !== null,
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.agentRuntime is ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
-    match: (value) => someAgentEntry(value, (agent) => getRecord(agent.agentRuntime) !== null),
   },
 ];
 
@@ -453,52 +422,6 @@ function migrateUnsupportedSandboxBrowserNetworks(
       changes,
     );
   }
-}
-
-function removeLegacyAgentRuntimePolicy(
-  container: Record<string, unknown>,
-  pathLabel: string,
-  changes: string[],
-): void {
-  if (getRecord(container.agentRuntime) !== null) {
-    preserveLegacyWholeAgentRuntimePolicy(container, pathLabel, changes);
-    delete container.agentRuntime;
-    changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
-  }
-}
-
-function preserveLegacyWholeAgentRuntimePolicy(
-  container: Record<string, unknown>,
-  pathLabel: string,
-  changes: string[],
-): void {
-  const intent = resolveLegacyCliRuntimeAlias(getRecord(container.agentRuntime)?.id);
-  if (!intent) {
-    return;
-  }
-  const selectedRefs = selectedCanonicalModelRefsForRuntimePolicy(container.model, intent.provider);
-  if (selectedRefs.length === 0) {
-    return;
-  }
-
-  const currentModels = getRecord(container.models);
-  const nextModels: Record<string, unknown> = currentModels ? { ...currentModels } : {};
-  let changed = false;
-  for (const ref of selectedRefs) {
-    const updated = modelEntryWithRuntimePolicy(nextModels[ref], intent.runtime);
-    if (!updated.changed) {
-      continue;
-    }
-    nextModels[ref] = updated.entry;
-    changed = true;
-  }
-  if (!changed) {
-    return;
-  }
-  container.models = nextModels;
-  changes.push(
-    `Moved ${pathLabel}.agentRuntime.id ${intent.runtime} to matching ${intent.provider} model runtime policy.`,
-  );
 }
 
 function removeIgnoredAgentModelTimeouts(
@@ -990,14 +913,52 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         removeIgnoredAgentModelTimeouts(agent, path, changes),
       ),
   }),
+  ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENT_POLICY,
   defineLegacyConfigMigration({
-    id: "agents.agentRuntime-ignored",
-    describe: "Remove ignored agent-wide runtime policy",
-    legacyRules: LEGACY_AGENT_RUNTIME_POLICY_RULES,
-    apply: (raw, changes) =>
-      visitAgentConfigScopes(raw, (agent, path) =>
-        removeLegacyAgentRuntimePolicy(agent, path, changes),
-      ),
+    id: "agents.sandbox.perSession->scope",
+    describe: "Move supported legacy sandbox perSession settings to scope",
+    legacyRules: [
+      {
+        path: ["agents"],
+        message:
+          'Agent sandbox.perSession settings moved to sandbox.scope. Run "openclaw doctor --fix".',
+        match: (value) => {
+          let found = false;
+          visitAgentConfigScopes({ agents: value }, (agent) => {
+            found ||= Object.hasOwn(getRecord(agent.sandbox) ?? {}, "perSession");
+          });
+          return found;
+        },
+      },
+    ],
+    apply: (raw, changes) => {
+      const inheritedScope = getRecord(getRecord(getRecord(raw.agents)?.defaults)?.sandbox)?.scope;
+      visitAgentConfigScopes(raw, (agent, path) => {
+        const sandbox = getRecord(agent.sandbox);
+        if (
+          !sandbox ||
+          !Object.hasOwn(sandbox, "perSession") ||
+          typeof sandbox.perSession !== "boolean"
+        ) {
+          return;
+        }
+        // An authored defaults scope already outranked per-agent legacy booleans.
+        const canonicalScope =
+          sandbox.scope !== undefined
+            ? sandbox.scope
+            : path === "agents.defaults"
+              ? undefined
+              : inheritedScope;
+        if (canonicalScope === undefined) {
+          const scope = sandbox.perSession ? "session" : "shared";
+          sandbox.scope = scope;
+          changes.push(`Moved ${path}.sandbox.perSession → ${path}.sandbox.scope (${scope}).`);
+        } else {
+          changes.push(`Removed ${path}.sandbox.perSession (canonical sandbox.scope already set).`);
+        }
+        delete sandbox.perSession;
+      });
+    },
   }),
   defineLegacyConfigMigration({
     id: "agents.sandbox.browser.network-none",

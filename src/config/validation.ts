@@ -3,13 +3,11 @@ import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { attachAgentListProjection } from "./agent-list-projection.js";
 import { omitDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
-import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
   inheritLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
-import { removeLegacyCopilotDiscovery } from "./legacy.github-copilot.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
@@ -140,14 +138,10 @@ function prepareConfigObjectWithPlugins(
   raw: unknown,
   params: ValidateConfigWithPluginsParams | undefined,
 ): PreparedConfigWithPlugins | { ok: false; result: ValidateConfigWithPluginsResult } {
-  const copilotConfig = removeLegacyCopilotDiscovery(
+  const migrated = migratePersistedImplicitMainRoster(
     omitDeferredPluginMigrationConfig(raw, params?.deferredPluginMigrations),
-  );
-  const contextBudgetConfig = migrateLegacyContextBudgetConfig(copilotConfig).config;
-  const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
-    env: params?.env,
-    homedir: params?.homedir,
-  }).config as OpenClawConfig;
+    { env: params?.env, homedir: params?.homedir },
+  ).config as OpenClawConfig;
   const base = validateConfigObjectRaw(migrated, {
     sourceRaw: params?.sourceRaw,
     preservedLegacyRootKeys: params?.preservedLegacyRootKeys,

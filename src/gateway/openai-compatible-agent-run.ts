@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
@@ -10,6 +11,7 @@ import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-s
 import { defaultRuntime } from "../runtime.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
+import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
@@ -27,6 +29,24 @@ export type OpenAiCompatiblePendingToolCall = {
   name: string;
   arguments: string;
 };
+
+export function resolveOpenAiCompatibleAgentError(
+  error: unknown,
+  fallback?: OpenAiCompatError["error"],
+): OpenAiCompatError {
+  if (isClientToolNameConflictError(error)) {
+    return {
+      status: 400,
+      error: { message: "invalid tool configuration", type: "invalid_request_error" },
+    };
+  }
+  return (
+    resolveOpenAiCompatError(error) ?? {
+      status: 500,
+      error: fallback ?? { message: "internal error", type: "api_error" },
+    }
+  );
+}
 
 export function readOpenAiHttpRunTerminal(result: unknown): {
   runFailed: boolean;

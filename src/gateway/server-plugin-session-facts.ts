@@ -19,7 +19,10 @@ import { withInProcessGatewayDispatch } from "./server-plugin-in-process-dispatc
 import { canTrustedOfficialPluginRequestScopes } from "./server-plugin-subagent-runtime.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
-import { getSessionRowProjection } from "./session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "./session-row-projection-access.js";
 import type { MaterializedRow } from "./session-row-projection-record.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
 import { resolveSessionVisibility } from "./session-sharing.js";
@@ -100,10 +103,7 @@ export async function readTrustedPluginSessionFacts(
           authorization.sessionMutationAuthorization?.assertCurrent();
         };
         assertCurrent();
-        const projection = getSessionRowProjection(resolved.context);
-        if (!projection) {
-          throw new Error("Session projection is unavailable before Gateway startup completes");
-        }
+        const projection = requireSessionRowProjection(resolved.context);
         const prOwner = resolved.context.controlUiSessionPullRequests;
         const prepared: PreparedSessionFacts[] = [];
         const refreshPreview = async (candidate: PreparedSessionFacts, record: MaterializedRow) => {

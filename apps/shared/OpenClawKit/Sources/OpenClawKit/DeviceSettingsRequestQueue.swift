@@ -1,10 +1,8 @@
-import Foundation
-
 @MainActor
-final class IOSDeviceSettingsRequestQueue {
+public final class DeviceSettingsRequestQueue {
     private struct Operation {
         let run: @MainActor () async -> Void
-        let cancel: @MainActor () -> Void
+        let cancel: (@MainActor () -> Void)?
     }
 
     private var generation = 0
@@ -12,9 +10,11 @@ final class IOSDeviceSettingsRequestQueue {
     private var active: Operation?
     private var pending: [Operation] = []
 
-    func enqueue(
-        operation: @escaping @MainActor () async -> Void,
-        onCancel: @escaping @MainActor () -> Void)
+    public init() {}
+
+    public func enqueue(
+        _ operation: @escaping @MainActor () async -> Void,
+        onCancel: (@MainActor () -> Void)? = nil)
     {
         self.pending.append(Operation(run: operation, cancel: onCancel))
         guard self.worker == nil else { return }
@@ -32,7 +32,7 @@ final class IOSDeviceSettingsRequestQueue {
         }
     }
 
-    func cancel() {
+    public func cancel() {
         self.generation += 1
         self.worker?.cancel()
         self.worker = nil
@@ -40,31 +40,10 @@ final class IOSDeviceSettingsRequestQueue {
         let active = self.active
         self.pending.removeAll()
         self.active = nil
-        // Reject every Promise now, even when a system permission prompt ignores cancellation.
-        active?.cancel()
+        // Permission prompts may ignore cancellation; retire their replies immediately.
+        active?.cancel?()
         for operation in retired {
-            operation.cancel()
+            operation.cancel?()
         }
-    }
-}
-
-@MainActor
-final class IOSDeviceSettingsReply {
-    typealias Handler = @MainActor (Any?, String?) -> Void
-
-    private var handler: Handler?
-
-    init(_ handler: @escaping Handler) {
-        self.handler = handler
-    }
-
-    func finish(_ value: Any? = nil, error: String? = nil) {
-        let handler = self.handler
-        self.handler = nil
-        handler?(value, error)
-    }
-
-    func retire() {
-        self.finish(error: "The device settings document is no longer available.")
     }
 }
