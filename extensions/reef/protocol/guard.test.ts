@@ -86,7 +86,7 @@ describe("guard admission", () => {
     ).toThrow("dated snapshot");
   });
 
-  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6.1-sol"])(
     "accepts documented immutable undated id %s",
     (pinnedModel) => {
       expect(() =>
