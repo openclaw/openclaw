@@ -49,6 +49,7 @@ describe("Anthropic OAuth token responses", () => {
     const onAuth = vi.fn();
     const close = vi.fn(async () => undefined);
     startOAuthLoopbackCallbackServer.mockResolvedValueOnce({
+      redirectUrl: ANTHROPIC_REDIRECT_URI,
       waitForCallback: vi.fn(),
       complete: vi.fn(async () => undefined),
       close,
@@ -149,6 +150,7 @@ describe("Anthropic OAuth callback host", () => {
   it("binds IPv4 loopback while keeping Anthropic's registered localhost redirect", async () => {
     vi.stubEnv("OPENCLAW_OAUTH_CALLBACK_HOST", "127.0.0.1");
     startOAuthLoopbackCallbackServer.mockImplementationOnce(async (params) => ({
+      redirectUrl: ANTHROPIC_REDIRECT_URI,
       waitForCallback: async () => ({
         type: "authorization_code" as const,
         code: "authorization-code",
@@ -198,6 +200,7 @@ describe("Anthropic OAuth callback host", () => {
   it("settles an OAuth error callback immediately", async () => {
     vi.stubEnv("OPENCLAW_OAUTH_CALLBACK_HOST", "127.0.0.1");
     startOAuthLoopbackCallbackServer.mockResolvedValueOnce({
+      redirectUrl: ANTHROPIC_REDIRECT_URI,
       waitForCallback: async () => ({ type: "oauth_error", error: "access_denied" }),
       complete: async () => undefined,
       close: async () => undefined,

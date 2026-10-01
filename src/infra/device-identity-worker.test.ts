@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { loadOAuthHostPublicKey } from "../plugin-sdk/provider-oauth-runtime.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -30,6 +31,41 @@ async function withIdentityWorkerState(
 }
 
 describe("device identity shared worker", () => {
+  it("exposes the persisted primary public key to OAuth and isolates separate installations", async () => {
+    await withIdentityWorkerState(async (options, stateDir) => {
+      const identity = await loadOrCreateDeviceIdentityAsync(options);
+      expect(await loadOAuthHostPublicKey(options.env)).toBe(identity.publicKeyPem);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      try {
+        expect(await loadOAuthHostPublicKey()).toBe(identity.publicKeyPem);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+      await closeOpenClawStateDatabaseByPathAsync(options.path);
+      expect((await loadDeviceIdentityIfPresentAsync(options))?.publicKeyPem).toBe(
+        identity.publicKeyPem,
+      );
+
+      const otherStateDir = path.join(stateDir, "other-installation");
+      const otherOptions = {
+        path: path.join(otherStateDir, "state", "openclaw.sqlite"),
+        env: { ...options.env, OPENCLAW_STATE_DIR: otherStateDir },
+      };
+      try {
+        const publicKey = await loadOAuthHostPublicKey(otherOptions.env);
+        expect(publicKey).not.toBe(identity.publicKeyPem);
+        await closeOpenClawStateDatabaseByPathAsync(otherOptions.path);
+        // Read through the durable owner so a cached facade result cannot hide missing persistence.
+        expect((await loadDeviceIdentityIfPresentAsync(otherOptions))?.publicKeyPem).toBe(
+          publicKey,
+        );
+        expect(await loadOAuthHostPublicKey(options.env)).toBe(identity.publicKeyPem);
+      } finally {
+        await closeOpenClawStateDatabaseByPathAsync(otherOptions.path);
+      }
+    });
+  });
+
   it("does not initialize an existing empty database during a read", async () => {
     await withIdentityWorkerState(async (options) => {
       const directory = path.dirname(options.path);

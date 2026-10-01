@@ -285,8 +285,6 @@ export async function createCodexInferenceProxy(params: {
               delete headers[key];
             }
             headers.authorization = `Bearer ${auth.token}`;
-            // Required by the OSS preview; remove when OpenAI retires this header.
-            headers["x-openai-chatpass-test"] = "codex-direct";
           }
           const init: RequestInit & { duplex: "half" } = {
             method: "POST",

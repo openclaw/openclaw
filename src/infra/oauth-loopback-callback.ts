@@ -9,6 +9,7 @@ type OAuthLoopbackCallbackResult =
   | { type: "oauth_error"; error: string; errorDescription?: string };
 
 export type OAuthLoopbackCallbackServer = {
+  redirectUrl: string;
   waitForCallback: () => Promise<OAuthLoopbackCallbackResult>;
   complete: (response: RenderedResponse & { status: number }) => Promise<void>;
   close: () => Promise<void>;
@@ -102,7 +103,7 @@ async function waitForAbortable<T>(promise: Promise<T>, signal?: AbortSignal): P
 
 function resolveOAuthLoopbackPort(redirectUrl: URL): number {
   const port = redirectUrl.port ? Number(redirectUrl.port) : 80;
-  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new Error("OAuth callback redirect must use a valid TCP port");
   }
   return port;
@@ -200,7 +201,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
   const addresses = Array.isArray(resolvedAddresses)
     ? resolvedAddresses
     : await waitForAbortable(resolvedAddresses, params.signal);
-  const port = resolveOAuthLoopbackPort(redirectUrl);
+  let port = resolveOAuthLoopbackPort(redirectUrl);
   const callbackPath = redirectUrl.pathname || "/";
   const createServer = params.createServer ?? (await import("node:http")).createServer;
   const servers: Server[] = [];
@@ -375,6 +376,15 @@ export async function startOAuthLoopbackCallbackServer(params: {
         server.once("error", reject);
         server.listen(port, address, resolve);
       });
+      if (port === 0) {
+        const boundAddress = server.address();
+        if (!boundAddress || typeof boundAddress === "string") {
+          throw new Error("OAuth callback failed to bind a TCP port");
+        }
+        // Every loopback address must serve the same redirect, including later family binds.
+        port = boundAddress.port;
+        redirectUrl.port = String(port);
+      }
       server.removeAllListeners("error");
       server.on("error", settleError);
       if (settled) {
@@ -392,6 +402,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
     timeout = setTimeout(() => settleError(new Error("OAuth callback timeout")), params.timeoutMs);
   }
   return {
+    redirectUrl: redirectUrl.toString(),
     waitForCallback: () => callback.promise,
     complete,
     close: async () => {

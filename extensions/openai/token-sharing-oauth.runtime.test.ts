@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
-import { request as httpRequest } from "node:http";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { once } from "node:events";
+import { createServer, request as httpRequest } from "node:http";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -7,7 +8,12 @@ import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const request = vi.hoisted(() => vi.fn());
+const loadHostPublicKey = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: request }));
+vi.mock("openclaw/plugin-sdk/provider-oauth-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-oauth-runtime")>()),
+  loadOAuthHostPublicKey: loadHostPublicKey,
+}));
 
 import { buildOpenAISetupProvider } from "./setup-api.js";
 import { loginTokenSharing, refreshTokenSharingCredential } from "./token-sharing-oauth.runtime.js";
@@ -22,6 +28,11 @@ import {
 } from "./token-sharing.js";
 
 const clientId = "test-public-client";
+const hostKey = generateKeyPairSync("ed25519").publicKey;
+const hostJwk = hostKey.export({ format: "jwk" });
+const hostId = `urn:ietf:params:oauth:jwk-thumbprint:sha-256:${createHash("sha256")
+  .update(JSON.stringify({ crv: hostJwk.crv, kty: hostJwk.kty, x: hostJwk.x }))
+  .digest("base64url")}`;
 let keys: Awaited<ReturnType<typeof generateKeyPair>>;
 let jwks: { keys: Awaited<ReturnType<typeof exportJWK>>[] };
 let authorization: URL;
@@ -56,6 +67,7 @@ async function identityToken() {
 function context(): ProviderAuthContext {
   const callbackOwner = new AbortController();
   return {
+    env: { OPENCLAW_STATE_DIR: "/synthetic/gateway-state" },
     signal: callbackOwner.signal,
     prompter: {
       note: vi.fn(async () => undefined),
@@ -125,6 +137,7 @@ async function loginCredential() {
 
 beforeEach(() => {
   request.mockReset();
+  loadHostPublicKey.mockReset().mockResolvedValue(hostKey.export({ type: "spki", format: "pem" }));
   grantScope = TOKEN_SHARING_SCOPE;
   idTokenAudience = clientId;
   identityNonce = undefined;
@@ -154,6 +167,20 @@ afterEach(async () => {
 });
 
 describe("ChatGPT token-sharing authorization", () => {
+  it("uses the Gateway host identity when personal account credentials have an empty environment", async () => {
+    const ctx = context();
+    ctx.env = {};
+    loadHostPublicKey.mockImplementation(async (env) => {
+      // An explicit empty environment would select a different installation's key.
+      return (env === undefined ? hostKey : generateKeyPairSync("ed25519").publicKey).export({
+        type: "spki",
+        format: "pem",
+      });
+    });
+    await loginTokenSharing(ctx);
+    expect(authorization.searchParams.get("ext_agent_host_id")).toBe(hostId);
+  });
+
   it.each([
     { isRemote: true, browserLink: true },
     { isRemote: true, browserLink: false },
@@ -163,8 +190,22 @@ describe("ChatGPT token-sharing authorization", () => {
       const ctx = context();
       const visitBrowser = ctx.openUrl;
       let pendingUrl: string | undefined;
+      let forwardedPort: string | undefined;
+      ctx.prompter.confirm = vi.fn(async ({ message }) => {
+        expect(pendingUrl).toBeUndefined();
+        const redirect = new URL(message.match(/http:\/\/[^ ]+/u)![0]);
+        forwardedPort = redirect.port;
+        expect(Number(forwardedPort)).toBeGreaterThan(0);
+        expect(message).toContain(`${forwardedPort}:127.0.0.1:${forwardedPort}`);
+        // The listener is already bound while the user prepares the tunnel.
+        redirect.hostname = "127.0.0.1";
+        expect((await fetch(redirect)).status).toBe(400);
+        return true;
+      });
       ctx.isRemote = isRemote;
       ctx.openUrl = async (url) => {
+        expect(forwardedPort).toBeDefined();
+        expect(new URL(new URL(url).searchParams.get("redirect_uri")!).port).toBe(forwardedPort);
         pendingUrl = url;
       };
       if (browserLink) {
@@ -178,14 +219,39 @@ describe("ChatGPT token-sharing authorization", () => {
         } else {
           expect(message).toContain(pendingUrl!);
         }
-        if (isRemote) {
-          expect(message).toContain("8080:127.0.0.1:8080");
-        }
         await visitBrowser(pendingUrl!);
       });
       const result = await loginTokenSharing(ctx);
       expect(result.profiles[0]?.credential).toMatchObject({ access: "opaque-test-access" });
       expect((await callbackResponse!).status).toBe(200);
+      expect(ctx.prompter.confirm).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["decline", "abort"] as const)(
+    "closes the callback without opening the browser on remote forwarding %s",
+    async (action) => {
+      const ctx = context();
+      const controller = new AbortController();
+      ctx.isRemote = true;
+      ctx.signal = controller.signal;
+      ctx.openUrl = vi.fn();
+      let callback: URL | undefined;
+      const pending = createDeferred<boolean>();
+      ctx.prompter.confirm = vi.fn(({ message }) => {
+        callback = new URL(message.match(/http:\/\/[^ ]+/u)![0]);
+        callback.hostname = "127.0.0.1";
+        if (action === "abort") {
+          controller.abort();
+          return pending.promise;
+        }
+        return Promise.resolve(false);
+      });
+      await expect(loginTokenSharing(ctx)).rejects.toThrow("cancelled");
+      pending.resolve(true);
+      expect(ctx.openUrl).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+      await expect(fetch(callback!)).rejects.toThrow();
     },
   );
 
@@ -293,10 +359,16 @@ describe("ChatGPT token-sharing authorization", () => {
       const registeredId = "oaiapp_testregistered";
       callbackClientIds = [registeredId];
       idTokenAudience = registeredId;
+      identityEmail = "owner@example.test";
       grantScope = "openid resource.invoke chatgpt.tokens.use.direct offline_access";
       const registered = await method.run(ctx);
       expect(authorization.searchParams.get("client_id")).toBe("dynamic_agent_client");
       expect(authorization.searchParams.get("agent_name_hint")).toBe("OpenClaw");
+      expect(authorization.searchParams.get("ext_agent_host_id")).toBe(hostId);
+      expect(loadHostPublicKey).toHaveBeenCalledWith();
+      const registeredRedirect = authorization.searchParams.get("redirect_uri")!;
+      expect(registeredRedirect).toMatch(/^http:\/\/127\.0\.0\.1:[1-9]\d*\/auth\/callback$/u);
+      expect(authorization.searchParams.has("login_hint")).toBe(false);
       expect(authorization.searchParams.get("scope")).toBe(
         "openid email profile resource.invoke chatgpt.tokens.use.direct offline_access",
       );
@@ -306,10 +378,14 @@ describe("ChatGPT token-sharing authorization", () => {
         authorizationScope: TOKEN_SHARING_SCOPE,
         grantedScope: grantScope,
         authFlow: TOKEN_SHARING_AUTH_FLOW,
+        redirectUri: registeredRedirect,
       });
       const exchange = request.mock.calls.find(([params]) => params.init?.method === "POST")![0];
       expect(exchange.init.body.get("client_id")).toBe(registeredId);
       expect(exchange.init.body.get("code_verifier")).toBeTruthy();
+      expect(exchange.init.body.get("redirect_uri")).toBe(
+        authorization.searchParams.get("redirect_uri"),
+      );
       expect((await callbackResponse!).status).toBe(200);
       await (await callbackResponse!).text();
 
@@ -320,6 +396,7 @@ describe("ChatGPT token-sharing authorization", () => {
       const refreshed = await refreshTokenSharingCredential(credential);
       expect(request.mock.calls[0]![0].init.body.get("client_id")).toBe(registeredId);
       expect(refreshed.clientId).toBe(registeredId);
+      expect(refreshed.redirectUri).toBe(registeredRedirect);
 
       const reconnect = context();
       // Named CLI profiles must keep their identity when reconnecting, too.
@@ -334,12 +411,28 @@ describe("ChatGPT token-sharing authorization", () => {
         ),
       ];
       callbackClientIds = [];
+      // Occupy the previous port: reconnect must use the same registration on a new port.
+      await using occupied = createServer();
+      occupied.listen(Number(new URL(registeredRedirect).port), "127.0.0.1");
+      await once(occupied, "listening");
+      request.mockClear();
       const reconnected = await method.run(reconnect);
       expect(authorization.searchParams.get("client_id")).toBe(registeredId);
       expect(authorization.searchParams.has("agent_name_hint")).toBe(false);
       expect(authorization.searchParams.get("scope")).toBe(TOKEN_SHARING_SCOPE);
+      expect(authorization.searchParams.get("ext_agent_host_id")).toBe(hostId);
+      const reconnectedRedirect = authorization.searchParams.get("redirect_uri")!;
+      expect(reconnectedRedirect).toMatch(/^http:\/\/127\.0\.0\.1:[1-9]\d*\/auth\/callback$/u);
+      expect(reconnectedRedirect).not.toBe(registeredRedirect);
+      expect(request.mock.calls[0]![0].init.body.get("redirect_uri")).toBe(reconnectedRedirect);
+      expect(authorization.searchParams.get("login_hint")).toBe(identityEmail);
+      expect(authorization.searchParams.has("prompt")).toBe(false);
+      expect(authorization.searchParams.has("id_token_hint")).toBe(false);
       expect(reconnected.profiles[0]?.profileId).toBe("openai:my-account");
-      expect(reconnected.profiles[0]?.credential).toMatchObject({ clientId: registeredId });
+      expect(reconnected.profiles[0]?.credential).toMatchObject({
+        clientId: registeredId,
+        redirectUri: reconnectedRedirect,
+      });
     },
   );
 
@@ -350,6 +443,7 @@ describe("ChatGPT token-sharing authorization", () => {
     idTokenAudience = callbackClientIds[0]!;
     const result = await loginTokenSharing(ctx);
     expect(authorization.searchParams.get("client_id")).toBe("dynamic_agent_client");
+    expect(authorization.searchParams.get("ext_agent_host_id")).toBe(hostId);
     expect(result.profiles[0]?.credential).toMatchObject({ clientId: idTokenAudience });
     expect(ctx.existingProfiles?.[0]?.credential).toMatchObject({ access: "old-access", clientId });
   });
@@ -370,6 +464,61 @@ describe("ChatGPT token-sharing authorization", () => {
   it("rejects replacement of an existing client ID in an ordinary login callback", async () => {
     callbackClientIds = ["oaiapp_substituted"];
     await expect(loginTokenSharing(context())).rejects.toThrow("invalid OAuth client ID");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps existing credentials that return the legacy direct-sharing scope usable", async () => {
+    grantScope = "openid offline_access resource.invoke chatgpt.tokens.use.direct";
+    const result = await loginTokenSharing(context());
+    expect(authorization.searchParams.get("scope")).toBe(TOKEN_SHARING_LEGACY_SCOPE);
+    const redirectUri = authorization.searchParams.get("redirect_uri")!;
+    expect(redirectUri).toMatch(/^http:\/\/localhost:[1-9]\d*\/auth\/callback$/u);
+    expect(result.profiles[0]?.credential).toMatchObject({
+      authFlow: TOKEN_SHARING_AUTH_FLOW,
+      authorizationScope: TOKEN_SHARING_LEGACY_SCOPE,
+      redirectUri,
+    });
+  });
+
+  it("requests consent when reconnecting after sharing was declined", async () => {
+    const ctx = context();
+    Object.assign(ctx.existingProfiles![0]!.credential, { authFlow: IDENTITY_AUTH_FLOW });
+    const result = await loginTokenSharing(ctx);
+    expect(authorization.searchParams.get("prompt")).toBe("consent");
+    expect(authorization.searchParams.has("force_reconsent")).toBe(false);
+    expect(result.profiles[0]?.credential).toMatchObject({ authFlow: TOKEN_SHARING_AUTH_FLOW });
+  });
+
+  it.each([
+    "not-a-url",
+    "https://127.0.0.1:8080/auth/callback",
+    "http://example.test:8080/auth/callback",
+    "http://user@127.0.0.1:8080/auth/callback",
+    "http://127.0.0.1:8080/other",
+    "http://127.0.0.1:8080/auth/callback?unexpected=true",
+    "http://127.0.0.1:8080/auth/callback#fragment",
+  ])("rejects unsupported saved callback %s before opening the browser", async (redirectUri) => {
+    const ctx = context();
+    Object.assign(ctx.existingProfiles![0]!.credential, {
+      redirectUri,
+    });
+    ctx.openUrl = vi.fn();
+    await expect(loginTokenSharing(ctx)).rejects.toThrow("callback address");
+    expect(ctx.openUrl).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not open the browser if the login is cancelled during host identity loading", async () => {
+    const ctx = context();
+    const abort = new AbortController();
+    ctx.signal = abort.signal;
+    ctx.openUrl = vi.fn();
+    loadHostPublicKey.mockImplementationOnce(async () => {
+      abort.abort();
+      return hostKey.export({ type: "spki", format: "pem" });
+    });
+    await expect(loginTokenSharing(ctx)).rejects.toThrow();
+    expect(ctx.openUrl).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -414,7 +563,7 @@ describe("ChatGPT token-sharing authorization", () => {
       client_id: clientId,
       code: "test-code",
       resource: TOKEN_SHARING_RESOURCE,
-      redirect_uri: "http://localhost:8080/auth/callback",
+      redirect_uri: authorization.searchParams.get("redirect_uri"),
     });
     expect(form.has("client_secret")).toBe(false);
     expect(result.profiles[0]?.profileId).toBe("openai:existing");
@@ -470,9 +619,11 @@ describe("ChatGPT token-sharing authorization", () => {
     const ctx = context();
     const openUrl = ctx.openUrl;
     ctx.openUrl = async (url) => {
+      const callback = new URL(new URL(url).searchParams.get("redirect_uri")!);
+      callback.hostname = "127.0.0.1";
       const status = await new Promise<number | undefined>((resolve, reject) => {
         const malformed = httpRequest(
-          { hostname: "127.0.0.1", port: 8080, path: "http://%" },
+          { hostname: callback.hostname, port: callback.port, path: "http://%" },
           (response) => {
             response.resume();
             response.once("end", () => resolve(response.statusCode));
@@ -482,7 +633,7 @@ describe("ChatGPT token-sharing authorization", () => {
         malformed.end();
       });
       expect(status).toBe(400);
-      const callback = new URL("http://127.0.0.1:8080/auth/callback?code=unrelated&state=wrong");
+      callback.search = "code=unrelated&state=wrong";
       expect((await fetch(callback)).status).toBe(400);
       await openUrl(url);
     };

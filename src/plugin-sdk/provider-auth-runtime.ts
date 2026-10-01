@@ -43,6 +43,8 @@ type ProviderOAuthLoopbackCallbackResult =
   | { type: "oauth_error"; error: string; errorDescription?: string };
 
 type ProviderOAuthLoopbackCallbackServer = {
+  /** Bound callback URL; use it in authorization and token exchange when requesting port zero. */
+  redirectUrl: string;
   waitForCallback: () => Promise<ProviderOAuthLoopbackCallbackResult>;
   /** Flushes a deferred browser result, then closes; closed listeners ignore late completion. */
   complete: (response: ProviderOAuthLoopbackRenderedResponse & { status: number }) => Promise<void>;
@@ -59,6 +61,7 @@ type ProviderOAuthLoopbackCorsOriginResolver = (
  * only after the callback route is ready. Invalid request candidates remain nonterminal.
  */
 export async function startProviderOAuthLoopbackCallbackServer(params: {
+  /** HTTP loopback redirect; port zero requests an available port from the operating system. */
   redirectUrl: string | URL;
   expectedState: string;
   /** Optional listener deadline; the caller signal continues to own provider work. */

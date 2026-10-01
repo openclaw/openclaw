@@ -164,16 +164,17 @@ describe("private inference HTTP relay", () => {
         "chatgpt-account-id": "native-account",
         "openai-project": "native-project",
         "openai-organization": "native-org",
-        "X-OpenAI-ChatPass-Test": "stale",
+        "X-Custom": "preserved",
       },
     });
     expect(result.status).toBe(200);
     expect(await result.text()).toBe("data: completed\n\n");
     expect(resolve.mock.calls).toEqual([[false], [true]]);
     expect(transport.fetch).toHaveBeenCalledTimes(2);
-    expect(
-      transport.fetch.mock.calls.map(([args]) => args.init.headers["x-openai-chatpass-test"]),
-    ).toEqual(["codex-direct", "codex-direct"]);
+    for (const [args] of transport.fetch.mock.calls) {
+      expect(args.init.headers).not.toHaveProperty("x-openai-chatpass-test");
+      expect(args.init.headers["x-custom"]).toBe("preserved");
+    }
     expect(transport.fetch.mock.calls[1]?.[0].init.headers.authorization).toBe(
       "Bearer synthetic-refreshed",
     );

@@ -20,14 +20,10 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
         responsesServerCompaction: false,
       },
       streamFn: (model, context, options) => {
-        const headers = new Headers(options?.headers);
-        // Required by the OSS preview; remove when OpenAI retires this header.
-        headers.set("x-openai-chatpass-test", "codex-direct");
         // Shared provider policy can enable item references. This grant requires
         // complete-context replay before request payload transforms run.
         const sharingOptions: SimpleStreamOptions & { replayResponsesItemIds: false } = {
           ...options,
-          headers: Object.fromEntries(headers.entries()),
           transport: "sse",
           replayResponsesItemIds: false,
           onPayload: async (payload, payloadModel) => {

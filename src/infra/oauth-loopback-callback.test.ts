@@ -363,34 +363,43 @@ describe("OAuth loopback callback server", () => {
     ).rejects.toThrow("exclusively to loopback");
   });
 
-  it("binds every loopback address resolved for localhost", async () => {
-    const port = await getClaimedPort();
-    const addresses = [
-      ...new Set(
-        (await dnsPromises.lookup("localhost", { all: true, verbatim: true })).map(
-          (entry) => entry.address,
+  it.each(["fixed", "dynamic"] as const)(
+    "binds every loopback address resolved for localhost on one %s port",
+    async (allocation) => {
+      const requestedPort = allocation === "dynamic" ? 0 : await getClaimedPort();
+      const addresses = [
+        ...new Set(
+          (await dnsPromises.lookup("localhost", { all: true, verbatim: true })).map(
+            (entry) => entry.address,
+          ),
         ),
-      ),
-    ];
-    const callback = await startOAuthLoopbackCallbackServer({
-      redirectUrl: `http://localhost:${port}/oauth/callback`,
-      bindHostname: "127.0.0.1",
-      expectedState: "state-1234567890",
-      timeoutMs: 5_000,
-    });
-    openCallbacks.push(callback);
+      ];
+      const callback = await startOAuthLoopbackCallbackServer({
+        redirectUrl: `http://localhost:${requestedPort}/oauth/callback`,
+        bindHostname: "127.0.0.1",
+        expectedState: "state-1234567890",
+        timeoutMs: 5_000,
+      });
+      openCallbacks.push(callback);
+      const port = Number(new URL(callback.redirectUrl).port);
+      expect(port).toBeGreaterThan(0);
+      expect(callback.redirectUrl).toBe(`http://localhost:${port}/oauth/callback`);
+      if (allocation === "fixed") {
+        expect(port).toBe(requestedPort);
+      }
 
-    for (const address of addresses) {
-      const response = await fetch(callbackUrl(address, port, "?code=bad&state=wrong"));
-      expect(response.status).toBe(400);
-    }
-    const response = await fetch(
-      callbackUrl(addresses[0]!, port, "?code=right&state=state-1234567890"),
-    );
-    expect(response.status).toBe(200);
-    await response.text();
-    await expect(callback.waitForCallback()).resolves.toMatchObject({ code: "right" });
-  });
+      for (const address of addresses) {
+        const response = await fetch(callbackUrl(address, port, "?code=bad&state=wrong"));
+        expect(response.status).toBe(400);
+      }
+      const response = await fetch(
+        callbackUrl(addresses[0]!, port, "?code=right&state=state-1234567890"),
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+      await expect(callback.waitForCallback()).resolves.toMatchObject({ code: "right" });
+    },
+  );
 
   it("supports an IPv6 loopback redirect when IPv6 is available", async () => {
     const started = await start("::1");
@@ -443,14 +452,7 @@ describe("OAuth loopback callback server", () => {
     },
   );
 
-  it("rejects non-loopback bind hosts and port zero", async () => {
-    await expect(
-      startOAuthLoopbackCallbackServer({
-        redirectUrl: "http://127.0.0.1:0/oauth/callback",
-        expectedState: "state-1234567890",
-        timeoutMs: 5_000,
-      }),
-    ).rejects.toThrow("valid TCP port");
+  it("rejects non-loopback bind hosts", async () => {
     await expect(
       startOAuthLoopbackCallbackServer({
         redirectUrl: "http://localhost:8080/oauth/callback",

@@ -33,6 +33,13 @@ export type OAuthProviderId = string;
 /** @deprecated Use OAuthProviderId instead. */
 export type OAuthProvider = OAuthProviderId;
 
+/** Return the installation's persisted public key without exposing its private key to plugins. */
+export async function loadOAuthHostPublicKey(env?: NodeJS.ProcessEnv): Promise<string> {
+  const { loadOrCreateProcessDeviceIdentityAsync } =
+    await import("../infra/device-identity-async.js");
+  return (await loadOrCreateProcessDeviceIdentityAsync({ env })).publicKeyPem;
+}
+
 /** Manual input prompt shown during OAuth login flows. */
 export type OAuthPrompt = {
   /** Prompt text shown to the operator. */

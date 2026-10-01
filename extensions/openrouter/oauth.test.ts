@@ -477,6 +477,7 @@ describe("OpenRouter OAuth", () => {
     }));
     const close = vi.fn(async () => undefined);
     const startCallback = vi.fn(async () => ({
+      redirectUrl: OPENROUTER_OAUTH_REDIRECT_URI,
       waitForCallback,
       complete: async () => undefined,
       close,
@@ -520,6 +521,7 @@ describe("OpenRouter OAuth", () => {
     }));
     const close = vi.fn(async () => undefined);
     const startCallback = vi.fn(async () => ({
+      redirectUrl: OPENROUTER_OAUTH_REDIRECT_URI,
       waitForCallback,
       complete: async () => undefined,
       close,

@@ -59,7 +59,7 @@ describe("token-sharing Responses stream", () => {
       { messages: [] },
       {
         transport: "websocket",
-        headers: { "X-OpenAI-ChatPass-Test": "stale", "X-Custom": "preserved" },
+        headers: { "X-Custom": "preserved" },
         onPayload: async (request) => ({
           ...(request as Record<string, unknown>),
           store: true,
@@ -78,7 +78,7 @@ describe("token-sharing Responses stream", () => {
     const payload = await capture.payload;
     const observed = capture.options;
     expect(observed).toMatchObject({ transport: "sse", replayResponsesItemIds: false });
-    expect(new Headers(observed?.headers).get("x-openai-chatpass-test")).toBe("codex-direct");
+    expect(new Headers(observed?.headers).get("x-openai-chatpass-test")).toBeNull();
     expect(new Headers(observed?.headers).get("x-custom")).toBe("preserved");
     expect(payload).toHaveProperty("store", false);
     expect(payload).not.toHaveProperty("context_management");
@@ -127,9 +127,7 @@ describe("token-sharing Responses stream", () => {
       const stream = wrapped ?? capture.streamFn;
       await stream(model, { messages: [], tools: [] }, {});
       const observed = capture.options;
-      expect(new Headers(observed?.headers).get("x-openai-chatpass-test")).toBe(
-        sharing ? "codex-direct" : null,
-      );
+      expect(new Headers(observed?.headers).get("x-openai-chatpass-test")).toBeNull();
       const result = await capture.payload;
       expect(result).toMatchObject({ tools: [], store: !sharing });
       if (sharing) {

@@ -1,12 +1,14 @@
-import { createHash } from "node:crypto";
-import { createLocalJWKSet, decodeJwt, jwtVerify } from "jose";
+import { createHash, createPublicKey } from "node:crypto";
+import { calculateJwkThumbprintUri, createLocalJWKSet, decodeJwt, jwtVerify } from "jose";
 import type { ProviderAuthContext, ProviderAuthResult } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
 import { startProviderOAuthLoopbackCallbackServer } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  createOAuthLoginCancelledError,
   generateOAuthState,
   generatePKCE,
+  loadOAuthHostPublicKey,
   oauthErrorHtml,
   oauthSuccessHtml,
   resolveOAuthTokenExpiresAt,
@@ -29,6 +31,7 @@ import {
   TOKEN_SHARING_AUTH_FLOW,
   TOKEN_SHARING_CLIENT_ID,
   TOKEN_SHARING_ISSUER,
+  TOKEN_SHARING_LEGACY_REDIRECT_URI,
   TOKEN_SHARING_LEGACY_SCOPE,
   TOKEN_SHARING_REDIRECT_URI,
   TOKEN_SHARING_RESOURCE,
@@ -272,6 +275,24 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
   );
   const clientId = existingProfile?.credential.clientId ?? TOKEN_SHARING_CLIENT_ID;
   const registering = clientId === TOKEN_SHARING_CLIENT_ID;
+  // Clients issued before callback metadata was saved registered localhost.
+  // Changing that host on reconnect invalidates the existing registration.
+  const callbackUrl = URL.parse(
+    existingProfile
+      ? (existingProfile.credential.redirectUri ?? TOKEN_SHARING_LEGACY_REDIRECT_URI)
+      : TOKEN_SHARING_REDIRECT_URI,
+  );
+  // RFC 8252 permits a new loopback port per attempt, but not a different host/path.
+  if (callbackUrl) {
+    callbackUrl.port = "0";
+  }
+  if (
+    !callbackUrl ||
+    (callbackUrl.href !== TOKEN_SHARING_REDIRECT_URI &&
+      callbackUrl.href !== TOKEN_SHARING_LEGACY_REDIRECT_URI)
+  ) {
+    throw new Error("Unsupported ChatGPT callback address. Connect a new account registration.");
+  }
   // Reconnect preserves the registration's requested permissions, replacing only
   // the obsolete preview spelling. Older static clients keep their narrower scope.
   const authorizationScope = (
@@ -286,31 +307,62 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
   owner.assertCurrent?.();
   owner.signal.throwIfAborted();
   const { verifier, challenge } = await generatePKCE();
+  // The Gateway owns this persisted key; profile imports must not replace the
+  // destination host's identity. Use the host environment, not the personal
+  // credential environment (which may be empty). Only the public thumbprint leaves.
+  const hostId = await withOAuthLoginAbort(
+    loadOAuthHostPublicKey().then((pem) => calculateJwkThumbprintUri(createPublicKey(pem))),
+    owner.signal,
+  );
+  owner.assertCurrent?.();
+  owner.signal.throwIfAborted();
+  const loginHint = normalizeOptionalString(existingProfile?.credential.email);
   const state = generateOAuthState();
   const nonce = generateOAuthState();
-  const url = new URL(`${TOKEN_SHARING_ISSUER}/api/accounts/authorize`);
-  url.search = new URLSearchParams({
-    response_type: "code",
-    client_id: clientId,
-    redirect_uri: TOKEN_SHARING_REDIRECT_URI,
-    resource: TOKEN_SHARING_RESOURCE,
-    scope: authorizationScope,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state,
-    nonce,
-    ...(registering ? { agent_name_hint: "OpenClaw" } : {}),
-  }).toString();
   const callback = await startProviderOAuthLoopbackCallbackServer({
-    redirectUrl: TOKEN_SHARING_REDIRECT_URI,
+    redirectUrl: callbackUrl.href,
     expectedState: state,
     signal: owner.signal,
-    // SSH forwards target IPv4 loopback; keep the registered localhost redirect unchanged.
+    // SSH forwards target IPv4 loopback, including older localhost registrations.
     bindOnlyHostname: "127.0.0.1",
     deferResponse: true,
   });
   try {
+    const redirectUri = callback.redirectUrl;
+    const url = new URL(`${TOKEN_SHARING_ISSUER}/api/accounts/authorize`);
+    url.search = new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      ext_agent_host_id: hostId,
+      resource: TOKEN_SHARING_RESOURCE,
+      scope: authorizationScope,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      state,
+      nonce,
+      ...(registering ? { agent_name_hint: "OpenClaw" } : {}),
+      ...(loginHint ? { login_hint: loginHint } : {}),
+      // Retry a declined sharing grant only on explicit reconnect. Ordinary
+      // sign-ins must not repeatedly force consent. Use the supported prompt parameter.
+      ...(existingProfile?.credential.authFlow === IDENTITY_AUTH_FLOW ? { prompt: "consent" } : {}),
+    }).toString();
+    if (ctx.isRemote) {
+      const port = new URL(redirectUri).port;
+      // Reauthorization can redirect immediately, so establish the tunnel before presenting its URL.
+      const ready = await withOAuthLoginAbort(
+        ctx.prompter.confirm({
+          message: `The callback ${redirectUri} must reach this OpenClaw process. If your browser is on the same computer, continue. Otherwise, run this on your browser's computer and keep it running:\nssh -N -L ${port}:127.0.0.1:${port} user@gateway-host\n\nIs the callback ready?`,
+          initialValue: true,
+        }),
+        owner.signal,
+      );
+      if (!ready) {
+        throw createOAuthLoginCancelledError();
+      }
+    }
     owner.assertCurrent?.();
+    owner.signal.throwIfAborted();
     // Gateway wizards attach the browser URL to the next note they publish.
     await withOAuthLoginAbort(ctx.openUrl(url.toString()), owner.signal);
     owner.assertCurrent?.();
@@ -325,11 +377,6 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
             : [
                 "Reconnect with the same ChatGPT user and workspace. To switch either, cancel and choose Connect a different ChatGPT account or workspace.",
               ]),
-          ...(ctx.isRemote
-            ? [
-                "Open the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
-              ]
-            : []),
           ...(ctx.prompter.openUrl ? [] : [`Sign-in URL: ${url.toString()}`]),
         ].join("\n\n"),
         "Sign in with ChatGPT (Beta)",
@@ -367,7 +414,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
         clientId: authorizedClientId,
         code: authorization.code,
         verifier,
-        redirectUri: TOKEN_SHARING_REDIRECT_URI,
+        redirectUri,
         resource: TOKEN_SHARING_RESOURCE,
       }),
     );
@@ -378,6 +425,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       owner,
     });
     credential.authorizationScope = authorizationScope;
+    credential.redirectUri = redirectUri;
     if (existingProfile) {
       const previous = existingProfile.credential;
       // Refresh fences retain the bound identity but discard ID tokens. Older
