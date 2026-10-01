@@ -195,9 +195,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     ),
     // #160931 (b4ae783fbfd) added three callable agent-harness-runtime exports
     // without its ratchet update; these pin exactly that growth.
+    // +3: bounded command-status projection types (#76759).
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4587,
+      4590,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
