@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import process from "node:process";
-import { describe, expect, it, vi } from "vitest";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
+import { describe, expect, it } from "vitest";
 import { runClaudeCliNativeSpawnProof } from "../../test/helpers/claude-cli-native-spawn-proof.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -12,10 +14,26 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runUtf8CommandWithTimeout } from "./exec.js";
 import { killProcessTree } from "./kill-tree.js";
 
+// libuv owns the Job, but no retained handle exposes this foreign descendant's exit.
+async function waitForDescendantExit(
+  identity: NodeWorkerProcessIdentity,
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    while (inspectNodeWorkerProcessIdentity(identity) !== "dead") {
+      await waitForProcessTick(50, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`Timed out waiting for Windows descendant ${identity.pid} to exit`, {
+      cause: error,
+    });
+  }
+}
+
 describe("runUtf8CommandWithTimeout Windows integration", () => {
   it.runIf(process.platform === "win32")(
     "closes a nested Node descendant after an inner spawnSync timeout and outer failure",
-    async () => {
+    async ({ signal }) => {
       const descendantSource = 'setInterval(() => {}, 1000); process.send("ready");';
       const innerSource = [
         'const { spawn } = require("node:child_process");',
@@ -51,36 +69,30 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
         },
       });
       try {
-        const descendant = await Promise.race([
-          ready.promise,
-          pending.then(() => {
-            throw new Error("inner command ended without descendant readiness");
-          }),
-        ]);
+        const descendant = await withinTest(
+          awaitGateBeforeSettlement(
+            ready.promise,
+            pending,
+            "inner command ended without descendant readiness",
+          ),
+          signal,
+        );
         expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("live");
-        await expect(pending).resolves.toMatchObject({
+        await expect(withinTest(pending, signal)).resolves.toMatchObject({
           code: 1,
           termination: "exit",
           stderr: expect.stringContaining("ETIMEDOUT"),
         });
-        await vi.waitFor(
-          () => {
-            expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("dead");
-          },
-          { timeout: 5_000, interval: 50 },
-        );
+        await waitForDescendantExit(descendant, signal);
+        expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("dead");
       } finally {
         controller.abort();
         await pending.catch(() => undefined);
         // Failed assertions still clean only the exact observed fixture process.
         if (child && inspectNodeWorkerProcessIdentity(child) === "live") {
           process.kill(child.pid, "SIGKILL");
-          await vi.waitFor(
-            () => {
-              expect(inspectNodeWorkerProcessIdentity(child!)).toBe("dead");
-            },
-            { timeout: 5_000, interval: 50 },
-          );
+          await waitForDescendantExit(child, signal);
+          expect(inspectNodeWorkerProcessIdentity(child)).toBe("dead");
         }
       }
     },
@@ -89,7 +101,7 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
 
   it.runIf(process.platform === "win32")(
     "force-kills a real Windows process tree when graceful taskkill refuses it",
-    async () => {
+    async ({ signal }) => {
       const program = [
         'const { spawn } = require("node:child_process");',
         'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });',
@@ -101,6 +113,7 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
         stdio: ["ignore", "pipe", "ignore"],
         windowsHide: true,
       });
+      const parentClosed = once(parent, "close");
       const parentPid = parent.pid;
       const parentStdout = parent.stdout;
 
@@ -110,9 +123,17 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
       }
 
       try {
-        const [output] = await once(parentStdout, "data");
+        const [output] = await withinTest(
+          awaitGateBeforeSettlement(
+            once(parentStdout, "data", { signal }),
+            parentClosed,
+            "Could not start the Windows process tree",
+          ),
+          signal,
+        );
         const childPid = Number.parseInt(String(output).trim(), 10);
         expect(Number.isSafeInteger(childPid)).toBe(true);
+        const descendant = requireNodeWorkerProcessIdentity(childPid);
         expect(() => process.kill(parentPid, 0)).not.toThrow();
         expect(() => process.kill(childPid, 0)).not.toThrow();
 
@@ -120,18 +141,16 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
         // depend on this unref'd timer surviving an application shutdown.
         killProcessTree(parentPid, { graceMs: 30_000 });
 
-        await vi.waitFor(
-          () => {
-            expect(() => process.kill(parentPid, 0)).toThrow();
-            expect(() => process.kill(childPid, 0)).toThrow();
-          },
-          { timeout: 5_000, interval: 50 },
-        );
+        await withinTest(parentClosed, signal);
+        await waitForDescendantExit(descendant, signal);
+        expect(() => process.kill(parentPid, 0)).toThrow();
+        expect(() => process.kill(childPid, 0)).toThrow();
       } finally {
         // The retained child handle is safe after exit; taskkill of its reusable
         // PID is not. This fixture's non-detached Node child is in its libuv job.
         parent.kill("SIGKILL");
         parentStdout.destroy();
+        await parentClosed;
       }
     },
     15_000,

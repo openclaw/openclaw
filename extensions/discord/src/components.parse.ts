@@ -105,11 +105,7 @@ function readOptionalEmoji(value: unknown, label: string) {
 }
 
 export function normalizeModalFieldName(value: string | undefined, index: number) {
-  const trimmed = value?.trim();
-  if (trimmed) {
-    return trimmed;
-  }
-  return `field_${index + 1}`;
+  return value?.trim() || `field_${index + 1}`;
 }
 
 function readAttachmentName(value: string, label: string, filenameLabel = "a filename"): string {
@@ -173,7 +169,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
   const obj = requireObject(raw, label);
   const style = normalizeOptionalString(obj.style) as DiscordComponentButtonStyle | undefined;
   const url = normalizeOptionalString(obj.url);
-  if ((style === "link" || url) && !url) {
+  if (style === "link" && !url) {
     throw new Error(`${label}.url is required for link buttons`);
   }
   return {

@@ -68,6 +68,19 @@ the account's bindings unchanged. An unresolved account stays blocked
 with that reason while the Gateway and other accounts continue running; it does
 not enter a restart loop. Add the reported binding and restart the Gateway.
 
+## Sender tool policies
+
+Doctor migrates unprefixed `toolsBySender` keys to `id:` entries before config
+validation, including the update-time Doctor pass. It preserves the previous
+matching behavior: a leading `@` on an unprefixed key is removed, IDs match
+without regard to case, and the first configured policy wins when multiple keys
+normalize to the same ID. Doctor reports shadowed entries and preserves their
+original values in the normal config backup before saving the repair.
+
+Runtime config requires typed sender keys or `"*"`. After replacing the binary
+directly, run `openclaw doctor --fix` before starting the Gateway. Explicit
+`id:@user:server` policies and incoming sender-ID matching remain supported.
+
 ## Channel webhook listeners
 
 Feishu, Nextcloud Talk, and Telegram receive webhooks on Gateway HTTP routes. Their plugin-owned

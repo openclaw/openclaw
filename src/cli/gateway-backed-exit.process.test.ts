@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import {
   readOriginDeviceTokenReadOnlyForTest,
   seedOriginDeviceToken,
@@ -359,7 +360,7 @@ describe("gateway-backed CLI process exit", () => {
         stateDir,
         configPath,
         env: {
-          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+          ...withRuntimePreload({}, preloadPath),
           OPENCLAW_ENTRY_PID_LOG: pidLogPath,
           OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
           OPENCLAW_NODE_OPTIONS_READY: undefined,

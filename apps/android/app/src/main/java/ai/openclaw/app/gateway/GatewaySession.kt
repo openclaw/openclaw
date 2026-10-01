@@ -232,6 +232,7 @@ data class GatewayHelloSummary(
   val updateAvailable: GatewayUpdateAvailableSummary?,
   val authRole: String? = null,
   val authScopes: List<String> = emptyList(),
+  val authSessionCap: String? = null,
   val methods: Set<String>? = null,
   val capabilities: Set<String>? = null,
 )
@@ -1804,6 +1805,7 @@ class GatewaySession(
         }
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: target.options.role
+      val authSessionCap = authObj?.get("sessionCap").asStringOrNull()
       controlUiReadCredentials =
         listOfNotNull(deviceToken, selectedAuth.authDeviceToken, selectedAuth.authToken, selectedAuth.authPassword)
           .map(String::trim)
@@ -1898,6 +1900,7 @@ class GatewaySession(
             updateAvailable = parseGatewayUpdateAvailableSummary(snapshot?.get("updateAvailable").asObjectOrNull()),
             authRole = authRole,
             authScopes = authScopes,
+            authSessionCap = authSessionCap,
             methods = methods,
             capabilities = capabilities,
           ),

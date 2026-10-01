@@ -68,10 +68,7 @@ async function normalizeSentMediaUrlsForDedupe(params: {
       });
       const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalized).mediaUrls;
       for (const mediaUrl of normalizedMediaUrls) {
-        const candidate = mediaUrl.trim();
-        if (candidate) {
-          normalizedUrls.add(candidate);
-        }
+        normalizedUrls.add(mediaUrl);
       }
     } catch (err) {
       logVerbose(`messaging tool sent-media normalization failed: ${String(err)}`);
@@ -363,10 +360,9 @@ export async function buildReplyPayloads(params: {
     if (!text || !retryBlockedDirectPayloads.length) {
       return false;
     }
-    const normalizedText = text.trim();
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
     const applicableFragments = directTextFragmentsByAssistantMessage.get(assistantMessageIndex);
-    return applicableFragments ? applicableFragments.join("").trim() === normalizedText : false;
+    return applicableFragments ? applicableFragments.join("").trim() === text : false;
   };
   const preserveUnsentMediaAfterBlockSend = (payload: ReplyPayload): ReplyPayload | null => {
     if (

@@ -279,8 +279,10 @@ at a time and preserves cache binary values. Source-file inspection remains on t
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
-Cache reads, the published-generation guard for shadow source writes, and cold
-opening remain separate work. Schemas, cache retention, and stored formats are unchanged.
+Cache and source-hash reads use the retained publication worker, with caller
+authority checked after delivery. The published-generation guard for shadow source
+writes and cold opening remain separate work. Schemas, cache retention, and stored
+formats are unchanged.
 
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally

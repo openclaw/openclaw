@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { applyLocalTsgoPolicy, resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -419,6 +420,7 @@ function profileGraph(name: GraphName, options: ProfileOptions) {
 
 async function main(argv: string[]): Promise<void> {
   const { options, selectedGraphs } = parseArgs(argv);
+  await ensureKyselyTypes(repoRoot);
   ensureDirs(options.outDir);
   const report: ProfileReport = {
     generatedAt: new Date().toISOString(),

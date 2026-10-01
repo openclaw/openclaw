@@ -132,6 +132,104 @@ openclaw-systems-page {
   font-size: 11px;
   border-bottom: 1px solid var(--border);
 }
+.systems-backups {
+  flex: 0 1 auto;
+  max-height: 36%;
+  overflow: auto;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.systems-backups h2 {
+  margin: 0 0 8px;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+.systems-backups h3 {
+  margin: 12px 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.systems-backups__targets,
+.systems-backups__locations {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.systems-backups__targets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 10px 24px;
+}
+.systems-backup,
+.systems-storage-location {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.systems-backup__heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.systems-backup strong,
+.systems-storage-location strong {
+  color: var(--text);
+  font-weight: 500;
+}
+.systems-backup__state {
+  color: var(--ok);
+}
+.systems-backup[data-status="failed"] .systems-backup__state,
+.systems-backup__error {
+  color: var(--danger);
+}
+.systems-backup__error {
+  margin: 4px 0 0;
+}
+.systems-backup__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  color: var(--muted);
+}
+.systems-backup__destination {
+  display: block;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.systems-backups__hint {
+  color: var(--muted);
+  margin: 4px 0;
+}
+.systems-storage-location {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 12px;
+  padding: 5px 0;
+}
+.systems-storage-location p {
+  grid-column: 1 / -1;
+}
+.systems-backups__check {
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+}
+.systems-backups__check:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.systems-backups__check:disabled {
+  opacity: 0.45;
+}
 .systems-body {
   display: flex;
   flex: 1;
@@ -541,6 +639,9 @@ openclaw-systems-page {
     box-shadow: var(--shadow-lg);
   }
   .systems-metrics {
+    padding: 8px 10px;
+  }
+  .systems-backups {
     padding: 8px 10px;
   }
   .systems-sample-time {

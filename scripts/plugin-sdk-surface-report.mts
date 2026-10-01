@@ -193,11 +193,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       158,
       env,
     ),
-    // #160931 (b4ae783fbfd) added three callable agent-harness-runtime exports
-    // without its ratchet update; these pin exactly that growth.
+    // Includes four approved storage transport contract types on plugin-entry.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4587,
+      4591,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

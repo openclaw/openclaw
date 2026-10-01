@@ -1,6 +1,5 @@
 // Covers bundling rules encoded in the root tsdown config.
 import { readdirSync, readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -15,6 +14,7 @@ import tsdownConfig, {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
 } from "../../tsdown.config.ts";
+import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 
 type TsdownConfigEntry = {
   deps?: {
@@ -383,7 +383,7 @@ describe("tsdown config", () => {
     });
     expect(clients.length).toBeGreaterThan(0);
     for (const clientUrl of clients) {
-      const runtimeSource = stripTypeScriptTypes(readFileSync(clientUrl, "utf8"));
+      const runtimeSource = stripNodeTypeScriptTypes(readFileSync(clientUrl, "utf8"));
       // Include literal paths assigned to variables used by dynamic imports, but not erased types.
       for (const match of runtimeSource.matchAll(
         /["'`]((?:\.{1,2}\/)+dist\/[^"'`\s]+\.[cm]?js)["'`]/gu,
