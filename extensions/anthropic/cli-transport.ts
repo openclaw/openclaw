@@ -3,6 +3,7 @@ import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { signalProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { createClaudeCliProcessOwner, type ClaudeCliSecretInput } from "./cli-process.js";
 
 // Match the host's per-record JSONL budget, including large image/tool records.
@@ -11,10 +12,28 @@ const MAX_LINE_CHARS = 8 * 1024 * 1024;
 const CLOSE_GRACE_MS = 500;
 const KILL_GRACE_MS = 1_000;
 
+/** Settings that do not fit on the command line, passed to Claude Code as a private file. */
+export async function writeClaudeCliSettingsFile(settings: Record<string, unknown>) {
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-claude-cli-settings-",
+  });
+  try {
+    return {
+      path: await workspace.writeJson("settings.json", settings),
+      cleanup: () => workspace.cleanup(),
+    };
+  } catch (error) {
+    await workspace.cleanup();
+    throw error;
+  }
+}
+
 /** One Claude Code subprocess and its bidirectional stream-json control channel. */
 export function createClaudeCliTransport(params: {
   context: CliBackendExecuteContext;
   args: string[];
+  settingsFile?: Awaited<ReturnType<typeof writeClaudeCliSettingsFile>>;
   initialize: Record<string, unknown>;
   currentContext: () => CliBackendExecuteContext | undefined;
   secretInput?: ClaudeCliSecretInput;
@@ -22,14 +41,25 @@ export function createClaudeCliTransport(params: {
   onRequest: (request: Record<string, unknown>, signal: AbortSignal) => Promise<() => unknown>;
   onError: (error: unknown) => void;
 }) {
-  const owner = createClaudeCliProcessOwner(params.currentContext, params.secretInput);
+  const removeSettings = () => void params.settingsFile?.cleanup().catch(() => {});
+  let owner: ReturnType<typeof createClaudeCliProcessOwner>;
+  try {
+    owner = createClaudeCliProcessOwner(params.currentContext, params.secretInput);
+  } catch (error) {
+    removeSettings();
+    throw error;
+  }
   let child: ReturnType<typeof owner.spawn>;
   try {
     const env = { ...params.context.env };
     delete env.NODE_OPTIONS;
     delete env.DEBUG;
-    child = owner.spawn({ ...params.context, args: params.args, env });
+    const args = params.settingsFile
+      ? [...params.args, "--settings", params.settingsFile.path]
+      : params.args;
+    child = owner.spawn({ ...params.context, args, env });
   } catch (error) {
+    removeSettings();
     owner[Symbol.dispose]();
     throw error;
   }
@@ -107,6 +137,7 @@ export function createClaudeCliTransport(params: {
     hasExited = true;
     clearTimeout(terminateTimer);
     clearTimeout(killTimer);
+    removeSettings();
     // Descendants can hold pipes and process-owned resources after the root exits.
     if (process.platform !== "win32" || !closed) {
       treeExit = signalTree("SIGKILL");
