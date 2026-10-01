@@ -35,6 +35,7 @@ vi.mock("./openclaw-state-lease-worker-storage.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-lease-worker-storage.js")>();
   return {
     ...actual,
+    acquireLease: mocks.forbidden,
     createOpenClawStateLeaseWorkerStorage: (context: OpenClawStateWorkerContext) =>
       mocks.configureStorage(actual.createOpenClawStateLeaseWorkerStorage(context)),
   };
@@ -60,7 +61,6 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
     execute?.(),
   resolveLeaseDatabasePath: mocks.forbidden,
-  acquireLease: mocks.forbidden,
   renewOpenClawStateLease: mocks.forbidden,
   verifyOpenClawStateLeaseOwnership: mocks.forbidden,
   releaseOpenClawStateLease: mocks.forbidden,

@@ -41,8 +41,6 @@ import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 type RestoredQueuedFailureSettlementClaim = {
-  entry: SubagentRunRecord;
-  runId: string;
   execution: SubagentRunRecord["execution"];
   queuedLaunch: SubagentRunRecord["queuedLaunch"];
   killIntent: SubagentRunRecord["killIntent"];
@@ -503,8 +501,6 @@ export function createSubagentRegistryRestorer(config: {
       return true;
     }
     const claim: RestoredQueuedFailureSettlementClaim = {
-      entry,
-      runId,
       execution: entry.execution,
       queuedLaunch: entry.queuedLaunch,
       killIntent: entry.killIntent,

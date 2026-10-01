@@ -64,7 +64,6 @@ export function resolveEmbeddedFullAccessState(params: {
   return { available: true };
 }
 
-/** Resolves the effective exec policy for sandbox-info reporting. */
 export async function resolveEmbeddedSandboxInfoExecPolicy(
   params: {
     config?: OpenClawConfig;
@@ -93,7 +92,6 @@ export async function resolveEmbeddedSandboxInfoExecPolicy(
   );
 }
 
-/** Builds the serializable sandbox metadata attached to embedded agent run results. */
 export function buildEmbeddedSandboxInfo(
   sandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>,
   execElevated?: ExecElevatedDefaults,

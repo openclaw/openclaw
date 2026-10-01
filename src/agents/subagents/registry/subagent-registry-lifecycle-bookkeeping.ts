@@ -164,33 +164,26 @@ export async function completeCleanupBookkeeping(
       throw new Error("Subagent cleanup owner changed after publication.");
     }
   };
-  if (retireImmediately) {
-    await commitSubagentLifecycleMutation(context, {
-      entry: cleanupParams.entry,
-      stateContext,
-      assertCurrent,
-      mutate: () => cleanupParams.discardDelivery?.(),
-      retire: true,
-    });
-    assertPublishedOwner();
-    subagentRuns.confirmRetirement(cleanupParams.entry);
-    clearGatewayContextResolver(cleanupParams.entry);
-  } else {
-    // Collector tombstones and announcing runs share the same durable cleanup
-    // boundary; only announcing runs keep a requester-settle obligation.
-    await commitSubagentLifecycleMutation(context, {
-      entry: cleanupParams.entry,
-      stateContext,
-      assertCurrent,
-      mutate: () => {
-        cleanupParams.discardDelivery?.();
+  // Collector tombstones and announcing runs share the same durable cleanup
+  // boundary; only announcing runs keep a requester-settle obligation.
+  await commitSubagentLifecycleMutation(context, {
+    entry: cleanupParams.entry,
+    stateContext,
+    assertCurrent,
+    retire: retireImmediately,
+    mutate: () => {
+      cleanupParams.discardDelivery?.();
+      if (!retireImmediately) {
         applyCleanupBookkeeping(cleanupParams, suppressSessionEffects, retireAfterSettle);
-      },
-    });
-    assertPublishedOwner();
-    if (cleanupParams.entry.collect || cleanupParams.skipRequesterSettleWake) {
-      clearGatewayContextResolver(cleanupParams.entry);
-    }
+      }
+    },
+  });
+  assertPublishedOwner();
+  if (retireImmediately) {
+    subagentRuns.confirmRetirement(cleanupParams.entry);
+  }
+  if (retireImmediately || cleanupParams.entry.collect || cleanupParams.skipRequesterSettleWake) {
+    clearGatewayContextResolver(cleanupParams.entry);
   }
   if (isDeleteCleanup || retireAfterSettle) {
     params.clearPendingLifecycleError(cleanupParams.runId);

@@ -39,7 +39,6 @@ const parseFacing = (value: string): CameraFacing => {
   throw new Error(`invalid facing: ${value} (expected front|back)`);
 };
 
-/** Register node camera list/snap/clip commands. */
 export function registerNodesCameraCommands(nodes: Command) {
   const camera = nodes.command("camera").description("Capture camera media from a paired node");
 

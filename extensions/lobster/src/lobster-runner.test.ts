@@ -146,12 +146,12 @@ describe("createEmbeddedLobsterRunner", () => {
     await expect(runner.run(runParams())).rejects.toThrow("boom");
   });
 
-  it("fails closed when the embedded runtime requests unsupported input", async () => {
+  it("rejects an input request without a resumable checkpoint", async () => {
     const { runtime, runner } = createRunner();
     runtime.runToolRequest.mockResolvedValue({ ...success, status: "needs_input" });
 
     await expect(runner.run(runParams())).rejects.toThrow(
-      "Lobster input requests are not supported by the OpenClaw Lobster tool yet",
+      "Lobster input request is missing its resume token",
     );
   });
 
@@ -237,7 +237,7 @@ describe("createEmbeddedLobsterRunner", () => {
     );
   });
 
-  it("requires token and approve for resume", async () => {
+  it("requires a checkpoint and a decision for resume", async () => {
     const { runner } = createRunner();
 
     await expect(
@@ -245,8 +245,40 @@ describe("createEmbeddedLobsterRunner", () => {
     ).rejects.toThrow(/token or approvalId required/);
     await expect(
       runner.run(runParams({ action: "resume", pipeline: undefined, token: "resume-token" })),
-    ).rejects.toThrow(/approve required/);
+    ).rejects.toThrow(/exactly one/);
   });
+
+  it.each([
+    { responseJson: "{bad" },
+    { responseJson: "" },
+    { approve: true, responseJson: "null" },
+    { cancel: true, responseJson: "null" },
+    { cancel: true, approve: false },
+    { cancel: false },
+  ])(
+    "rejects invalid or ambiguous resume arguments before touching state: %j",
+    async (decision) => {
+      const { runtime, runner } = createRunner();
+      await expect(
+        runner.run(runParams({ action: "resume", token: "resume-token", ...decision })),
+      ).rejects.toThrow();
+      expect(runtime.resumeToolRequest).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["null", "false", "[]"])(
+    "passes JSON values unchanged on resume: %s",
+    async (responseJson) => {
+      const { runtime, runner } = createRunner();
+      runtime.resumeToolRequest.mockResolvedValue(success);
+      await runner.run(runParams({ action: "resume", token: "resume-token", responseJson }));
+      expect(runtime.resumeToolRequest).toHaveBeenCalledExactlyOnceWith({
+        token: "resume-token",
+        response: JSON.parse(responseJson),
+        ctx: toolContext(),
+      });
+    },
+  );
 
   it("aborts long-running embedded work", async () => {
     const { runtime, runner } = createRunner();

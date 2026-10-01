@@ -1,10 +1,11 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
-import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import type { AssistantMessage } from "@openclaw/ai";
+import { execa } from "execa";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertControlUiGeneratedArtifactsIsolated,
@@ -18,12 +19,10 @@ import {
   verifyControlUiReferencedKeys,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
-  appendBoundedProcessOutput,
   assertNoControlUiFallbacks,
   buildBatchPrompt,
   filterPlaceholderCompatibleTranslations,
   parseTranslationBatchReply,
-  runProcess,
   translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
 import { loadControlUiSourceCatalog } from "../../scripts/lib/control-ui-i18n-catalog.ts";
@@ -32,16 +31,13 @@ import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../src/agents/test-helpers/usage-fixtures.js";
-import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
-import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
-import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -90,15 +86,19 @@ describe("translation provider privacy and fallback", () => {
   });
 
   it("reports CLI failures without disclosing configured model or key values", async () => {
-    const result = await runProcess(process.execPath, [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/control-ui-i18n.ts",
-      "sync",
-      "--locale",
-      `${primary.toUpperCase()}/${fallback}/test-key`,
-    ]);
-    expect(result.code).toBe(1);
+    const result = await execa(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/control-ui-i18n.ts",
+        "sync",
+        "--locale",
+        `${primary.toUpperCase()}/${fallback}/test-key`,
+      ],
+      { reject: false, timeout: 120_000, stripFinalNewline: false },
+    );
+    expect(result.exitCode).toBe(1);
     expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
   });
 
@@ -135,13 +135,12 @@ describe("translation provider privacy and fallback", () => {
       error: "unknown refresh key: missing.fixture.key",
     },
   ])("rejects invalid targeted refresh: $error", async ({ args, error }) => {
-    const result = await runProcess(process.execPath, [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/control-ui-i18n.ts",
-      ...args,
-    ]);
-    expect(result.code).not.toBe(0);
+    const result = await execa(
+      process.execPath,
+      ["--import", "./scripts/tsx.mjs", "scripts/control-ui-i18n.ts", ...args],
+      { reject: false, timeout: 120_000, stripFinalNewline: false },
+    );
+    expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain(error);
   });
 
@@ -149,18 +148,22 @@ describe("translation provider privacy and fallback", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL", "1");
-    const result = await runProcess(process.execPath, [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/control-ui-i18n.ts",
-      "sync",
-      "--write",
-      "--locale",
-      "pl",
-      "--refresh-key",
-      "chat.parentSession",
-    ]);
-    expect(result.code).toBe(1);
+    const result = await execa(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/control-ui-i18n.ts",
+        "sync",
+        "--write",
+        "--locale",
+        "pl",
+        "--refresh-key",
+        "chat.parentSession",
+      ],
+      { reject: false, timeout: 120_000, stripFinalNewline: false },
+    );
+    expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("--refresh-key requires a configured translation provider");
   });
 
@@ -221,14 +224,12 @@ describe("translation provider privacy and fallback", () => {
         assert.equal(requests, 1);
         console.log("isolated-runtime-ok");
       `;
-      const result = await runProcess(process.execPath, [
-        "--import",
-        "./scripts/tsx.mjs",
-        "--input-type=module",
-        "-e",
-        code,
-      ]);
-      expect(result.code, result.stderr).toBe(0);
+      const result = await execa(
+        testNodeExecPath,
+        ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", code],
+        { reject: false, timeout: 120_000, stripFinalNewline: false },
+      );
+      expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).toContain("isolated-runtime-ok");
       expect(result.stdout + result.stderr).not.toContain(primary);
       expect(result.stdout + result.stderr).not.toContain("[model-fetch]");
@@ -488,29 +489,7 @@ describe("control-ui-i18n generated ownership", () => {
   });
 });
 
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!processIsAlive(pid)) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
-}
-
-describe("control-ui-i18n process runner", () => {
+describe("control-ui-i18n catalog validation", () => {
   it("points strict catalog drift at the generated release repair", () => {
     const message = formatControlUiCatalogFallbackDriftError();
 
@@ -740,194 +719,4 @@ describe("control-ui-i18n process runner", () => {
       ]),
     ).not.toThrow();
   });
-
-  it("keeps a bounded process output tail", () => {
-    const first = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
-    const second = appendBoundedProcessOutput(first, "ghij", 5);
-
-    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
-    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
-  });
-
-  it("does not split a UTF-16 surrogate pair at the tail boundary", () => {
-    // "ab😀cdef" is 8 UTF-16 code units: a, b, <high>, <low>, c, d, e, f.
-    // maxChars = 5 forces a tail slice whose boundary lands inside the surrogate pair.
-    // The raw `slice(-5)` would return "<low>cdef" (leading dangling low surrogate).
-    // sliceUtf16Safe advances past the low surrogate, retaining "cdef" (4 units);
-    // truncatedChars must reflect the 4 actually-dropped units, not maxChars.
-    const result = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "ab😀cdef", 5);
-    expect(result.text.length).toBeLessThanOrEqual(5);
-    // No dangling surrogate (high 0xd800-0xdbff or low 0xdc00-0xdfff) at either edge.
-    expect(result.text.charCodeAt(0)).toBeLessThan(0xd800);
-    expect(result.text.charCodeAt(result.text.length - 1)).toBeLessThan(0xd800);
-    expect(result.text).toBe("cdef");
-    expect(result.truncatedChars).toBe(4);
-  });
-
-  it("bounds failure diagnostics to the newest output", async () => {
-    await expect(
-      runProcess(
-        process.execPath,
-        [
-          "-e",
-          [
-            "process.stderr.write('stderr-begin-' + 'x'.repeat(128) + '-stderr-end', () => process.exit(2));",
-          ].join(" "),
-        ],
-        { maxOutputChars: 64, rejectOnFailure: true },
-      ),
-    ).rejects.toThrow(/output truncated[\s\S]*stderr-end/u);
-  });
-
-  it("rejects successful commands before returning truncated stdout", async () => {
-    await expect(
-      runProcess(
-        process.execPath,
-        ["-e", "process.stdout.write('x'.repeat(128), () => process.exit(0));"],
-        {
-          maxOutputChars: 12,
-        },
-      ),
-    ).rejects.toThrow("produced more than 12 stdout chars");
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "kills descendant processes after the process timeout",
-    async () => {
-      const tempDirs = createTempDirTracker();
-      const tempDir = tempDirs.make("openclaw-control-ui-i18n-timeout-");
-      try {
-        const markerPath = path.join(tempDir, "grandchild.pid");
-        const grandchildScript = [
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        const parentScript = [
-          "const { spawn } = require('node:child_process');",
-          "const { writeFileSync } = require('node:fs');",
-          `const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildScript)}], { stdio: "ignore" });`,
-          `writeFileSync(${JSON.stringify(markerPath)}, String(grandchild.pid));`,
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-
-        await expect(
-          runProcess(process.execPath, ["-e", parentScript], {
-            cwd: tempDir,
-            killGraceMs: 25,
-            timeoutMs: 500,
-          }),
-        ).rejects.toThrow(`timed out after 500ms`);
-
-        const grandchildPid = await waitForPidFile(markerPath, 1_000);
-        await waitForProcessExit(grandchildPid);
-      } finally {
-        tempDirs.cleanup();
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "waits for all process groups before re-raising parent signals",
-    async () => {
-      const tempDirs = createTempDirTracker();
-      const tempDir = tempDirs.make("openclaw-control-ui-i18n-signal-");
-      const fastReadyPath = path.join(tempDir, "fast-ready");
-      const fastCommandPath = path.join(tempDir, "fast-command.mjs");
-      const commandPath = path.join(tempDir, "command.mjs");
-      const runnerPath = path.join(tempDir, "runner.mjs");
-      const grandchildPidPath = path.join(tempDir, "grandchild.pid");
-      let grandchildPid = 0;
-
-      try {
-        const grandchildScript = [
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        writeFileSync(
-          fastCommandPath,
-          [
-            "import { writeFileSync } from 'node:fs';",
-            `writeFileSync(${JSON.stringify(fastReadyPath)}, "ready");`,
-            "process.on('SIGTERM', () => process.exit(0));",
-            "setInterval(() => {}, 1000);",
-          ].join("\n"),
-          "utf8",
-        );
-        writeFileSync(
-          commandPath,
-          [
-            "import { spawn } from 'node:child_process';",
-            "import { writeFileSync } from 'node:fs';",
-            `const grandchild = spawn(process.execPath, ["--eval", ${JSON.stringify(
-              grandchildScript,
-            )}], { stdio: "ignore" });`,
-            `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
-            "process.on('SIGTERM', () => process.exit(0));",
-            "setInterval(() => {}, 1000);",
-          ].join("\n"),
-          "utf8",
-        );
-        writeFileSync(
-          runnerPath,
-          [
-            `const { runProcess } = await import(${JSON.stringify(
-              resolveRuntimeWorkerUrl(toolingTsEntrypoints.controlUiI18n).href,
-            )});`,
-            "void runProcess(process.execPath,",
-            `  [${JSON.stringify(fastCommandPath)}],`,
-            "  { killGraceMs: 100, timeoutMs: 30_000 },",
-            ").catch(() => undefined);",
-            "void runProcess(process.execPath,",
-            `  [${JSON.stringify(commandPath)}],`,
-            "  { killGraceMs: 100, timeoutMs: 30_000 },",
-            ").catch(() => undefined);",
-          ].join("\n"),
-          "utf8",
-        );
-
-        const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
-          cwd: process.cwd(),
-          stdio: "ignore",
-        });
-
-        try {
-          const deadline = Date.now() + 30_000;
-          grandchildPid = await waitForPidFile(grandchildPidPath, 30_000);
-          let fastReady = false;
-          while (Date.now() < deadline) {
-            try {
-              fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
-            } catch {}
-            if (fastReady && grandchildPid > 0 && processIsAlive(grandchildPid)) {
-              break;
-            }
-            await new Promise((resolve) => {
-              setTimeout(resolve, 10);
-            });
-          }
-          expect(fastReady).toBe(true);
-          expect(grandchildPid).toBeGreaterThan(0);
-          expect(processIsAlive(grandchildPid)).toBe(true);
-
-          runner.kill("SIGTERM");
-
-          await expect(waitForChildClose(runner, 2_000)).resolves.toEqual({
-            code: null,
-            signal: "SIGTERM",
-          });
-          await waitForProcessExit(grandchildPid, 2_000);
-        } finally {
-          if (runner.pid && processIsAlive(runner.pid)) {
-            runner.kill("SIGKILL");
-          }
-          if (grandchildPid > 0 && processIsAlive(grandchildPid)) {
-            process.kill(grandchildPid, "SIGKILL");
-          }
-        }
-      } finally {
-        tempDirs.cleanup();
-      }
-    },
-  );
 });

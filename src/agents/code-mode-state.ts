@@ -293,7 +293,9 @@ export function removeExpiredRuns(now = Date.now()): void {
         state.agentWaitRetainUntil !== undefined &&
         isFutureDateTimestampMs(state.agentWaitRetainUntil, { nowMs: now })
       ) {
-        const renewed = resolveCodeModeSnapshotExpiresAt(now, state.config.snapshotTtlSeconds);
+        const renewed = resolveExpiresAtMsFromDurationSeconds(state.config.snapshotTtlSeconds, {
+          nowMs: now,
+        });
         if (renewed !== undefined) {
           state.expiresAt = Math.min(renewed, state.agentWaitRetainUntil);
           continue;
@@ -417,20 +419,12 @@ export function waitForPendingBridgeSettlement(
   return settlement.then(() => undefined);
 }
 
-function resolveCodeModeSnapshotExpiresAt(now: number, ttlSeconds: number): number | undefined {
-  return resolveExpiresAtMsFromDurationSeconds(ttlSeconds, { nowMs: now });
-}
-
-function enforceActiveRunLimit(): void {
-  removeExpiredRuns();
-  if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
-    throw new ToolInputError("too many suspended code mode runs.");
-  }
-}
-
 export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   if (ownedRunId === undefined) {
-    enforceActiveRunLimit();
+    removeExpiredRuns();
+    if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
+      throw new ToolInputError("too many suspended code mode runs.");
+    }
   } else {
     const state = activeRuns.get(ownedRunId);
     if (!state) {
@@ -474,6 +468,7 @@ function isPendingBridgeRequestReplaySafe(
     request.method === "agentSpawn" ||
     request.method === "agentWait" ||
     request.method === "skillsList" ||
+    request.method === "skillsSearch" ||
     request.method === "skillsRead" ||
     request.method === "sleep"
   ) {
@@ -564,9 +559,9 @@ export function createPendingBridgeStates(
         if (state.method === "agentWait" && params.activeRunId) {
           const active = activeRuns.get(params.activeRunId);
           if (active?.pending.includes(state)) {
-            const renewed = resolveCodeModeSnapshotExpiresAt(
-              Date.now(),
+            const renewed = resolveExpiresAtMsFromDurationSeconds(
               active.config.snapshotTtlSeconds,
+              { nowMs: Date.now() },
             );
             if (renewed !== undefined) {
               active.expiresAt = renewed;
@@ -595,7 +590,9 @@ export function storeSuspendedRun(
     return codeModeAbortedResult(params);
   }
   const now = Date.now();
-  const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
+  const expiresAt = resolveExpiresAtMsFromDurationSeconds(params.config.snapshotTtlSeconds, {
+    nowMs: now,
+  });
   if (expiresAt === undefined) {
     throw new ToolInputError("code mode run expiry is unavailable.");
   }
@@ -603,9 +600,9 @@ export function storeSuspendedRun(
     (entry) => entry.method === "agentWait" && !entry.settled,
   );
   const agentWaitRetainUntil = hasPendingAgentWait
-    ? resolveCodeModeSnapshotExpiresAt(
-        now,
+    ? resolveExpiresAtMsFromDurationSeconds(
         params.config.snapshotTtlSeconds * MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS,
+        { nowMs: now },
       )
     : undefined;
   const state: CodeModeRunState = { ...params, runId, expiresAt, agentWaitRetainUntil };

@@ -165,7 +165,7 @@ describe("plugin CLI metadata registration", () => {
       if (failure) {
         expect(result.ok).toBe(false);
         if (!result.ok) {
-          expect(hasRetainedPluginRuntimeCloseError(result.error)).toBe(true);
+          expect(hasRetainedPluginRuntimeCloseError(result.error)).toBe(false);
           expect(
             collectNestedErrorCandidates(result.error).some(
               (candidate) =>

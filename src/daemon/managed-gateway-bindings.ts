@@ -98,18 +98,11 @@ function profileEnvFields(profile: string): GatewayServiceEnv {
   return profile === "default" ? {} : { OPENCLAW_PROFILE: profile };
 }
 
-function detailPath(prefix: string, detail: string): string | undefined {
-  if (!detail.startsWith(prefix)) {
-    return undefined;
-  }
-  return detail.slice(prefix.length).trim();
-}
-
 function bindingFromSystemdService(
   svc: ExtraGatewayService,
   env: Record<string, string | undefined>,
 ): ManagedGatewayBinding {
-  const unitPath = detailPath("unit:", svc.detail);
+  const unitPath = svc.sourcePath;
   const unitName = resolveSystemdTemplateInstanceName(svc.label, {
     OPENCLAW_SYSTEMD_UNIT: svc.label,
   });
@@ -125,7 +118,7 @@ function bindingFromLaunchdService(
   svc: ExtraGatewayService,
   env: Record<string, string | undefined>,
 ): ManagedGatewayBinding {
-  const plistPath = detailPath("plist:", svc.detail);
+  const plistPath = svc.sourcePath;
   return {
     scope: svc.scope,
     ...(plistPath ? { launchAgentPlistPath: plistPath } : {}),

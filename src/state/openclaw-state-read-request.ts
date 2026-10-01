@@ -125,8 +125,11 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   if (command.type === "devicePairing.bootstrapContext") {
     return { ...command, input: { ...command.input } };
   }
-  if (command.type === "operatorApprovals.history") {
-    return { ...command, input: { ...command.input } };
+  if (
+    command.type === "operatorApprovals.history" ||
+    command.type === "operatorApprovals.listCronGrants"
+  ) {
+    return structuredClone(command);
   }
   if (
     command.type === "acpSessions.metadata" ||
@@ -370,6 +373,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       16
     );
   }
+  if (command.type === "operatorApprovals.listCronGrants") {
+    return bytes + 8;
+  }
   if (command.type === "deliveryQueue.outbound") {
     return bytes + Buffer.byteLength(command.id ?? "", "utf8");
   }
@@ -445,6 +451,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }
   if (
+    command.type === "userModelAccounts.links" ||
     command.type === "userProfiles.reconcile" ||
     command.type === "userProfiles.avatar.inspect" ||
     command.type === "userProfiles.channelIdentity.list" ||

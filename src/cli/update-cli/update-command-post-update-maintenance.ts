@@ -6,6 +6,7 @@ import {
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { adoptCandidateManagedServiceStop } from "../../infra/update-candidate-predecessor-stop.js";
+import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -96,7 +97,16 @@ export async function preparePostUpdateService(
     params.result = failure.result;
     params.failure = { cause, detail: failure.message };
   }
-  return prepareUpdateServiceResult(params);
+  const shouldRestart = prepareUpdateServiceResult(params);
+  if (params.opts.restart === false && !params.shouldRestart && params.opts.run) {
+    assertCurrent();
+    recordUpdateRunStep(
+      params.opts.run.runId,
+      { step: "restart", status: "skipped", endedAtMs: Date.now(), detail: "skipped by operator" },
+      { env: params.opts.run.env },
+    );
+  }
+  return shouldRestart;
 }
 
 export async function parkPostUpdateService(

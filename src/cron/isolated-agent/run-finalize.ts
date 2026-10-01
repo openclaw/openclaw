@@ -258,7 +258,14 @@ export async function finalizeCronRun(params: {
       ...(failure
         ? { error: failure.error, ...(failure.errorKind ? { errorKind: failure.errorKind } : {}) }
         : hasFatalErrorPayload
-          ? { error: runError }
+          ? {
+              error: runError,
+              // The agent already judged the task blocked: rerunning it would repeat that turn,
+              // and its prose must not be text-classified into a transient retry reason.
+              ...(cronPayloadOutcome.agentReportedFailure
+                ? { errorClassification: { kind: "permanent" as const } }
+                : {}),
+            }
           : {}),
       ...output,
       replyDisposition,
@@ -352,6 +359,7 @@ export async function finalizeCronRun(params: {
     cfgWithAgentDefaults: prepared.cfgWithAgentDefaults,
     deps: prepared.input.deps,
     job: prepared.input.job,
+    deliveryAttemptFence: prepared.input.deliveryAttemptFence,
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
     sourceSessionKey: prepared.sourceSessionKey,

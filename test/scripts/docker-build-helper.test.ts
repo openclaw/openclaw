@@ -676,12 +676,12 @@ function cleanupSmokeLogTailHelpers(): string {
 
 function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string): string {
   const script = readFileSync(CLEANUP_DOCKER_SMOKE_PATH, "utf8");
-  const match = script.match(/(resolve_default_cleanup_platform\(\) \{[\s\S]*?\n\})\n\nPLATFORM=/u);
+  const match = script.match(/^PLATFORM=.*$/mu);
   if (!match) {
-    throw new Error("resolve_default_cleanup_platform was not found");
+    throw new Error("cleanup smoke platform assignment was not found");
   }
   return execDockerSnippet(
-    `${match[1]}\nuname() { if [[ "\${1:-}" == "-m" ]]; then printf "%s" "$FAKE_UNAME_ARCH"; else command uname "$@"; fi; }\nresolve_default_cleanup_platform`,
+    `source ${shellQuote(HELPER_PATH)}\nuname() { if [[ "\${1:-}" == "-m" ]]; then printf "%s" "$FAKE_UNAME_ARCH"; else command uname "$@"; fi; }\n${match[0]}\nprintf '%s' "$PLATFORM"`,
     {
       encoding: "utf8",
       env: {
@@ -739,7 +739,12 @@ describe("docker build helper", () => {
     const script = repoShell(home)`
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 printf '%s\\n' "$HOME"
+trap : INT
+trap '' TERM
+trap - HUP
+original_traps="$(trap -p INT TERM HUP)"
 run_logged_print_heartbeat isolated-shell 30 printf 'fixture output\\n'
+test "$(trap -p INT TERM HUP)" = "$original_traps"
 exit 0
 `;
     const expected = `${home}\nfixture output\n`;
@@ -1218,7 +1223,12 @@ export OPENCLAW_DOCKER_BUILD_TIMEOUT=17s
 
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
+trap : INT
+trap '' TERM
+trap - HUP
+original_traps="$(trap -p INT TERM HUP)"
 docker_build_run e2e-build -t demo-image .
+test "$(trap -p INT TERM HUP)" = "$original_traps"
 
 grep -q '^--kill-after=30s 17s|env DOCKER_BUILDKIT=1 docker build --progress=plain --build-arg GITHUB_ACTIONS -t demo-image .$' "$TMPDIR/timeout-seen"
 grep -q '^build --progress=plain --build-arg GITHUB_ACTIONS -t demo-image .$' "$TMPDIR/docker-seen"
@@ -1742,7 +1752,12 @@ export DOCKER_STUB_EXIT_CODE=137
 export DOCKER_STUB_OOM=true
 DOCKER_STUB_ERROR="$(printf '%05000d' 0)"
 export DOCKER_STUB_ERROR
+trap : INT
+trap '' TERM
+trap - HUP
+original_traps="$(trap -p INT TERM HUP)"
 docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/failure-stderr" || run_status="$?"
+test "$(trap -p INT TERM HUP)" = "$original_traps"
 test "\${run_status:-0}" = "7"
 test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3s"
 grep -qx "container-7" "$TMPDIR/docker-rm-seen"
@@ -1776,6 +1791,7 @@ unset DOCKER_STUB_INSPECT_STATUS DOCKER_STUB_INSPECT_ERROR
 unset DOCKER_COMMAND_TIMEOUT
 rm -f "$TMPDIR/docker-timeout-seen"
 docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/success-stderr"
+test "$(trap -p INT TERM HUP)" = "$original_traps"
 test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3600s"
 grep -qx "container-0" "$TMPDIR/docker-rm-seen"
 test "$(tail -n 2 "$TMPDIR/docker-lifecycle")" = $'run container-0\\nrm container-0'

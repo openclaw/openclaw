@@ -453,6 +453,22 @@ export function redactPublicSupportDiagnosticLine(
   context: SupportRedactionContext,
 ): string {
   const line = redactSupportDiagnosticLine(value, context);
+  // Package drift reports carry only a bounded relative entry and closed field names,
+  // never contents, hash values, absolute installation paths, or arbitrary error prose.
+  const packageEntry =
+    /^Package rollback entry "([A-Za-z0-9_@.+/-]{1,90})": fields=((?:added|removed|dev:ino|mode|uid|gid|nlink|size|mtimeNs|ctimeNs|target|sha256)(?:,(?:dev:ino|mode|uid|gid|nlink|size|mtimeNs|ctimeNs|target|sha256))*)$/u.exec(
+      line,
+    );
+  const packagePath = packageEntry?.[1];
+  if (
+    packagePath &&
+    !packagePath.startsWith("/") &&
+    packagePath
+      .split("/")
+      .every((part) => part !== ".." && (!part.includes("@") || part === "@openclaw"))
+  ) {
+    return line;
+  }
   if (line === "Invalid configuration field" || line === "Configuration could not be read.") {
     return line;
   }

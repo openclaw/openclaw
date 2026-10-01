@@ -198,6 +198,7 @@ function createMetrics(startupJsGzipBytes: number) {
 
 const looseBudgets = {
   startupJsRequests: 10,
+  routeBootJsRequests: 35,
   startupCssRequests: 10,
   startupJsGzipBytes: 100_000,
   startupCssGzipBytes: 100_000,
@@ -298,6 +299,7 @@ describe("Control UI performance budgets", () => {
     const metrics = collectControlUiPerformanceMetrics(distDir);
     const budgets = {
       startupJsRequests: 0,
+      routeBootJsRequests: 35,
       startupCssRequests: 1,
       startupJsGzipBytes: 30,
       startupCssGzipBytes: 20,
@@ -315,6 +317,20 @@ describe("Control UI performance budgets", () => {
     expect(formatControlUiPerformanceReport(metrics, budgets)).toContain(
       "route boot accounting: unavailable (build has no route preload templates)",
     );
+  });
+
+  it.each(["chat", "new"] as const)("enforces the %s boot JS request limit", (route) => {
+    const initial = createMetrics(40);
+    const boot = { ...initial.startup, js: { ...initial.startup.js, requests: 35 } };
+    const metrics = { ...initial, routeBoot: { chat: boot, new: boot } };
+
+    expect(evaluateControlUiPerformanceBudgets(metrics)).toEqual([]);
+
+    metrics.routeBoot[route] = { ...boot, js: { ...boot.js, requests: 36 } };
+    expect(evaluateControlUiPerformanceBudgets(metrics)).toEqual([
+      { metric: `${route} boot JS requests`, actual: 36, limit: 35, unit: "count" },
+    ]);
+    expect(formatControlUiPerformanceReport(metrics)).toContain("limit: 35 requests");
   });
 
   it.each([
@@ -547,6 +563,7 @@ describe("Control UI performance budgets", () => {
     const metrics = createMetrics(43_009);
     const budgets = {
       startupJsRequests: 1,
+      routeBootJsRequests: 35,
       startupCssRequests: 1,
       startupJsGzipBytes: 43_008,
       startupCssGzipBytes: 20,

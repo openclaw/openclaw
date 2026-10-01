@@ -43,6 +43,7 @@ export function createControlUiSessionPrSnapshotRead(deps: {
   return (
     target: ControlUiSessionPrTarget,
     assertCurrent: () => void,
+    projection?: ControlUiSessionPrReadContext["projection"],
   ): Promise<ControlUiSessionPullRequestSnapshot> => {
     const assertActive = () => {
       if (deps.scope.isClosing) {
@@ -65,6 +66,7 @@ export function createControlUiSessionPrSnapshotRead(deps: {
             const result = await deps.load(target.params, undefined, {
               target,
               sourceIdentity,
+              projection,
               assertCurrent: assertReadCurrent,
             });
             assertReadCurrent();

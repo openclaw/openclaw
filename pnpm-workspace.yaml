@@ -12,19 +12,17 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   # Maintainer-approved for Bun-only npm plugin installs; remove after 2026-09-29T21:29:31.258Z.
   - npm@11.20.0
-  # Reviewed ACPX release; remove after 2026-09-29T10:05:37.124Z.
-  - acpx@0.19.1
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe 0.21.2 release and native helpers; remove after 2026-10-05T17:19:08.397Z.
-  - "@openclaw/fs-safe@0.21.2"
-  - "@openclaw/fs-safe-darwin-arm64@0.21.2"
-  - "@openclaw/fs-safe-darwin-x64@0.21.2"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.21.2"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.21.2"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.21.2"
-  - "@openclaw/fs-safe-linux-x64-musl@0.21.2"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.21.2"
+  # Reviewed fs-safe 0.22.0 release and native helpers; remove after 2026-10-08T06:00:12.449Z.
+  - "@openclaw/fs-safe@0.22.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.22.0"
+  - "@openclaw/fs-safe-darwin-x64@0.22.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.22.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.22.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.22.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.22.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.22.0"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
@@ -43,7 +41,8 @@ overrides:
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
   "@agentclientprotocol/codex-acp@1.12.0>@openai/codex": 0.158.0
-  "@codemirror/commands@6.11.1>@codemirror/view": 6.43.12
+  "@codemirror/commands@6.11.1>@codemirror/view": 6.43.13
+  "@codemirror/view@6.43.13>@codemirror/state": 6.7.6
   "@anthropic-ai/sdk": 0.127.0
   "@anthropic-ai/vertex-sdk@0.19.10>google-auth-library": 11.1.0
   "@opentelemetry/core": 2.11.0

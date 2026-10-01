@@ -100,8 +100,8 @@ export function markInterruptedStartupRun(params: {
     deferredNotifications: params.deferredNotifications,
   });
 
-  // Live owner reclamation consumes an already-started one-shot. Only startup
-  // recovery may replay it; an operator's distinct replacement stays scheduled.
+  // Only startup recovery with durable evidence of no delivery handoff may replay
+  // a started one-shot; an operator's distinct replacement stays scheduled.
   if (
     job.schedule.kind === "at" &&
     replacementAtMs === undefined &&

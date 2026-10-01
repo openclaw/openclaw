@@ -15,6 +15,7 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import type { SessionCatalogListTiming } from "./session-catalog-list-admission.js";
 
 const catalogLog = createSubsystemLogger("gateway/session-catalog");
+const mappedProviders = new WeakSet<SessionCatalogProvider>();
 
 type CatalogWaitPhase = "projection_initial" | "provider" | "coalesced" | "projection_final";
 type CatalogSyncPhase = "planning" | "delivery";
@@ -94,6 +95,17 @@ export function startSessionCatalogListDiagnostics(
   }
   const id = provider.id;
   const providerId = typeof id === "string" && id.length <= 256 ? id : undefined;
+  if (providerId && !mappedProviders.has(provider) && catalogLog.isEnabled("debug")) {
+    try {
+      catalogLog.debug("session catalog provider identity", {
+        providerId,
+        providerIdHash: sha256Hex(providerId),
+      });
+      mappedProviders.add(provider);
+    } catch {
+      // A diagnostic sink cannot prevent provider enumeration.
+    }
+  }
   const trace = getActiveDiagnosticTraceContext();
   const startedAt = performance.now();
   const timing: SessionCatalogListTiming = {};

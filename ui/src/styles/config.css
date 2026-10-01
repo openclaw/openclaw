@@ -8,10 +8,6 @@
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
    pieces layered on top of the settings primitives. */
 
-/* ===========================================
-   Lead column (toolbar / banner / nav above the form)
-   =========================================== */
-
 /* Mirrors the .settings-page column so config chrome lines up with it. */
 .config-lead {
   width: 100%;
@@ -201,10 +197,6 @@
   min-width: 0;
   flex: 1 1 420px;
 }
-
-/* ===========================================
-   Appearance custom pickers (theme + text scale)
-   =========================================== */
 
 .settings-theme-grid {
   display: grid;
@@ -634,7 +626,7 @@
 
 .settings-theme-import__label,
 .settings-theme-import__meta-label {
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -742,7 +734,7 @@
 
 .settings-text-scale__label {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   line-height: 1.2;
 }
 
@@ -789,10 +781,6 @@
     transform: rotate(360deg);
   }
 }
-
-/* ===========================================
-   Form specifics layered on settings rows
-   =========================================== */
 
 /* Inline validation/unsupported-node message inside a settings-row. */
 .cfg-field__error {

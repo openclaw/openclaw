@@ -623,6 +623,9 @@ assert.ok(
     ending === "supervisor-loss" ||
     ending === "native-resource" ||
     ending === "resource-supervisor-loss" ||
+    ending === "resource-auto-close-success" ||
+    ending === "resource-auto-close-failure" ||
+    ending === "resource-auto-close-refusal" ||
     ending === "resource-cold-supervisor-loss" ||
     ending === "resource-close-supervisor-loss" ||
     ending === "resource-late-attachment" ||
@@ -644,6 +647,30 @@ if (ending === "generation") {
   await runNativeColdRecovery(directory, serviceNativeUntil);
 } else if (ending === "resource-supervisor-loss") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil, true);
+} else if (ending === "resource-auto-close-success") {
+  await runNativeResourceLifecycle(
+    directory,
+    serviceNativeUntil,
+    true,
+    false,
+    "auto-close-success",
+  );
+} else if (ending === "resource-auto-close-failure") {
+  await runNativeResourceLifecycle(
+    directory,
+    serviceNativeUntil,
+    true,
+    false,
+    "auto-close-failure",
+  );
+} else if (ending === "resource-auto-close-refusal") {
+  await runNativeResourceLifecycle(
+    directory,
+    serviceNativeUntil,
+    true,
+    false,
+    "auto-close-refusal",
+  );
 } else if (ending === "resource-close-supervisor-loss") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil, true, true);
 } else if (ending === "resource-late-attachment") {

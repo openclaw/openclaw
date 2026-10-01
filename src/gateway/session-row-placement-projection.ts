@@ -279,7 +279,9 @@ export function createSessionRowPlacementProjection(
       queries: (config: OpenClawConfig) => readonly Lookup[],
       prepareRows: (queries: readonly Lookup[]) => Promise<void> | undefined,
       consume: (read: SessionRowReadView, queries: readonly Lookup[]) => T,
+      prepareSelection?: () => Promise<void> | undefined,
     ): ReturnType<typeof withPreparedSessionRows<T>> {
+      const prepareFacts = () => prepareReadFacts() ?? prepareSelection?.();
       let deferred: { kind: "pending"; database: { agentId: string; path: string } } | undefined;
       let preparedQueries: readonly Lookup[] = [];
       let selectedIds: readonly string[] = [];
@@ -354,7 +356,7 @@ export function createSessionRowPlacementProjection(
           privateRepositories,
         );
       const prepare = () => {
-        const pending = prepareReadFacts();
+        const pending = prepareFacts();
         if (pending) {
           return pending;
         }
@@ -362,7 +364,7 @@ export function createSessionRowPlacementProjection(
         return prepareSelectedRows();
       };
       while (true) {
-        for (let pending = prepareReadFacts(); pending; pending = prepareReadFacts()) {
+        for (let pending = prepareFacts(); pending; pending = prepareFacts()) {
           await pending;
         }
         if (disposed) {

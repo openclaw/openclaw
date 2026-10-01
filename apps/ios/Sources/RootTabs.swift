@@ -585,6 +585,7 @@ struct RootTabs: View {
     private func rootAppearLifecycle(_ content: some View) -> some View {
         content
             .onAppear {
+                self.sidebarModel.setSnoozeWakeUpdatesActive(self.scenePhase == .active)
                 self.updateIdleTimer()
                 self.evaluateOnboardingPresentation(force: false)
                 self.maybeAutoOpenSettings()
@@ -597,6 +598,7 @@ struct RootTabs: View {
             .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.scenePhase) { _, newValue in
+                self.sidebarModel.setSnoozeWakeUpdatesActive(newValue == .active)
                 self.updateIdleTimer()
                 guard newValue == .active else {
                     self.clearVoiceWakeToast()
@@ -609,6 +611,7 @@ struct RootTabs: View {
                 }
             }
             .onDisappear {
+                self.sidebarModel.setSnoozeWakeUpdatesActive(false)
                 UIApplication.shared.isIdleTimerDisabled = false
                 self.clearVoiceWakeToast()
             }

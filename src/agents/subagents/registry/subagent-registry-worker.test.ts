@@ -249,6 +249,69 @@ describe("queued registry worker publication", () => {
     }
   });
 
+  it.each([false, true])(
+    "keeps staged terminal rows private while metadata publication holds admission (replaced=%s)",
+    async (replaced) => {
+      const entry = run();
+      const entries = new Map([[entry.runId, entry]]);
+      const preimage = captureSubagentRunMutationSnapshot(entry);
+      const execution = entry.execution;
+      const metadataPublished = createDeferredCore();
+      const workerStarted = createDeferredCore();
+      const worker = expectDefined(mocks.runWorker.getMockImplementation(), "worker owner");
+      mocks.runWorker.mockImplementation(async (...args) => {
+        workerStarted.resolve();
+        return await worker(...args);
+      });
+      const attempts = mocks.runWorker.mock.calls.length;
+      entry.execution = { status: "terminal", endedAt: 2 };
+      const pending = publishSubagentRunPostimages({
+        runs: entries,
+        previous: new Map([[entry, preimage]]),
+        context: original,
+        assertCurrent: () => {},
+        withPublication: async (publish) => {
+          await metadataPublished.promise;
+          await publish();
+        },
+        persist: (stateContext, callbacks, ...ids) =>
+          persistSubagentRunsToDiskAsyncOrThrow(entries, ids, {
+            context: stateContext,
+            ...callbacks,
+          }),
+      });
+      const settled = pending.then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(entry.execution).toBe(execution);
+        expect(mocks.runWorker.mock.calls).toHaveLength(attempts);
+        if (replaced) {
+          entries.set(entry.runId, { ...run(), task: "replacement owner" });
+        }
+        metadataPublished.resolve();
+        await workerStarted.promise;
+        if (replaced) {
+          expect(await settled).toMatchObject({ error: { outcome: "not-committed" } });
+          expect(entries.get(entry.runId)?.task).toBe("replacement owner");
+        } else {
+          expect(await request("transaction")).toBe(true);
+          expect(await request("commit")).toBe(true);
+          reply.resolve({ writeId: command.writeId });
+          expect(await settled).toEqual({
+            result: { outcome: "committed", publication: "published" },
+          });
+          expect(entry.execution).toEqual({ status: "terminal", endedAt: 2 });
+        }
+      } finally {
+        metadataPublished.resolve();
+        reply.resolve({ writeId: command?.writeId ?? "unstarted" });
+        await settled;
+      }
+    },
+  );
+
   it("keeps a publication failure after acknowledgement known committed without undo or replay", async () => {
     const entry = run();
     const failure = new Error("Synthetic publication failure");

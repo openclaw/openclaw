@@ -42,7 +42,6 @@ export async function loadRecentSessions(
   return result.sessions;
 }
 
-/** Build labels and matching text for recent-session pickers. */
 export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): SessionPickerChoice[] {
   return sessions.map((session) => {
     const title = session.derivedTitle ?? session.displayName;

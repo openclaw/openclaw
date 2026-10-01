@@ -23,6 +23,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import { createClosedSessionTranscriptSource } from "../../gateway/session-end-transcript-reader.js";
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -349,6 +350,15 @@ function emitCompactionSessionLifecycleHooks(params: {
           : undefined),
       transcriptArchived: transcript.transcriptArchived,
       nextSessionId: params.nextEntry.sessionId,
+      endedTranscript:
+        agentId && storePath
+          ? createClosedSessionTranscriptSource({
+              agentId,
+              sessionId: params.previousEntry.sessionId,
+              sessionKey: params.sessionKey,
+              storePath,
+            })
+          : { available: false, reason: "unsupported-source" },
     });
     void runWithGatewayDetachedWorkContinuation(async () => {
       await hookRunner.runSessionEnd(payload.event, payload.context);

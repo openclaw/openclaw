@@ -375,6 +375,8 @@ export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
   groups: MessageGroup[];
+  /** Terminal reply owning this rollup’s presentation, not its nested execution identities. */
+  replyRunId?: string;
   /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
   previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
@@ -606,6 +608,22 @@ export function collapseCompletedTurnWork(
         ? runtimeMs
         : null;
     const continuationBoundary = turns[continuationTurnIndexes.get(turnIndex) ?? -1]?.[0];
+    // A completed rollup may span automatic resumptions. Its reply owns the
+    // display only when reaching it crosses neither another answer’s run nor a steer.
+    const replyRunId =
+      finalReplyIndex >= 0 &&
+      !hasForwardedSource(terminalReply) &&
+      !groups.some(hasForwardedSource) &&
+      answers
+        .slice(0, answers.indexOf(terminalReply))
+        .every(
+          (answer) =>
+            answer.kind === "group" &&
+            !hasForwardedSource(answer) &&
+            answer.runId === terminalReply.runId,
+        )
+        ? terminalReply.runId
+        : undefined;
     result.push(...turn.slice(0, segmentStart));
     result.push({
       kind: "work-group",
@@ -614,6 +632,7 @@ export function collapseCompletedTurnWork(
         finalReplyIndex >= 0 || !continuationBoundary ? terminalReply.key : continuationBoundary.key
       }`,
       groups,
+      ...(replyRunId ? { replyRunId } : {}),
       ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });

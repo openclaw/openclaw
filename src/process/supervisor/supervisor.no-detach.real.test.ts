@@ -2,7 +2,18 @@ import { spawn } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createProcessSupervisor } from "./supervisor.js";
 
@@ -31,6 +42,14 @@ const identities: Identity[] = [];
 const identityFiles = new Set<string>();
 const tempDirs = createTempDirTracker();
 const signalProcess = process.kill.bind(process);
+const childExits = new Map<number, Promise<unknown>>();
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 function readInstance(pid: number) {
   try {
@@ -75,7 +94,7 @@ function heartbeatSize(file: string): number {
 }
 
 async function createFixture(cwd: string, workerThread: boolean) {
-  const leafPath = path.join(cwd, "leaf.cjs");
+  const leafPath = path.join(cwd, "leaf.mjs");
   const leafIdentityPath = path.join(cwd, "leaf.json");
   const leafTicksPath = path.join(cwd, "leaf.ticks");
   const rootPath = path.join(cwd, "root.cjs");
@@ -86,18 +105,32 @@ async function createFixture(cwd: string, workerThread: boolean) {
   await writeFile(
     leafPath,
     `
-      const fs = require("node:fs");
+      import fs from "node:fs";
+      ${fixtureReceiptClientSource(receipts.endpoint)}
       process.on("SIGTERM", () => {});
       const stat = fs.readFileSync("/proc/self/stat", "utf8");
       const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\\s+/);
       fs.writeFileSync(process.argv[2], JSON.stringify({pid: process.pid, starttime: fields[19]}));
-      setInterval(() => fs.appendFileSync(process.argv[3], "."), 25);
+      let tick = 0;
+      setInterval(() => {
+        fs.appendFileSync(process.argv[3], ".");
+        sendReceipt(process.argv[3], "tick");
+        if (++tick === 1) process.send?.("ready");
+      }, 25);
     `,
   );
   const spawnLeaf = `
       const { spawn } = require("node:child_process");
-      spawn(process.execPath, [${JSON.stringify(leafPath)}, ${JSON.stringify(leafIdentityPath)},
-        ${JSON.stringify(leafTicksPath)}], { stdio: "ignore", detached: false });
+      const fs = require("node:fs");
+      const leaf = spawn(process.execPath, [${JSON.stringify(leafPath)}, ${JSON.stringify(leafIdentityPath)},
+        ${JSON.stringify(leafTicksPath)}], { stdio: ["ignore", "ignore", "ignore", "ipc"], detached: false });
+      const stat = fs.readFileSync("/proc/" + leaf.pid + "/stat", "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\\s+/);
+      fs.writeFileSync(${JSON.stringify(leafIdentityPath)}, JSON.stringify({pid: leaf.pid, starttime: fields[19]}));
+      leaf.once("message", () => {
+        leaf.disconnect();
+        process.send?.("ready");
+      });
       setInterval(() => {}, 1000);
     `;
   await writeFile(
@@ -121,7 +154,34 @@ async function createFixture(cwd: string, workerThread: boolean) {
   };
 }
 
-afterEach(async () => {
+async function waitForFixtureExit(identity: Identity, signal: AbortSignal) {
+  // Attached-tree escalation retains identities but exposes no descendant exit join.
+  while (stillRunning(identity)) {
+    await delay(10, undefined, { signal }).catch((error: unknown) => {
+      throw new Error(`Fixture process ${identity.pid} did not exit`, { cause: error });
+    });
+  }
+}
+
+function tickBeforeSettlement(file: string, operation: Promise<unknown>) {
+  return Promise.race([
+    receipts.waitFor(file, "tick"),
+    operation.then(
+      () => {
+        if (heartbeatSize(file) === 0) {
+          throw new Error(`Fixture exited before its first tick: ${file}`);
+        }
+      },
+      (error: unknown) => {
+        if (heartbeatSize(file) === 0) {
+          throw error;
+        }
+      },
+    ),
+  ]);
+}
+
+afterEach(async ({ signal }) => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const file of identityFiles) {
@@ -139,17 +199,26 @@ afterEach(async () => {
       }
     }
   }
-  await expect.poll(() => identities.every((identity) => !stillRunning(identity))).toBe(true);
-  identities.length = 0;
-  identityFiles.clear();
-  fallbackAttempts.length = 0;
-  tempDirs.cleanup();
+  try {
+    await Promise.all(
+      identities.map(
+        (identity) => childExits.get(identity.pid) ?? waitForFixtureExit(identity, signal),
+      ),
+    );
+  } finally {
+    childExits.clear();
+    identities.length = 0;
+    identityFiles.clear();
+    fallbackAttempts.length = 0;
+    tempDirs.cleanup();
+  }
 });
 
 describe.skipIf(process.platform !== "linux")("Linux no-detach cancellation", () => {
-  it.each([false, true])(
+  it.for([false, true])(
     "kills a TERM-resistant descendant after root settlement, worker thread: %s",
-    async (workerThread) => {
+    { timeout: 30_000 },
+    async (workerThread, { signal: testSignal }) => {
       vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
       const cwd = tempDirs.make("openclaw-no-detach-proof-");
       const {
@@ -162,9 +231,19 @@ describe.skipIf(process.platform !== "linux")("Linux no-detach cancellation", ()
       } = await createFixture(cwd, workerThread);
 
       const foreign = spawn(process.execPath, [leafPath, foreignIdentityPath, foreignTicksPath], {
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
         detached: false,
       });
+      const foreignReady = createDeferred();
+      foreign.once("message", () => {
+        foreign.disconnect();
+        foreignReady.resolve();
+      });
+      const foreignExit = new Promise<void>((resolve, reject) => {
+        foreign.once("error", reject);
+        foreign.once("exit", () => resolve());
+      });
+      childExits.set(foreign.pid!, foreignExit);
       expect(foreign.pid).toBeDefined();
       const foreignInstance = readInstance(foreign.pid!);
       expect(foreignInstance?.starttime).toBeDefined();
@@ -190,49 +269,69 @@ describe.skipIf(process.platform !== "linux")("Linux no-detach cancellation", ()
       expect(root?.starttime).toBeDefined();
       identities.push({ pid: run.pid!, starttime: root!.starttime! });
 
-      await expect.poll(() => readIdentity(leafIdentityPath), { timeout: 15_000 }).toBeDefined();
-      const leaf = readIdentity(leafIdentityPath)!;
-      identities.push(leaf);
-      expect(readInstance(leaf.pid)?.ppid).toBe(run.pid);
-      await expect.poll(() => heartbeatSize(leafTicksPath)).toBeGreaterThan(0);
-      await expect.poll(() => heartbeatSize(foreignTicksPath)).toBeGreaterThan(0);
-      expect(fallbackAttempts).toEqual([true, false]);
+      try {
+        await withinTest(tickBeforeSettlement(leafTicksPath, run.wait()), testSignal);
+        const leaf = readIdentity(leafIdentityPath)!;
+        expect(leaf).toBeDefined();
+        identities.push(leaf);
+        expect(readInstance(leaf.pid)?.ppid).toBe(run.pid);
+        expect(heartbeatSize(leafTicksPath)).toBeGreaterThan(0);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            foreignReady.promise,
+            foreignExit,
+            "Foreign control exited before its first tick",
+          ),
+          testSignal,
+        );
+        expect(heartbeatSize(foreignTicksPath)).toBeGreaterThan(0);
+        expect(fallbackAttempts).toEqual([true, false]);
 
-      const cancelledAt = Date.now();
-      run.cancel("manual-cancel");
-      const result = await run.wait();
-      const rootSettledAt = Date.now();
-      expect(result.reason).toBe("manual-cancel");
-      expect(stillRunning(leaf)).toBe(true);
-      const afterSettlementTicks = heartbeatSize(leafTicksPath);
-      await expect.poll(() => heartbeatSize(leafTicksPath)).toBeGreaterThan(afterSettlementTicks);
-      await expect.poll(() => stillRunning(leaf), { timeout: 12_000, interval: 50 }).toBe(false);
-      expect(stillRunning(identities[0]!)).toBe(true);
-      expect(signals.some(({ pid }) => pid < 0)).toBe(false);
-      expect(signals.some(({ pid, signal }) => pid === foreign.pid && signal !== 0)).toBe(false);
-      expect(signals.some(({ pid, signal }) => pid === leaf.pid && signal === "SIGKILL")).toBe(
-        true,
-      );
-      console.log(
-        JSON.stringify({
-          proof: "no-detach-supervisor-root-settled",
-          platform: process.platform,
-          workerThread,
-          root,
-          leaf,
-          foreign: identities[0],
-          cancelledAt,
-          rootSettledAt,
-          descendantStoppedAt: Date.now(),
-          fallbackAttempts,
-          signals,
-        }),
-      );
+        const cancelledAt = Date.now();
+        run.cancel("manual-cancel");
+        const result = await withinTest(run.wait(), testSignal);
+        const rootSettledAt = Date.now();
+        expect(result.reason).toBe("manual-cancel");
+        expect(stillRunning(leaf)).toBe(true);
+        const afterSettlementTicks = heartbeatSize(leafTicksPath);
+        await withinTest(
+          receipts.waitFor(leafTicksPath, "tick", afterSettlementTicks + 1),
+          testSignal,
+        );
+        expect(heartbeatSize(leafTicksPath)).toBeGreaterThan(afterSettlementTicks);
+        await waitForFixtureExit(leaf, testSignal);
+        expect(stillRunning(identities[0]!)).toBe(true);
+        expect(signals.some(({ pid }) => pid < 0)).toBe(false);
+        expect(signals.some(({ pid, signal }) => pid === foreign.pid && signal !== 0)).toBe(false);
+        expect(signals.some(({ pid, signal }) => pid === leaf.pid && signal === "SIGKILL")).toBe(
+          true,
+        );
+        console.log(
+          JSON.stringify({
+            proof: "no-detach-supervisor-root-settled",
+            platform: process.platform,
+            workerThread,
+            root,
+            leaf,
+            foreign: identities[0],
+            cancelledAt,
+            rootSettledAt,
+            descendantStoppedAt: Date.now(),
+            fallbackAttempts,
+            signals,
+          }),
+        );
+      } finally {
+        run.cancel();
+        foreign.kill("SIGKILL");
+        await Promise.all([supervisor.shutdown(), foreignExit]);
+      }
     },
-    30_000,
   );
 
-  it("finishes retained escalation before an otherwise idle cancellation host exits", async () => {
+  it("finishes retained escalation before an otherwise idle cancellation host exits", async ({
+    signal,
+  }) => {
     const cwd = tempDirs.make("openclaw-idle-cancellation-proof-");
     const { rootPath, leafIdentityPath, leafTicksPath } = await createFixture(cwd, false);
     const rootIdentityPath = path.join(cwd, "root.json");
@@ -251,13 +350,13 @@ describe.skipIf(process.platform !== "linux")("Linux no-detach cancellation", ()
       import { spawn } from "node:child_process";
       import fs from "node:fs";
       import { killProcessTree } from ${JSON.stringify(helperUrl)};
-      const root = spawn(process.execPath, [${JSON.stringify(rootPath)}], { stdio: "ignore" });
+      const root = spawn(process.execPath, [${JSON.stringify(rootPath)}], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+      const ready = new Promise(resolve => root.once("message", resolve));
       const stat = fs.readFileSync("/proc/" + root.pid + "/stat", "utf8");
       const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\\s+/);
       fs.writeFileSync(${JSON.stringify(rootIdentityPath)}, JSON.stringify({pid: root.pid, starttime: fields[19]}));
-      while (!fs.existsSync(${JSON.stringify(leafTicksPath)})) {
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
+      await ready;
+      root.disconnect();
       killProcessTree(root.pid, { detached: false, graceMs: 200 });
       // No more host work. Closing the root's handle must not cancel escalation.
     `,
@@ -271,13 +370,25 @@ describe.skipIf(process.platform !== "linux")("Linux no-detach cancellation", ()
       host.once("error", reject);
       host.once("exit", resolve);
     });
-    await expect.poll(() => readIdentity(leafIdentityPath), { timeout: 15_000 }).toBeDefined();
-    const leaf = readIdentity(leafIdentityPath)!;
-    identities.push(leaf);
-    expect(await exit).toBe(0);
-    await expect.poll(() => stillRunning(leaf), { timeout: 1000 }).toBe(false);
-    console.log(
-      JSON.stringify({ proof: "idle-cancellation-host-exit", host: host.pid, leaf, stopped: true }),
-    );
+    childExits.set(host.pid!, exit);
+    try {
+      await withinTest(tickBeforeSettlement(leafTicksPath, exit), signal);
+      const leaf = readIdentity(leafIdentityPath)!;
+      expect(leaf).toBeDefined();
+      identities.push(leaf);
+      expect(await withinTest(exit, signal)).toBe(0);
+      await waitForFixtureExit(leaf, signal);
+      console.log(
+        JSON.stringify({
+          proof: "idle-cancellation-host-exit",
+          host: host.pid,
+          leaf,
+          stopped: true,
+        }),
+      );
+    } finally {
+      host.kill("SIGKILL");
+      await exit;
+    }
   }, 20_000);
 });

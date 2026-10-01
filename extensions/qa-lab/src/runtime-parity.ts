@@ -26,7 +26,11 @@ import {
   type RuntimeParityCacheDiagnostics,
 } from "./runtime-parity-cache-diagnostics.js";
 import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
-import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-transcript.js";
+import {
+  extractQaMessageText,
+  readQaMessageFunctionCalls,
+  readQaTranscriptMessages,
+} from "./runtime-transcript.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 
 export type { RuntimeParityUsage } from "./runtime-parity-usage.js";
@@ -287,38 +291,10 @@ function addUsage(target: RuntimeParityUsage, next: RuntimeParityUsage) {
 }
 
 function extractAssistantText(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (typeof rawContent === "string") {
-    return rawContent.trim();
-  }
-  if (!Array.isArray(rawContent)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isMessageRecord(block)) {
-      continue;
-    }
-    const text = readNonEmptyString(block.text);
-    if (text) {
-      parts.push(text);
-      continue;
-    }
-    const nestedText = readNonEmptyString(block.content);
-    if (
-      nestedText &&
-      (block.type === "output_text" || block.type === "text" || block.type === "message")
-    ) {
-      parts.push(nestedText);
-    }
-  }
-  return parts.join("\n").trim();
+  return extractQaMessageText(
+    message,
+    (type) => type === "output_text" || type === "text" || type === "message",
+  );
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {

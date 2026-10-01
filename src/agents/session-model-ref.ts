@@ -125,7 +125,6 @@ export function resolveSessionModelIdentityRef(
       if (parsedRuntime) {
         return { provider: parsedRuntime.provider, model: parsedRuntime.model };
       }
-      return { model: runtimeModel };
     }
     return { model: runtimeModel };
   }

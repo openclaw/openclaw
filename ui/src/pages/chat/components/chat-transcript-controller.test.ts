@@ -115,6 +115,11 @@ describe("chat transcript controller", () => {
     transcript.hostConnected();
     transcript.hostUpdated();
     await flushDeferredRowPrune();
+    for (const observer of resizeObservers) {
+      for (const row of transcriptRows(container)) {
+        observer.emitTarget(row, 800, 100);
+      }
+    }
     render(renderChatThread(props, transcript), container);
 
     expect(transcriptSize(container)).toBe(200);
@@ -138,6 +143,13 @@ describe("chat transcript controller", () => {
       { kind: "content" as const, key: "group:next", content: html`<div>next</div>` },
     ];
     const { container, renderRows } = await mountTestTranscript("pane-mcp-rows", initialRows);
+    for (const observer of resizeObservers) {
+      for (const row of transcriptRows(container)) {
+        observer.emitTarget(row, 800, 180);
+      }
+    }
+    renderRows(initialRows);
+    expect(transcriptSize(container)).toBe(540);
     stubMcpAppLifecycle(container, () => teardownPending.promise);
 
     renderRows(regroupedRows);
@@ -167,6 +179,15 @@ describe("chat transcript controller", () => {
       "group:reply",
       "group:next",
     ]);
+    // New rows receive their first sizes; the retained reply must keep its own.
+    for (const observer of resizeObservers) {
+      for (const row of committedRows) {
+        if (row.dataset.virtualRowKey !== "group:reply") {
+          observer.emitTarget(row, 800, 180);
+        }
+      }
+    }
+    renderRows(regroupedRows);
     // The old tool's 40px delivery must not resize the retained reply key.
     expect(transcriptSize(container)).toBe(540);
   });

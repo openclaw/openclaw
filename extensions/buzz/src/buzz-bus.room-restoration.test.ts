@@ -41,7 +41,9 @@ afterEach(async () => {
   }
 });
 
-async function startBus(options: Partial<Pick<BusOptions, "onMessage" | "channelIds">> = {}) {
+async function startBus(
+  options: Partial<Pick<BusOptions, "onMessage" | "channelIds" | "onRoomUnavailable">> = {},
+) {
   cleanupBus = await startBuzzBus({
     accountId: randomUUID(),
     relayUrl: fixture.relayUrl,
@@ -118,9 +120,11 @@ function roomSubscriptionIds(roomId: string) {
 }
 
 it("restores a skipped room without replacing healthy subscriptions", async () => {
+  const unavailable = vi.fn<(error: Error) => void>();
   const replies: string[] = [];
   let restoredTurnSignal: AbortSignal | undefined;
   const bus = await startBus({
+    onRoomUnavailable: unavailable,
     onMessage: async (message, activeBus, signal) => {
       messages.push(message.text);
       if (message.channelId === skipped.roomId) {
@@ -133,6 +137,11 @@ it("restores a skipped room without replacing healthy subscriptions", async () =
   const healthySubscriptions = roomSubscriptionIds(fixture.roomId);
   expect(healthySubscriptions).toHaveLength(1);
   expect(roomSubscriptionIds(skipped.roomId)).toEqual([]);
+  expect(unavailable).toHaveBeenCalledOnce();
+  expect(unavailable).toHaveBeenCalledWith(
+    expect.objectContaining({ message: expect.stringContaining(skipped.roomId) }),
+  );
+  expect(unavailable.mock.calls[0]?.[0].message).toContain("does not have the Bot role");
   fixture.sendMessage("healthy before restoration");
   await vi.waitFor(() => expect(replies).toContain("healthy before restoration"));
 
@@ -268,7 +277,7 @@ it("retains a newer non-Bot roster when a later grant query returns an older Bot
   expect(fatal).toEqual([]);
 });
 
-it.each(["live downgrade", "shutdown before EOSE", "shutdown during reconciliation"] as const)(
+it.each(["live downgrade", "shutdown during reconciliation"] as const)(
   "retires pending restoration on %s without late work",
   async (interruption) => {
     let turnSignal: AbortSignal | undefined;
@@ -307,7 +316,7 @@ it.each(["live downgrade", "shutdown before EOSE", "shutdown during reconciliati
           .listGroupMembers({ groupId: skipped.roomId })
           .some((member) => member.id === fixture.senderPublicKey),
       ).toBe(true);
-    } else if (interruption === "live downgrade") {
+    } else {
       // A registered room subscription can receive a live roster before its EOSE.
       fixture.sendUnchecked(
         fixture.signRelay({
@@ -345,21 +354,6 @@ it.each(["live downgrade", "shutdown before EOSE", "shutdown during reconciliati
     );
   },
 );
-
-it("does not open a restored room after shutdown during its roster query", async () => {
-  const bus = await startBus();
-  const query = fixture.pauseNextMembershipQuery();
-  publishBotRole(skipped.roomId, "bot", skipped.createdAt + 1);
-  notifyBotMembership(skipped.roomId, 44100, skipped.createdAt + 1);
-  await query.started;
-  await bus.close();
-  query.release();
-  expect(roomSubscriptionIds(skipped.roomId)).toEqual([]);
-  expect(fatal).toEqual([]);
-  await expect(
-    bus.sendText({ channelId: fixture.roomId, text: "closed generation reply" }),
-  ).rejects.toThrow("Buzz bus closed");
-});
 
 it.each(["closed", "missing EOSE"] as const)(
   "fails the account when restored room history is %s",

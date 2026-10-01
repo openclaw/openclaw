@@ -60,13 +60,11 @@ type RelayMetrics = {
 };
 
 export interface MetricEvent {
-  /** Metric name (e.g., "event.received", "relay.connect") */
   name: MetricName;
   /** Metric value (usually 1 for counters, or a measured value) */
   value: number;
   /** Unix timestamp in milliseconds */
   timestamp: number;
-  /** Optional labels for additional context */
   labels?: Record<string, string | number>;
 }
 
@@ -240,9 +238,6 @@ export function createMetrics(onMetric?: OnMetricCallback) {
 export type MetricsSnapshot = ReturnType<typeof createMetricsSnapshot>;
 export type NostrMetrics = ReturnType<typeof createMetrics>;
 
-/**
- * Create a no-op metrics instance (for when metrics are disabled).
- */
 export function createNoopMetrics(): NostrMetrics {
   const emptySnapshot = createMetricsSnapshot(createZeroMetricsState(), 0);
 

@@ -164,10 +164,10 @@ describe("promptGatewayConfig", () => {
     },
   );
 
-  it("generates a token when the prompt returns undefined", async () => {
+  it.each([undefined, "undefined"])("generates a token for prompt value %j", async (token) => {
     const result = await runGatewayPrompt({
       selectQueue: ["loopback", "token", "off", "plaintext"],
-      textQueue: ["18789", undefined],
+      textQueue: ["18789", token],
       randomToken: "generated-token",
     });
     expect(result.token).toBe("generated-token");

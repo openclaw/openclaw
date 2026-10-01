@@ -84,7 +84,7 @@ export async function runAdmittedUpdate(
   try {
     assertInitializationCurrent?.();
     run.executorFence = initializedFence;
-    await initialization?.registerRun(run);
+    await initialization?.registerRun(run, () => disposePresentation?.());
     const presentation = createUpdateProgress(!opts.json, run);
     disposePresentation = presentation.dispose;
     const executeWith = (executor: UpdateCommandExecutor) =>
@@ -152,6 +152,8 @@ export async function runAdmittedUpdate(
     }
     throw error;
   } finally {
-    disposePresentation?.();
+    if (!initialization) {
+      disposePresentation?.();
+    }
   }
 }

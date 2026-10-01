@@ -36,6 +36,8 @@ import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
 
 export type StoredOutboxScopeHost = {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
   settings: { gatewayUrl?: string | null };
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
@@ -334,10 +336,7 @@ export class ShellGatewayOwner {
         await this.ensureRuntimeConfig(snapshot, context.runtimeConfig);
         return this.refreshProfileAppearancePrefs(context);
       });
-      if (
-        this.host.routeState.routeId &&
-        (!context.agents.state.agentsList || context.agents.state.agentsListCached)
-      ) {
+      if (this.host.routeState.routeId && !context.agents.state.agentsList) {
         void connectionBootstrap.run("agents", () =>
           this.ensureAgentsList(snapshot, context.agents),
         );
@@ -389,7 +388,7 @@ export class ShellGatewayOwner {
       return Promise.resolve();
     }
     const routeId = this.host.routeState.routeId;
-    if (!agents || !routeId || (agents.state.agentsList && !agents.state.agentsListCached)) {
+    if (!agents || !routeId || agents.state.agentsList) {
       return Promise.resolve();
     }
     if (this.host.agentsListClient === snapshot.client && this.host.agentsListSource === agents) {

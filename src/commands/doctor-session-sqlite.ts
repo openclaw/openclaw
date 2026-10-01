@@ -453,6 +453,11 @@ export async function runDoctorSessionSqlite(
   return report;
 }
 
+/** Verified originals retained for unavailable plugins still await settlement. */
+export function hasRetainedDoctorSessionSources(report: DoctorSessionSqliteReport): boolean {
+  return retainedArchivePlans.has(report);
+}
+
 /** Retire only this import's verified originals before the last plugin obligation clears. */
 export async function settleRetainedDoctorSessionSources(
   report: DoctorSessionSqliteReport,

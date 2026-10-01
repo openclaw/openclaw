@@ -191,6 +191,7 @@ describe("CI changed lint", () => {
       "run-oxlint.mjs",
       "run-oxlint.mts",
       "run-oxlint-shards.mts",
+      "generate-kysely-types.mts",
       "tsx.mjs",
       "windows-cmd-helpers.mjs",
     ]) {

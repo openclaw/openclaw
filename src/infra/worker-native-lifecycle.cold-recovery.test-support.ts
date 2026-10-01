@@ -14,6 +14,7 @@ export async function runNativeColdRecovery(
   serviceUntil: (label: string, service: () => void, done: () => boolean) => void,
 ) {
   const { SpawnBrokerHost } = await import("../process/spawn-broker/host.js");
+  const { drainGlobalSingletonLifecycleState } = await import("../shared/global-singleton.js");
   const { SpawnBrokerError } = await import("../process/spawn-broker/protocol.js");
   const { runtimeProcessEntrypoints } = await import("./runtime-process-entrypoints.js");
   const { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } =
@@ -198,13 +199,14 @@ export async function runNativeColdRecovery(
     assert.equal(worker.stop().read().status, "fulfilled");
     assert.equal(worker.threadId, -1);
     assert.ok(sealCalls >= 2, "retry must return to the same source seal operation");
-    assert.ok(
-      captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }) !== source,
-      "actual resource settlement releases source custody",
-    );
     await broker.close();
     await brokerClosed.promise;
     assert.equal(nativeBrokerClosed, true);
+    await drainGlobalSingletonLifecycleState();
+    assert.ok(
+      captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }) !== source,
+      "actual resource and broker cleanup release source custody",
+    );
     console.log(
       JSON.stringify({
         ending: "resource-cold-supervisor-loss",

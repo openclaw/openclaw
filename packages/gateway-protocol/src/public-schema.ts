@@ -159,6 +159,8 @@ export {
   SessionsCatalogReadResultSchema,
   SessionsCatalogContinueParamsSchema,
   SessionsCatalogContinueResultSchema,
+  SessionsCatalogImportParamsSchema,
+  SessionsCatalogImportResultSchema,
   SessionsCatalogArchiveParamsSchema,
   SessionsCatalogArchiveResultSchema,
   SessionsCatalogStartTerminalParamsSchema,

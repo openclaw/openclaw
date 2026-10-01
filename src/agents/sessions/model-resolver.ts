@@ -266,7 +266,6 @@ export async function resolveModelScope(
   const scopedModels: ScopedModel[] = [];
 
   for (const pattern of patterns) {
-    // Check if pattern contains glob characters
     if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
       // Extract optional thinking level suffix (e.g., "provider/*:high")
       const suffix = splitModelPatternSuffix(pattern);
@@ -312,7 +311,6 @@ export async function resolveModelScope(
       continue;
     }
 
-    // Avoid duplicates
     if (!scopedModels.some((sm) => modelsAreEqual(sm.model, model))) {
       scopedModels.push({ model, thinkingLevel });
     }

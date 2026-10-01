@@ -253,7 +253,10 @@ async function forgetWorkspaceMemory(
     readSessionIngestionState(workspaceDir),
     readMemoryPreimages(workspaceDir),
     listMemoryArtifactProvenance({ workspaceDir }),
-    listSessionTranscriptCorpusEntriesForAgent(params.agentId),
+    listSessionTranscriptCorpusEntriesForAgent(params.agentId, {
+      readOnly: true,
+      includeContentRevision: false,
+    }),
   ]);
   const sessionKeys = new Set(targets.map((target) => target.sessionKey));
   const curatedWrites = new Map(

@@ -80,16 +80,9 @@ export async function lockWorktreeForProcess(record: ManagedWorktreeRecord): Pro
   if (heldByThisProcess(state)) {
     return;
   }
-  // A lock naming a dead OpenClaw pid is restart residue: the owner died (crash or
-  // update restart) without unlocking, so git refuses every later lock forever and
-  // the run would otherwise proceed unprotected. remove()/release() already treat a
-  // dead owner as reclaimable, so reclaim it here instead of failing the acquire.
-  // Accepted tradeoff: the observe-then-unlock window is the same one those two
-  // callers already take, so two processes reclaiming the identical stale lock at
-  // once can both believe they won. Closing it needs one reclaim guard shared by all
-  // three paths -- this acquire plus service.ts release() and remove()
-  // (openclaw#114129); today's behavior instead loses
-  // the lock every time.
+  // Reclaim dead-pid residue, as remove()/release() do. Concurrent reclaimers can
+  // both win this observe-then-unlock race; fixing it requires a guard shared by
+  // all three paths (openclaw#114129).
   if (state.kind !== "dead") {
     throw commandError("git worktree lock", result);
   }

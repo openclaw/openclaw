@@ -1,5 +1,40 @@
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+export function extractQaMessageText(
+  message: Record<string, unknown>,
+  acceptsNestedType: (type: unknown) => boolean,
+) {
+  const rawContent = message.content;
+  if (typeof rawContent === "string") {
+    return rawContent.trim();
+  }
+  if (!Array.isArray(rawContent)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of rawContent) {
+    if (typeof block === "string") {
+      if (block.trim()) {
+        parts.push(block.trim());
+      }
+      continue;
+    }
+    if (!isRecord(block)) {
+      continue;
+    }
+    const text = normalizeOptionalString(block.text);
+    if (text) {
+      parts.push(text);
+      continue;
+    }
+    const nestedText = normalizeOptionalString(block.content);
+    if (nestedText && acceptsNestedType(block.type)) {
+      parts.push(nestedText);
+    }
+  }
+  return parts.join("\n").trim();
+}
+
 export function* readQaTranscriptMessages(transcriptBytes: string) {
   for (const line of transcriptBytes.split(/\r?\n/u)) {
     const trimmed = line.trim();

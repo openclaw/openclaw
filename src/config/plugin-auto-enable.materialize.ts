@@ -33,6 +33,8 @@ function resolvePluginAutoEnableCandidateReason(candidate: PluginAutoEnableCandi
       return `${candidate.providerId} speech provider selected`;
     case "worker-provider-selected":
       return `${candidate.providerId} worker provider selected`;
+    case "storage-provider-selected":
+      return `${candidate.providerId} storage provider selected`;
     case "decision-provider-selected":
       return `${candidate.providerId} decision provider selected`;
     case "agent-harness-runtime-configured":

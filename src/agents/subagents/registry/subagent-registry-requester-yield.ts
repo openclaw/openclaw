@@ -1,6 +1,5 @@
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-/** Settles durable child ownership when the spawning requester turn ends. */
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { promoteFollowupYield } from "../completion/session-followup-completion.js";
 import {
@@ -350,19 +349,18 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     return false;
   }
   const requester = params.runs.get(requesterTurnRunId);
-  const pauseRequester =
+  const requesterOwnsSession =
     params.requesterYielded &&
     requester?.childSessionKey === requesterSessionKey &&
-    requester.execution.status === "running" &&
     !requester.killIntent &&
     !requester.killReconciliation &&
     ![...params.runs.values()].some(
       (entry) =>
         entry.childSessionKey === requesterSessionKey &&
         compareSubagentRunGeneration(entry, requester) > 0,
-    )
-      ? requester
-      : undefined;
+    );
+  const pauseRequester =
+    requesterOwnsSession && requester.execution.status === "running" ? requester : undefined;
   const batchRunIds = entries.map((entry) => entry.runId).toSorted();
   const requesterAlreadyDeliveredFinal =
     params.requesterYielded &&
@@ -414,16 +412,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   }
   const requesterOwner =
     pauseRequester ??
-    (preparedCohort &&
-    requester?.childSessionKey === requesterSessionKey &&
-    requester.pauseReason === "sessions_yield" &&
-    !requester.killIntent &&
-    !requester.killReconciliation &&
-    ![...params.runs.values()].some(
-      (entry) =>
-        entry.childSessionKey === requesterSessionKey &&
-        compareSubagentRunGeneration(entry, requester) > 0,
-    )
+    (preparedCohort && requesterOwnsSession && requester.pauseReason === "sessions_yield"
       ? requester
       : undefined);
   const retired = new Set<SubagentRunRecord>();
@@ -479,6 +468,9 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             attemptCount: 0,
             batchRunIds,
             requesterYieldBatch: true,
+            // Written only by builds that let a yielded requester answer; released
+            // markerless private batches keep their admitted private policy.
+            yieldedFinalDeliverable: true,
             ...(completionEnded ? { afterRequesterYield: true } : {}),
             rearmGeneration,
             progressOperationId,

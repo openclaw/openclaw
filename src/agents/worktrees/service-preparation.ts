@@ -157,6 +157,16 @@ export async function resolveRepository(repoRoot: string): Promise<ResolvedRepos
   return await resolveRepositoryFromRealPath(requested, repoRoot);
 }
 
+export async function resolveRepositoryIdentity(repoRoot: string) {
+  const resolved = await resolveRepository(repoRoot);
+  return {
+    checkoutRoot: resolved.sourceRoot,
+    repoRoot: resolved.repoRoot,
+    originUrl: resolved.originUrl,
+    fingerprint: resolved.fingerprint,
+  };
+}
+
 export async function cleanupFailedCreate(...args: Parameters<typeof removeFailedWorktree>) {
   const failure = await removeFailedWorktree(...args);
   if (failure) {

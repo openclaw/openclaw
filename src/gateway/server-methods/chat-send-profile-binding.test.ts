@@ -22,7 +22,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";

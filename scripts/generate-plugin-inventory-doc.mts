@@ -270,6 +270,7 @@ function resolveDescription({ manifest, packageJson }: PluginSourceEntry) {
     realtimeTranscriptionProviders: "Adds realtime transcription provider support.",
     realtimeVoiceProviders: "Adds realtime voice provider support.",
     speechProviders: "Adds text-to-speech provider support.",
+    storageProviders: "Adds storage location transport support.",
     tools: "Adds agent-callable tools.",
     videoGenerationProviders: "Adds video generation provider support.",
     webContentExtractors: "Adds readable web content extraction.",

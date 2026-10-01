@@ -137,6 +137,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       );
 
       const res = await runCronIsolatedAgentTurn({
+        deliveryAttemptFence: null,
         cfg,
         deps,
         job: {
@@ -213,6 +214,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           };
         });
         const res = await runCronIsolatedAgentTurn({
+          deliveryAttemptFence: null,
           cfg,
           deps: makeDeps(),
           job,
@@ -264,6 +266,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
 
       const res = await runCronIsolatedAgentTurn({
+        deliveryAttemptFence: null,
         cfg: makeCfg(home, storePath),
         deps,
         job: currentBoundJob,

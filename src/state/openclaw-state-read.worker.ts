@@ -38,6 +38,7 @@ import {
   readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
+import { listCronStandingGrantsInDatabase } from "../gateway/operator-approval-standing-grants.js";
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
@@ -88,6 +89,7 @@ import {
   readAgentDatabaseDeletionSnapshotInDatabase,
   readAgentDeletionJournalStatusInDatabase,
 } from "./agent-deletion-journal.read.js";
+import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
@@ -118,6 +120,7 @@ import {
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
+import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
@@ -342,6 +345,9 @@ serveOwnedWorkerTasks(
                 record: inspectCurrentConversationBindingRecordInDatabase(db, command.conversation),
               };
             }
+            if (command.type === "backup.runs") {
+              return { type: command.type, runs: readBackupRunsInDatabase(db) };
+            }
             if (isCronStateReadCommand(command)) {
               return readCronStateCommandInDatabase(db, command);
             }
@@ -477,6 +483,12 @@ serveOwnedWorkerTasks(
                 history: listTerminalOperatorApprovalsInDatabase(command.input, db),
               };
             }
+            if (command.type === "operatorApprovals.listCronGrants") {
+              return {
+                type: command.type,
+                grants: listCronStandingGrantsInDatabase(db, command.input),
+              };
+            }
             if (command.type === "onboardingRecommendations.read") {
               return {
                 type: command.type,
@@ -596,6 +608,14 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 values: selectUserPreferenceValues(db, command.profileIds, command.key),
+              };
+            }
+            if (command.type === "userModelAccounts.links") {
+              return {
+                type: command.type,
+                links: runSqliteDeferredTransactionSync(db, () =>
+                  listUserProfileAuthLinksInDatabase(db, command.profileId),
+                ),
               };
             }
             if (command.type === "userProfiles.email.resolve") {

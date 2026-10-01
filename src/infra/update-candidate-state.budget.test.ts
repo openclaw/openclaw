@@ -14,6 +14,7 @@ import { observeUpdateCandidateIoProgress } from "./update-candidate-io.test-sup
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -397,6 +398,7 @@ it.each(["stdout", "stderr"] as const)(
 
 it("refuses a grown WAL family at the post-inventory capacity gate", async () => {
   const root = await fs.realpath(tempDirs.make("rehearsal-wal-growth-"));
+  await materializeUpdateCandidateStateWorker(root);
   const stateDir = path.join(root, "source");
   const database = path.join(stateDir, "state", "openclaw.sqlite");
   await fs.mkdir(path.dirname(database), { recursive: true });

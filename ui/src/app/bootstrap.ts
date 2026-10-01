@@ -201,10 +201,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     gateway,
     startsApplicationRouter && !hasPendingGateway ? bootRecord?.profileId : undefined,
   );
-  const agents = createAgentCapability(gateway, {
-    cachedList: bootRecord?.agents ?? null,
-    cachedProfileId: bootRecord?.profileId ?? null,
-  });
+  const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
   const parsedInitialSession = parseAgentSessionKey(settings.sessionKey);
   const deferInitialLocationUntilGateway = firstRunDefaultLanding && !parsedInitialSession;

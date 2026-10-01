@@ -51,7 +51,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const closers: Array<() => Promise<void> | void> = [];
 const execFileAsync = promisify(execFile);
 
-// The undici copy @slack/socket-mode itself loads (bare import, as the SDK does).
+// Resolve the installed SDK dependency without Bun's bare-undici builtin alias.
 type SocketModeUndici = typeof import("undici");
 function loadSocketModeUndici(): SocketModeUndici {
   const requireFromTest = createRequire(import.meta.url);
@@ -59,7 +59,7 @@ function loadSocketModeUndici(): SocketModeUndici {
   const requireFromSocketMode = createRequire(
     requireFromBolt.resolve("@slack/socket-mode/package.json"),
   );
-  return requireFromSocketMode("undici") as SocketModeUndici;
+  return requireFromSocketMode("undici/index.js") as SocketModeUndici;
 }
 
 function clearProxyEnv() {
@@ -179,7 +179,7 @@ async function echoThroughTrustedChildProcess(options: {
     );
     const requireFromBolt = createRequire(requireFromTest.resolve("@slack/bolt/package.json"));
     const requireFromSocketMode = createRequire(requireFromBolt.resolve("@slack/socket-mode/package.json"));
-    const { WebSocket } = requireFromSocketMode("undici");
+    const { WebSocket } = requireFromSocketMode("undici/index.js");
     const dispatchers = resolveSlackMonitorDispatchers("socket");
     const dispatcher = dispatchers.socketMode;
     const result = await new Promise((resolve, reject) => {
