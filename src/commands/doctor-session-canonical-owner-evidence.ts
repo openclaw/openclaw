@@ -18,8 +18,13 @@ export function applyCanonicalOwnerEvidence(
   const resolveCanonicalKey = (
     item: CanonicalOwnerEvidenceItem,
     seen = new Set<string>(),
+    depth = 0,
   ): string => {
-    if (!item.canonicalOwnerSessionKey) {
+    // `seen` guards against cycles (A -> B -> A), but a deep *acyclic* alias
+    // chain recurses once per link with no bound, overflowing the stack
+    // (RangeError: Maximum call stack size exceeded). Cut the chain at a safe
+    // depth and resolve to the current node's canonical key instead.
+    if (!item.canonicalOwnerSessionKey || depth > 512) {
       return item.canonicalKey;
     }
     const identity = `${item.target.sqlitePath}\0${item.sessionKey}`;
@@ -28,7 +33,9 @@ export function applyCanonicalOwnerEvidence(
       return item.canonicalKey;
     }
     seen.add(identity);
-    return owner.canonicalOwnerSessionKey ? resolveCanonicalKey(owner, seen) : owner.canonicalKey;
+    return owner.canonicalOwnerSessionKey
+      ? resolveCanonicalKey(owner, seen, depth + 1)
+      : owner.canonicalKey;
   };
   const canonicalKeysByStoredKey = new Map<string, Set<string>>();
   for (const item of inventory) {
