@@ -252,6 +252,20 @@ describe("channel doctor compatibility mutations", () => {
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("discord");
   });
 
+  it("preserves the merged adapter as the compatibility hook receiver", () => {
+    mockReadOnlyMatrixPlugin({
+      groupModel: "sender",
+      normalizeCompatibilityConfig({ cfg }: { cfg: unknown }) {
+        return { config: cfg, changes: [this.groupModel] };
+      },
+    });
+    const cfg = createMatrixEnabledConfig();
+
+    expect(collectChannelDoctorCompatibilityMutations(cfg)).toEqual([
+      { config: cfg, changes: ["sender"] },
+    ]);
+  });
+
   it("preserves config and continues after a channel repair throws", () => {
     const cfg = { channels: { matrix: { enabled: true }, slack: { enabled: true } } };
     mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({

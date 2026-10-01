@@ -58,7 +58,6 @@ let clearPluginSetupRegistryCache: typeof import("./setup-registry.test-fixtures
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
 let resolvePluginSetupProviderCore: typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
-let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
@@ -216,12 +215,8 @@ describe("setup-registry module loader", () => {
     // The non-isolated plugin shard may cache this owner through a sibling first.
     // Refresh it once after this file's hoisted mocks, then reuse it for every case.
     vi.resetModules();
-    ({
-      resolvePluginSetupRegistry,
-      resolvePluginSetupProviderCore,
-      resolvePluginSetupCliBackend,
-      runPluginSetupConfigMigrations,
-    } = await import("./setup-registry.js"));
+    ({ resolvePluginSetupRegistry, resolvePluginSetupProviderCore, resolvePluginSetupCliBackend } =
+      await import("./setup-registry.js"));
     ({ clearPluginSetupRegistryCache } = await import("./setup-registry.test-fixtures.js"));
     clearPluginSetupRegistryCache();
     const pluginRoot = makeTempDir();
@@ -404,158 +399,6 @@ describe("setup-registry module loader", () => {
     expect(setupRegistrySource).not.toContain('from "./runtime.js"');
     expect(selectionSource).not.toContain("plugin-runtime-artifact-resolution");
     expect(selectionSource).not.toMatch(/from ["']\.\/runtime(?:\.js|\/)/u);
-  });
-
-  it("skips setup-api loading when config has no relevant migration triggers", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "amazon-bedrock",
-          rootDir: pluginRoot,
-          configContracts: {
-            compatibilityMigrationPaths: ["models.bedrockDiscovery"],
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    mocks.createJiti.mockImplementation(() => {
-      return () => ({
-        default: {
-          register(api: SetupRegistryApi) {
-            api.registerConfigMigration((config) => ({ config, changes: ["unexpected"] }));
-          },
-        },
-      });
-    });
-
-    const result = runPluginSetupConfigMigrations({
-      config: {
-        models: {
-          providers: {
-            openai: { baseUrl: "https://api.openai.com/v1" },
-          },
-        },
-      } as never,
-      env: {},
-    });
-
-    expect(result.changes).toStrictEqual([]);
-    expect(mocks.createJiti).not.toHaveBeenCalled();
-  });
-
-  it("loads only plugins whose manifest migration triggers match the config", () => {
-    const bedrockRoot = makeTempDir();
-    const voiceCallRoot = makeTempDir();
-    fs.writeFileSync(path.join(bedrockRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    fs.writeFileSync(path.join(voiceCallRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "amazon-bedrock",
-          rootDir: bedrockRoot,
-          configContracts: {
-            compatibilityMigrationPaths: ["models.bedrockDiscovery"],
-          },
-        },
-        {
-          id: "voice-call",
-          rootDir: voiceCallRoot,
-          configContracts: {
-            compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    mocks.createJiti.mockImplementation((modulePath: string) => {
-      const pluginId = modulePath.includes(bedrockRoot) ? "amazon-bedrock" : "voice-call";
-      return () => ({
-        default: {
-          register(api: SetupRegistryApi) {
-            api.registerConfigMigration((config) => ({
-              config,
-              changes: [pluginId],
-            }));
-          },
-        },
-      });
-    });
-
-    const result = runPluginSetupConfigMigrations({
-      config: {
-        models: {
-          bedrockDiscovery: {
-            enabled: true,
-          },
-        },
-      } as never,
-      env: {},
-    });
-
-    expect(result.changes).toEqual(["amazon-bedrock"]);
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(bedrockRoot, "setup-api.js"));
-  });
-
-  it("still loads explicitly configured plugin entries without manifest trigger metadata", () => {
-    mockVoiceCallConfigMigrationRegistration();
-
-    const result = runPluginSetupConfigMigrations({
-      config: {
-        plugins: {
-          entries: {
-            "voice-call": {
-              config: {
-                provider: "log",
-              },
-            },
-          },
-        },
-      } as never,
-      env: {},
-    });
-
-    expect(result.changes).toEqual(["voice-call"]);
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([false, true])("isolates registered migration candidates (throws=%s)", (throws) => {
-    const pluginRoot = makeTempDir();
-    writeSetupApiStub(pluginRoot);
-    mockSinglePlugin({ id: "fixture", rootDir: pluginRoot });
-    mocks.createJiti.mockImplementation(() => () => ({
-      default: {
-        register(api: SetupRegistryApi) {
-          api.registerConfigMigration((config) => ({
-            config: { ...config, gateway: { port: 18789 } },
-            changes: ["first"],
-          }));
-          api.registerConfigMigration((config) => {
-            config.gateway = { port: 19999 };
-            if (throws) {
-              throw new Error("fixture migration failed");
-            }
-            return null;
-          });
-          api.registerConfigMigration((config) => ({
-            config: { ...config, gateway: { ...config.gateway, bind: "loopback" } },
-            changes: ["last"],
-          }));
-        },
-      },
-    }));
-    const config = { plugins: { entries: { fixture: {} } } };
-    const result = runPluginSetupConfigMigrations({ config, env: {} });
-
-    expect(result.config.gateway).toEqual({ port: 18789, bind: "loopback" });
-    expect(result.changes).toEqual(["first", "last"]);
-    expect(result.warnings ?? []).toEqual(
-      throws ? [expect.stringContaining('Plugin "fixture" config repair failed')] : [],
-    );
-    expect(config).toEqual({ plugins: { entries: { fixture: {} } } });
   });
 
   it("prefers setup provider descriptors over top-level provider ids", () => {

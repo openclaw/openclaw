@@ -305,7 +305,7 @@ export function collectChannelDoctorCompatibilityMutations(
     listChannelDoctorEntries(collectConfiguredChannelIds(cfg), { cfg, env: options.env }).map(
       ({ id, doctor }) => ({
         pluginId: id,
-        normalizeCompatibilityConfig: doctor.normalizeCompatibilityConfig,
+        normalizeCompatibilityConfig: doctor.normalizeCompatibilityConfig?.bind(doctor),
       }),
     ),
   );
