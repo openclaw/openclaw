@@ -114,6 +114,7 @@ function readWorkflowStep({ file, job, step: name }: WorkflowTarget): Step & { r
 }
 
 export async function runCiGitStep(options: {
+  signal: AbortSignal;
   workflow?: "workflow-sanity" | WorkflowTarget;
   job?: string;
   action?:
@@ -241,6 +242,7 @@ export async function runCiGitStep(options: {
   let publisherFixture: ReturnType<typeof prepareGeneratedPublisherFixture> | undefined;
   return withCiCheckoutFixture(
     `linux:${options.scenario ?? "configured"}`,
+    options.signal,
     (root) => {
       const actions = path.join(root, "trusted-actions");
       if (options.performance) {

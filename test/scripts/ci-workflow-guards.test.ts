@@ -4982,7 +4982,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
   });
 
-  it.skipIf(process.platform === "win32").each([
+  it.skipIf(process.platform === "win32").for([
     { task: "bundled-protocol", eventName: "pull_request" },
     { task: "bundled-protocol", eventName: "workflow_dispatch" },
     { task: "guards", eventName: "pull_request" },
@@ -4991,7 +4991,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     { task: "npm-lock", eventName: "workflow_dispatch" },
   ] as const)(
     "uses prefetched CI base without later network access ($task, $eventName)",
-    async ({ task, eventName }) => {
+    { timeout: 55_000 },
+    async ({ task, eventName }, { signal }) => {
       const base = "c".repeat(40);
       const baseRef = "refs/remotes/origin/ci-ratchet-base";
       const jobName = task === "bundled-protocol" ? "checks-fast-core" : "check-shard";
@@ -5007,6 +5008,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         preflightOutputs: { diff_base_revision: base },
       });
       const report = await runCiGitStep({
+        signal,
         job: jobName,
         step:
           task === "bundled-protocol"
@@ -5069,7 +5071,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ]);
       }
     },
-    55_000,
   );
 
   it.each([
