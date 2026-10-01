@@ -44,6 +44,8 @@ import {
   replaceConfigFile,
   resolveGatewayInstallEntrypoint,
   resolveOpenClawPackageRoot,
+  resolveUpdateInstallIdentity,
+  resolveUpdateInstallKind,
   runCommandWithTimeout,
   runDaemonInstall,
   runDaemonRestart,
@@ -465,13 +467,45 @@ describe("update-cli", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "continues package-to-Git updates from the published checkout after its alias is retargeted",
-    async () => {
-      const root = tempDirs.make("openclaw-update-git-alias-");
+  it.runIf(process.platform !== "win32").each(["package", "dirty Git", "custom launcher"] as const)(
+    "continues %s updates from the published checkout without changing the source",
+    async (scenario) => {
+      const root = await fs.realpath(tempDirs.make("openclaw-update-git-alias-"));
       const { nodeModules, pkgRoot } = await setupInstalledPackageAtNodeModules(
         path.join(root, "package", "lib", "node_modules"),
       );
+      const originalRoot = path.join(root, "original-checkout");
+      const binDir = path.join(root, "package", "bin");
+      const originalSha = "b".repeat(40);
+      if (scenario !== "package") {
+        await fs.rename(pkgRoot, originalRoot);
+        await writeOpenClawPackageFixture(originalRoot, "2026.4.21", {
+          git: true,
+          builtSha: originalSha,
+        });
+        await fs.writeFile(path.join(originalRoot, "operator.txt"), "local edits\n");
+        await fs.chmod(path.join(originalRoot, "openclaw.mjs"), 0o755);
+        await fs.symlink(originalRoot, pkgRoot, "dir");
+        await fs.mkdir(binDir, { recursive: true });
+        await fs.symlink(
+          "../lib/node_modules/openclaw/openclaw.mjs",
+          path.join(binDir, "openclaw"),
+        );
+        vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(originalRoot);
+        vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
+        vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
+        vi.spyOn(process, "argv", "get").mockReturnValue([
+          process.execPath,
+          path.join(binDir, "openclaw"),
+          "update",
+        ]);
+      }
+      const customEntry = path.join(originalRoot, "custom.js");
+      if (scenario === "custom launcher") {
+        await fs.writeFile(customEntry, "export {};\n", { mode: 0o755 });
+        await fs.unlink(path.join(binDir, "openclaw"));
+        await fs.symlink(customEntry, path.join(binDir, "openclaw"));
+      }
       const targetRoot = path.join(root, "checkout-target");
       const replacementRoot = path.join(root, "checkout-replacement");
       const checkoutAlias = path.join(root, "checkout-alias");
@@ -504,12 +538,19 @@ describe("update-cli", () => {
       mockNpmGlobalCommands(
         nodeModules,
         async (argv) => {
+          if (argv.includes(originalRoot) && argv.includes("status")) {
+            return commandResult({ stdout: " M operator.txt\n" });
+          }
+          if (argv.includes(originalRoot) && argv.includes("rev-parse")) {
+            return commandResult({ stdout: originalSha });
+          }
           if (argv[0] === "git" && argv[1] === "clone") {
             const stagingDir = requireValue(argv.at(-1), "Git clone staging directory");
             await writeOpenClawPackageFixture(stagingDir, "2026.8.17", { git: true });
             await fs.unlink(checkoutAlias);
             await fs.symlink(replacementRoot, checkoutAlias, "dir");
           }
+          return undefined;
         },
         () =>
           requireValue(
@@ -518,13 +559,42 @@ describe("update-cli", () => {
           ),
       );
 
-      await withEnvAsync({ OPENCLAW_GIT_DIR: checkoutAlias }, async () => {
-        await updateCommand({ channel: "dev", yes: true, restart: false }).catch(
-          (error: unknown) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_GIT_DIR: checkoutAlias,
+          ...(scenario === "package"
+            ? {}
+            : { PATH: `${binDir}${path.delimiter}${process.env.PATH}` }),
+        },
+        async () => {
+          const update = updateCommand({ channel: "dev", yes: true, restart: false });
+          if (scenario === "custom launcher") {
+            await expect(update).rejects.toMatchObject({ code: 1 });
+            return;
+          }
+          await update.catch((error: unknown) => {
             throw new Error(getErrorOutput() + getLogOutput(), { cause: error });
-          },
+          });
+        },
+      );
+
+      if (scenario !== "package") {
+        await expect(fs.readFile(path.join(originalRoot, "operator.txt"), "utf8")).resolves.toBe(
+          "local edits\n",
         );
-      });
+      }
+      if (scenario === "custom launcher") {
+        await expect(fs.realpath(path.join(binDir, "openclaw"))).resolves.toBe(customEntry);
+        expect(updateGitCheckout).not.toHaveBeenCalled();
+        expect(getErrorOutput() + getLogOutput()).toContain("recognized npm launcher");
+        return;
+      }
+      if (scenario === "dirty Git") {
+        await expect(fs.realpath(pkgRoot)).resolves.toBe(publishedRoot);
+        await expect(fs.realpath(path.join(binDir, "openclaw"))).resolves.toBe(
+          path.join(publishedRoot, "openclaw.mjs"),
+        );
+      }
 
       const installCall = packageInstallCommandCall();
       const candidateRoot = requireValue(
@@ -541,7 +611,10 @@ describe("update-cli", () => {
             globalRoot: nodeModules,
             packageRoot: pkgRoot,
           }),
-          mutationRoots: expect.arrayContaining([pkgRoot, checkoutAlias]),
+          mutationRoots: expect.arrayContaining([
+            scenario === "package" ? pkgRoot : originalRoot,
+            scenario === "package" ? checkoutAlias : targetRoot,
+          ]),
         }),
       );
       await expect(fs.readdir(replacementRoot)).resolves.toEqual([]);

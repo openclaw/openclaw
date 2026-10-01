@@ -5,6 +5,7 @@ import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { createUpdateProgress } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { GitInstallRelocation } from "./update-command-git.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
@@ -14,6 +15,7 @@ export type MutableUpdateExecutionParams = {
   installKind: "git" | "package" | "unknown";
   updateInstallKind: "git" | "package" | "unknown";
   switchToGit: boolean;
+  gitRelocation?: GitInstallRelocation;
   timeoutMs: number | undefined;
   updateStepTimeoutMs: number;
   startedAt: number;

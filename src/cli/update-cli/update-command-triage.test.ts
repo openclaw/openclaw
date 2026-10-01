@@ -52,8 +52,33 @@ it.each<{
   result?: Partial<UpdateRunResult>;
   serviceMutationAllowed?: boolean;
   allowed: boolean;
+  installKindChanged?: boolean;
+  relocatedGit?: boolean;
+  expectedRoot?: string;
 }>([
   { name: "failed activation", allowed: true },
+  {
+    name: "relocated Git retained after failure",
+    relocatedGit: true,
+    installKindChanged: true,
+    result: { mode: "git", root: "/fresh-checkout" },
+    expectedRoot: "/fresh-checkout",
+    allowed: true,
+  },
+  {
+    name: "relocated Git rolled back",
+    relocatedGit: true,
+    installKindChanged: true,
+    result: { mode: "git", root: "/original-checkout" },
+    expectedRoot: "/original-checkout",
+    allowed: true,
+  },
+  {
+    name: "unknown relocated runtime",
+    relocatedGit: true,
+    result: { root: undefined },
+    allowed: false,
+  },
   { name: "failed staging", mutationStarted: false, allowed: false },
   {
     name: "unhealthy restart",
@@ -138,11 +163,15 @@ it.each<{
   const context = resolveAutomaticUpdateTriage({ ...failedUpdate, ...trial.result }, undefined, {
     root: "/installation",
     mutationStarted: trial.mutationStarted ?? true,
-    installKindChanged: false,
+    installKindChanged: trial.installKindChanged ?? false,
+    relocatedGit: trial.relocatedGit,
     gateway: "preserve",
     preManagedServiceStop: { serviceMutationAllowed: trial.serviceMutationAllowed ?? true },
   });
   expect(Boolean(context)).toBe(trial.allowed);
+  if (trial.expectedRoot) {
+    expect(context?.installationRoot).toBe(trial.expectedRoot);
+  }
 });
 
 async function createInstalledTriage(exitCode = 0) {

@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as diskSpace from "../../infra/disk-space.js";
+import * as updateGlobal from "../../infra/update-global.js";
+import * as gitRecovery from "../../infra/update-runner-git-recovery.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -143,3 +145,66 @@ it.each([
     });
   },
 );
+
+it("reports Git recovery when relocation snapshot admission fails", async () => {
+  await withTestDir({ prefix: "git-relocation-snapshot-" }, async (base) => {
+    const root = path.join(base, "checkout");
+    const stateDir = path.join(base, "state");
+    await Promise.all([fs.mkdir(root), fs.mkdir(stateDir)]);
+    const env = {
+      HOME: base,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      TMPDIR: base,
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
+    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+      targetPath,
+      checkedPath: targetPath,
+      availableBytes: 0,
+      totalBytes: 1024 ** 3,
+    }));
+    const readGitRecovery = vi
+      .spyOn(gitRecovery, "readCurrentGitUpdateRecovery")
+      .mockResolvedValue({ serviceRestartSafe: true, version: "2026.9.1" });
+    const verifyPackageRecovery = vi
+      .spyOn(updateGlobal, "verifyPackageUpdateRecovery")
+      .mockResolvedValue({ serviceRestartSafe: false, reason: "runtime-verification-failed" });
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+
+    const result = await updateGitInstall({
+      root,
+      switchToGit: true,
+      installKind: "git",
+      gitRelocation: {
+        directory: path.join(base, "selected"),
+        installTarget: {
+          manager: "npm",
+          command: "npm",
+          globalRoot: base,
+          packageRoot: root,
+          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
+        },
+        assertCurrent: async () => {},
+      },
+      timeoutMs: undefined,
+      startedAt: Date.now(),
+      progress: {},
+      channel: "dev",
+      beforeGitMutation: async () => {},
+      validateCandidate: async () => {},
+      inspectGitTarget: async () => {},
+      getManagedServiceEnv: () => undefined,
+      getSnapshotSource: async () => ({ config: {}, env }),
+      jsonMode: true,
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "snapshot-capacity-insufficient",
+      recovery: { serviceRestartSafe: true },
+    });
+    expect(readGitRecovery).toHaveBeenCalledWith(root, expect.any(Number));
+    expect(verifyPackageRecovery).not.toHaveBeenCalled();
+  });
+});

@@ -275,6 +275,7 @@ async function runResolvedUpdate(
     storedChannel,
     channel,
     switchToGit,
+    gitRelocation,
     switchToPackage,
     tag,
     currentVersion,
@@ -496,7 +497,10 @@ async function runResolvedUpdate(
     const retentionStartedAt = Date.now();
     progress.onStepStart?.(retentionStep);
     const retention = await retainRuntime({
-      mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
+      mutationRoots: [
+        root,
+        ...(switchToGit ? [gitRelocation?.directory ?? resolveGitInstallDir()] : []),
+      ],
       installTarget,
       env,
       timeoutMs: updateStepTimeoutMs,
@@ -565,6 +569,7 @@ async function runResolvedUpdate(
     root,
     previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
+    relocatedGit: Boolean(gitRelocation),
     configSnapshot: ownedManagedUpdateContext?.configSnapshot ?? configSnapshot,
     requestedChannel,
     storedChannel,

@@ -109,6 +109,7 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
 }
 
 export async function printUpdateDryRun(params: {
+  gitRelocation?: { directory: string };
   runId: string;
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -139,7 +140,11 @@ export async function printUpdateDryRun(params: {
   if (params.requestedChannel && params.requestedChannel !== params.storedChannel) {
     actions.push(`Persist update.channel=${params.requestedChannel} in config`);
   }
-  if (params.switchToGit) {
+  if (params.gitRelocation) {
+    actions.push(
+      `Install in ${params.gitRelocation.directory}, preserving local changes in ${params.root}`,
+    );
+  } else if (params.switchToGit) {
     actions.push("Switch install mode from package to git checkout (dev channel)");
   } else if (params.switchToPackage) {
     actions.push(`Switch install mode from git to package manager (${params.mode})`);

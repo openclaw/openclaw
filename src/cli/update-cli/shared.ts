@@ -457,9 +457,17 @@ export async function ensureGitCheckout(params: {
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
   useStagedCheckout?: StagedGitCheckout;
+  /** Relocation owns a fresh destination; never adopt a checkout that appeared after admission. */
+  requireFresh?: boolean;
 }): Promise<GitCheckoutResult> {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
+  if (params.requireFresh && dirExists && !(await isEmptyDir(params.dir))) {
+    throw new UpdatePreMutationError(
+      "invalid-git-directory",
+      `OPENCLAW_GIT_DIR changed after relocation admission: ${params.dir}. The existing path was left unchanged; choose an empty OPENCLAW_GIT_DIR and retry.`,
+    );
+  }
   if (!dirExists || !(await isGitCheckout(params.dir))) {
     if (dirExists && !(await isEmptyDir(params.dir))) {
       throw new UpdatePreMutationError(

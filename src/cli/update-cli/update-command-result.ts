@@ -469,6 +469,7 @@ export function resolveAutomaticUpdateTriage(
     mutationStarted: boolean;
     root: string;
     installKindChanged: boolean;
+    relocatedGit?: boolean;
     expectedVersion?: string;
     gateway: TriageFailureContext["gateway"];
     preManagedServiceStop?: Pick<PreManagedServiceStop, "serviceMutationAllowed">;
@@ -477,6 +478,7 @@ export function resolveAutomaticUpdateTriage(
   // Triage follows a failed update, never a verified rollback: the restored
   // generation is serving, and an autonomous repair turn there is unwanted.
   const eligible =
+    !(params.relocatedGit && !result.root) &&
     !isVerifiedUpdateRollback(result) &&
     (params.mutationStarted || result.reason === "restart-unhealthy") &&
     result.reason !== "service-revalidation-failed" &&
@@ -496,9 +498,9 @@ export function resolveAutomaticUpdateTriage(
         kind: "update",
         phase,
         error: detail ?? failedStep?.stderrTail ?? failedStep?.stdoutTail ?? phase,
-        // Global exposure, not the candidate checkout, identifies a package-to-Git target.
+        // Relocation preserves the original Git checkout; only settled exposure owns triage.
         installationRoot:
-          params.installKindChanged && result.mode === "git"
+          params.installKindChanged && result.mode === "git" && !params.relocatedGit
             ? params.root
             : (result.root ?? params.root),
         expectedVersion: params.expectedVersion ?? result.after?.version ?? undefined,

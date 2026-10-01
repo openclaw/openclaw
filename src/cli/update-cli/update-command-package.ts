@@ -406,7 +406,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
 
 /** Keep package staging open until its source owner publishes the validated checkout. */
 export async function prepareGitPackageExposure(
-  params: Omit<Parameters<typeof runGlobalPackageUpdateSteps>[0], "beforeActivate">,
+  params: Parameters<typeof runGlobalPackageUpdateSteps>[0],
 ) {
   const prepared = createDeferredCore();
   const activation = createDeferredCore<boolean>();
@@ -418,6 +418,7 @@ export async function prepareGitPackageExposure(
       if (!(await activation.promise)) {
         throw cancellation;
       }
+      await params.beforeActivate?.();
     },
   });
   const outcome = await Promise.race([prepared.promise.then(() => null), completed]);

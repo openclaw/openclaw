@@ -19,6 +19,7 @@ export type FinishUpdateParams = UpdateRestartParams & {
   expectedVersion?: string;
   previousInstallRoot?: string;
   installKindChanged: boolean;
+  relocatedGit?: boolean;
   configSnapshot: ConfigFileSnapshot;
   requestedChannel: UpdateChannel | null;
   storedChannel: UpdateChannel | null;

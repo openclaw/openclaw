@@ -314,6 +314,32 @@ describe("update CLI shared helpers", () => {
     });
   });
 
+  it("refuses to adopt a checkout that appeared after fresh relocation admission", async () => {
+    await withTestDir({ prefix: "openclaw-update-clone-admission-race-" }, async (base) => {
+      const checkoutDir = path.join(base, "openclaw");
+      await fs.mkdir(path.join(checkoutDir, ".git"), { recursive: true });
+      await fs.writeFile(
+        path.join(checkoutDir, "package.json"),
+        JSON.stringify({ name: "openclaw" }),
+      );
+      await fs.writeFile(path.join(checkoutDir, "user.marker"), "keep\n");
+
+      await expect(
+        ensureGitCheckout({
+          dir: checkoutDir,
+          timeoutMs: 1_000,
+          env: process.env,
+          requireFresh: true,
+        }),
+      ).rejects.toThrow("changed after relocation admission");
+
+      expect(runCommandWithTimeout).not.toHaveBeenCalled();
+      await expect(fs.readFile(path.join(checkoutDir, "user.marker"), "utf8")).resolves.toBe(
+        "keep\n",
+      );
+    });
+  });
+
   it.each([
     { existing: false, failure: "allocation" },
     { existing: true, failure: "allocation" },

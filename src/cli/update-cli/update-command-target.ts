@@ -62,8 +62,10 @@ import {
   captureUpdateCommandExecutorAuthority,
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
+import type { GitInstallRelocation } from "./update-command-git.js";
 import { readUpdateCandidateSource } from "./update-command-managed-context.js";
 import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
+import { prepareDirtyGitRelocation } from "./update-command-relocation.js";
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import {
   assertUpdatePackageActivationAdmission,
@@ -303,9 +305,22 @@ export async function resolveUpdateCommandTarget(
       // package-target override, so it keeps a stored-dev package install on the
       // package path; only an explicitly requested dev channel outranks it.
       const explicitTag = normalizeTag(opts.tag);
+      let gitRelocation: GitInstallRelocation | undefined;
+      if (installKind === "git" && requestedChannel === "dev") {
+        try {
+          gitRelocation = await prepareDirtyGitRelocation(root, updateStepTimeoutMs);
+        } catch (error) {
+          if (!(error instanceof UpdatePreMutationError)) {
+            throw error;
+          }
+          await refuseUpdate(error.reason, error.message, error.failureFacts);
+          return undefined;
+        }
+      }
       const switchToGit =
-        installKind !== "git" &&
-        (requestedChannel === "dev" || (channel === "dev" && explicitTag === null));
+        Boolean(gitRelocation) ||
+        (installKind !== "git" &&
+          (requestedChannel === "dev" || (channel === "dev" && explicitTag === null)));
       const switchToPackage =
         requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
       updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
@@ -652,6 +667,7 @@ export async function resolveUpdateCommandTarget(
         channel,
         explicitTag,
         switchToGit,
+        ...(gitRelocation ? { gitRelocation } : {}),
         switchToPackage,
         tag,
         currentVersion,
