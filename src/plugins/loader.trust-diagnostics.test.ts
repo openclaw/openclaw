@@ -21,10 +21,13 @@ import { buildPluginInspectReport, buildPluginSnapshotReport } from "./status.js
 const defaultPluginId = "diagnostics-otel";
 const defaultPackageName = `@openclaw/${defaultPluginId}`;
 const agentMailIntegrity = normalizeClawHubSha256Integrity(
+  "sha256:ec9d12135b13f49c912accaaab6f37215209235fc3709eca495f3ca65d85ce0f",
+);
+const previousAgentMailIntegrity = normalizeClawHubSha256Integrity(
   "sha256:155221cec38673a39bc27629f9f6ec87567ce4e37b7fa619ec4b1f7ca3d28730",
 );
-if (!agentMailIntegrity) {
-  throw new Error("Expected a valid AgentMail catalog integrity");
+if (!agentMailIntegrity || !previousAgentMailIntegrity) {
+  throw new Error("Expected valid AgentMail catalog integrities");
 }
 
 afterEach(() => {
@@ -67,6 +70,47 @@ describe("recorded plugin trust diagnostics", () => {
       name: "official AgentMail ClawHub install",
       pluginId: "agentmail",
       packageName: "@agentmail/agentmail",
+      version: "0.2.2",
+      override: {
+        source: "clawhub",
+        spec: "clawhub:@agentmail/agentmail@0.2.2",
+        clawhubPackage: "@agentmail/agentmail",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubChannel: "official",
+      },
+      reason: "trusted-official",
+      trusted: true,
+    },
+    {
+      name: "legacy AgentMail ClawHub install",
+      pluginId: "agentmail",
+      packageName: "@agentmail/agentmail",
+      version: "0.2.2",
+      override: { source: "clawhub", spec: "clawhub:@agentmail/agentmail@0.2.2" },
+      reason: "provenance-missing",
+      trusted: false,
+      repair: true,
+      repairTrusted: false,
+    },
+    {
+      name: "legacy AgentMail ClawHub install with matching integrity",
+      pluginId: "agentmail",
+      packageName: "@agentmail/agentmail",
+      version: "0.2.2",
+      override: {
+        source: "clawhub",
+        spec: "clawhub:@agentmail/agentmail@0.2.2",
+        integrity: agentMailIntegrity,
+      },
+      reason: "provenance-missing",
+      trusted: false,
+      repair: true,
+      repairTrusted: true,
+    },
+    {
+      name: "official AgentMail ClawHub install of the previous pinned version",
+      pluginId: "agentmail",
+      packageName: "@agentmail/agentmail",
       version: "0.2.1",
       override: {
         source: "clawhub",
@@ -79,36 +123,25 @@ describe("recorded plugin trust diagnostics", () => {
       trusted: true,
     },
     {
-      name: "legacy AgentMail ClawHub install",
-      pluginId: "agentmail",
-      packageName: "@agentmail/agentmail",
-      version: "0.2.1",
-      override: { source: "clawhub", spec: "clawhub:@agentmail/agentmail@0.2.1" },
-      reason: "provenance-missing",
-      trusted: false,
-      repair: true,
-      repairTrusted: false,
-    },
-    {
-      name: "legacy AgentMail ClawHub install with matching integrity",
+      name: "legacy AgentMail ClawHub install with the previous pinned integrity",
       pluginId: "agentmail",
       packageName: "@agentmail/agentmail",
       version: "0.2.1",
       override: {
         source: "clawhub",
         spec: "clawhub:@agentmail/agentmail@0.2.1",
-        integrity: agentMailIntegrity,
+        integrity: previousAgentMailIntegrity,
       },
       reason: "provenance-missing",
       trusted: false,
       repair: true,
-      repairTrusted: true,
+      repairTrusted: false,
     },
     {
       name: "unendorsed AgentMail npm namesake",
       pluginId: "agentmail",
       packageName: "@agentmail/agentmail",
-      version: "0.2.1",
+      version: "0.2.2",
       reason: "provenance-invalid",
       trusted: false,
     },

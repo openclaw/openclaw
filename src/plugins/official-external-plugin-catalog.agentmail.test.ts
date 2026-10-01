@@ -19,8 +19,8 @@ describe("official AgentMail catalog entry", () => {
       exposure: { docs: false },
     });
     expect(resolveOfficialExternalPluginInstall(entry)).toEqual({
-      clawhubSpec: "clawhub:@agentmail/agentmail@0.2.1",
-      expectedIntegrity: "sha256:155221cec38673a39bc27629f9f6ec87567ce4e37b7fa619ec4b1f7ca3d28730",
+      clawhubSpec: "clawhub:@agentmail/agentmail@0.2.2",
+      expectedIntegrity: "sha256:ec9d12135b13f49c912accaaab6f37215209235fc3709eca495f3ca65d85ce0f",
       defaultChoice: "clawhub",
       minHostVersion: ">=2026.8.1-beta.2",
       allowInvalidConfigRecovery: true,
