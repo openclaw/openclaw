@@ -14,30 +14,6 @@ const loadConversationRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/conversation-binding-runtime"),
 );
 
-// Enumerable across the plugin SDK and core so a projected route keeps the snapshot.
-const BINDING_ROUTE_FACTS = Symbol.for("openclaw.conversationBindingRouteFacts");
-
-function projectRuntimeAcpSourceRoute<T extends { sessionKey: string; agentId: string }>(
-  runtimeRoute: T,
-  sourceRoute: T,
-): T {
-  const facts = (runtimeRoute as { [BINDING_ROUTE_FACTS]?: { agentId: string } })[
-    BINDING_ROUTE_FACTS
-  ];
-  const projected = {
-    ...runtimeRoute,
-    ...sourceRoute,
-  };
-  if (!facts) {
-    return projected;
-  }
-  // Admission uses the Discord source owner. The binding identity stays attached
-  // so a later removal or reassignment can still reject before harness I/O.
-  return Object.assign(projected, {
-    [BINDING_ROUTE_FACTS]: Object.freeze({ ...facts, agentId: sourceRoute.agentId }),
-  });
-}
-
 export async function resolveDiscordPreflightRoute(params: {
   preflight: DiscordMessagePreflightParams;
   author: User;
@@ -88,7 +64,7 @@ export async function resolveDiscordPreflightRoute(params: {
   const isRuntimeAcpBinding = isDiscordRuntimeAcpThreadBinding(runtimeRoute.bindingRecord);
   const effectiveRoute = runtimeRoute.boundSessionKey
     ? isRuntimeAcpBinding
-      ? projectRuntimeAcpSourceRoute(runtimeRoute.route, route({}))
+      ? conversationRuntime.projectAdmissionRouteBindingFacts(runtimeRoute.route, route({}))
       : runtimeRoute.route
     : resolveDiscordEffectiveRoute({
         route: configuredRoute?.route ?? runtimeRoute.route,
