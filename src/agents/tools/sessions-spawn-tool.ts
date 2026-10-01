@@ -18,7 +18,7 @@ import {
   formatAcpInheritedToolAllowError,
   formatAcpInheritedToolDenyError,
 } from "../inherited-tool-deny.js";
-import { optionalStringEnum } from "../schema/typebox.js";
+import { optionalStringEnum, requesterProfileSchema } from "../schema/typebox.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
@@ -154,12 +154,7 @@ function createSessionsSpawnToolSchema(params: {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
     task: Type.String(),
-    user: Type.Optional(
-      Type.String({
-        description:
-          "The person's requester_profile.id, required when several people have steered this turn.",
-      }),
-    ),
+    user: requesterProfileSchema(),
     taskName: Type.Optional(
       Type.String({
         description:

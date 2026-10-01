@@ -1,5 +1,7 @@
 import { Type } from "typebox";
 import {
+  COMPUTER_ESCALATION_REASONS,
+  COMPUTER_SCROLL_DIRECTIONS,
   COMPUTER_USE_V1_ACTION_NAMES,
   type ComputerUseV2ActionName,
 } from "../../plugins/computer-use-contract.js";
@@ -101,7 +103,7 @@ export function createComputerToolSchema(
           'click/scroll actions: modifier keys to hold ("shift", "ctrl", "alt", "cmd").',
       }),
     ),
-    scrollDirection: optionalStringEnum(["up", "down", "left", "right"] as const),
+    scrollDirection: optionalStringEnum(COMPUTER_SCROLL_DIRECTIONS),
     scrollAmount: optionalPositiveIntegerSchema({
       maximum: 100,
       description: "scroll: number of wheel ticks.",
@@ -177,13 +179,7 @@ export function createComputerToolSchema(
     y1: Type.Optional(Type.Number({ minimum: 0 })),
     x2: Type.Optional(Type.Number({ minimum: 0 })),
     y2: Type.Optional(Type.Number({ minimum: 0 })),
-    reason: optionalStringEnum([
-      "ax_tree_pixel_mismatch",
-      "background_delivery_failed",
-      "foreground_ineffective",
-      "no_window_target",
-      "other",
-    ] as const),
+    reason: optionalStringEnum(COMPUTER_ESCALATION_REASONS),
     snapshotFormat: optionalStringEnum(["dom_refs_v1", "semantic_v2"] as const),
     continuation: Type.Optional(Type.String()),
     includeScreenshot: Type.Optional(Type.Boolean()),
