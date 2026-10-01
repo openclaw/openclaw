@@ -1087,10 +1087,7 @@ function redactSecretsWithOptions<T>(value: T, options: RedactOptions): T {
   if (typeof value === "string") {
     return redactSensitiveText(value, options) as T;
   }
-  if (value === null || value === undefined) {
-    return value;
-  }
-  if (typeof value !== "object") {
+  if (value === null || typeof value !== "object") {
     return value;
   }
   return redactStructuredSecretValue(
