@@ -1,13 +1,15 @@
 // Correlated CLI tool results already carry their started args; display-only
 // results must not duplicate that potentially large payload.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { type AgentEventRuntimePayload, onAgentEvent } from "../../infra/agent-events.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-function buildContext(runId: string): PreparedCliRunContext {
+async function buildContext(runId: string): Promise<PreparedCliRunContext> {
+  const admission = prepareSystemAgentRunAdmission({}, runId, "main", "cli-event-test");
+  onTestFinished(admission.close);
   const backend = {
     command: "claude",
     args: [],
@@ -17,7 +19,7 @@ function buildContext(runId: string): PreparedCliRunContext {
   };
   return {
     params: {
-      admittedRunContext: createTestAdmittedRunContext(runId),
+      admittedRunContext: await admission.admit("embedded"),
       agentId: "main",
       sessionId: "session-1",
       sessionKey: "agent:main:main",
@@ -69,10 +71,10 @@ function collectToolEvents(runId: string): {
 }
 
 describe("cli tool result events", () => {
-  it("emits complete CLI commentary as a completed preamble", () => {
+  it("emits complete CLI commentary as a completed preamble", async () => {
     const runId = "run-commentary-complete";
     const handlers = createCliEventHandlers({
-      context: buildContext(runId),
+      context: await buildContext(runId),
       toolTracking: buildToolTracking(),
       getRunState: () => ({ failed: false, error: undefined }),
     });
@@ -97,10 +99,10 @@ describe("cli tool result events", () => {
     }
   });
 
-  it("emits canonical CLI compaction lifecycle events", () => {
+  it("emits canonical CLI compaction lifecycle events", async () => {
     const runId = "run-compaction-events";
     const handlers = createCliEventHandlers({
-      context: buildContext(runId),
+      context: await buildContext(runId),
       toolTracking: buildToolTracking(),
       getRunState: () => ({ failed: false, error: undefined }),
     });
@@ -124,10 +126,10 @@ describe("cli tool result events", () => {
     }
   });
 
-  it("keeps correlated result args without adding them to display results", () => {
+  it("keeps correlated result args without adding them to display results", async () => {
     const runId = "run-tool-result-args";
     const handlers = createCliEventHandlers({
-      context: buildContext(runId),
+      context: await buildContext(runId),
       toolTracking: buildToolTracking(),
       getRunState: () => ({ failed: false, error: undefined }),
     });
@@ -177,10 +179,10 @@ describe("cli tool result events", () => {
     }
   });
 
-  it("forgets a call's args once it reports, so ids cannot leak across calls", () => {
+  it("forgets a call's args once it reports, so ids cannot leak across calls", async () => {
     const runId = "run-tool-result-args-forget";
     const handlers = createCliEventHandlers({
-      context: buildContext(runId),
+      context: await buildContext(runId),
       toolTracking: buildToolTracking(),
       getRunState: () => ({ failed: false, error: undefined }),
     });

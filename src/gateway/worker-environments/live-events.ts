@@ -36,6 +36,7 @@ import {
   type LiveEventTarget,
   type WorkerLiveSessionBinding,
 } from "./live-event-session-binding.js";
+import { captureWorkerTurnAgentEventPublisher } from "./placement-turn-claim-events.js";
 import { captureWorkerTurnDiagnosticRecorder } from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
@@ -44,10 +45,15 @@ const DEFAULT_MAX_SESSIONS = 128;
 const DEFAULT_MAX_ACTIVE_RUNS = 32;
 const MAX_FENCED_ENVIRONMENTS = 4096;
 
+type LiveEventPublication = {
+  publishEvent?: ReturnType<typeof captureWorkerTurnAgentEventPublisher>;
+  recordDiagnostic?: ReturnType<typeof captureWorkerTurnDiagnosticRecorder>;
+};
+
 type PendingLiveEvent = {
   request: WorkerLiveEventParams;
   sizeBytes: number;
-  recordDiagnostic?: ReturnType<typeof captureWorkerTurnDiagnosticRecorder>;
+  publication: LiveEventPublication;
 };
 
 type OwnedLiveRun = {
@@ -468,6 +474,21 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     return false;
   };
 
+  const isRunCurrent = (window: LiveEventWindow, runId: string, owned: OwnedLiveRun): boolean => {
+    const context = getAgentRunContext(runId);
+    return (
+      windows.get(window.sessionId) === window &&
+      !staleSessions.has(window.sessionId) &&
+      window.activeRuns.get(runId) === owned &&
+      getAgentRunContextOwnerStatus(runId, owned.claimId, owned.lifecycleGeneration) === "active" &&
+      context?.sessionId === window.sessionId &&
+      context.sessionKey === window.target.sessionKey &&
+      context.agentId === window.target.agentId &&
+      context.lifecycleGeneration === owned.lifecycleGeneration &&
+      context.isControlUiVisible === owned.controlUiVisible
+    );
+  };
+
   const claimRun = (
     window: LiveEventWindow,
     runId: string,
@@ -478,7 +499,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     const owned = window.activeRuns.get(runId);
     if (owned) {
-      const context = getAgentRunContext(runId);
       const ownerStatus = getAgentRunContextOwnerStatus(
         runId,
         owned.claimId,
@@ -489,14 +509,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         clearWindow(window);
         return resyncRequired(0);
       }
-      if (
-        ownerStatus !== "active" ||
-        context?.sessionId !== window.sessionId ||
-        context.sessionKey !== window.target.sessionKey ||
-        context.agentId !== window.target.agentId ||
-        context.lifecycleGeneration !== owned.lifecycleGeneration ||
-        context.isControlUiVisible !== owned.controlUiVisible
-      ) {
+      if (!isRunCurrent(window, runId, owned)) {
         fenceReleasedRun(window, runId);
         return invalidEvent();
       }
@@ -576,8 +589,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     window: LiveEventWindow,
     request: WorkerLiveEventParams,
     allowBufferedTerminalCapacity: boolean,
-    recordDiagnostic: PendingLiveEvent["recordDiagnostic"],
+    publication: LiveEventPublication,
   ): WorkerLiveEventFailure | undefined => {
+    if (windows.get(window.sessionId) !== window) {
+      return invalidEvent();
+    }
     const owned = claimRun(window, request.runId, allowBufferedTerminalCapacity);
     if ("ok" in owned) {
       return owned;
@@ -594,8 +610,17 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       data: prepareWorkerLiveEventData(request.event),
     };
     if (owned.emissionMode === "shared") {
-      if (!emitAgentEventIfCurrent(event)) {
-        if (definitiveTerminal) {
+      // A captured root cannot be reacquired from a newer turn at dequeue time.
+      // The receiver predicate runs after the root's reentrant source assertions.
+      const accepted = publication.publishEvent
+        ? publication.publishEvent(event, () => isRunCurrent(window, request.runId, owned))
+        : emitAgentEventIfCurrent(event);
+      if (!accepted) {
+        if (
+          definitiveTerminal &&
+          window.activeRuns.get(request.runId) === owned &&
+          window.terminalRuns.get(request.runId) === request.seq
+        ) {
           window.terminalRuns.delete(request.runId);
         }
         return invalidEvent();
@@ -604,45 +629,37 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       emitAgentEventForOwner(event, owned.claimId);
     }
     recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
-    recordDiagnostic?.(request.event);
+    publication.recordDiagnostic?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
 
   const drain = (
     window: LiveEventWindow,
-    first: WorkerLiveEventParams,
-    firstDiagnostic: PendingLiveEvent["recordDiagnostic"],
+    first: { request: WorkerLiveEventParams; publication: LiveEventPublication },
     firstPending?: PendingLiveEvent,
   ): WorkerLiveEventApplicationResult => {
-    let request: WorkerLiveEventParams | undefined = first;
+    let envelope: typeof first | undefined = first;
     let buffered = firstPending;
-    let recordDiagnostic = firstPending ? firstPending.recordDiagnostic : firstDiagnostic;
     let publishedPrefix = false;
-    while (request) {
-      const failed = publish(window, request, buffered !== undefined, recordDiagnostic);
+    while (envelope) {
+      const { request, publication } = envelope;
+      const failed = publish(window, request, buffered !== undefined, publication);
+      if (failed?.details.reason === "capacity-exceeded" && buffered) {
+        // Keep the ordered tail retryable while the active prefix claim drains.
+        // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
+        return { ok: true, result: { ackedSeq: window.ackedSeq } };
+      }
+      if (buffered && window.pending.delete(request.seq)) {
+        window.pendingBytes -= buffered.sizeBytes;
+      }
       if (failed) {
-        if (failed.details.reason === "capacity-exceeded" && buffered) {
-          // Keep the ordered tail retryable while the active prefix claim drains.
-          // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
-          return { ok: true, result: { ackedSeq: window.ackedSeq } };
-        }
-        if (buffered) {
-          if (window.pending.delete(request.seq)) {
-            window.pendingBytes -= buffered.sizeBytes;
-          }
-        }
         if (failed.details.reason === "capacity-exceeded" && !publishedPrefix) {
           // A fresh head cannot advance. Reset its cursor and release every claim.
           clearWindow(window);
           return failed;
         }
         return publishedPrefix ? { ok: true, result: { ackedSeq: window.ackedSeq } } : failed;
-      }
-      if (buffered) {
-        if (window.pending.delete(request.seq)) {
-          window.pendingBytes -= buffered.sizeBytes;
-        }
       }
       window.ackedSeq = request.seq;
       publishedPrefix = true;
@@ -654,13 +671,8 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
           window.terminalRuns.delete(runId);
         }
       }
-      const next = window.pending.get(window.ackedSeq + 1);
-      if (!next) {
-        break;
-      }
-      request = next.request;
-      buffered = next;
-      recordDiagnostic = next.recordDiagnostic;
+      buffered = window.pending.get(window.ackedSeq + 1);
+      envelope = buffered;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
@@ -685,7 +697,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if ("ok" in window) {
       return window;
     }
-    const recordDiagnostic = captureWorkerTurnDiagnosticRecorder(params.identity);
+    const publication: LiveEventPublication = {
+      publishEvent: captureWorkerTurnAgentEventPublisher(params.identity),
+      recordDiagnostic: captureWorkerTurnDiagnosticRecorder(params.identity),
+    };
     const { seq } = params.request;
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
@@ -693,7 +708,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (seq === expectedSeq) {
       const pending = window.pending.get(seq);
-      return drain(window, pending?.request ?? params.request, recordDiagnostic, pending);
+      return drain(window, pending ?? { request: params.request, publication }, pending);
     }
     if (window.pending.has(seq)) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
@@ -702,7 +717,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (window.pendingBytes + sizeBytes > maxPendingBytes) {
       return resyncWindow(window);
     }
-    window.pending.set(seq, { request: params.request, sizeBytes, recordDiagnostic });
+    window.pending.set(seq, { request: params.request, sizeBytes, publication });
     window.pendingBytes += sizeBytes;
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };

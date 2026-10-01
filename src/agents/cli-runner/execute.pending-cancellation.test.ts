@@ -1,10 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { onAgentRuntimeEvent, type AgentEventRuntimePayload } from "../../infra/agent-events.js";
+import {
+  onTrustedToolExecutionEvent,
+  type TrustedToolExecutionEvent,
+} from "../../infra/diagnostic-events.js";
 import { createProcessAdapterEvents } from "../../process/supervisor/adapters/process-events.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import * as failoverErrors from "../failover-error.js";
 import { executeDeps } from "./execute-deps.js";
+import * as cliEvents from "./execute-events.js";
+import * as cliToolTracking from "./execute-tool-tracking.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
   setCliRunnerExecuteTestDeps,
@@ -252,6 +263,110 @@ describe("local CLI pending process cancellation", () => {
     expect(abortListener).toBeTypeOf("function");
     expect(removeListener).toHaveBeenCalledWith("abort", abortListener);
   });
+
+  it.each(["success", "drain-error", "finalize-error"] as const)(
+    "closes retained event handlers before teardown and after %s with the root still live",
+    async (outcome) => {
+      const context = createRunContext({ runId: `cli-handler-teardown-${outcome}` });
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        context.params.runId,
+        "main",
+        "cli-handler-teardown-test",
+      );
+      onTestFinished(admission.close);
+      context.params.admittedRunContext = await admission.admit("embedded");
+      const root = getAdmittedRunDelegatedAuthority(context.params.admittedRunContext);
+      expect(root).toBeDefined();
+      const handlersSpy = vi.spyOn(cliEvents, "createCliEventHandlers");
+      const trackingSpy = vi.spyOn(cliToolTracking, "createCliToolTracking");
+      const events: AgentEventRuntimePayload[] = [];
+      const diagnostics: TrustedToolExecutionEvent[] = [];
+      onTestFinished(onAgentRuntimeEvent((event) => events.push(event)));
+      onTestFinished(onTrustedToolExecutionEvent((event) => diagnostics.push(event)));
+      const adapter = createTestAdapter();
+      createChildAdapterMock.mockResolvedValueOnce(adapter);
+      const run = executePreparedCliRun(context).then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+      const draining = createDeferred();
+      const releaseDrain = createDeferred();
+      try {
+        await vi.waitFor(() => expect(adapter.onStdout).toHaveBeenCalledOnce());
+        const handlersResult = handlersSpy.mock.results[0];
+        const trackingResult = trackingSpy.mock.results[0];
+        if (handlersResult?.type !== "return" || trackingResult?.type !== "return") {
+          throw new Error("Expected the real attempt's event handlers and tool tracking");
+        }
+        const handlers = handlersResult.value;
+        const tracking = trackingResult.value;
+        const finish = tracking.finishDeliveryTracking;
+        vi.spyOn(tracking, "finishDeliveryTracking").mockImplementation(async (params) => {
+          draining.resolve();
+          await releaseDrain.promise;
+          await finish(params);
+          if (outcome === "drain-error") {
+            throw new Error("drain failed");
+          }
+        });
+        if (outcome === "finalize-error") {
+          vi.spyOn(tracking, "finalizeCapture").mockImplementation(() => {
+            throw new Error("finalize failed");
+          });
+        }
+        handlers.emitParsedToolUseStart({
+          toolCallId: "accepted-tool",
+          name: "read",
+          kind: "tool_use",
+          args: {},
+        });
+        adapter.emitStdout("completed");
+        adapter.settle(0);
+        await Promise.race([
+          draining.promise,
+          run.then(() => {
+            throw new Error("Attempt ended before delivery drain");
+          }),
+        ]);
+        const acceptedEvents = events.slice();
+        const acceptedDiagnostics = diagnostics.slice();
+        const acceptedSummary = handlers.getToolSummary();
+        handlers.emitCliAssistantDelta({ text: "late", delta: "late" });
+        handlers.emitParsedToolUseStart({
+          toolCallId: "late-tool",
+          name: "write",
+          kind: "tool_use",
+          args: {},
+        });
+        expect(events).toEqual(acceptedEvents);
+        expect(diagnostics).toEqual(acceptedDiagnostics);
+        expect(handlers.getToolSummary()).toEqual(acceptedSummary);
+
+        releaseDrain.resolve();
+        const settled = await run;
+        if (outcome === "success") {
+          expect(settled.value).toMatchObject({ text: "completed", toolSummary: acceptedSummary });
+          expect(diagnostics).toMatchObject([
+            { type: "tool.execution.started", toolCallId: "accepted-tool" },
+            { type: "tool.execution.error", toolCallId: "accepted-tool" },
+          ]);
+        } else {
+          expect(settled.error).toMatchObject({
+            message: outcome === "drain-error" ? "drain failed" : "finalize failed",
+          });
+        }
+        expect(getAdmittedRunDelegatedAuthority(context.params.admittedRunContext)).toBe(root);
+        const terminalEvents = events.slice();
+        handlers.emitCliCompaction({ phase: "start" });
+        expect(events).toEqual(terminalEvents);
+      } finally {
+        releaseDrain.resolve();
+        adapter.settle(0);
+        await run;
+      }
+    },
+  );
 
   it("cancels a child adapter that is still starting by the caller run id", async () => {
     const controller = new AbortController();

@@ -619,11 +619,16 @@ export async function executePreparedCliRun(
     } catch (error) {
       recordRunError(error);
     } finally {
-      await toolTracking.finishDeliveryTracking({
-        useManagedClaudeLiveSession,
-        recordRunError,
-      });
-      toolTracking.finalizeCapture(events.finalizeParsedTools);
+      // Fence new input before settling accepted tools and delivery evidence.
+      events.close();
+      await toolTracking
+        .finishDeliveryTracking({ useManagedClaudeLiveSession, recordRunError })
+        .catch(recordRunError);
+      try {
+        toolTracking.finalizeCapture(events.finalizeParsedTools);
+      } catch (error) {
+        recordRunError(error);
+      }
       try {
         await runCliCleanup(params, "cli-mcp-capture", async () => {
           await cleanupMcpCaptureAttempt?.();
