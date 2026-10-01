@@ -501,8 +501,19 @@ export async function createOnlineReadOnlyBackup(
     }
     return publishPreparedCopy(tempDir);
   } catch (error) {
-    await removeTempDirectoryAsync(tempDir);
-    throw sqliteSnapshotStagingError(tempDir, error);
+    const stagingError = sqliteSnapshotStagingError(tempDir, error);
+    const errors: unknown[] = [stagingError];
+    const removed = await removeTempDirectoryAsync(tempDir, (cleanupError) =>
+      errors.push(cleanupError),
+    );
+    if (!removed) {
+      throw createSqliteLifecycleAggregateError(
+        errors,
+        "SQLite online backup and cleanup failed",
+        stagingError,
+      );
+    }
+    throw stagingError;
   }
 }
 
@@ -545,6 +556,7 @@ async function prepareReadOnlySourceInProcess(
         } catch (error) {
           signal?.throwIfAborted();
           if (
+            error instanceof AggregateError ||
             !isSqliteReadOnlyError(error) ||
             readSourceJournalMode(canonicalPath) !== "rollback" ||
             !readSourceSidecars(canonicalPath).journal

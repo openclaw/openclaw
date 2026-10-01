@@ -204,6 +204,54 @@ describe("stable read-only snapshot copies", () => {
     expect(allocations).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry after online backup and cleanup both fail", async () => {
+    const fixture = createFixture(Buffer.alloc(0));
+    const sqlite = requireNodeSqlite();
+    const seed = new sqlite.DatabaseSync(fixture.sourcePath);
+    seed.exec("CREATE TABLE probe (value TEXT);");
+    seed.close();
+
+    const mkdtemp = fs.mkdtempSync.bind(fs);
+    const allocations = vi
+      .spyOn(fs, "mkdtempSync")
+      .mockImplementation((prefix, options) => mkdtemp(prefix, options));
+    const open = fs.openSync.bind(fs);
+    const fsync = fs.fsyncSync.bind(fs);
+    const snapshotDescriptors = new Set<number>();
+    vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+      const descriptor = open(pathname, flags, mode);
+      if (
+        flags === "r+" &&
+        path.resolve(String(pathname)).startsWith(`${fixture.stagingRoot}${path.sep}`)
+      ) {
+        snapshotDescriptors.add(descriptor);
+      }
+      return descriptor;
+    });
+    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+      if (snapshotDescriptors.has(descriptor)) {
+        throw Object.assign(new Error("SQLite destination is read-only"), { errcode: 8 });
+      }
+      fsync(descriptor);
+    });
+    const cleanupError = Object.assign(new Error("snapshot cleanup denied"), {
+      code: "EACCES",
+    });
+    vi.spyOn(fs.promises, "rm").mockImplementation(async () => {
+      fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.replaced`);
+      throw cleanupError;
+    });
+
+    const error = await prepareSqliteReadOnlyLocationInProcess(
+      fixture.sourcePath,
+      fixture.stagingRoot,
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toContain(cleanupError);
+    expect(allocations).toHaveBeenCalledTimes(1);
+  });
+
   it.each([512])("preserves a malformed catalog beside a cold %i-byte journal", (bytes) => {
     const fixture = createFixture(Buffer.alloc(0));
     const sqlite = requireNodeSqlite();
