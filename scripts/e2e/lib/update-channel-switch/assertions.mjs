@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { readJson } from "../fixtures/common.mjs";
 
 const [command, ...args] = process.argv.slice(2);
 const controlUiHtml = "<!doctype html><title>fixture</title>\n";
@@ -12,10 +13,6 @@ function usage() {
     "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
   );
   process.exit(2);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 // Runs inside the bare Docker E2E image, before package dependencies are installed.

@@ -13,6 +13,7 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
+  pruneTranscriptReactionsInTransaction,
   readTranscriptMutationStateInTransaction,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
@@ -508,6 +509,7 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     }),
     retainedIdempotencyKeys,
   );
+  pruneTranscriptReactionsInTransaction(database, resolved, [...suffixIdentityKeys.keys()]);
   if (stagedData) {
     executeSqliteQuerySync(
       database.db,

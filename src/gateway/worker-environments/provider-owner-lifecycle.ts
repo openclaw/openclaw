@@ -274,13 +274,12 @@ export function createWorkerProviderOwnerLifecycle(
     );
   };
 
-  const cancelRequested = (record: WorkerEnvironmentRecord) =>
-    move(record, "failed", { lastError: "Provisioning canceled before provider allocation" });
-
   const finishDestroy = async (record: WorkerEnvironmentRecord, provider?: WorkerProvider) => {
     let r = record;
     if (r.state === "requested") {
-      return cancelRequested(requireCurrentOwner(r));
+      return move(requireCurrentOwner(r), "failed", {
+        lastError: "Provisioning canceled before provider allocation",
+      });
     }
     // Fence local authority even when the provider is unavailable. stopOwner preserves
     // shared/unknown-host stop acknowledgements before releasing their attachments.
@@ -332,8 +331,7 @@ export function createWorkerProviderOwnerLifecycle(
       retryRequested?: boolean;
     } = {},
   ) => {
-    const stopping = options.isStopping();
-    if (stopping) {
+    if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
     return withLock(environmentId, async () => {

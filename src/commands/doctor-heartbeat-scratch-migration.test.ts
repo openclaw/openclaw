@@ -6,7 +6,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readCronJobScratchState, writeCronJobScratch } from "../cron/scratch-store.js";
+import { readCronJobScratchState } from "../cron/scratch-store.js";
+import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import {
   loadCronJobsStore,
   resolveCronJobsStorePath,
@@ -149,7 +150,7 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     // Recreate a retired source after an operator edit: doctor must not overwrite it.
     const { monitor, storePath } = await loadMonitor();
     const current = readCronJobScratchState(storePath, monitor.id);
-    writeCronJobScratch({
+    writeCronJobScratchForMaintenance({
       storePath,
       jobId: monitor.id,
       content: "operator scratch\n",
@@ -357,7 +358,7 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     await maybeMigrateHeartbeatFilesToScratch({ cfg: fixture.cfg, shouldRepair: true });
     const { monitor, storePath } = await loadMonitor();
     const state = readCronJobScratchState(storePath, monitor.id);
-    const unset = writeCronJobScratch({
+    const unset = writeCronJobScratchForMaintenance({
       storePath,
       jobId: monitor.id,
       content: null,

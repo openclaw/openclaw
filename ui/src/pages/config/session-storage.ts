@@ -507,15 +507,3 @@ class SessionStorageSettings extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-session-storage-settings")) {
   customElements.define("openclaw-session-storage-settings", SessionStorageSettings);
 }
-
-export function renderSessionStorage(props: {
-  mutationDisabled: boolean;
-  advancedExpanded: boolean;
-  editor: TemplateResult | typeof nothing;
-}) {
-  return html`<openclaw-session-storage-settings
-    .mutationDisabled=${props.mutationDisabled}
-    .advancedExpanded=${props.advancedExpanded}
-    .editor=${props.editor}
-  ></openclaw-session-storage-settings>`;
-}

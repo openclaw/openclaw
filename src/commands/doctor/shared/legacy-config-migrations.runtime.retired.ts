@@ -18,12 +18,15 @@ import {
   hasMediaDeepgram,
   migrateDiscordVoice,
   migrateMediaDeepgram,
-  moveVoice,
   stripRetiredTuningKnobs,
 } from "./legacy-config-migrations.runtime.retired-media.js";
 import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
-import { visitAgentConfigScopes, visitChannelEntries } from "./legacy-config-record-shared.js";
+import {
+  moveLegacyConfigKey,
+  visitAgentConfigScopes,
+  visitChannelEntries,
+} from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],
@@ -34,25 +37,6 @@ const rule = (
   message: `${message} Run "openclaw doctor --fix".`,
   ...(match ? { match } : {}),
 });
-
-function moveKey(
-  owner: Record<string, unknown> | null | undefined,
-  legacyKey: string,
-  canonicalKey: string,
-  path: string,
-  changes: string[],
-): void {
-  if (!owner || !Object.hasOwn(owner, legacyKey)) {
-    return;
-  }
-  if (owner[canonicalKey] === undefined) {
-    owner[canonicalKey] = owner[legacyKey];
-    changes.push(`Moved ${path}.${legacyKey} → ${path}.${canonicalKey}.`);
-  } else {
-    changes.push(`Removed ${path}.${legacyKey} (${path}.${canonicalKey} already set).`);
-  }
-  delete owner[legacyKey];
-}
 
 function migrateMessageCrossContext(raw: Record<string, unknown>, changes: string[]): void {
   const globalMessage = getRecord(getRecord(raw.tools)?.message);
@@ -115,7 +99,7 @@ function migrateTruncateAfterCompaction(raw: Record<string, unknown>, changes: s
 function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string[]): void {
   const agents = getRecord(raw.agents);
   const defaults = getRecord(agents?.defaults);
-  moveKey(defaults, "pdfMaxBytesMb", "pdfMaxMb", "agents.defaults", changes);
+  moveLegacyConfigKey(defaults, "pdfMaxBytesMb", "pdfMaxMb", "agents.defaults", changes);
   if (defaults) {
     const mediaModels = getRecord(defaults.mediaModels) ?? {};
     for (const [legacyKey, canonicalKey] of [
@@ -144,14 +128,14 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
   }
 
   visitAgentConfigScopes(raw, (scope, path) => {
-    moveKey(
+    moveLegacyConfigKey(
       getRecord(getRecord(scope.tools)?.exec),
       "timeoutSec",
       "timeoutSeconds",
       `${path}.tools.exec`,
       changes,
     );
-    moveKey(
+    moveLegacyConfigKey(
       getRecord(getRecord(scope.sandbox)?.browser),
       "enableNoVnc",
       "noVncEnabled",
@@ -159,7 +143,7 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
       changes,
     );
   });
-  moveKey(
+  moveLegacyConfigKey(
     getRecord(getRecord(raw.tools)?.exec),
     "timeoutSec",
     "timeoutSeconds",
@@ -252,7 +236,7 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
   }
 
   visitChannelEntries(raw, "slack", (entry, path) => {
-    moveKey(entry, "identity", "postAs", path, changes);
+    moveLegacyConfigKey(entry, "identity", "postAs", path, changes);
   });
 }
 
@@ -371,7 +355,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
   }
 
   visitChannelEntries(raw, "whatsapp", (entry, path) => {
-    moveKey(entry, "messagePrefix", "responsePrefix", path, changes);
+    moveLegacyConfigKey(entry, "messagePrefix", "responsePrefix", path, changes);
   });
 
   visitChannelEntries(raw, "slack", (entry, path) => {
@@ -716,13 +700,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         delete tools.experimental;
       }
       const talkRealtime = getRecord(getRecord(raw.talk)?.realtime);
-      if (talkRealtime) {
-        moveVoice(talkRealtime, "talk.realtime", changes);
-      }
-      const channels = getRecord(raw.channels);
-      if (channels) {
-        migrateDiscordVoice(channels, changes);
-      }
+      moveLegacyConfigKey(talkRealtime, "voice", "speakerVoice", "talk.realtime", changes);
+      migrateDiscordVoice(raw, changes);
       migrateMediaDeepgram(raw, changes);
     },
   }),

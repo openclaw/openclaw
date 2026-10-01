@@ -175,9 +175,6 @@ export async function deliverOutboundPayloadsCore(
         }),
     });
     for (const unit of units) {
-      if (unit.kind !== "text") {
-        continue;
-      }
       throwIfAborted(abortSignal);
       const resultIndex = results.length;
       await recordIdentifiedDeliveryResult(
@@ -423,9 +420,6 @@ export async function deliverOutboundPayloadsCore(
         });
         const sendMedia = deliveryHandler.sendFormattedMedia ?? deliveryHandler.sendMedia;
         for (const unit of mediaUnits) {
-          if (unit.kind !== "media") {
-            continue;
-          }
           throwIfAborted(abortSignal);
           const resultIndex = results.length;
           const delivery = await sendMedia(

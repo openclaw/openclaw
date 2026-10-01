@@ -22,6 +22,7 @@ The official Android app is available on [Google Play](https://play.google.com/s
 - Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability.
 - The sidebar marks sessions waiting for an answer or approval, including inactive sessions and collapsed groups. Tap the attention icon, hover over it, or focus it with a keyboard to read the oldest pending request and the count of additional requests of the same kind. The indicator clears when requests resolve, are canceled, or expire. Question previews never include answer drafts.
 - The sidebar and recent Threads view keep cron sessions and system-created probes out of ordinary chat lists, without changing saved pins. The selected conversation stays reachable; named work and human-created background conversations remain visible. Open **Threads → Automations** to find and reopen automation and system conversations, including previously pinned chats. This is a view filter, not a saved setting. **Sidebar → Pages pencil → Automations** shows scheduled jobs and their recent run summaries. Other sessions without creation metadata remain visible rather than being classified from their titles.
+- Long-press an eligible thread and choose **Snooze**: **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), or **Next week** (next Monday at 09:00 local, omitted on Sundays). Snoozed sessions hide from Recent, Current, and sidebar recents. The **Snoozed** pill shows their wake times; **Wake session** brings one back early. Time expiry, a real inbound message, or a completed run wakes the session; pinning or archiving clears snooze too. Snooze syncs through the Gateway and never stops runs, messages, or automations. Archived, child, and protected sessions cannot be snoozed.
 - **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 
 Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
@@ -493,6 +494,17 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Image input works through the picker and Android Sharesheet. Sent photos sit above your text bubble; adjacent photos wrap into compact rows. Assistant photos stay beside their associated text in message order. Tap a photo for the full-screen preview. Messages display at most four image previews at once; **Next images** and **Previous images** reach the rest without keeping every decoded image in memory. Assistant-generated images resolve through the paired Gateway connection and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via Gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the Gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
+
+#### Reactions
+
+Saved prompts and assistant replies show emoji reaction chips with counts and
+reactor names, highlighting your own reactions. Tap a chip to toggle your
+reaction, or long-press a message (including a media-only message) and choose
+**Add reaction**. The quick palette matches the Control UI; **More…** accepts
+one emoji, including joined emoji and flags. Controls follow the Gateway's
+operator and session-sharing permissions; read-only viewers can still see
+reactions. Updates appear live while the conversation is open and do not create
+notifications. See [Reactions](/concepts/multi-user#reactions).
 
 #### Agent browser in chat
 

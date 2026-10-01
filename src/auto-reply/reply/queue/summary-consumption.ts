@@ -1,4 +1,3 @@
-// Consumes exact overflow sources without disturbing sibling summary accounting.
 import { expectDefined } from "@openclaw/normalization-core";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
 import type { FOLLOWUP_QUEUES } from "./state.js";
@@ -35,7 +34,6 @@ export function consumeQueueSummaryDelivery(
           entry.sources.splice(elidedSourceIndex, 1);
           entry.summaryLines.splice(elidedSourceIndex, 1);
         }
-        entry.count = entry.sources.length;
         consumedCount += 1;
         if (entry.sources.length === 0) {
           queue.summaryElisions.splice(elisionIndex, 1);

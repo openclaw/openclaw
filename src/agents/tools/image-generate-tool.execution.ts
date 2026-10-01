@@ -13,10 +13,10 @@ import type {
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/media-services.js";
-import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
+import { extractOriginalFilename } from "../../media/store.js";
 import { formatGeneratedAttachmentLines } from "../generated-attachments.js";
 import { ToolInputError } from "./common.js";
-import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
+import { persistGeneratedMediaBuffers } from "./generated-media-batch-persistence.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import { imageGenerationTaskLifecycle } from "./media-generate-background.js";
 import {
@@ -99,20 +99,11 @@ export async function executeImageGenerationJob(params: {
   } = resolveMediaGenerationResultGeometry(result, params.size);
   const appliedResolution = result.appliedResolution ?? normalizedResolution;
 
-  const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "image");
-  const savedImages = await persistGeneratedMediaBatch({
+  const savedImages = await persistGeneratedMediaBuffers({
+    assets: result.images,
     subdir: GENERATED_IMAGE_MEDIA_SUBDIR,
-    mode: "concurrent",
-    saves: result.images.map((image) => async () => {
-      const savedMedia = await saveMediaBuffer(
-        image.buffer,
-        image.mimeType,
-        GENERATED_IMAGE_MEDIA_SUBDIR,
-        mediaMaxBytes,
-        params.filename || image.fileName,
-      );
-      return { value: savedMedia, savedMedia };
-    }),
+    maxBytes: resolveGeneratedMediaMaxBytes(params.effectiveCfg, "image"),
+    filename: params.filename,
   });
 
   const revisedPrompts = result.images
@@ -138,12 +129,7 @@ export async function executeImageGenerationJob(params: {
     taskHandle: params.taskHandle,
     warning,
     details: {
-      ...buildMediaReferenceDetails({
-        entries: params.loadedReferenceImages,
-        singleKey: "image",
-        pluralKey: "images",
-        getResolvedInput: (entry) => entry.resolvedInput,
-      }),
+      ...buildMediaReferenceDetails(params.loadedReferenceImages, "image"),
       ...(appliedResolution ? { resolution: appliedResolution } : {}),
       ...(normalizedSize || (params.size && !sizeTranslatedToAspectRatio)
         ? { size: normalizedSize ?? params.size }

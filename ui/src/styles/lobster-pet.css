@@ -875,8 +875,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* ---- Acts ---- */
-
 .lobster-pet--act-wave .lob-claw--r {
   animation: lobster-pet-wave 1.4s ease-in-out;
   animation-delay: var(--lob-act-delay, 0s);
@@ -1056,8 +1054,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   color: #ff5c8a;
 }
 
-/* ---- Bubbles ---- */
-
 .lobster-pet__bubble {
   position: absolute;
   left: 30%;
@@ -1074,8 +1070,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation: lobster-pet-bubble 1.6s ease-out;
   animation-delay: calc(var(--i, 0) * 0.42s);
 }
-
-/* ---- Keyframes ---- */
 
 @keyframes lobster-pet-breathe {
   0%,
@@ -1588,8 +1582,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
     transform: translateY(-6%) rotate(-4deg);
   }
 }
-
-/* ---- Lobsterdex (appearance settings gallery) ---- */
 
 .lobsterdex {
   display: flex;

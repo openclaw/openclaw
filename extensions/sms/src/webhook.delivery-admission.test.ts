@@ -2,10 +2,9 @@ import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SmsDeliveryRecorder } from "./delivery-observations.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
-import { createSmsTestAccount } from "./webhook.test-support.js";
+import { createSmsTestAccount, createSmsTestDeliveryRecorder } from "./webhook.test-support.js";
 
 type TestResponse = ServerResponse & {
   setHeaderMock: ReturnType<typeof vi.fn>;
@@ -62,24 +61,6 @@ function createResponse(): TestResponse {
   } as unknown as TestResponse;
 }
 
-function createDeliveryRecorder(): SmsDeliveryRecorder & {
-  record: ReturnType<typeof vi.fn<SmsDeliveryRecorder["record"]>>;
-} {
-  const record = vi.fn<SmsDeliveryRecorder["record"]>(async ({ account, form }) => ({
-    duplicate: false,
-    record: {
-      accountId: account.accountId,
-      accountSidHash: "account-sid-hash",
-      messageSid: form.MessageSid ?? "",
-      status: form.MessageStatus ?? "",
-      firstObservedAt: 1,
-      lastObservedAt: 1,
-      observations: [],
-    },
-  }));
-  return { record };
-}
-
 function messageSid(index: number): string {
   return `SM${index.toString(16).padStart(32, "0")}`;
 }
@@ -92,7 +73,7 @@ describe("SMS delivery callback admission", () => {
   it("bounds writes per account route and reopens after the window resets", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const account = createAccount();
-    const delivery = createDeliveryRecorder();
+    const delivery = createSmsTestDeliveryRecorder();
     const warn = vi.fn();
     const handler = createSmsWebhookHandler({
       cfg: {},
@@ -133,7 +114,7 @@ describe("SMS delivery callback admission", () => {
       webhookPath: "/webhooks/sms/support",
       publicWebhookUrl: "https://gateway.example.com/webhooks/sms/support",
     });
-    const otherDelivery = createDeliveryRecorder();
+    const otherDelivery = createSmsTestDeliveryRecorder();
     const otherHandler = createSmsWebhookHandler({
       cfg: {},
       account: otherAccount,

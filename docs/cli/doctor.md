@@ -10,6 +10,8 @@ title: "Doctor CLI"
 
 Health checks and quick fixes for the gateway, channels, plugins, skills, model routing, local state, and config migrations. Use it whenever something is not behaving as expected and you want one command to explain what is wrong.
 
+During a chat-requested update, Doctor rechecks the original requester's current owner permissions between repair steps. Removing or replacing that owner prevents further changes. After the pre-mutation backup boundary, these checks reuse the maintenance session's live reader instead of repeatedly copying the shared database.
+
 When run for a managed Gateway, Doctor compares active official plugins with the OpenClaw package referenced by the installed service. This check still works when the Gateway is stopped or unreachable. When an older Gateway is still running, Doctor reports its version separately from the post-restart version. If the service package cannot be identified, Doctor reports restart readiness as unknown instead of treating the plugin set as compatible.
 
 When Gateway status reports degraded SecretRef owners, doctor prints a **Secret runtime degradation** warning with every cold or stale owner, affected config path, redacted reason, and the `openclaw secrets reload` retry command.

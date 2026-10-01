@@ -17,6 +17,14 @@ import type { GatewayRequestContext } from "./types.js";
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
 const emptyAuthStore = { version: 1, profiles: {} } as const;
 
+function catalogContext(config: OpenClawConfig) {
+  return {
+    getRuntimeConfig: () => config,
+    loadGatewayModelCatalogSnapshot: vi.fn(),
+    logGateway: { debug: vi.fn() },
+  };
+}
+
 describe("models.list provider catalog outcomes", () => {
   it.each([
     {
@@ -67,11 +75,7 @@ describe("models.list provider catalog outcomes", () => {
         }),
         preparedAuthStore: emptyAuthStore,
       });
-      const context = {
-        getRuntimeConfig: () => config,
-        loadGatewayModelCatalogSnapshot: vi.fn(),
-        logGateway: { debug: vi.fn() },
-      } as unknown as GatewayRequestContext;
+      const context = catalogContext(config) as unknown as GatewayRequestContext;
 
       await expect(
         buildModelsListResult({
@@ -202,11 +206,7 @@ describe("models.list provider catalog outcomes", () => {
       },
       preferredProfileId: "openai:chatgpt",
     });
-    const context = {
-      getRuntimeConfig: () => config,
-      loadGatewayModelCatalogSnapshot: vi.fn(),
-      logGateway: { debug: vi.fn() },
-    } as unknown as GatewayRequestContext;
+    const context = catalogContext(config) as unknown as GatewayRequestContext;
 
     await expect(
       buildModelsListResult({
@@ -342,11 +342,7 @@ describe("models.list provider catalog outcomes", () => {
       routeResolution: null,
     });
     const evaluateNative = vi.spyOn(projector, "evaluateNative");
-    const context = {
-      getRuntimeConfig: () => config,
-      loadGatewayModelCatalogSnapshot: vi.fn(),
-      logGateway: { debug: vi.fn() },
-    } as unknown as GatewayRequestContext;
+    const context = catalogContext(config) as unknown as GatewayRequestContext;
 
     const prepared = await prepareModelsListResult({
       source: { kind: "gateway", context },

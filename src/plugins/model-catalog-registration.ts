@@ -1,4 +1,3 @@
-// Registers plugin-provided models into the model catalog.
 import type { UnifiedModelCatalogSource } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { uniqueValues } from "../../packages/normalization-core/src/string-normalization.js";

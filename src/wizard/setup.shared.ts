@@ -13,7 +13,7 @@ import {
   transformConfigWithPendingPluginInstalls,
   stripPendingPluginInstallRecords,
 } from "../plugins/install-record-commit.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { createGatewayEnvSecretRef } from "../secrets/ref-contract.js";
 import {
   captureSetupInferenceFileUndo,
   type SetupInferenceConfigTarget,
@@ -351,13 +351,7 @@ export function resolveQuickstartGatewayDefaults(
     tailscaleMode: overrides.tailscale ?? tailscaleMode,
     token:
       overrides.gatewayTokenRefEnv !== undefined
-        ? {
-            source: "env",
-            provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
-              preferFirstProviderForSource: true,
-            }),
-            id: overrides.gatewayTokenRefEnv.trim(),
-          }
+        ? createGatewayEnvSecretRef(baseConfig, overrides.gatewayTokenRefEnv.trim())
         : (overrides.gatewayToken ?? baseConfig.gateway?.auth?.token),
     password: overrides.gatewayPassword ?? baseConfig.gateway?.auth?.password,
     customBindHost: baseConfig.gateway?.customBindHost,

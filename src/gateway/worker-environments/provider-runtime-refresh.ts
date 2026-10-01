@@ -135,6 +135,8 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
               throw new Error("Worker node bundle installer is unavailable");
             }
             return options.ensureNodeWorkerBundle({
+              reason: "refresh",
+              environmentId: record.environmentId,
               deviceId: record.nodeDeviceId,
               artifact: installation,
               prewarm: record.profileSnapshot.executionMode !== "remote-exec",

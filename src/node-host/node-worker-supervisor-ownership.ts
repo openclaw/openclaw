@@ -18,6 +18,9 @@ import type { NodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
+export const NODE_WORKER_STOP_GRACE_MS = 1_000;
+export const NODE_WORKER_FORCE_STOP_WAIT_MS = 4_000;
+
 export type NodeWorkerStopState = Extract<NodeWorkerTerminalState, "cancelled" | "interrupted">;
 
 export type NodeWorkerEnvironmentBinding = ReturnType<typeof nodeWorkerEnvironmentBinding>;

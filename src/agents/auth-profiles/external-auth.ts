@@ -25,7 +25,7 @@ import {
 import type { AuthProfileStore } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
-type ExternalCliOverlayOptions = {
+export type ExternalCliOverlayOptions = {
   allowKeychainPrompt?: boolean;
   config?: OpenClawConfig;
   externalCliProviderIds?: Iterable<string>;

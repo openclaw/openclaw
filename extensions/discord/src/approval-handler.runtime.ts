@@ -1,4 +1,4 @@
-import { ButtonStyle } from "discord-api-types/v10";
+import { ButtonStyle, Routes } from "discord-api-types/v10";
 import {
   createChannelApprovalNativeRuntimeAdapter,
   type ApprovalViewModel,
@@ -26,7 +26,7 @@ import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import {
   Button,
-  createChannelMessage,
+  Container,
   createUserDmChannel,
   deleteChannelMessage,
   editChannelMessage,
@@ -42,7 +42,6 @@ import {
   createDiscordMessageNonce,
   stripUndefinedFields,
 } from "./send.shared.js";
-import { DiscordUiContainer } from "./ui.js";
 
 export { buildExecApprovalCustomId };
 
@@ -116,7 +115,7 @@ function createApprovalActionRow(view: PendingApprovalView): Row<Button> {
   );
 }
 
-function buildExecApprovalPayload(container: DiscordUiContainer): MessagePayloadObject {
+function buildExecApprovalPayload(container: Container): MessagePayloadObject {
   const components: TopLevelComponents[] = [container];
   return { components, allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS };
 }
@@ -139,10 +138,8 @@ function formatOptionalCommandPreview(
 
 function createApprovalContainer(params: {
   view: ApprovalViewModel;
-  cfg: OpenClawConfig;
-  accountId: string;
   actionRow?: Row<Button>;
-}): DiscordUiContainer {
+}): Container {
   const { view } = params;
   const plugin = view.approvalKind === "plugin";
   const systemAgent = view.approvalKind === "system-agent";
@@ -228,12 +225,7 @@ function createApprovalContainer(params: {
     new Separator({ divider: false, spacing: "small" }),
     new TextDisplay(`-# ${footer}`),
   );
-  return new DiscordUiContainer({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    components,
-    accentColor,
-  });
+  return new Container(components, { accentColor });
 }
 
 async function updateMessage(params: {
@@ -242,7 +234,7 @@ async function updateMessage(params: {
   token: string;
   channelId: string;
   messageId: string;
-  container: DiscordUiContainer;
+  container: Container;
 }): Promise<void> {
   try {
     const { rest, request: discordRequest } = createDiscordClient({
@@ -272,7 +264,7 @@ async function finalizeMessage(params: {
   cleanupAfterResolve?: boolean;
   channelId: string;
   messageId: string;
-  container: DiscordUiContainer;
+  container: Container;
 }): Promise<void> {
   if (!params.cleanupAfterResolve) {
     await updateMessage(params);
@@ -307,8 +299,6 @@ function buildTerminalApprovalResult(
   }
   const container = createApprovalContainer({
     view: params.view,
-    cfg: params.cfg,
-    accountId: resolved.accountId,
   });
   return { kind: "update", payload: container } as const;
 }
@@ -351,8 +341,6 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       }
       const container = createApprovalContainer({
         view,
-        cfg,
-        accountId: resolved.accountId,
         actionRow: createApprovalActionRow(view),
       });
       return {
@@ -428,14 +416,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         enforce_nonce: true,
       };
       const message = (await discordRequest(
-        () =>
-          createChannelMessage<{ id: string; channel_id: string }>(
-            rest,
-            preparedTarget.discordChannelId,
-            {
-              body,
-            },
-          ),
+        () => rest.post(Routes.channelMessages(preparedTarget.discordChannelId), { body }),
         plannedTarget.surface === "origin" ? "send-approval-channel" : "send-approval",
         { safety: "nonce-protected-create" },
       )) as { id: string; channel_id: string };
@@ -459,7 +440,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       if (!resolved) {
         return;
       }
-      const container = payload as DiscordUiContainer;
+      const container = payload as Container;
       await finalizeMessage({
         cfg,
         accountId: resolved.accountId,

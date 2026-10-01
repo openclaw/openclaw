@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -16,14 +17,102 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import * as repositoryWorkspaces from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { prepareSessionRepositoryWorkspace } from "./server-methods/session-create-project.js";
 import { createGatewaySession } from "./session-create-service.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 describe("Gateway creation preparation", () => {
+  it.each(["caller", "database"] as const)(
+    "keeps repository creation compensation bound to its original source after %s retirement",
+    async (retired) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const store = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
+        const selectStore = vi
+          .spyOn(repositoryWorkspaces, "getSessionRepositoryWorkspaceStore")
+          .mockReturnValue(store);
+        const create = store.create.bind(store);
+        let current = true;
+        const createTarget = vi.spyOn(store, "create").mockImplementationOnce(async (input) => {
+          const created = await create(input);
+          const artifact = store.artifactPath(created.workspaceId);
+          await fs.mkdir(artifact, { recursive: true });
+          await fs.writeFile(path.join(artifact, "retained-owner"), "accepted target");
+          if (retired === "database") {
+            await closeOpenClawStateDatabaseByPathAsync(store.path);
+          } else {
+            current = false;
+          }
+          return created;
+        });
+        try {
+          const owner = { agentId: "main", sessionKey: "agent:main:creation-compensation" };
+          const result = await prepareSessionRepositoryWorkspace(
+            { url: "https://github.com/openclaw/fixture.git" },
+            {
+              runSetupScript: false,
+              assertCurrent: () => {
+                if (!current) {
+                  throw new Error("creation caller revoked");
+                }
+              },
+            },
+          )({
+            agentId: owner.agentId,
+            key: owner.sessionKey,
+            storePath: state.path("sessions.sqlite"),
+          });
+          if (!result.ok || !result.value.rollback || !result.value.repositoryWorkspaceId) {
+            throw new Error("Repository creation did not prepare compensation");
+          }
+          const workspaceId = result.value.repositoryWorkspaceId;
+          const persisted = await store.get(workspaceId);
+          expect(persisted).toMatchObject({ workspaceId, ...owner });
+          if (retired === "database") {
+            await expect(result.value.rollback()).rejects.toBeInstanceOf(
+              StateDatabaseReadAdmissionInvalidatedError,
+            );
+            expect(await store.get(workspaceId)).toEqual(persisted);
+            expect(
+              await fs.readFile(
+                path.join(store.artifactPath(workspaceId), "retained-owner"),
+                "utf8",
+              ),
+            ).toBe("accepted target");
+          } else {
+            await result.value.rollback();
+            expect(await store.get(workspaceId)).toBeUndefined();
+            await expect(fs.stat(store.artifactPath(workspaceId))).rejects.toMatchObject({
+              code: "ENOENT",
+            });
+          }
+          if (!result.value.withCommit) {
+            throw new Error("Repository creation did not retain its persistence source");
+          }
+          const commit = vi.fn(async (assertSourceCurrent: () => void) => assertSourceCurrent());
+          const publication = result.value.withCommit(commit);
+          if (retired === "database") {
+            await expect(publication).rejects.toBeInstanceOf(
+              StateDatabaseReadAdmissionInvalidatedError,
+            );
+          } else {
+            await expect(publication).rejects.toThrow("creation caller revoked");
+          }
+          expect(commit).not.toHaveBeenCalled();
+        } finally {
+          createTarget.mockRestore();
+          selectStore.mockRestore();
+        }
+      });
+    },
+  );
+
   it.each(["canonical", "alias", "sessionId", "embedded"] as const)(
     "rejects workspace preparation before allocation while %s owns active work",
     async (identity) => {

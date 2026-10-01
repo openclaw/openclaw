@@ -1,14 +1,9 @@
-import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -43,25 +38,18 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-generation-cleanup-race-");
 
 describe("SQLite lifecycle generation cleanup races", () => {
   let storePath: string;
 
   beforeEach(() => {
-    storePath = path.join(
-      tempDirs.make("openclaw-session-generation-cleanup-race-"),
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
+    storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
   });
 
   afterEach(() => {
     archiveMaterializationHook.afterMaterialize = undefined;
     archiveMaterializationHook.onMaterialize = undefined;
-    closeOpenClawAgentDatabasesForTest();
   });
 
   function captureGenerationClaims(sessionKey: string) {
@@ -117,17 +105,8 @@ describe("SQLite lifecycle generation cleanup races", () => {
       archiveMaterializationHook.onMaterialize = (ids) => {
         [plannedId] = ids;
       };
-      const diagnostics = channel("openclaw.session.write");
-      const onPlanningComplete = (message: unknown) => {
-        if (
-          injected ||
-          !plannedId ||
-          !isRecord(message) ||
-          message.operation !== "session.lifecycle.reclamation-plan" ||
-          message.writer !== "foreground" ||
-          message.outcome !== "ok" ||
-          (changed === "new history") !== (plannedId === currentId)
-        ) {
+      archiveMaterializationHook.afterMaterialize = () => {
+        if (injected || !plannedId || (changed === "new history") !== (plannedId === currentId)) {
           return;
         }
         injected = true;
@@ -139,7 +118,7 @@ describe("SQLite lifecycle generation cleanup races", () => {
               : changed === "other history"
                 ? historicalIds.find((id) => id !== plannedId)!
                 : plannedId;
-        // Planning has released its admission; the reclamation Worker has not started.
+        // Extraction has finished; the final transactional generation check has not run.
         try {
           mutation = runOpenClawAgentWriteTransaction((database) => {
             const rowsChanged =
@@ -161,11 +140,10 @@ describe("SQLite lifecycle generation cleanup races", () => {
             return { sessionId, rowsChanged };
           }, databaseOptions);
         } catch (error) {
-          // diagnostics_channel subscribers cannot propagate failures to the awaited deletion.
+          // Keep injection failure separate from the lifecycle result asserted below.
           mutationError = error;
         }
       };
-      diagnostics.subscribe(onPlanningComplete);
       try {
         const result = await deleteSessionEntryLifecycle({
           ...expected,
@@ -210,7 +188,7 @@ describe("SQLite lifecycle generation cleanup races", () => {
           );
         }
       } finally {
-        diagnostics.unsubscribe(onPlanningComplete);
+        archiveMaterializationHook.afterMaterialize = undefined;
       }
     },
   );

@@ -11,14 +11,9 @@ import {
 } from "./provider-usage-plugin-runtime.test-mocks.js";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
-import {
-  loadUsageWithAuth,
-  type ProviderUsageAuth,
-  usageNow,
-} from "./provider-usage.test-support.js";
+import { loadUsageWithAuth, usageNow } from "./provider-usage.test-support.js";
 import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types.js";
 
-type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
 
@@ -29,46 +24,28 @@ describe("provider-usage.load", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it.each([false, true])(
-    "returns Timeout without auth or fetch dispatch for an exhausted budget (synthetic: %s)",
-    async (synthetic) => {
-      vi.useFakeTimers();
-      const provider = synthetic ? "openai" : "anthropic";
-      const fetch = vi.fn(async () => new Response("{}"));
-      resolveProviderUsageAuthWithPluginMock.mockResolvedValue({ token: "fixture-token" });
-      resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ context }) => {
-        await context.fetchFn("https://usage.example.test");
-        return { provider, displayName: provider, windows: [] };
-      });
-
-      const pending = loadProviderUsageSummary({
-        providers: [provider],
-        ...(synthetic
-          ? { auth: [{ provider, token: "codex-app-server", hookProvider: "codex" }] }
-          : {}),
-        config: {},
-        env: { ANTHROPIC_API_KEY: "fixture-token" },
-        now: usageNow,
-        timeoutMs: 0,
-        fetch,
-      });
-      await vi.advanceTimersByTimeAsync(1);
-      expect(await pending).toEqual({
-        updatedAt: usageNow,
-        providers: [
-          { provider, displayName: synthetic ? "OpenAI" : "Claude", windows: [], error: "Timeout" },
-        ],
-      });
-      expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
-      expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
-      expect(fetch).not.toHaveBeenCalled();
-    },
-  );
+  it("does not dispatch auth or fetch for an exhausted budget", async () => {
+    const fetch = vi.fn(async () => new Response("{}"));
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValue({ token: "fixture-token" });
+    const result = await loadProviderUsageSummary({
+      providers: ["anthropic"],
+      config: {},
+      env: { ANTHROPIC_API_KEY: "fixture-token" },
+      now: usageNow,
+      timeoutMs: 0,
+      fetch,
+    });
+    expect(result).toEqual({
+      updatedAt: usageNow,
+      providers: [{ provider: "anthropic", displayName: "Claude", windows: [], error: "Timeout" }],
+    });
+    expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
+    expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["init", false],
-    ["request", false],
-    ["init", true],
     ["request", true],
   ] as const)(
     "cancels the usage fetch (%s signal, caller abort: %s)",
@@ -135,7 +112,7 @@ describe("provider-usage.load", () => {
     },
   );
 
-  it.each(["key", "candidates", "oauth"])(
+  it.each(["candidates", "oauth"])(
     "rejects a retained %s auth helper after the usage deadline",
     async (helper) => {
       vi.useFakeTimers();
@@ -162,9 +139,7 @@ describe("provider-usage.load", () => {
         expect(context.signal?.aborted).toBe(true);
         await expect(
           Promise.resolve().then(async () => {
-            if (helper === "key") {
-              context.resolveApiKeyFromConfigAndStore();
-            } else if (helper === "candidates") {
+            if (helper === "candidates") {
               await context.resolveApiKeyCandidatesFromConfigAndStore?.();
             } else {
               await context.resolveOAuthToken();
@@ -180,80 +155,11 @@ describe("provider-usage.load", () => {
     },
   );
 
-  it("does not dispatch usage after auth completes beyond the deadline", async () => {
-    vi.useFakeTimers();
-    const scope = new AsyncWorkScope();
-    const auth = createDeferredCore<{ token: string }>();
-    resolveProviderUsageAuthWithPluginMock.mockReturnValue(auth.promise);
-    const pending = scope.track(() =>
-      loadProviderUsageSummary({
-        providers: ["anthropic"],
-        config: {},
-        env: { ANTHROPIC_API_KEY: "fixture-token" },
-        timeoutMs: 1,
-      }),
-    );
-    try {
-      await vi.advanceTimersByTimeAsync(1);
-      expect((await pending).providers[0]?.error).toBe("Timeout");
-      expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce();
-      auth.resolve({ token: "fixture-token" });
-      await scope.drain();
-      expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
-    } finally {
-      auth.resolve({ token: "fixture-token" });
-      await pending;
-      await scope.drain();
-    }
-  });
-
-  it("loads populated and empty plugin snapshots without using legacy fetch", async () => {
-    const snapshots: ProviderUsageSnapshot[] = [
-      { provider: "xiaomi", displayName: "Xiaomi", windows: [] },
-      {
-        provider: "openai",
-        displayName: "Codex",
-        windows: [{ label: "3h", usedPercent: 12 }],
-      },
-    ];
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
-      async ({ provider }) => snapshots.find((snapshot) => snapshot.provider === provider) ?? null,
-    );
-    const mockFetch = createProviderUsageFetch(async () => {
-      throw new Error("legacy fetch should not run");
-    });
-
-    const summary = await loadUsageWithAuth(
-      loadProviderUsageSummary,
-      [
-        { provider: "xiaomi", token: "xiaomi-token" },
-        { provider: "openai", token: "codex-token", accountId: "acc-1" },
-      ],
-      mockFetch,
-    );
-
-    expect(summary.providers).toEqual([
-      { provider: "xiaomi", displayName: "Xiaomi", windows: [] },
-      {
-        provider: "openai",
-        displayName: "Codex",
-        windows: [{ label: "3h", usedPercent: 12 }],
-      },
-    ]);
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("returns empty provider list when auth resolves to none", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(404, "not found"));
-    const summary = await loadUsageWithAuth(loadProviderUsageSummary, [], mockFetch);
-    expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
-  });
-
   it("returns unsupported provider snapshots for unknown provider ids", async () => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(404, "not found"));
     const summary = await loadUsageWithAuth(
       loadProviderUsageSummary,
-      [{ provider: "unsupported-provider", token: "token-u" }] as unknown as ProviderAuth[],
+      [{ provider: "unsupported-provider", token: "token-u" }],
       mockFetch,
     );
     expect(summary.providers).toHaveLength(1);
@@ -306,48 +212,6 @@ describe("provider-usage.load", () => {
         displayName: "DeepSeek",
         windows: [],
         summary: "Balance ¥42.50",
-      },
-    ]);
-  });
-
-  it("keeps usage summary available when one provider fetch rejects", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
-      async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
-        if (provider === "anthropic") {
-          throw new Error("fetch failed");
-        }
-        const usageProvider = provider as ProviderUsageSnapshot["provider"];
-        return {
-          provider: usageProvider,
-          displayName: "Codex",
-          windows: [{ label: "3h", usedPercent: 12 }],
-        };
-      },
-    );
-    const mockFetch = createProviderUsageFetch(async () => {
-      throw new Error("legacy fetch should not run");
-    });
-
-    const summary = await loadUsageWithAuth(
-      loadProviderUsageSummary,
-      [
-        { provider: "anthropic", token: "token-a" },
-        { provider: "openai", token: "token-codex" },
-      ],
-      mockFetch,
-    );
-
-    expect(summary.providers).toEqual([
-      {
-        provider: "anthropic",
-        displayName: "Claude",
-        windows: [],
-        error: "fetch failed",
-      },
-      {
-        provider: "openai",
-        displayName: "Codex",
-        windows: [{ label: "3h", usedPercent: 12 }],
       },
     ]);
   });

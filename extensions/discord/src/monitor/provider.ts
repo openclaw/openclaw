@@ -21,6 +21,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
@@ -232,10 +233,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
 
   logStartupPhase("fetch-application-id:start");
-  const configuredApplicationId =
-    typeof discordCfg.applicationId === "string" && discordCfg.applicationId.trim()
-      ? discordCfg.applicationId.trim()
-      : undefined;
+  const configuredApplicationId = normalizeOptionalString(discordCfg.applicationId);
   const parsedApplicationId = configuredApplicationId ?? parseApplicationIdFromToken(token);
   const applicationIdProbe = parsedApplicationId
     ? ({ kind: "resolved", applicationId: parsedApplicationId } as const)

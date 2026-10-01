@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import * as cacheDatabase from "./session-roster-cache-database.ts";
 import {
   clearCachedBootState,
   flushSessionRosters,
@@ -358,6 +360,31 @@ describe("persistent session roster", () => {
       expect(saved?.result.sessions.map((row) => row.key)).toEqual([one.key, two.key]);
     },
   );
+
+  it("joins cache clearing before admitting a successor write", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const reset = cacheDatabase.resetSessionRosterDatabase;
+    vi.spyOn(cacheDatabase, "resetSessionRosterDatabase").mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      await reset();
+    });
+    const opened = vi.spyOn(cacheDatabase, "openSessionRosterDatabase");
+    const clearing = clearCachedBootState();
+    await entered.promise;
+    persist(record("successor"));
+    const writing = flushSessionRosters();
+    try {
+      await vi.dynamicImportSettled();
+      expect(opened).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await clearing;
+      await writing;
+    }
+    expect(await sessionRosterCache.read("successor", expected)).not.toBeNull();
+  });
 
   it("clears both boot stores and fences writes still waiting for the runtime import", async () => {
     localStorage.setItem(`${BOOT_RECORD_PREFIX}gateway-one`, "cached");

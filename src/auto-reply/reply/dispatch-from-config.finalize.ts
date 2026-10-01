@@ -65,15 +65,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   throwIfDispatchOperationAborted();
   const heartbeatReply = await heartbeat?.prepareReply(replyResult, state.replyOperationRunState);
   throwIfDispatchOperationAborted();
-  const replies = heartbeatReply
-    ? heartbeatReply.reply
-      ? [heartbeatReply.reply]
-      : []
-    : replyResult
-      ? Array.isArray(replyResult)
-        ? replyResult
-        : [replyResult]
-      : [];
+  const finalResult = heartbeatReply ? heartbeatReply.reply : replyResult;
+  const replies = Array.isArray(finalResult) ? finalResult : finalResult ? [finalResult] : [];
   const pendingFinalDeliveryIdentity = replies
     .map((reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryCompletion)
     .find((completion) => completion !== undefined);

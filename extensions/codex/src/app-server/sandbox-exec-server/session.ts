@@ -54,7 +54,6 @@ export class CodexSandboxExecSession {
     private readonly processAuthority?: CodexNativeProcessClient,
   ) {
     this.notifications = {
-      isOpen: transport.isOpen,
       signal: this.closeController.signal,
       send: (method, params) => {
         if (transport.isOpen()) {

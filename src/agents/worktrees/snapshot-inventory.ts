@@ -22,7 +22,13 @@ import {
   type GitTreePath,
 } from "./git-path-inventory.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
-import { commandError, requireGit, requireGitBuffer, runGit } from "./git.js";
+import {
+  commandError,
+  requireGit,
+  requireGitBuffer,
+  resolveGitMetadataPath,
+  runGit,
+} from "./git.js";
 import {
   captureExactState,
   exactSnapshotPrefix,
@@ -292,12 +298,7 @@ async function seedSnapshotIndex(
   inventory: SnapshotInventory,
   indexEnv: SnapshotIndexEnvironment,
 ): Promise<void> {
-  const source = path.resolve(
-    input.checkoutPath,
-    normalizeGitPathForFilesystem(
-      await requireGit(input.checkoutPath, ["rev-parse", "--git-path", "index"]),
-    ),
-  );
+  const source = await resolveGitMetadataPath(input.checkoutPath, "index");
   const destination = indexEnv.GIT_INDEX_FILE;
   try {
     const stat = await fs.stat(source);

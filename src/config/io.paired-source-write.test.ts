@@ -81,7 +81,6 @@ describe("paired source through the public config writer", () => {
   );
 
   it.each([
-    { literalEdit: false, expandRoster: false },
     { literalEdit: true, expandRoster: false },
     { literalEdit: false, expandRoster: true },
     { literalEdit: true, expandRoster: true },

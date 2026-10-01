@@ -1,7 +1,6 @@
 // OC Path tests cover edit emit roundtrip plugin behavior.
 import { describe, expect, it } from "vitest";
 import { setJsoncOcPath } from "../../jsonc/edit.js";
-import { emitJsonc } from "../../jsonc/emit.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { resolveJsoncOcPath } from "../../jsonc/resolve.js";
 import { parseOcPath } from "../../oc-path.js";
@@ -14,7 +13,7 @@ describe("edit-then-emit round-trip", () => {
       value: 99,
     });
     if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({
+      expect(JSON.parse(r.ast.raw)).toEqual({
         a: 1,
         b: { c: 99, d: 3 },
         e: 4,
@@ -38,7 +37,7 @@ describe("edit-then-emit round-trip", () => {
     if (r.ok) {
       ast = r.ast;
     }
-    expect(JSON.parse(emitJsonc(ast))).toEqual({ a: 10, b: 20 });
+    expect(JSON.parse(ast.raw)).toEqual({ a: 10, b: 20 });
   });
 
   it("jsonc parser-backed edit preserves comments", () => {
@@ -49,7 +48,7 @@ describe("edit-then-emit round-trip", () => {
       value: 2,
     });
     if (r.ok) {
-      expect(emitJsonc(r.ast)).toContain("// comment");
+      expect(r.ast.raw).toContain("// comment");
       const reparsed = resolveJsoncOcPath(r.ast, parseOcPath("oc://config/k"));
       expect(reparsed?.kind).toBe("object-entry");
       if (reparsed?.kind === "object-entry") {

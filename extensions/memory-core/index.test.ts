@@ -399,10 +399,19 @@ describe("memory-core plugin runtime registration", () => {
       };
     };
     expect(ownerTool).toMatchObject({ name: "intent" });
+    expect(ownerTool.description).toContain("system injects the reminder automatically");
     expect(ownerTool.description).toContain("Use scheduled tasks for time-based reminders");
     expect(ownerTool.description).not.toMatch(/\b(?:cron|automations)\b/u);
-    expect(ownerTool.parameters?.properties?.scope?.default).toBe("channel");
-    expect(ownerTool.parameters?.properties?.senderScope?.default).toBe("sender");
+    expect(ownerTool.parameters?.properties?.channelScope).toBeUndefined();
+    expect(ownerTool.parameters?.properties?.scope).toMatchObject({
+      type: "string",
+      enum: ["conversation", "channel", "anywhere"],
+      default: "channel",
+    });
+    expect(ownerTool.parameters?.properties?.senderScope).toMatchObject({
+      enum: ["sender", "anyone"],
+      default: "sender",
+    });
     expect(warn).toHaveBeenCalledTimes(1);
   });
 

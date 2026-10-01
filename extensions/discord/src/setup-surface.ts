@@ -22,15 +22,6 @@ const t = createSetupTranslator();
 
 const channel = "discord" as const;
 
-async function resolveDiscordAllowFromEntries(params: { token?: string; entries: string[] }) {
-  return await resolveBasicAllowFromEntries({
-    token: params.token,
-    entries: params.entries,
-    resolveEntries: async ({ token, entries }) =>
-      await resolveDiscordUserAllowlist({ token, entries }),
-  });
-}
-
 async function promptDiscordAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -65,16 +56,11 @@ async function promptDiscordAllowFrom(params: {
     parseId: parseDiscordAllowFromId,
     invalidWithoutTokenNote: t("wizard.discord.allowFromInvalidWithoutToken"),
     resolveEntries: async ({ token, entries }) =>
-      (
-        await resolveDiscordUserAllowlist({
-          token,
-          entries,
-        })
-      ).map((entry) => ({
-        input: entry.input,
-        resolved: entry.resolved,
-        id: entry.id ?? null,
-      })),
+      await resolveBasicAllowFromEntries({
+        token,
+        entries,
+        resolveEntries: resolveDiscordUserAllowlist,
+      }),
   });
   return patchChannelConfigForAccount({
     cfg: params.cfg,
@@ -105,28 +91,19 @@ async function resolveDiscordGroupAllowlist(params: {
       input,
       resolved: false,
     }),
-    resolveEntries: async ({ token, entries }) =>
-      await resolveDiscordChannelAllowlist({
-        token,
-        entries,
-      }),
+    resolveEntries: resolveDiscordChannelAllowlist,
   });
 }
 
 export const discordSetupWizard: ChannelSetupWizard = createDiscordSetupWizardBase({
   promptAllowFrom: promptDiscordAllowFrom,
   resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) =>
-    await resolveDiscordAllowFromEntries({
+    await resolveBasicAllowFromEntries({
       token:
         resolveDiscordToken(cfg, { accountId }).token ||
         (typeof credentialValues.token === "string" ? credentialValues.token : ""),
       entries,
+      resolveEntries: resolveDiscordUserAllowlist,
     }),
-  resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries }) =>
-    await resolveDiscordGroupAllowlist({
-      cfg,
-      accountId,
-      credentialValues,
-      entries,
-    }),
+  resolveGroupAllowlist: resolveDiscordGroupAllowlist,
 });

@@ -1,4 +1,5 @@
 // Frontmatter tests cover shared Markdown frontmatter parsing helpers.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, test } from "vitest";
 import {
   applyOpenClawManifestInstallCommonFields,
@@ -9,15 +10,6 @@ import {
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
 } from "./frontmatter.js";
-
-function expectInstallBase(
-  parsed: ReturnType<typeof parseOpenClawManifestInstallBase>,
-): NonNullable<ReturnType<typeof parseOpenClawManifestInstallBase>> {
-  if (parsed === undefined) {
-    throw new Error("Expected manifest install base");
-  }
-  return parsed;
-}
 
 describe("shared/frontmatter", () => {
   test("parseFrontmatterBool respects explicit values and fallback", () => {
@@ -132,7 +124,7 @@ describe("shared/frontmatter", () => {
         id?: string;
         label?: string;
         bins?: string[];
-      }>({ extra: true }, expectInstallBase(parsed)),
+      }>({ extra: true }, expectDefined(parsed, "manifest install base")),
     ).toEqual({
       extra: true,
       id: "brew.git",

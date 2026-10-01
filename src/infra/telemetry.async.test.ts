@@ -10,7 +10,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
-import type { TelemetryWorkerOperations, TelemetryState } from "./telemetry-worker-contract.js";
+import type { TelemetryWorkerOperations } from "./telemetry-store.worker.js";
+import type { TelemetryState } from "./telemetry-worker-contract.js";
 import {
   buildTelemetryPayload,
   checkTelemetryUpdate,

@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   parseFiniteNumber as readFiniteNumber,
   parseStrictNonNegativeInteger as readNonNegativeInteger,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { RateLimitError } from "../internal/discord.js";
@@ -112,14 +113,8 @@ function isAbortLikeError(err: unknown): boolean {
 }
 
 function formatDiscordDeployRestOperation(err: DiscordDeployErrorLike): string {
-  const method =
-    typeof err.deployRestMethod === "string" && err.deployRestMethod.trim().length > 0
-      ? err.deployRestMethod.toUpperCase()
-      : undefined;
-  const path =
-    typeof err.deployRestPath === "string" && err.deployRestPath.trim().length > 0
-      ? err.deployRestPath
-      : undefined;
+  const method = readNonBlankString(err.deployRestMethod)?.toUpperCase();
+  const path = readNonBlankString(err.deployRestPath);
   if (method && path) {
     return `${method} ${path}`;
   }
@@ -182,13 +177,8 @@ function resolveDiscordDeployRateLimitDetails(
   }
   const rawGlobal = readDiscordDeployObjectField(deployErr.rawBody, "global");
   const scope =
-    typeof deployErr.scope === "string" && deployErr.scope.trim().length > 0
-      ? deployErr.scope
-      : rawGlobal === true
-        ? "global"
-        : rawGlobal === false
-          ? "route"
-          : undefined;
+    readNonBlankString(deployErr.scope) ??
+    (rawGlobal === true ? "global" : rawGlobal === false ? "route" : undefined);
   const discordCode =
     typeof deployErr.discordCode === "number" || typeof deployErr.discordCode === "string"
       ? deployErr.discordCode

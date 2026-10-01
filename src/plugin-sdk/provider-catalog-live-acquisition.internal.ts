@@ -271,22 +271,14 @@ function bodyAdvertisesMoreLiveModelCatalogPages(body: unknown): boolean {
   );
 }
 
-function tryParseUrl(url: string, base?: string): URL | undefined {
-  try {
-    return new URL(url, base);
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveLiveModelCatalogNextPage(
   currentUrl: string,
   body: unknown,
 ): LiveModelCatalogNextPageResolution {
   const rawNextUrl = readLiveModelCatalogNextUrl(body);
   if (rawNextUrl) {
-    const currentParsed = tryParseUrl(currentUrl);
-    const nextUrl = tryParseUrl(rawNextUrl, currentUrl);
+    const currentParsed = URL.parse(currentUrl);
+    const nextUrl = URL.parse(rawNextUrl, currentUrl);
     if (nextUrl && currentParsed && nextUrl.origin === currentParsed.origin) {
       return { status: "next", url: nextUrl.toString() };
     }
@@ -294,7 +286,7 @@ function resolveLiveModelCatalogNextPage(
   // Malformed or cross-origin next URLs may still have a usable same-origin cursor.
   const cursor = readLiveModelCatalogCursor(body);
   if (cursor) {
-    const nextUrl = tryParseUrl(currentUrl);
+    const nextUrl = URL.parse(currentUrl);
     if (nextUrl) {
       nextUrl.searchParams.set(cursor.name, cursor.value);
       return { status: "next", url: nextUrl.toString() };
@@ -377,8 +369,8 @@ export async function fetchLiveProviderModelRows(
       safeReplayHeaders,
     });
     rows.push(...result.rows);
-    const finalParsed = tryParseUrl(result.finalUrl);
-    const requestedParsed = tryParseUrl(requestedPageUrl);
+    const finalParsed = URL.parse(result.finalUrl);
+    const requestedParsed = URL.parse(requestedPageUrl);
     if (
       safeReplayHeaders ||
       !finalParsed ||

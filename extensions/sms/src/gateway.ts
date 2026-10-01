@@ -1,4 +1,3 @@
-// Sms plugin module implements gateway behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import {

@@ -1,4 +1,3 @@
-// Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import type { Command } from "commander";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
@@ -154,12 +153,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       runtime.error(danger(message));
       exitCliAfterOutput(runtime, 1);
     }
-    if (opts.json) {
-      writeRuntimeJson(runtime, res.value);
-    } else if (
-      typeof res.value === "string" ||
-      typeof res.value === "number" ||
-      typeof res.value === "boolean"
+    if (
+      !opts.json &&
+      (typeof res.value === "string" ||
+        typeof res.value === "number" ||
+        typeof res.value === "boolean")
     ) {
       writeRuntimeStdout(runtime, `${String(res.value)}\n`);
     } else {

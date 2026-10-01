@@ -6,10 +6,6 @@ const QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY = "OPENCLAW_QA_ALLOW_INSECURE_H
 
 type ErrorFactory = (message: string) => Error;
 
-function makeError(message: string) {
-  return new Error(message);
-}
-
 export function parseQaCredentialPositiveIntegerEnv(params: {
   env: NodeJS.ProcessEnv;
   fallback: number;
@@ -22,7 +18,7 @@ export function parseQaCredentialPositiveIntegerEnv(params: {
   }
   const value = parseStrictPositiveInteger(raw);
   if (value === undefined) {
-    throw (params.createError ?? makeError)(`${params.key} must be a positive integer.`);
+    throw (params.createError ?? Error)(`${params.key} must be a positive integer.`);
   }
   return value;
 }
@@ -37,7 +33,7 @@ export function normalizeQaCredentialConvexSiteUrl(params: {
   raw: string;
   createError?: ErrorFactory;
 }): string {
-  const createError = params.createError ?? makeError;
+  const createError = params.createError ?? Error;
   let url: URL;
   try {
     url = new URL(params.raw);
@@ -46,17 +42,14 @@ export function normalizeQaCredentialConvexSiteUrl(params: {
       `OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL, got "${params.raw || "<empty>"}".`,
     );
   }
-  if (url.protocol === "https:") {
-    const text = url.toString();
-    return text.endsWith("/") ? text.slice(0, -1) : text;
-  }
-  if (url.protocol !== "http:") {
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
     throw createError("OPENCLAW_QA_CONVEX_SITE_URL must use https://.");
   }
-  const allowInsecureHttp = isQaCredentialTruthyOptIn(
-    params.env[QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY],
-  );
-  if (!allowInsecureHttp || !isLoopbackHost(url.hostname)) {
+  if (
+    url.protocol === "http:" &&
+    (!isQaCredentialTruthyOptIn(params.env[QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY]) ||
+      !isLoopbackHost(url.hostname))
+  ) {
     throw createError(
       `OPENCLAW_QA_CONVEX_SITE_URL must use https://. http:// is only allowed for loopback hosts when ${QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY}=1.`,
     );
@@ -78,7 +71,7 @@ export function normalizeQaCredentialEndpointPrefix(params: {
   }
   const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   const normalized = prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-  const createError = params.createError ?? makeError;
+  const createError = params.createError ?? Error;
   if (!normalized.startsWith("/") || normalized.startsWith("//")) {
     throw createError(params.invalidAbsoluteMessage);
   }

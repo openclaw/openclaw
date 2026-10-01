@@ -290,7 +290,9 @@ describe("agent schema 21 migration", () => {
         database
           .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
           .run(sibling);
-        const before = database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all();
+        const before = database
+          .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY session_key")
+          .all();
         oldWriter = new DatabaseSync(pathname);
         const oldWrite = oldWriter.prepare(
           "UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?",

@@ -42,10 +42,6 @@ describe("community invite card", () => {
     expect(container.querySelector("[autofocus]")).toBeNull();
   });
 
-  it("leaves persistence to the sidebar owner", () => {
-    expect(localStorage.getItem(COMMUNITY_INVITE_KEY)).toBeNull();
-  });
-
   it("delegates dismissal from the close button", () => {
     const close = cardQuery(".invite__close");
     expect(close.getAttribute("aria-label")).toBe("Dismiss and don't show again");

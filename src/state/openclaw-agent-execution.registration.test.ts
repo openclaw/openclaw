@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { serialize } from "node:v8";
 import type { MessagePort } from "node:worker_threads";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

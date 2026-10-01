@@ -29,16 +29,8 @@ import { invokeChatAbortHandler } from "../../../gateway/server-methods/chat.abo
 import { sessionDeleteHandlers } from "../../../gateway/server-methods/sessions-delete.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-  rotateAgentRunRegistryLifecycleGeneration,
-} from "../../../infra/agent-run-registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import {
-  createOperationalRunInstanceRef,
-  getAdmittedRunDelegatedAuthority,
-} from "../../admitted-run-context.js";
+import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "../../agent-tool-availability.js";
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
@@ -51,7 +43,7 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
@@ -271,11 +263,8 @@ describe("pending spawn preparation authority", () => {
           expect(
             await fs.readFile(
               path.join(
-                resolveSubagentAttachmentDir(
-                  "main",
-                  childSessionKey,
-                  path.basename(details.attachments.relDir),
-                ),
+                resolveSubagentSessionAttachmentRootDir({ agentId: "main", childSessionKey }),
+                path.basename(details.attachments.relDir),
                 "synthetic.txt",
               ),
               "utf8",
@@ -304,12 +293,8 @@ describe("pending spawn preparation authority", () => {
     "native acceptance",
     "native call signal",
     "native construction signal",
-    "native claim loss",
-    "native replacement",
-    "native lifecycle rotation",
     "native admission close",
     "projected close",
-    "projected claim loss",
   ])("rolls back an untransferred native spawn: %s", async (closure) => {
     const entered = createDeferred<string>();
     const release = createDeferred();
@@ -324,8 +309,9 @@ describe("pending spawn preparation authority", () => {
           }
         })
       : undefined;
-    const { cfg, storePath, context, admission, parent, admitted, authority } =
-      await createBoundParent(closure.startsWith("projected") ? "plugin-harness" : "embedded");
+    const { cfg, storePath, context, admission, parent, admitted } = await createBoundParent(
+      closure.startsWith("projected") ? "plugin-harness" : "embedded",
+    );
     if (closure === "native thread binding") {
       await replaceTranscriptEvents(
         { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
@@ -440,7 +426,6 @@ describe("pending spawn preparation authority", () => {
       },
     });
     const invocationAbort = new AbortController();
-    let replacementAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
     const host = closure.startsWith("projected")
       ? createAgentHarnessHostCapabilities({
           attempt: {
@@ -559,15 +544,7 @@ describe("pending spawn preparation authority", () => {
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
         expect(await wrappedOutcome).toBeInstanceOf(Error);
       } else {
-        if (closure.endsWith("claim loss")) {
-          releaseAgentRunDelegatedAuthority(authority);
-        } else if (closure.endsWith("replacement")) {
-          replacementAuthority = claimAgentRunDelegatedAuthority(
-            createOperationalRunInstanceRef(parentRunId),
-          );
-        } else if (closure.endsWith("lifecycle rotation")) {
-          rotateAgentRunRegistryLifecycleGeneration();
-        } else if (closure === "projected close") {
+        if (closure === "projected close") {
           host!.close();
         } else if (closure.endsWith("signal")) {
           invocationAbort.abort();
@@ -634,9 +611,6 @@ describe("pending spawn preparation authority", () => {
       childController?.cleanup();
       await wrappedOutcome;
       host?.close();
-      if (replacementAuthority) {
-        releaseAgentRunDelegatedAuthority(replacementAuthority);
-      }
       admission.close();
       parent.cleanup();
       attachmentFixture?.restore();

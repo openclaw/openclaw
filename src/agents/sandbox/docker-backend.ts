@@ -1,8 +1,3 @@
-/**
- * Docker sandbox backend implementation.
- *
- * Creates/reuses Docker containers and exposes backend-neutral exec and shell-command handles.
- */
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
@@ -167,6 +162,14 @@ function createContainerSandboxBackendHandle(params: {
   podmanTarget?: SandboxContainerEngineTarget;
   assertCurrent?: () => void;
 }): SandboxBackendHandle {
+  const run = (command: SandboxBackendCommandParams, assertCurrent?: () => void) =>
+    runContainerSandboxShellCommand({
+      engine: params.engine,
+      containerName: params.containerId,
+      podmanTarget: params.podmanTarget,
+      ...command,
+      assertCurrent,
+    });
   return {
     id: params.engine.id,
     runtimeId: params.containerName,
@@ -224,14 +227,6 @@ function createContainerSandboxBackendHandle(params: {
         params.containerName,
         params.containerId,
       );
-      const run = (command: SandboxBackendCommandParams, assertCurrent?: () => void) =>
-        runContainerSandboxShellCommand({
-          engine: params.engine,
-          containerName: params.containerId,
-          podmanTarget: params.podmanTarget,
-          ...command,
-          assertCurrent,
-        });
       return createSandboxProcessCleanup(
         (command) => run(command, params.assertCurrent),
         env,
@@ -265,13 +260,7 @@ function createContainerSandboxBackendHandle(params: {
       );
     },
     runShellCommand(command) {
-      return runContainerSandboxShellCommand({
-        engine: params.engine,
-        containerName: params.containerId,
-        podmanTarget: params.podmanTarget,
-        ...command,
-        assertCurrent: params.assertCurrent,
-      });
+      return run(command, params.assertCurrent);
     },
   };
 }

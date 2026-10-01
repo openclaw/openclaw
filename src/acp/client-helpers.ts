@@ -1,4 +1,3 @@
-/** Permission, environment, and spawn helpers for the standalone ACP client. */
 import * as readline from "node:readline";
 import type { RequestPermissionRequest, RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import {
@@ -18,7 +17,6 @@ import { classifyAcpToolApproval } from "./approval-classifier.js";
 
 type PermissionOption = RequestPermissionRequest["options"][number];
 
-// ACP permission resolution keeps readonly tool classes noninteractive and prompts for risky tools.
 type PermissionResolverDeps = {
   prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
   log?: (line: string) => void;
@@ -86,7 +84,6 @@ function promptUserPermission(toolName: string | undefined, toolTitle?: string):
   });
 }
 
-/** Converts an ACP permission request into a selected allow/reject option or cancellation. */
 export async function resolvePermissionRequest(
   params: RequestPermissionRequest,
   deps: PermissionResolverDeps = {},
@@ -110,9 +107,7 @@ export async function resolvePermissionRequest(
 
   const allowOption = pickOption(options, ["allow_once", "allow_always"]);
   const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
-  const promptRequired = !classification.autoApprove;
-
-  if (!promptRequired) {
+  if (classification.autoApprove) {
     if (!allowOption) {
       log(`[permission cancelled] ${toolName ?? "unknown"}: missing allow option`);
       return cancelledPermission();
@@ -143,7 +138,6 @@ type AcpClientSpawnEnvOptions = {
   stripKeys?: Iterable<string>;
 };
 
-/** Builds the sanitized environment used when spawning an ACP client process. */
 export function resolveAcpClientSpawnEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
   options: AcpClientSpawnEnvOptions = {},
@@ -153,7 +147,6 @@ export function resolveAcpClientSpawnEnv(
   return env;
 }
 
-/** Returns true when the client should hide provider credentials from the spawned server. */
 export function shouldStripProviderAuthEnvVarsForAcpServer(
   params: {
     serverCommand?: string;
@@ -178,7 +171,6 @@ export function shouldStripProviderAuthEnvVarsForAcpServer(
   );
 }
 
-/** Builds the exact environment variable denylist used for ACP client subprocesses. */
 export function buildAcpClientStripKeys(params: {
   stripProviderAuthEnvVars?: boolean;
   activeSkillEnvKeys?: Iterable<string>;
@@ -204,7 +196,6 @@ const DEFAULT_ACP_SPAWN_RUNTIME: AcpSpawnRuntime = {
   execPath: process.execPath,
 };
 
-/** Resolves the executable/args used to spawn an ACP server, including Windows shims. */
 export function resolveAcpClientSpawnInvocation(
   params: { serverCommand: string; serverArgs: string[] },
   runtime: AcpSpawnRuntime = DEFAULT_ACP_SPAWN_RUNTIME,

@@ -82,8 +82,7 @@ export function createWorktreeGcErrorHandler(context: {
     let error = initialError;
     if (error instanceof WorktreeBranchMovedError) {
       await deferWorktreeGcRecord(env, record, "branch-moved");
-    }
-    if (!(error instanceof WorktreeBranchMovedError)) {
+    } else {
       try {
         if (await hasMissingManagedWorktreeGitdir(record)) {
           await withWorktreeAllocationLease(

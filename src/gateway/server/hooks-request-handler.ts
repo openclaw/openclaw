@@ -87,13 +87,6 @@ type HookReplayScope = {
   dispatchScope: Record<string, unknown>;
 };
 
-function resolveMappedHookExternalContentSource(params: { subPath: string; sessionKey: string }) {
-  if (params.subPath === "gmail") {
-    return "gmail" as const;
-  }
-  return resolveHookExternalContentSourceFromSession(params.sessionKey) ?? "webhook";
-}
-
 export function createHooksRequestHandler(
   opts: {
     scheduler: GatewayScheduler;
@@ -601,7 +594,7 @@ export function createHooksRequestHandler(
               dispatchScope.occurrence = occurrence;
             }
             const replayKey = buildHookReplayCacheKey({
-              pathKey: subPath || "mapping",
+              pathKey: subPath,
               token,
               // Fan-out producers (gog gmail) send no idempotency key, yet a
               // non-2xx batch response makes them redeliver the same batch.
@@ -637,10 +630,11 @@ export function createHooksRequestHandler(
                   mappingId: action.mappingId,
                   allowUnsafeExternalContent: action.allowUnsafeExternalContent,
                   ...(mapped.fanout ? { admissionMode: "background" as const } : {}),
-                  externalContentSource: resolveMappedHookExternalContentSource({
-                    subPath,
-                    sessionKey: sessionKey.value,
-                  }),
+                  externalContentSource:
+                    subPath === "gmail"
+                      ? "gmail"
+                      : (resolveHookExternalContentSourceFromSession(sessionKey.value) ??
+                        "webhook"),
                 });
               });
           };

@@ -96,11 +96,6 @@ export function listPluginThemes(): ThemeCatalogEntry[] {
     snapshot.index.plugins.filter((plugin) => plugin.enabled).map((plugin) => plugin.pluginId),
   );
   return snapshot.plugins
-    .flatMap((plugin): ThemeCatalogEntry[] => {
-      if (!enabled.has(plugin.id)) {
-        return [];
-      }
-      return pluginThemes(plugin);
-    })
+    .flatMap((plugin) => (enabled.has(plugin.id) ? pluginThemes(plugin) : []))
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

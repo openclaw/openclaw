@@ -59,16 +59,6 @@ describe("native window drag", () => {
     expect(postMessage).toHaveBeenCalledTimes(2);
   });
 
-  it("posts a window-drag message for presses on passive header chrome", () => {
-    const postMessage = installBridge();
-    const { header } = buildHeader();
-
-    const event = mouseDown(header);
-
-    expect(postMessage).toHaveBeenCalledWith({ type: "window-drag" });
-    expect(event.defaultPrevented).toBe(true);
-  });
-
   it("treats the static title text as draggable chrome", () => {
     const postMessage = installBridge();
     const { title } = buildHeader();

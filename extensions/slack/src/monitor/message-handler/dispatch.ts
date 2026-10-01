@@ -592,7 +592,8 @@ async function dispatchSlackMessageWithSetup(
   }
 
   if (dispatchError || agentRunFailed) {
-    await progress.finalizeDraftProgressCard("error");
+    // A failed turn without a reply has no other visible outcome.
+    await progress.finalizeDraftProgressCard("error", { postIfMissing: !anyReplyDelivered });
   }
   await progress.dropDetachedProgressCards();
 

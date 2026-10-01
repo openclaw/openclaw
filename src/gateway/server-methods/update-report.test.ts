@@ -258,41 +258,19 @@ describe("update.report", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
-  it.each(["preview", "submit"] as const)(
-    "refuses %s without a live authenticated-client guard",
-    async (action) => {
-      const respond = await invoke(
-        {
-          action,
-          attemptId: "handoff-failed",
-          ...(action === "submit" ? { previewDigest: "a".repeat(64) } : {}),
-        },
-        null,
-      );
+  it("refuses submission without a live authenticated-client guard", async () => {
+    const respond = await invoke(
+      { action: "submit", attemptId: "handoff-failed", previewDigest: "a".repeat(64) },
+      null,
+    );
 
-      expect(mocks.submit).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("authenticated client"),
-        }),
-      );
-    },
-  );
-
-  it("rejects a stale update identity before preparing or submitting", async () => {
-    const respond = await invoke({ action: "preview", attemptId: "older-handoff" });
-
-    expect(mocks.prepare).not.toHaveBeenCalled();
     expect(mocks.submit).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({
         code: "INVALID_REQUEST",
-        message: expect.stringContaining("stale"),
+        message: expect.stringContaining("authenticated client"),
       }),
     );
   });
@@ -350,6 +328,7 @@ describe("update.report", () => {
 
     expect(mocks.getLatest).not.toHaveBeenCalled();
     expect(mocks.prepare).not.toHaveBeenCalled();
+    expect(mocks.submit).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

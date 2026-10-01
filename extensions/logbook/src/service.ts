@@ -550,8 +550,6 @@ export class LogbookService {
       const parsed = parseCardsJson({
         raw,
         day: batch.day,
-        windowStartMs: window.startMs,
-        windowEndMs: window.endMs,
       });
       if (!parsed.ok) {
         return parsed;

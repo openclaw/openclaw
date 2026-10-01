@@ -1,4 +1,3 @@
-// Process supervisor types describe supervised runs and termination reasons.
 import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-job.mts";
 
 export type ProcessExtinctionResult = void | WindowsJobExtinction;

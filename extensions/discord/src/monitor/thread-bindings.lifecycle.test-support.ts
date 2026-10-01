@@ -9,8 +9,7 @@ import {
   clearRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, expect, vi } from "vitest";
+import { beforeEach, vi } from "vitest";
 import { setDiscordRuntime } from "../runtime.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
@@ -90,46 +89,6 @@ export function createTestThreadBindingManager(
     maxAgeMs: 0,
     ...params,
   });
-}
-
-export function createNonSweepingTestManager(params: {
-  accountId: string;
-  cfg?: OpenClawConfig;
-  token?: string;
-}) {
-  return createTestThreadBindingManager({
-    persist: false,
-    enableSweeper: false,
-    idleTimeoutMs: 24 * 60 * 60 * 1000,
-    maxAgeMs: 0,
-    ...params,
-  });
-}
-
-export const requireRecord = createRequireRecord("record", "expected-label-capitalized");
-
-export function expectFields(
-  value: unknown,
-  label: string,
-  fields: Record<string, unknown>,
-): Record<string, unknown> {
-  const record = requireRecord(value, label);
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(record[key]).toEqual(expected);
-  }
-  return record;
-}
-
-export function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
-  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
-  if (!Array.isArray(calls)) {
-    throw new Error(`Expected ${label} mock calls`);
-  }
-  const call = calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${callIndex + 1}`);
-  }
-  return call[argIndex];
 }
 
 export function installThreadBindingLifecycleTestHooks() {
@@ -269,15 +228,20 @@ export function installThreadBindingLifecycleTestHooks() {
   });
 }
 
-export const requireBinding = (
-  manager: Awaited<ReturnType<typeof createThreadBindingManager>>,
-  threadId: string,
-) => {
-  const binding = manager.getByThreadId(threadId);
-  if (!binding) {
-    throw new Error(`missing thread binding: ${threadId}`);
-  }
-  return binding;
-};
-
 export { hoisted };
+
+export function bindTestThread(
+  manager: Awaited<ReturnType<typeof createThreadBindingManager>>,
+  overrides: Partial<Parameters<typeof manager.bindTarget>[0]> = {},
+) {
+  return manager.bindTarget({
+    threadId: "thread-1",
+    channelId: "parent-1",
+    targetKind: "subagent",
+    targetSessionKey: "agent:main:subagent:child",
+    agentId: "main",
+    webhookId: "wh-1",
+    webhookToken: "tok-1",
+    ...overrides,
+  });
+}

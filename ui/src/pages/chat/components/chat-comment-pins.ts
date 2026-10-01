@@ -22,6 +22,8 @@ class ChatCommentPins extends OpenClawLightDomElement {
   private mutationObserver?: MutationObserver;
   private frame?: number;
   private observedInner?: Element;
+  /** Source bubbles placed by the last layout; null while any pin is unplaced. */
+  private anchors: HTMLElement[] | null = null;
 
   protected override updated(changed: PropertyValues<this>) {
     let relayout = changed.has("attachments") || changed.has("sessionKey");
@@ -32,7 +34,7 @@ class ChatCommentPins extends OpenClawLightDomElement {
         this.resizeObserver = new ResizeObserver(this.scheduleLayout);
         this.resizeObserver.observe(this.root);
         this.mutationObserver = new MutationObserver((records) => {
-          if (records.some((record) => !this.contains(record.target))) {
+          if (records.some((record) => this.canMovePins(record.target))) {
             this.scheduleLayout();
           }
         });
@@ -57,11 +59,28 @@ class ChatCommentPins extends OpenClawLightDomElement {
     this.root?.removeEventListener("scroll", this.scheduleLayout);
     this.root = null;
     this.observedInner = undefined;
+    this.anchors = null;
     if (this.frame !== undefined) {
       cancelAnimationFrame(this.frame);
       this.frame = undefined;
     }
     super.disconnectedCallback();
+  }
+
+  /** The transcript is top-aligned, so content after every placed source cannot move a pin. */
+  private canMovePins(target: Node) {
+    return (
+      !this.contains(target) &&
+      !this.anchors?.every((bubble) => {
+        const position = bubble.compareDocumentPosition(target);
+        return (
+          (position & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
+          (position &
+            (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_DISCONNECTED)) ===
+            0
+        );
+      })
+    );
   }
 
   private readonly scheduleLayout = () => {
@@ -89,19 +108,24 @@ class ChatCommentPins extends OpenClawLightDomElement {
     const origin = this.getBoundingClientRect();
     const edge = this.root.getBoundingClientRect().right - 28;
     const occupied: Array<{ left: number; top: number }> = [];
+    const anchors: HTMLElement[] = [];
+    let placed = true;
     for (const attachment of currentChatComments(this.attachments, this.sessionKey)) {
       const pin = Array.from(this.querySelectorAll<HTMLButtonElement>("button")).find(
         (item) => item.dataset.attachmentId === attachment.id,
       );
       if (!pin) {
+        placed = false;
         continue;
       }
       const anchor = resolveChatCommentAnchor(this.root, attachment.selectionAnnotation);
-      const line = anchor && chatCommentLineEnd(anchor);
+      const line = anchor ? chatCommentLineEnd(anchor) : null;
       pin.hidden = !line;
-      if (!line) {
+      if (!anchor || !line) {
+        placed = false;
         continue;
       }
+      anchors.push(anchor.bubble);
       let left = Math.min(line.right + 4, edge) - origin.left;
       let top = line.top + (line.height - 24) / 2 - origin.top;
       while (
@@ -117,6 +141,7 @@ class ChatCommentPins extends OpenClawLightDomElement {
       pin.style.left = `${left}px`;
       pin.style.top = `${top}px`;
     }
+    this.anchors = placed ? anchors : null;
   }
 
   protected override render() {

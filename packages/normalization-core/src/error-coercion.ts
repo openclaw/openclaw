@@ -265,13 +265,7 @@ export function extractErrorCode(err: unknown): string | undefined {
     return undefined;
   }
   const code = readProperty(err, "code");
-  if (typeof code === "string") {
-    return code;
-  }
-  if (typeof code === "number") {
-    return String(code);
-  }
-  return undefined;
+  return typeof code === "string" || typeof code === "number" ? String(code) : undefined;
 }
 
 export function readErrorName(err: unknown): string {

@@ -66,13 +66,10 @@ import {
   resolveTelegramCommandIngressAuthorization,
   resolveTelegramNativeCommandBody,
 } from "./ingress.js";
+import { resolveStickerVisionSupport } from "./sticker-vision.js";
 type TelegramMentionFacts = NonNullable<
   NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
 >;
-
-const loadStickerVisionRuntime = createLazyRuntimeModule(
-  () => import("./sticker-vision.runtime.js"),
-);
 
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/media-runtime"),
@@ -125,18 +122,6 @@ function resolveTelegramMentionFacts(params: {
     effectiveWasMentioned: params.effectiveWasMentioned,
     requireMention: params.requireMention,
   };
-}
-
-async function resolveStickerVisionSupport(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-}): Promise<boolean> {
-  try {
-    const { resolveStickerVisionSupportRuntime } = await loadStickerVisionRuntime();
-    return await resolveStickerVisionSupportRuntime(params);
-  } catch {
-    return false;
-  }
 }
 
 export async function resolveTelegramInboundBody(params: {

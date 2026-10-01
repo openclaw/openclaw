@@ -190,17 +190,16 @@ run_remote_testbox_full_test_gate() {
     ' "$script_parent_dir" "${!name}" "$name") || return 2
     [ -z "$value" ] || remote_env+=("$name=$value")
   done
-  # Same Blacksmith Testbox delegation shape check:changed uses; the worktree's
-  # own wrapper syncs this prep tree (the canonical copy would sync the primary
-  # checkout instead).
+  # Explicit full-suite proof retains the measured high-memory allocation.
+  # The worktree wrapper syncs this prep tree, not the canonical checkout.
   run_quiet_logged "$label" "$log_file" \
     node scripts/crabbox-wrapper.mjs run \
     --provider blacksmith-testbox \
     --blacksmith-org openclaw \
-    --blacksmith-workflow .github/workflows/ci-check-testbox.yml \
+    --blacksmith-workflow .github/workflows/ci-check-high-memory-testbox.yml \
     --blacksmith-job check \
     --blacksmith-ref main \
-    --idle-timeout 90m \
+    --idle-timeout 15m \
     --ttl 240m \
     --timing-json \
     --label "$lease_label" \
@@ -614,7 +613,12 @@ prepare_gates() {
     echo "Crabbox AWS proof is deferred until prepare-push verifies the exact remote head."
   else
     prepare_local_gate_workspace
-    run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
+    local build_command=(pnpm build)
+    if [ "$gates_remote_mode" = local ] && [ "$docs_only" != true ]; then
+      # Prepare the full suite's artifacts without changing check/test runtime inputs.
+      build_command=(env OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build)
+    fi
+    run_quiet_logged "pnpm build" ".local/gates-build.log" "${build_command[@]}" || return $?
     run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check --base "$check_base"
 
     if [ "$docs_only" = "true" ]; then

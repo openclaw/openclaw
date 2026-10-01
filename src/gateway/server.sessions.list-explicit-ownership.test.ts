@@ -259,41 +259,43 @@ test.for(
           return published;
         });
       const projection = await createSessionRowProjection({ cfg });
-      const ensure = projection.ensureMaterialized;
-      const spy = vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-        await ensure();
-        expect(
-          projection.snapshot(
-            { key, agentId: "ops" },
-            { includeDerivedTitles: true, includeLastMessage: true },
-          ).row,
-        ).toMatchObject({
-          key,
-          agentId: "ops",
-          derivedTitle: "Physical database title",
-          lastMessagePreview: "Physical database preview",
+      const prepare = projection.prepareSelection;
+      const spy = vi
+        .spyOn(projection, "prepareSelection")
+        .mockImplementationOnce(async (...args) => {
+          await prepare(...args);
+          expect(
+            projection.snapshot(
+              { key, agentId: "ops" },
+              { includeDerivedTitles: true, includeLastMessage: true },
+            ).row,
+          ).toMatchObject({
+            key,
+            agentId: "ops",
+            derivedTitle: "Physical database title",
+            lastMessagePreview: "Physical database preview",
+          });
+          if (change === "delete") {
+            await deleteSessionEntryLifecycle({
+              agentId: scope.agentId,
+              storePath,
+              target: { canonicalKey: key, storeKeys: [key] },
+              archiveTranscript: false,
+              deleteTranscriptWithoutArchive: true,
+            });
+          } else if (change === "draft") {
+            replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
+          } else if (change === "join") {
+            addSessionMember(scope, {
+              identityId: "viewer",
+              addedBy: "owner",
+              expectedSessionId: entry.sessionId,
+            });
+          } else {
+            removeSessionMember(scope, "viewer", undefined, entry.sessionId);
+          }
+          return prepare(...args);
         });
-        if (change === "delete") {
-          await deleteSessionEntryLifecycle({
-            agentId: scope.agentId,
-            storePath,
-            target: { canonicalKey: key, storeKeys: [key] },
-            archiveTranscript: false,
-            deleteTranscriptWithoutArchive: true,
-          });
-        } else if (change === "draft") {
-          replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
-        } else if (change === "join") {
-          addSessionMember(scope, {
-            identityId: "viewer",
-            addedBy: "owner",
-            expectedSessionId: entry.sessionId,
-          });
-        } else {
-          removeSessionMember(scope, "viewer", undefined, entry.sessionId);
-        }
-        await ensure();
-      });
       try {
         await previewPublished.promise;
         publication.mockRestore();

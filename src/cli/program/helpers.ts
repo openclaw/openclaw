@@ -1,4 +1,3 @@
-// Shared Commander registration helpers for repeated options and positive integers.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { InvalidArgumentError } from "commander";
 

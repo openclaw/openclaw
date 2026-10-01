@@ -301,7 +301,7 @@ describe("update.run handoff refusal diagnostics", () => {
       const sentinel = expectDefined(sentinelState.capturedPayload, "restart sentinel");
       expect(sentinel.stats?.steps).toContainEqual(expect.objectContaining({ failureFacts }));
       expect(formatUpdateRestartStatusValue(sentinel)).toContain(statusMessage);
-      expect(buildStatusUpdateRows(sentinel)).toContainEqual({
+      expect(await buildStatusUpdateRows(sentinel)).toContainEqual({
         Item: "Update run",
         Value: expect.stringContaining(statusMessage),
       });

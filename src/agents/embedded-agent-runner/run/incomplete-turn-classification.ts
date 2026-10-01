@@ -191,27 +191,6 @@ export function joinAssistantTexts(assistantTexts?: readonly string[]): string {
   return (assistantTexts ?? []).join("\n\n").trim();
 }
 
-export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
-}
-
-// Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
-// returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
-// so the content.length > 0 guard is required to distinguish the two cases.
-export function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
-  if (message == null || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return false;
-  }
-  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
-}
-
 export function shouldApplyNonVisibleTurnRetryGuard(params: {
   provider?: string;
   modelId?: string;
@@ -256,7 +235,9 @@ export function classifyAssistantTurn(params: {
       : joinAssistantTexts(params.attempt.assistantTexts),
   );
   const visibleText = output.text.trim();
-  const reasoningOnly = isReasoningOnlyAssistantTurn(assistant);
+  const reasoningOnly = Boolean(
+    assistant && assessLastAssistantMessage(assistant) === "incomplete-text",
+  );
   const nonVisibleEligibleForSilentReply =
     params.payloadCount === 0 &&
     visibleText.length === 0 &&

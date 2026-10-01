@@ -187,7 +187,9 @@ describe("worktrees gateway methods", () => {
       includeRepositoryStatus: true,
     });
 
-    // Write scope cannot probe arbitrary host paths for branch names.
+    // Write scope cannot probe arbitrary host paths for branch names; the
+    // denial uses the shared structured missing-scope contract so clients can
+    // tell an authorization failure apart from a repository inspection failure.
     const denied = await call(
       handlers,
       "worktrees.branches",
@@ -195,7 +197,15 @@ describe("worktrees gateway methods", () => {
       { client: writeClient, context: emptyConfigContext },
     );
     expect(denied?.[0]).toBe(false);
-    expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
+    expect(denied?.[2]).toMatchObject({
+      code: "FORBIDDEN",
+      message: "missing scope: operator.admin",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.admin",
+        requiredScopes: ["operator.admin"],
+      },
+    });
   });
 
   it("allows write-scoped branch listing for a subdirectory inside an agent workspace", async () => {
@@ -275,7 +285,14 @@ describe("worktrees gateway methods", () => {
         { client: writeClient, context: emptyConfigContext },
       );
       expect(denied?.[0]).toBe(false);
-      expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
+      expect(denied?.[2]).toMatchObject({
+        code: "FORBIDDEN",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
     } finally {
       await removeProjectRegistry(project);
     }

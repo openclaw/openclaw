@@ -1,4 +1,4 @@
-import { isPublicUpdateFailureCode } from "../../infra/update-failure-public-identifiers.js";
+import { isPublicUpdateFailureCode } from "../../infra/update-failure-public-codes.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";

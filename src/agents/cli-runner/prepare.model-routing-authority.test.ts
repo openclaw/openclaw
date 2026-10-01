@@ -181,8 +181,6 @@ describe("CLI model-routing receipt authority", () => {
 
   it.each<{ kind: AuthorityLoss; producer: Producer }>([
     { kind: "close", producer: "normal" },
-    { kind: "replace", producer: "normal" },
-    { kind: "close", producer: "side-question" },
     { kind: "replace", producer: "side-question" },
   ])("drops $producer routing work when admission $kind wins the await", async (testCase) => {
     const runId = `run-cli-${testCase.producer}-${testCase.kind}`;

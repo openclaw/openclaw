@@ -9,7 +9,7 @@ import {
 } from "../../lib/chat/message-visibility.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { isChatRunStartupPhase, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatRunOwner,
@@ -97,32 +97,14 @@ function replayedCommentaryItemIds(
   return itemIds;
 }
 
-function onlyInFlightRunProjectionChanged(
-  previous: ReturnType<typeof getChatSessionProjection>["runs"],
-  current: ReturnType<typeof getChatSessionProjection>["runs"],
-  runId: string,
-): boolean {
-  for (const [previousRunId, run] of Object.entries(previous)) {
-    if (previousRunId !== runId && current[previousRunId] !== run) {
-      return false;
-    }
-  }
-  for (const [currentRunId, run] of Object.entries(current)) {
-    if (currentRunId !== runId && previous[currentRunId] !== run) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function runProjectionsUnchanged(
   previous: ReturnType<typeof getChatSessionProjection>["runs"],
   current: ReturnType<typeof getChatSessionProjection>["runs"],
+  exceptRunId?: string,
 ): boolean {
-  const previousEntries = Object.entries(previous);
   return (
-    previousEntries.length === Object.keys(current).length &&
-    previousEntries.every(([runId, run]) => current[runId] === run)
+    Object.entries(previous).every(([id, run]) => id === exceptRunId || current[id] === run) &&
+    Object.entries(current).every(([id, run]) => id === exceptRunId || previous[id] === run)
   );
 }
 
@@ -271,7 +253,7 @@ export function applyHistoryRun(params: {
   const sameRunContinued =
     state.chatRunId === inFlightRunId &&
     projectedInFlightRun?.status === "streaming" &&
-    onlyInFlightRunProjectionChanged(previousRunProjections, currentRunProjections, inFlightRunId);
+    runProjectionsUnchanged(previousRunProjections, currentRunProjections, inFlightRunId);
   const retainsLiveStream =
     sameRunContinued ||
     (state.chatRunId === inFlightRunId &&
@@ -364,22 +346,12 @@ export function applyHistoryRun(params: {
     (event) => event.runId === inFlightRunId && event.stream === "run_status",
   );
   const startupPhase = startup?.data.phase;
-  const hasStartupStatus =
-    startupPhase === "waiting_for_state" ||
-    startupPhase === "preparing_workspace" ||
-    startupPhase === "naming_worktree" ||
-    startupPhase === "creating_worktree" ||
-    startupPhase === "running_setup" ||
-    startupPhase === "provisioning_environment" ||
-    startupPhase === "preparing_context" ||
-    startupPhase === "memory_flushing" ||
-    startupPhase === "starting_model";
   if (
     run.text &&
     !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
   ) {
     reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
-  } else if (startup && hasStartupStatus) {
+  } else if (startup && isChatRunStartupPhase(startupPhase)) {
     reconcileChatRunStartup(state, {
       state: "status",
       runId: inFlightRunId,

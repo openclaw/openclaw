@@ -26,6 +26,7 @@ const STATUS_TIMEOUT_MS = 8_000;
 const PROCESS_TIMEOUT_MS = 10_000;
 const TEST_TOKEN = "qa-gateway-ssh-token";
 const SSH_NAMESPACE_MARKER = "OPENCLAW_QA_SSH_NAMESPACE";
+export const sshTrustPreparedMarker = "OPENCLAW_QA_SSH_TRUST_PREPARED";
 
 type ProducerOptions = {
   artifactBase: string;
@@ -415,8 +416,13 @@ exec "$@"
     cwd: options.repoRoot,
     detached: true,
     env: process.env,
-    stdio: [options.fixtureReadyPath ? "pipe" : "ignore", "ignore", "pipe"],
+    stdio: [
+      options.fixtureReadyPath ? "pipe" : "ignore",
+      options.fixtureReadyPath ? "pipe" : "ignore",
+      "pipe",
+    ],
   });
+  child.stdout?.pipe(process.stdout, { end: false });
   if (options.fixtureProcessPath && child.pid) {
     await fs.writeFile(options.fixtureProcessPath, `${child.pid}\n`, "utf8");
   }
@@ -563,6 +569,7 @@ export async function runGatewaySshTunnels(
       fixtureReadyPath
         ? async () => {
             await fs.writeFile(fixtureReadyPath, "ready\n", "utf8");
+            process.stdout.write(`${sshTrustPreparedMarker}\n`);
             // The parent's open pipe keeps this fixture alive until its deliberate SIGKILL.
             process.stdin.resume();
             await finished(process.stdin);

@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
 
 export type ServiceChildStart = {
@@ -18,6 +19,9 @@ export type ServiceChildStart = {
   /** Absent only for older Gateway hosts retained by update --no-restart. */
   acknowledgeClosing?: true;
   windowsShellCommand?: string;
+  treeOwnership?: "linux-subreaper";
+  /** Package-owned helper inherited by an admitted portable worker, never a remote command. */
+  nativeProcessOwner?: string;
 } & (
   | { ownedWorker: true; cleanupBinding: NodeWorkerCleanupBinding }
   | { ownedWorker?: never; cleanupBinding?: never }
@@ -42,6 +46,7 @@ export type ServiceChildAnchorPayload =
       type: "ready";
       commandPid: number;
       anchorPid: number;
+      treeOwnership?: "linux-subreaper";
     }
   | {
       type: "root-result";
@@ -64,6 +69,7 @@ export type ServiceChildAnchorPayload =
   | {
       type: "closing";
       reason: "cancel" | "lineage-closed" | "lineage-lost" | "parent-lost";
+      descendantsReaped?: true;
     }
   | {
       type: "startup-error";
@@ -87,6 +93,27 @@ export type ServiceChildRelayMessage =
   | ServiceChildStart
   | ServiceChildRelayRetirement
   | { type: "relay-error"; generation: string; error: string };
+
+export function readServiceChildMessage(
+  raw: unknown,
+): ServiceChildRelayMessage | ServiceChildAnchorMessage {
+  // SAFETY: the spawned relay or Job anchor is the sole writer on each private protocol channel.
+  return raw as ServiceChildRelayMessage | ServiceChildAnchorMessage;
+}
+
+/** The retained private IPC peer owns delivery acknowledgement for these frames. */
+export function sendServiceChildMessage(
+  child: Pick<ChildProcess, "connected" | "send">,
+  message: ServiceChildStart | ServiceChildControlMessage,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!child.connected) {
+      reject(new Error("service child lifecycle IPC is closed"));
+      return;
+    }
+    child.send(message, (error) => (error ? reject(error) : resolve()));
+  });
+}
 
 export function encodeServiceChildMessage(
   message: ServiceChildStart | ServiceChildControlMessage | ServiceChildAnchorMessage,

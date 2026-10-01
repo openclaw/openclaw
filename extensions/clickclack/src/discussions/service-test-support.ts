@@ -72,6 +72,18 @@ export function asyncDiscussionTestStore<T>(
   };
 }
 
+export function discussionChannel<T extends Partial<ClickClackChannel>>(fields: T) {
+  return {
+    id: "chn_discussion",
+    route_id: "discussion-route",
+    workspace_id: "wsp_team",
+    name: "discussion",
+    kind: "public",
+    created_at: "2026-07-19T00:00:00.000Z",
+    ...fields,
+  };
+}
+
 export function discussionConfig(): CoreConfig {
   return {
     channels: {

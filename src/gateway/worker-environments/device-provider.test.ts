@@ -7,6 +7,7 @@ import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeRunnerInventoryIssue,
 } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
@@ -58,7 +59,7 @@ function connectedNode(deviceId = DEVICE_ID, available = true): NodeWorkerSuperv
 function deviceRuntime(params: {
   getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
   listCurrentNodes?: () => Promise<readonly NodeWorkerSupervisorNodeProof[]>;
-  getIssue?: () => typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE | undefined;
+  getIssue?: () => NodeRunnerInventoryIssue | undefined;
   now?: () => number;
 }) {
   const runtime = createDeviceWorkerRuntime({
@@ -135,6 +136,19 @@ describe("device worker provider", () => {
     ).resolves.toEqual(
       expect.objectContaining({ node: { deviceId: DEVICE_ID }, sharedHost: true }),
     );
+  });
+
+  it("returns the node's actionable disabled-host reason during provision", async () => {
+    const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
+    const provider = deviceRuntime({
+      getPairedDevice: async () => pairedDevice(),
+      listCurrentNodes: async () => [],
+      getIssue: () => ({ code: "worker-host-unavailable", message }),
+    }).provider;
+
+    await expect(
+      provider.provision({ device: DEVICE_ID }, "operation", { assertCurrent: () => {} }),
+    ).rejects.toThrow(`device worker node ${DEVICE_ID} cannot host sessions: ${message}`);
   });
 
   it.each([

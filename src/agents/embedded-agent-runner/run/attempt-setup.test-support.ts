@@ -1,5 +1,5 @@
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
-import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 
 export function createAttemptSetupFixture(
   overrides: Partial<EmbeddedAttemptSetup> = {},
@@ -26,7 +26,7 @@ export function createAttemptSetupFixture(
       workspaceDir: "/tmp/workspace",
       prepared: true,
     }),
-    prepStages: createEmbeddedRunStageTracker(),
+    prepStages: createStageTimingTracker(Date.now),
     proactiveSubagentOrchestration: false,
     ...overrides,
   };

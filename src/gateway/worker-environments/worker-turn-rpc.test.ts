@@ -332,7 +332,7 @@ describe("worker environment service", () => {
         ownerEpoch: environmentIdentity.ownerEpoch,
         sessionId,
       });
-      store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       store.updateAckCursors({ claim, liveEvent: 1 });
       const preRestartService = support.createService(support.createProvider(), {
         placementStore: createWorkerSessionPlacementGate(store),
@@ -351,12 +351,12 @@ describe("worker environment service", () => {
         gate.fenceWorkerTurnForRecovery(claim);
       }
       const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>();
-      const executeSessionTool =
-        vi.fn<NonNullable<WorkerEnvironmentServiceOptions["executeSessionTool"]>>();
+      const createGatewayTools =
+        vi.fn<NonNullable<WorkerEnvironmentServiceOptions["createGatewayTools"]>>();
       const liveEvents = support.createLiveEvents();
       const workerService = support.createService(support.createProvider(), {
         executeInference,
-        executeSessionTool,
+        createGatewayTools,
         liveEvents,
         placementStore: gate,
       });
@@ -397,17 +397,29 @@ describe("worker environment service", () => {
         }),
       ).toEqual({ ok: false, closeReason: "placement-mismatch" });
       await expect(
-        workerService.executeSessionTool(identity, "sessions_send", {
+        workerService.invokeGatewayTool(
+          identity,
+          {
+            generation: "stale-surface",
+            toolId: "send",
+            toolCallId: "inherited-tool",
+            arguments: { sessionKey: "agent:main:target", message: "stale" },
+          },
+          { send: vi.fn() },
+        ),
+      ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+      await expect(workerService.getToolSurface(identity)).resolves.toEqual({
+        ok: false,
+        closeReason: "placement-mismatch",
+      });
+      await expect(
+        workerService.cancelGatewayTool(identity, {
+          generation: "stale-surface",
           toolCallId: "inherited-tool",
-          sessionKey: "agent:main:target",
-          message: "stale",
         }),
       ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
       expect(executeInference).not.toHaveBeenCalled();
-      expect(executeSessionTool).not.toHaveBeenCalled();
-      console.info(
-        `[worker-authority-proof] source=${source} admission=denied credential-ack=false connection/transcript/live/inference/tools=placement-mismatch effects=0`,
-      );
+      expect(createGatewayTools).not.toHaveBeenCalled();
     },
   );
 
@@ -927,20 +939,19 @@ describe("worker environment service", () => {
       { executeInference },
     );
     const request = support.inferenceRequest(identity);
-    expect(
-      await workerService.startInference(
-        identity,
-        { ...request, sessionId: "session-other" },
-        { connectionId: "connection-a", send: vi.fn() },
-      ),
-    ).toEqual({ ok: false, reason: "session-not-attached" });
-    expect(
-      await workerService.startInference(
-        identity,
-        { ...request, runEpoch: request.runEpoch + 1 },
-        { connectionId: "connection-b", send: vi.fn() },
-      ),
-    ).toEqual({ ok: false, reason: "epoch-mismatch" });
+    for (const [input, reason] of [
+      [{ ...request, sessionId: "session-other" }, "session-not-attached"],
+      [{ ...request, runId: "run-other" }, "session-not-attached"],
+      [{ ...request, runEpoch: request.runEpoch + 1 }, "epoch-mismatch"],
+    ] as const) {
+      await expect(
+        workerService.startInference(identity, input, { connectionId: "fenced", send: vi.fn() }),
+      ).resolves.toEqual({ ok: false, reason });
+      await expect(workerService.cancelInference(identity, input)).resolves.toEqual({
+        ok: false,
+        reason,
+      });
+    }
 
     const send = vi.fn();
     const started = await workerService.startInference(identity, request, {

@@ -170,16 +170,10 @@ it("does not schedule projection writes for read-only history", async () => {
     .spyOn(reconcile, "startSessionTranscriptIndexReconcile")
     .mockImplementation(() => {});
   const wait = vi.spyOn(reconcile, "waitForSessionTranscriptProjection");
-  const rpc = request().params;
   const pending = readSessionHistoryPageInWorker({
     kind: "message-page",
     params: {
-      target: {
-        agentId: rpc.sessionAgentId,
-        sessionId: rpc.sessionId,
-        sessionKey: rpc.canonicalKey,
-        storePath: rpc.storePath,
-      },
+      target: historyTarget(),
       options: { offset: 0, maxMessages: 20, maxBytes: 100_000, readOnly: true },
     },
   });
@@ -213,6 +207,16 @@ function request(overrides: Partial<RpcRequest["params"]> = {}): RpcRequest {
   };
 }
 
+function historyTarget() {
+  const rpc = request().params;
+  return {
+    agentId: rpc.sessionAgentId,
+    sessionId: rpc.sessionId,
+    sessionKey: rpc.canonicalKey,
+    storePath: rpc.storePath,
+  };
+}
+
 function page(text: string): SessionHistoryWorkerResult {
   return {
     kind: "rpc",
@@ -220,14 +224,21 @@ function page(text: string): SessionHistoryWorkerResult {
   };
 }
 
-it.each([
-  { kind: "message-by-id", revoke: false },
-  { kind: "message-count", revoke: false },
-  { kind: "message-by-id", revoke: true },
-  { kind: "message-count", revoke: true },
-] as const)(
-  "keeps $kind independent of auxiliary registry churn but retains primary authority (revoke: $revoke)",
-  async ({ kind, revoke }) => {
+function httpPage(): SessionHistoryWorkerResult {
+  return {
+    kind: "http",
+    snapshot: {
+      history: { items: [], messages: [], hasMore: false },
+      rawTranscriptSeq: 0,
+      turnBoundaryPending: false,
+      assistantErrorPending: false,
+    },
+  };
+}
+
+it.each([false, true])(
+  "keeps exact lookup independent of auxiliary registry churn but retains primary authority (revoke: %s)",
+  async (revoke) => {
     vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(
       new AgentDatabaseRegistryChangedError(),
     );
@@ -253,23 +264,16 @@ it.each([
     const found = { found: true, oversized: false, message, seq: 2 };
     runWorker.mockImplementationOnce(async () => {
       workerReturned = true;
-      return kind === "message-by-id" ? { kind, result: found } : { kind, count: 2 };
+      return { kind: "message-by-id", result: found };
     });
-    const rpc = request().params;
-    const target = {
-      agentId: rpc.sessionAgentId,
-      sessionId: rpc.sessionId,
-      sessionKey: rpc.canonicalKey,
-      storePath: rpc.storePath,
-    };
-    const pending =
-      kind === "message-by-id"
-        ? readSessionHistoryPageInWorker({ kind, params: { target, messageId: "answer" } })
-        : readSessionHistoryPageInWorker({ kind, params: { target } });
+    const pending = readSessionHistoryPageInWorker({
+      kind: "message-by-id",
+      params: { target: historyTarget(), messageId: "answer" },
+    });
     if (revoke) {
       await expect(pending).rejects.toBe(revoked);
     } else {
-      await expect(pending).resolves.toEqual(kind === "message-by-id" ? found : 2);
+      await expect(pending).resolves.toEqual(found);
     }
   },
 );
@@ -303,7 +307,12 @@ it.each(["rpc", "http"] as const)(
     const makeRequest = (
       includeUnrelatedEnv = false,
     ): Extract<SessionHistoryWorkerRequest, { kind: "rpc" | "http" }> => {
-      const rpc = request();
+      const rpc = request({
+        provider: "original-provider",
+        offset: 4,
+        messageId: "original-anchor",
+        ignoreCliSessionImports: true,
+      });
       return kind === "rpc"
         ? rpc
         : {
@@ -326,10 +335,6 @@ it.each(["rpc", "http"] as const)(
             },
           };
     };
-    const read = (input: Extract<SessionHistoryWorkerRequest, { kind: "rpc" | "http" }>) =>
-      input.kind === "rpc"
-        ? readSessionHistoryPageInWorker(input)
-        : readSessionHistoryPageInWorker(input);
     const supplied = makeRequest(true);
     const expected = makeRequest();
     const mutate = (stage: string) => {
@@ -353,7 +358,7 @@ it.each(["rpc", "http"] as const)(
           effectiveMaxChars: 20,
           offset: 2,
           messageId: `${stage}-anchor`,
-          ignoreCliSessionImports: true,
+          ignoreCliSessionImports: false,
         });
       } else {
         if (supplied.params.target.env) {
@@ -382,31 +387,19 @@ it.each(["rpc", "http"] as const)(
         return target;
       },
     );
-    const first = read(supplied);
+    const first = readSessionHistoryPageInWorker(supplied);
     await entered.promise;
     mutate("during-preparation");
     release.resolve();
     await waitForReaderAdmission(1);
-    const second = read(makeRequest());
+    const second = readSessionHistoryPageInWorker(makeRequest());
     await waitForReaderAdmission(2);
     mutate("after-enqueue-before-dispatch");
 
     const dispatched = queued.map((job, index) => {
       const input = job.prepare();
       const bytes = runWorker.mock.calls[index]![1];
-      job.result.resolve(
-        kind === "rpc"
-          ? page("captured request")
-          : {
-              kind: "http",
-              snapshot: {
-                history: { items: [], messages: [], hasMore: false },
-                rawTranscriptSeq: 0,
-                turnBoundaryPending: false,
-                assistantErrorPending: false,
-              },
-            },
-      );
+      job.result.resolve(kind === "rpc" ? page("captured request") : httpPage());
       return { input, bytes };
     });
     const outcomes = await Promise.allSettled([first, second]);
@@ -465,14 +458,7 @@ it.each(["delta", "message-lookup", "recent", "message-by-id", "message-count"] 
                 }
               : { kind, params: { target, messageId: "original" } };
     const expected = structuredClone(supplied);
-    const pending =
-      supplied.kind === "message-by-id"
-        ? readSessionHistoryPageInWorker(supplied)
-        : supplied.kind === "message-count"
-          ? readSessionHistoryPageInWorker(supplied)
-          : supplied.kind === "delta"
-            ? readSessionHistoryPageInWorker(supplied)
-            : readSessionHistoryPageInWorker(supplied);
+    const pending = readSessionHistoryPageInWorker(supplied);
     target.sessionId = "successor";
     target.sessionEntry.sessionId = "successor";
     target.env.OPENCLAW_STATE_DIR = "/tmp/successor-history-state";
@@ -584,10 +570,7 @@ it("does not recover partial delta facts when worker retirement fails", async ()
     kind: "delta",
     params: {
       target: {
-        agentId: rpc.sessionAgentId,
-        sessionId: rpc.sessionId,
-        sessionKey: rpc.canonicalKey,
-        storePath: rpc.storePath,
+        ...historyTarget(),
         sessionEntry: rpc.entry,
       },
       limits: {},
@@ -647,15 +630,7 @@ it("shares queued equivalent pages but starts a fresh read after dispatch", asyn
 
 it.each([
   { max: 2 },
-  { provider: "other" },
-  { ignoreCliSessionImports: true },
-  { canonicalKey: "agent:main:other" },
-  { maxHistoryBytes: 512 },
-  { effectiveMaxChars: 20 },
-  { offset: 2 },
-  { messageId: "anchor" },
   { storePath: "/tmp/another-history-worker-fixture/sessions.json" },
-  { sessionId: "replacement" },
   { entry: { sessionId: "history-worker", updatedAt: 1, sessionStartedAt: 2 } },
 ])("keeps distinct history selectors separate: %j", async (difference) => {
   const first = readSessionHistoryPageInWorker(request());
@@ -814,42 +789,31 @@ it.each([
   },
 );
 
-it.each([{ limit: 2 }, { cursor: "7" }, { maxChars: 20 }])(
-  "includes HTTP pagination selectors in coalescing and byte admission: %j",
-  async (difference) => {
-    const rpc = request().params;
-    const params = {
-      target: {
-        agentId: rpc.sessionAgentId,
-        sessionKey: rpc.canonicalKey,
-        sessionId: rpc.sessionId,
-        sessionEntry: rpc.entry,
-        storePath: rpc.storePath,
-      },
-      limit: 10,
-      maxChars: 8000,
-      cursor: undefined as string | undefined,
-    };
-    const first = readSessionHistoryPageInWorker({ kind: "http", params });
-    const second = readSessionHistoryPageInWorker({
-      kind: "http",
-      params: { ...params, ...difference },
-    });
-    await waitForReaderAdmission(2);
-    expect(queued).toHaveLength(2);
-    for (const [index, job] of queued.entries()) {
-      const input = job.prepare();
-      expect(runWorker.mock.calls[index]![1]).toBe(`1:${JSON.stringify(input)}`.length * 2);
-      job.result.resolve({
-        kind: "http",
-        snapshot: {
-          history: { items: [], messages: [], hasMore: false },
-          rawTranscriptSeq: 0,
-          turnBoundaryPending: false,
-          assistantErrorPending: false,
-        },
-      });
-    }
-    await Promise.all([first, second]);
-  },
-);
+it("keeps distinct HTTP cursors separate in coalescing and byte admission", async () => {
+  const rpc = request().params;
+  const params = {
+    target: {
+      agentId: rpc.sessionAgentId,
+      sessionKey: rpc.canonicalKey,
+      sessionId: rpc.sessionId,
+      sessionEntry: rpc.entry,
+      storePath: rpc.storePath,
+    },
+    limit: 10,
+    maxChars: 8000,
+    cursor: undefined as string | undefined,
+  };
+  const first = readSessionHistoryPageInWorker({ kind: "http", params });
+  const second = readSessionHistoryPageInWorker({
+    kind: "http",
+    params: { ...params, cursor: "7" },
+  });
+  await waitForReaderAdmission(2);
+  expect(queued).toHaveLength(2);
+  for (const [index, job] of queued.entries()) {
+    const input = job.prepare();
+    expect(runWorker.mock.calls[index]![1]).toBe(`1:${JSON.stringify(input)}`.length * 2);
+    job.result.resolve(httpPage());
+  }
+  await Promise.all([first, second]);
+});

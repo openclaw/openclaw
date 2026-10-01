@@ -402,9 +402,7 @@ export const createTelegramMessageProcessor = (
                   adoptedResult.kind === "failed-retryable"
                     ? adoptedResult.error
                     : new Error("telegram spooled turn adoption was not completed");
-                throw adoptedResult.kind === "failed-retryable"
-                  ? adoptedResult.error
-                  : new Error("telegram spooled turn adoption was not completed");
+                throw adoptionFinalizationError;
               }
               await drainLifecycle?.onAdopted();
             },

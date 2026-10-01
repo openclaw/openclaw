@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -70,6 +70,8 @@ describe("update-cli", () => {
     setupServicePackageAtPrefix,
     tempDirs,
   } = createUpdateCliFixture();
+
+  beforeEach(() => runtimeRecovery.stubNodeRuntime());
 
   it("keeps the CLI and service reachable after nvm runtime recovery", async () => {
     resolveNodeRuntimeInfo.mockResolvedValue(runtimeRecovery.unsupportedServiceRuntimeFixture);
@@ -393,8 +395,15 @@ describe("update-cli", () => {
           status: "error",
           reason: "node-runtime-preflight",
         });
+        const refusedRun = requireValue(listUpdateRuns({ limit: 1 })[0], "refused update run");
+        expect(refusedRun.reason).toBe("node-runtime-preflight");
+        const captureWarnings = refusedRun.steps
+          .filter((step) => step.step.startsWith("warning:original-state-capture:"))
+          .map((step) => `Warning: ${requireValue(step.detail, "original capture warning")}\n`)
+          .join("");
         expect(getErrorOutput()).toBe(
-          `openclaw@${VERSION} requires Node >=24.16.0 <25 || >=26.1.0; selected runtime is Node 22.23.1 at ${serviceNode}.\nbroken TEXT decoder\n${runtimeRecovery.expectedPlainRecovery(VERSION, "24.16.0", writable ? "refresh" : "owner", "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR", root, writable ? undefined : serviceNode)}`,
+          captureWarnings +
+            `openclaw@${VERSION} requires Node >=24.16.0 <25 || >=26.1.0; selected runtime is Node 22.23.1 at ${serviceNode}.\nbroken TEXT decoder\n${runtimeRecovery.expectedPlainRecovery(VERSION, "24.16.0", writable ? "refresh" : "owner", "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR", root, writable ? undefined : serviceNode)}`,
         );
         expectNoSideEffects(
           updateNpmInstalledPlugins,
