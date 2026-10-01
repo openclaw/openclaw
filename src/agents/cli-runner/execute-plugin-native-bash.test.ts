@@ -65,4 +65,49 @@ describe("native Bash execution policy", () => {
       }
     },
   );
+
+  it("uses the runtime policy agent for native Bash allowlist grants", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const dir = makeExecApprovalsTempDir();
+    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+    const binary = makeExecutable(dir, "gog");
+    saveExecApprovals({
+      version: 1,
+      agents: {
+        main: { allowlist: [{ pattern: binary }] },
+        worker: { allowlist: [] },
+      },
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({ id: "worker-miss", decision: "deny" });
+    const { context } = await createExecution({
+      config: {
+        agents: {
+          entries: {
+            main: { tools: { profile: "full" } },
+            worker: { tools: { profile: "full" } },
+          },
+        },
+        tools: { exec: { security: "allowlist", ask: "on-miss", pathPrepend: [dir] } },
+      },
+      nativeTools: ["Bash"],
+    });
+    context.params.runtimePolicySessionKey = "agent:worker:main";
+
+    let decision: CliBackendToolPermissionResult | undefined;
+    await runPlugin(context, async function* (execution) {
+      decision = await execution.requestToolPermission({
+        toolName: "Bash",
+        toolInput: { command: `${binary} calendar list` },
+        cwd: dir,
+      });
+      yield SUCCESS_RESULT;
+    });
+
+    expect(decision).toMatchObject({ behavior: "deny" });
+    expect(mockCallGatewayTool.mock.calls[0]?.[2]).toMatchObject({
+      agentId: "worker",
+      sessionKey: "agent:main:main",
+    });
+    expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedAt).toBeUndefined();
+  });
 });
