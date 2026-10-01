@@ -23,7 +23,7 @@ import type {
   CronMessageChannel,
 } from "../types.js";
 import { buildCronFailureRepairBrief } from "./failure-repair-brief.js";
-import { hasScheduledNextRunAtMs, isJobEnabled } from "./jobs-scheduling.js";
+import { isJobEnabled } from "./jobs-scheduling.js";
 import {
   cronNotificationJob,
   type CronNotificationJob,
@@ -378,9 +378,9 @@ export function maybeEmitFailureAlert(
     params.job.payload.kind !== "command" &&
     params.job.schedule.kind !== "on-exit" &&
     params.job.schedule.kind !== "stream" &&
-    // A disabled job, or a one-shot with no retry left, cannot show a repair worked.
-    isJobEnabled(params.job) &&
-    (params.job.schedule.kind !== "at" || hasScheduledNextRunAtMs(params.job.state.nextRunAtMs))
+    // Scheduling has settled: a disabled job (such as a one-shot with no retry left) will not
+    // run again, so it cannot show a repair worked.
+    isJobEnabled(params.job)
   ) {
     const opened = params.job.state.failureAlertIncident ?? incident;
     params.job.state.failureAlertIncident = { ...opened, repair: { atMs: now } };

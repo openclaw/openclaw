@@ -7,6 +7,7 @@ import {
   setupFailureAlertSuite,
 } from "./service.failure-alert.test-helpers.js";
 import { maybeEmitFailureAlert, resolveFailureAlert } from "./service/failure-alerts.js";
+import { markInterruptedStartupRun } from "./service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
@@ -220,6 +221,50 @@ describe("CronService failure repair", () => {
       status: "error",
       error: "boom",
       consecutiveCount: 2,
+      deferredNotifications,
+    });
+    expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
+      repairs ? "failure-repair" : "failure-alert",
+    ]);
+  });
+
+  it.each([
+    { name: "recurring job", schedule: "every", recover: false, repairs: true },
+    { name: "replayed one-shot", schedule: "at", recover: true, repairs: true },
+    { name: "retired one-shot", schedule: "at", recover: false, repairs: false },
+  ] as const)("restart-interrupted $name: repair=$repairs", ({ schedule, recover, repairs }) => {
+    const runningAtMs = Date.parse("2026-09-29T10:00:00Z");
+    const state: CronJobPolicyContext = {
+      deps: {
+        nowMs: () => runningAtMs + 30_000,
+        cronConfig: { failureAlert: { enabled: true } },
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      },
+    };
+    const job = {
+      id: `interrupted-${schedule}`,
+      name: "interrupted job",
+      enabled: true,
+      createdAtMs: runningAtMs,
+      updatedAtMs: runningAtMs,
+      schedule:
+        schedule === "at"
+          ? { kind: "at", at: new Date(runningAtMs).toISOString() }
+          : { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "sync" },
+      owner: { agentId: "main", sessionKey: ownerSessionKey },
+      failureAlert: { after: 2, cooldownMs: 0, channel: "telegram", to: "19098680" },
+      state: { consecutiveErrors: 1, nextRunAtMs: runningAtMs, runningAtMs },
+    } as CronJob;
+    const deferredNotifications: DeferredCronNotifications = [];
+    markInterruptedStartupRun({
+      state,
+      job,
+      runningAtMs,
+      nowMs: runningAtMs + 30_000,
+      recoverInterruptedOneShot: recover,
       deferredNotifications,
     });
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
