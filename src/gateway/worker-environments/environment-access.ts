@@ -63,6 +63,7 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
 
 type WorkerEnvironmentAccessOptions = {
   store: WorkerEnvironmentStore;
+  getCleanupError: (record: WorkerEnvironmentRecord) => string | undefined;
   getConfig: () => OpenClawConfig;
   projectNamespace?: string;
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
@@ -94,16 +95,10 @@ type WorkerEnvironmentAccessOptions = {
 };
 
 export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOptions) {
-  const { store } = options;
+  const { store, now, inState, providerFor, identityResolverFor, serviceError, withLock } = options;
   const tunnels = options.tunnelManager;
   const nodeTunnels = options.nodeTunnelManager;
   const nodeDesktop = options.nodeDesktopCarrier;
-  const now = options.now;
-  const inState = options.inState;
-  const providerFor = options.providerFor;
-  const identityResolverFor = options.identityResolverFor;
-  const serviceError = options.serviceError;
-  const withLock = options.withLock;
   let desktopEnabled = options.getConfig().cloudWorkers?.desktop === true;
   let desktopPolicy = new AbortController();
 
@@ -147,6 +142,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const project = (record: WorkerEnvironmentRecord) => {
+    const cleanupError = options.getCleanupError(record);
     const desktopAvailable =
       options.getConfig().cloudWorkers?.desktop === true &&
       inState(record, "ready", "idle", "attached") &&
@@ -173,9 +169,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             },
           }
         : {}),
-      ...((record.state === "failed" || record.state === "orphaned") && record.lastError
+      ...((record.state === "failed" ||
+        record.state === "orphaned" ||
+        (record.destroyRequestedAtMs !== null && record.state !== "destroyed")) &&
+      record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
+      ...(cleanupError ? { error: cleanupError } : {}),
       desktopAvailable,
       desktopApps: desktopAvailable
         ? (record.desktop?.apps?.map((app) => app.id).toSorted() ?? [])
@@ -276,8 +276,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> => {
-    const stopping = options.isStopping();
-    if (stopping) {
+    if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
     if (!tunnels && !nodeTunnels) {
@@ -327,6 +326,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
       }
+      request.authorize?.();
       const nodeDeviceId = record.nodeDeviceId;
       const nodeBundle =
         typeof nodeDeviceId === "string" &&
@@ -354,6 +354,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             openclawVersion: currentBundle.openclawVersion,
             protocolFeatures: [...currentBundle.protocolFeatures],
           },
+          authorize: request.authorize,
         });
         stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
         return;

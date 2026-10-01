@@ -1,12 +1,13 @@
-// QA Lab Slack native approval observation and resolution.
 import { randomUUID } from "node:crypto";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { requestLiveQaApproval } from "../shared/live-approval-request.js";
-import { assertApprovalDecisionResult } from "../shared/live-approval-result.js";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
-  writeSlackApprovalCheckpoint,
-  waitForApprovalDecision,
-} from "./slack-live.approval-checkpoint.js";
+  requestLiveQaApproval,
+  resolveLiveQaApprovalDecision,
+  waitForLiveQaApprovalDecision,
+} from "../shared/live-approval-request.js";
+import { assertApprovalDecisionResult } from "../shared/live-approval-result.js";
+import { writeSlackApprovalCheckpoint } from "./slack-live.approval-checkpoint.js";
 import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
   type SlackQaApprovalDecision,
@@ -16,11 +17,11 @@ import {
   type SlackAuthIdentity,
   type SlackObservedMessage,
   type SlackApprovalArtifact,
-  type SlackMessage,
   type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import {
   listSlackMessages,
+  recordSlackObservedMessage,
   collectSlackBlockText,
   collectSlackActionValues,
   parseSlackNativeApprovalAction,
@@ -49,38 +50,7 @@ function resolveApprovalHeading(params: {
   return params.approvalKind === "exec" ? `Exec approval: ${label}` : `Plugin approval: ${label}`;
 }
 
-function getSlackMessageSearchText(message: SlackMessage) {
-  return [message.text ?? "", ...collectSlackBlockText(message.blocks)].join("\n");
-}
-
-function pushObservedApprovalMessage(params: {
-  channelId: string;
-  matchedScenario: boolean;
-  message: SlackMessage;
-  observedMessages: SlackObservedMessage[];
-  scenarioId: string;
-  scenarioTitle: string;
-}) {
-  if (!params.message.ts) {
-    return;
-  }
-  params.observedMessages.push({
-    actionValues: collectSlackActionValues(params.message.blocks),
-    blockText: collectSlackBlockText(params.message.blocks),
-    botId: params.message.bot_id,
-    channelId: params.channelId,
-    matchedScenario: params.matchedScenario,
-    scenarioId: params.scenarioId,
-    scenarioTitle: params.scenarioTitle,
-    text: params.message.text ?? "",
-    threadTs: params.message.thread_ts,
-    ts: params.message.ts,
-    userId: params.message.user,
-  });
-}
-
-export async function waitForSlackApprovalPrompt(params: {
-  approvalId?: string;
+type SlackApprovalObservation = {
   approvalKind: ChannelApprovalKind;
   channelId: string;
   client: WebClient;
@@ -93,74 +63,73 @@ export async function waitForSlackApprovalPrompt(params: {
   timeoutMs: number;
   token?: string;
   extraTextMatches?: string[];
-}) {
+};
+
+export async function waitForSlackApprovalMessage(
+  params: SlackApprovalObservation &
+    ({ state: "pending"; approvalId?: string } | { state: "resolved"; messageTs: string }),
+) {
   const startedAt = Date.now();
   const seenObservedMessages = new Set<string>();
   let lastMatchedWithoutActions = "";
   while (Date.now() - startedAt < params.timeoutMs) {
-    const messages = await listSlackMessages({
-      channelId: params.channelId,
-      client: params.client,
-      oldestTs: params.oldestTs,
-    });
-    for (const message of messages) {
-      if (!message.ts || !isSutSlackMessage(message, params.sutIdentity)) {
+    const messages = await listSlackMessages(params);
+    const candidates =
+      params.state === "resolved"
+        ? [messages.find((message) => message.ts === params.messageTs)]
+        : messages;
+    for (const message of candidates) {
+      if (!message || !isSutSlackMessage(message, params.sutIdentity)) {
         continue;
       }
-      const text = getSlackMessageSearchText(message);
+      if (params.state === "pending" && !message.ts) {
+        continue;
+      }
+      const text = [message.text ?? "", ...collectSlackBlockText(message.blocks)].join("\n");
       const actionValues = collectSlackActionValues(message.blocks);
-      const matchedScenario = matchesSlackApprovalPromptText({
-        approvalKind: params.approvalKind,
-        extraTextMatches: params.extraTextMatches,
-        text,
-        token: params.token,
-      });
+      const textMatches =
+        text.includes(resolveApprovalHeading(params)) &&
+        (!params.token || text.includes(params.token)) &&
+        (params.extraTextMatches ?? []).every((match) => text.includes(match));
+      const hasActions =
+        params.state === "pending"
+          ? hasSlackNativeApprovalActions({ ...params, actionValues })
+          : actionValues.some((value) => parseSlackNativeApprovalAction(value));
+      const matchedScenario = textMatches && (params.state === "pending" || !hasActions);
       const observedKey = `${message.ts}:${message.text ?? ""}:${actionValues.join("|")}`;
-      if (matchedScenario || hasSlackNativeApprovalActions({ ...params, actionValues })) {
-        if (!seenObservedMessages.has(observedKey)) {
-          seenObservedMessages.add(observedKey);
-          pushObservedApprovalMessage({
-            channelId: params.channelId,
-            matchedScenario,
-            message,
-            observedMessages: params.observedMessages,
-            scenarioId: params.scenarioId,
-            scenarioTitle: params.scenarioTitle,
-          });
-        }
+      if (
+        (params.state === "resolved" || matchedScenario || hasActions) &&
+        !seenObservedMessages.has(observedKey)
+      ) {
+        seenObservedMessages.add(observedKey);
+        recordSlackObservedMessage({ ...params, matchedScenario, message });
       }
       if (!matchedScenario) {
         continue;
       }
-      if (
-        !hasSlackNativeApprovalActions({
-          actionValues,
-          approvalId: params.approvalId,
-          decision: params.decision,
-        })
-      ) {
+      if (params.state === "pending" && !hasActions) {
         lastMatchedWithoutActions = `message ${message.ts} matched approval text but did not expose native approval button values`;
         continue;
       }
       return {
         actionValues,
-        approvalId:
-          params.approvalId ??
-          extractSlackNativeApprovalId({
-            actionValues,
-            decision: params.decision,
-          }),
+        ...(params.state === "pending"
+          ? {
+              approvalId:
+                params.approvalId ??
+                extractSlackNativeApprovalId({ actionValues, decision: params.decision }),
+            }
+          : {}),
         message,
         observedAt: new Date().toISOString(),
       };
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    await sleep(1_000);
   }
+  const label = params.state === "pending" ? "prompt" : "resolution update";
   throw new Error(
     [
-      `timed out after ${params.timeoutMs}ms waiting for Slack ${params.approvalKind} approval prompt`,
+      `timed out after ${params.timeoutMs}ms waiting for Slack ${params.approvalKind} approval ${label}`,
       lastMatchedWithoutActions,
     ]
       .filter(Boolean)
@@ -168,127 +137,11 @@ export async function waitForSlackApprovalPrompt(params: {
   );
 }
 
-function matchesSlackApprovalPromptText(params: {
-  approvalKind: ChannelApprovalKind;
-  extraTextMatches?: string[];
-  text: string;
-  token?: string;
-}) {
-  return (
-    params.text.includes(
-      resolveApprovalHeading({ approvalKind: params.approvalKind, state: "pending" }),
-    ) &&
-    (!params.token || params.text.includes(params.token)) &&
-    (params.extraTextMatches ?? []).every((match) => params.text.includes(match))
-  );
-}
-
-export async function waitForSlackApprovalResolvedUpdate(params: {
-  approvalKind: ChannelApprovalKind;
-  channelId: string;
-  client: WebClient;
-  decision: SlackQaApprovalDecision;
-  messageTs: string;
-  observedMessages: SlackObservedMessage[];
-  oldestTs: string;
-  scenarioId: string;
-  scenarioTitle: string;
-  sutIdentity: SlackAuthIdentity;
-  timeoutMs: number;
-  token?: string;
-  extraTextMatches?: string[];
-}) {
-  const startedAt = Date.now();
-  const seenObservedMessages = new Set<string>();
-  while (Date.now() - startedAt < params.timeoutMs) {
-    const messages = await listSlackMessages({
-      channelId: params.channelId,
-      client: params.client,
-      oldestTs: params.oldestTs,
-    });
-    const message = messages.find((entry) => entry.ts === params.messageTs);
-    if (message && isSutSlackMessage(message, params.sutIdentity)) {
-      const text = getSlackMessageSearchText(message);
-      const actionValues = collectSlackActionValues(message.blocks);
-      const matchedScenario = matchesSlackApprovalResolvedUpdate({
-        actionValues,
-        approvalKind: params.approvalKind,
-        decision: params.decision,
-        extraTextMatches: params.extraTextMatches,
-        text,
-        token: params.token,
-      });
-      const observedKey = `${message.ts}:${message.text ?? ""}:${actionValues.join("|")}`;
-      if (!seenObservedMessages.has(observedKey)) {
-        seenObservedMessages.add(observedKey);
-        pushObservedApprovalMessage({
-          channelId: params.channelId,
-          matchedScenario,
-          message,
-          observedMessages: params.observedMessages,
-          scenarioId: params.scenarioId,
-          scenarioTitle: params.scenarioTitle,
-        });
-      }
-      if (matchedScenario) {
-        return {
-          actionValues,
-          message,
-          observedAt: new Date().toISOString(),
-        };
-      }
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
-  }
-  throw new Error(
-    `timed out after ${params.timeoutMs}ms waiting for Slack ${params.approvalKind} approval resolution update`,
-  );
-}
-
-function matchesSlackApprovalResolvedUpdate(params: {
-  actionValues: string[];
-  approvalKind: ChannelApprovalKind;
-  decision: SlackQaApprovalDecision;
-  extraTextMatches?: string[];
-  text: string;
-  token?: string;
-}) {
-  return (
-    params.text.includes(
-      resolveApprovalHeading({
-        approvalKind: params.approvalKind,
-        decision: params.decision,
-        state: "resolved",
-      }),
-    ) &&
-    (!params.token || params.text.includes(params.token)) &&
-    (params.extraTextMatches ?? []).every((match) => params.text.includes(match)) &&
-    !params.actionValues.some((value) => parseSlackNativeApprovalAction(value))
-  );
-}
-
-export async function resolveApprovalDecision(params: {
-  approvalId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
-  decision: SlackQaApprovalDecision;
-  kind: ChannelApprovalKind;
-}) {
-  const method = params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";
-  return await params.context.gateway.call(
-    method,
-    { decision: params.decision, id: params.approvalId },
-    {
-      expectFinal: false,
-      timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
-}
-
 export async function runSlackApprovalScenario(params: {
   channelId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: Pick<SlackQaScenarioContext, "sutIdentity" | "sutReadClient"> & {
+    gateway: Pick<SlackQaScenarioContext["gateway"], "call">;
+  };
   observedMessages: SlackObservedMessage[];
   run: SlackQaApprovalScenarioRun;
   scenario: SlackQaScenarioMetadata;
@@ -310,8 +163,7 @@ export async function runSlackApprovalScenario(params: {
     turnSourceTo: `channel:${params.channelId}`,
     sutAccountId: params.sutAccountId,
   });
-  const pending = await waitForSlackApprovalPrompt({
-    approvalId,
+  const observation = {
     approvalKind: params.run.approvalKind,
     channelId: params.channelId,
     client: params.context.sutReadClient,
@@ -323,52 +175,50 @@ export async function runSlackApprovalScenario(params: {
     sutIdentity: params.context.sutIdentity,
     timeoutMs: params.scenario.timeoutMs,
     token: params.run.token,
+  };
+  const pending = await waitForSlackApprovalMessage({
+    ...observation,
+    state: "pending",
+    approvalId,
   });
-  const pendingCheckpoint = await writeSlackApprovalCheckpoint({
+  const checkpoint = {
     approvalId,
     approvalKind: params.run.approvalKind,
     channelId: params.channelId,
+    scenarioId: params.scenario.id,
+  };
+  const pendingCheckpoint = await writeSlackApprovalCheckpoint({
+    ...checkpoint,
     message: pending.message,
     observedAt: pending.observedAt,
-    scenarioId: params.scenario.id,
     state: "pending",
   });
-  await resolveApprovalDecision({
+  await resolveLiveQaApprovalDecision({
     approvalId,
-    context: params.context,
+    gateway: params.context.gateway,
     decision: params.run.decision,
     kind: params.run.approvalKind,
+    timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
   });
   assertApprovalDecisionResult({
     decision: params.run.decision,
-    result: await waitForApprovalDecision({
+    result: await waitForLiveQaApprovalDecision({
       approvalId,
-      context: params.context,
+      gateway: params.context.gateway,
       kind: params.run.approvalKind,
+      timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
     }),
   });
-  const resolved = await waitForSlackApprovalResolvedUpdate({
-    approvalKind: params.run.approvalKind,
-    channelId: params.channelId,
-    client: params.context.sutReadClient,
-    decision: params.run.decision,
+  const resolved = await waitForSlackApprovalMessage({
+    ...observation,
+    state: "resolved",
     messageTs: pending.message.ts,
-    observedMessages: params.observedMessages,
-    oldestTs,
-    scenarioId: params.scenario.id,
-    scenarioTitle: params.scenario.title,
-    sutIdentity: params.context.sutIdentity,
-    timeoutMs: params.scenario.timeoutMs,
-    token: params.run.token,
   });
   const resolvedCheckpoint = await writeSlackApprovalCheckpoint({
-    approvalId,
-    approvalKind: params.run.approvalKind,
-    channelId: params.channelId,
+    ...checkpoint,
     decision: params.run.decision,
     message: resolved.message,
     observedAt: resolved.observedAt,
-    scenarioId: params.scenario.id,
     state: "resolved",
   });
   const responseObservedAt = new Date(resolved.observedAt);

@@ -27,7 +27,6 @@ import {
   updateExecApprovals,
   type ExecApprovalsFile,
   type ExecAsk,
-  type ExecMode,
   type ExecSecurity,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
@@ -84,39 +83,23 @@ type ExecPolicyShowPayload = {
   };
 };
 
-type ExecPolicyShowSecurity = ExecSecurity | "unknown";
-type ExecPolicyShowAsk = ExecAsk | "unknown";
-
 type ExecPolicyShowScope = Omit<
   ExecPolicyScopeSnapshot,
   "security" | "ask" | "askFallback" | "allowedDecisions"
 > & {
   runtimeApprovalsSource: "local-file" | "node-runtime";
-  security: {
-    requested: ExecSecurity;
-    requestedSource: string;
-    host: ExecPolicyShowSecurity;
-    hostSource: string;
-    effective: ExecPolicyShowSecurity;
-    note: string;
+  security: Omit<ExecPolicyScopeSnapshot["security"], "host" | "effective"> & {
+    host: ExecSecurity | "unknown";
+    effective: ExecSecurity | "unknown";
   };
-  ask: {
-    requested: ExecAsk;
-    requestedSource: string;
-    host: ExecPolicyShowAsk;
-    hostSource: string;
-    effective: ExecPolicyShowAsk;
-    note: string;
+  ask: Omit<ExecPolicyScopeSnapshot["ask"], "host" | "effective"> & {
+    host: ExecAsk | "unknown";
+    effective: ExecAsk | "unknown";
   };
-  askFallback: {
-    effective: ExecPolicyShowSecurity;
-    source: string;
+  askFallback: Omit<ExecPolicyScopeSnapshot["askFallback"], "effective"> & {
+    effective: ExecSecurity | "unknown";
   };
 };
-
-function failExecPolicy(message: string): never {
-  throw new Error(message);
-}
 
 function formatExecPolicyError(err: unknown): string {
   return sanitizeExecPolicyMessage(err instanceof Error ? err.message : String(err));
@@ -149,45 +132,35 @@ function resolveExecPolicyInput(params: {
   if (params.host !== undefined) {
     const host = normalizeExecTarget(params.host);
     if (!host) {
-      failExecPolicy(`Invalid exec host: ${sanitizeExecPolicyMessage(params.host)}`);
+      throw new Error(`Invalid exec host: ${sanitizeExecPolicyMessage(params.host)}`);
     }
     resolved.host = host;
   }
   if (params.security !== undefined) {
     const security = normalizeExecSecurity(params.security);
     if (!security) {
-      failExecPolicy(`Invalid exec security: ${sanitizeExecPolicyMessage(params.security)}`);
+      throw new Error(`Invalid exec security: ${sanitizeExecPolicyMessage(params.security)}`);
     }
     resolved.security = security;
   }
   if (params.ask !== undefined) {
     const ask = normalizeExecAsk(params.ask);
     if (!ask) {
-      failExecPolicy(`Invalid exec ask mode: ${sanitizeExecPolicyMessage(params.ask)}`);
+      throw new Error(`Invalid exec ask mode: ${sanitizeExecPolicyMessage(params.ask)}`);
     }
     resolved.ask = ask;
   }
   if (params.askFallback !== undefined) {
     const askFallback = normalizeExecSecurity(params.askFallback);
     if (!askFallback) {
-      failExecPolicy(`Invalid exec askFallback: ${sanitizeExecPolicyMessage(params.askFallback)}`);
+      throw new Error(`Invalid exec askFallback: ${sanitizeExecPolicyMessage(params.askFallback)}`);
     }
     resolved.askFallback = askFallback;
   }
   return resolved;
 }
 
-function applyConfigExecPolicy(draft: Record<string, unknown>, policy: ExecPolicyResolved): void {
-  const root = draft as {
-    tools?: {
-      exec?: {
-        host?: ExecTarget;
-        mode?: ExecMode;
-        security?: ExecSecurity;
-        ask?: ExecAsk;
-      };
-    };
-  };
+function applyConfigExecPolicy(root: OpenClawConfig, policy: ExecPolicyResolved): void {
   root.tools ??= {};
   root.tools.exec ??= {};
   if (policy.host !== undefined) {
@@ -268,15 +241,6 @@ function buildExecPolicyApprovalsRollback(params: {
     }
   }
   return changed ? next : null;
-}
-
-function buildNextExecPolicyConfig(
-  config: OpenClawConfig,
-  policy: ExecPolicyResolved,
-): OpenClawConfig {
-  const draft = structuredClone(config);
-  applyConfigExecPolicy(draft as Record<string, unknown>, policy);
-  return draft;
 }
 
 async function buildLocalExecPolicyShowPayload(
@@ -420,9 +384,10 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
 
 async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
   const configSnapshot = await readConfigFileSnapshot();
-  const nextConfig = buildNextExecPolicyConfig(configSnapshot.config ?? {}, policy);
+  const nextConfig = structuredClone(configSnapshot.config ?? {});
+  applyConfigExecPolicy(nextConfig, policy);
   if (nextConfig.tools?.exec?.host === "node") {
-    failExecPolicy(
+    throw new Error(
       "Local exec-policy cannot synchronize host=node. Node approvals are fetched from the node at runtime.",
     );
   }
@@ -547,7 +512,7 @@ export function registerExecPolicyCli(program: Command) {
     .action(async (name: string, opts: { json?: boolean }) => {
       await runExecPolicyAction(async () => {
         if (!Object.hasOwn(EXEC_POLICY_PRESETS, name)) {
-          failExecPolicy(`Unknown exec-policy preset: ${sanitizeExecPolicyMessage(name)}`);
+          throw new Error(`Unknown exec-policy preset: ${sanitizeExecPolicyMessage(name)}`);
         }
         const preset = EXEC_POLICY_PRESETS[name as ExecPolicyPresetName];
         const payload = await applyLocalExecPolicy(preset);
@@ -580,7 +545,9 @@ export function registerExecPolicyCli(program: Command) {
         await runExecPolicyAction(async () => {
           const policy = resolveExecPolicyInput(opts);
           if (Object.keys(policy).length === 0) {
-            failExecPolicy("Provide at least one of --host, --security, --ask, or --ask-fallback.");
+            throw new Error(
+              "Provide at least one of --host, --security, --ask, or --ask-fallback.",
+            );
           }
           const payload = await applyLocalExecPolicy(policy);
           if (opts.json) {

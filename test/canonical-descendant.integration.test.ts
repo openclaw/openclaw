@@ -12,7 +12,11 @@ import {
   prepareAgentRunAdmission,
   createOperationalRunInstanceRef,
 } from "../src/agents/admitted-run-context.js";
-import { retireSessionMcpRuntime } from "../src/agents/agent-bundle-mcp-manager-api.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  retireSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
+} from "../src/agents/agent-bundle-mcp-manager-api.js";
 import {
   setRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
@@ -83,6 +87,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../src/state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
 import { useCanonicalDescendantState } from "./helpers/canonical-descendant-state.js";
 
 // Native transport mocks own the source graph, so discovery must use that graph.
@@ -259,7 +264,7 @@ async function withFixture(
             sessionId,
             ownerEpoch: 7,
           });
-          let placement = placements.startDispatch(target);
+          let placement = await placements.startDispatch(target);
           placement = placements.transition({
             sessionId,
             from: "requested",
@@ -372,7 +377,9 @@ async function withFixture(
         };
       },
     });
+    const scheduler = createTestGatewayScheduler();
     try {
+      await setSessionMcpRuntimeScheduler(scheduler);
       config.plugins = {
         allow: ["codex", "openai"],
         entries: {
@@ -546,7 +553,12 @@ async function withFixture(
         markPluginRegistryRetired(registry);
       }
     } finally {
-      await fixture.dispose();
+      try {
+        await disposeAllSessionMcpRuntimes();
+      } finally {
+        await scheduler.stop();
+        await fixture.dispose();
+      }
     }
   }, options.isolatedState);
 }

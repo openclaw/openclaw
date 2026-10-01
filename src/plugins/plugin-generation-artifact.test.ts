@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createJiti } from "jiti";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { gitRuntimeStagingPath } from "../infra/update-runtime-staging.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { inspectPluginSourceDependencies } from "./plugin-generation-source-inspection.js";
 
@@ -45,6 +46,37 @@ it.each(["empty", "nested/empty", ".git/empty", "node_modules/unused"])(
     expect(capture().sourceDigest).toBe(before.sourceDigest);
   },
 );
+
+it("keeps the plugin source identity independent of Git rollback retirement", () => {
+  const source = temp.make("plugin-update-digest-");
+  fs.writeFileSync(path.join(source, "index.cjs"), "exports.value = 1;");
+  const staging = gitRuntimeStagingPath(path.join(source, "node_modules"));
+  fs.mkdirSync(path.join(staging, "previous"), { recursive: true });
+  fs.writeFileSync(path.join(staging, "previous", "old.cjs"), "exports.value = 0;");
+  const artifact = capturePluginGenerationArtifact(source);
+  cleanups.push(artifact.dispose);
+  fs.rmSync(staging, { recursive: true });
+  expect(artifact.assertSourceCurrent).not.toThrow();
+  const after = capturePluginGenerationArtifact(source);
+  cleanups.push(after.dispose);
+  expect(after.sourceDigest).toBe(artifact.sourceDigest);
+  fs.writeFileSync(path.join(source, "new.cjs"), "exports.value = 2;");
+  expect(artifact.assertSourceCurrent).toThrow();
+});
+
+it("detects an included symlink retarget even when both target files were captured", () => {
+  const source = temp.make("plugin-source-link-identity-");
+  fs.writeFileSync(path.join(source, "a.cjs"), "exports.value = 'a';");
+  fs.writeFileSync(path.join(source, "b.cjs"), "exports.value = 'b';");
+  const link = path.join(source, "alias.cjs");
+  fs.symlinkSync("a.cjs", link, "file");
+  const artifact = capturePluginGenerationArtifact(source);
+  cleanups.push(artifact.dispose);
+  expect(artifact.assertSourceCurrent).not.toThrow();
+  fs.unlinkSync(link);
+  fs.symlinkSync("b.cjs", link, "file");
+  expect(artifact.assertSourceCurrent).toThrow();
+});
 
 it.each([
   "dependency",

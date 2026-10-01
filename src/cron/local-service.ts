@@ -1,7 +1,9 @@
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
+import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging/logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { CronService } from "./service.js";
@@ -14,9 +16,11 @@ export async function withLocalAgentCronJobsRemoved<T>(
 ): Promise<T> {
   const cfg = getRuntimeConfig();
   const storePath = resolveCronJobsStorePath();
+  const scheduler = new GatewayScheduler();
   const service = new CronService({
+    scheduler,
     storePath,
-    cronEnabled: cfg.cron?.enabled !== false,
+    cronEnabled: cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED,
     cronConfig: cfg.cron,
     log: toPinoLikeLogger(
       getChildLogger({ module: "cron", storeKey: storePath }),
@@ -40,5 +44,6 @@ export async function withLocalAgentCronJobsRemoved<T>(
     return await service.removeAgentJobsTransactional(agentId, commit);
   } finally {
     service.stop();
+    await scheduler.stop();
   }
 }

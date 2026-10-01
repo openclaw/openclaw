@@ -2,6 +2,7 @@ import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-transcript.js";
 
 type GatewayLogSentinelKind =
   | "plugin-hook-failure"
@@ -47,11 +48,6 @@ type GatewayLogSentinelAssertOptions = GatewayLogSentinelScanOptions & {
 
 type GatewayLogSentinelRule = Omit<GatewayLogSentinelFinding, "line" | "text"> & {
   test: (line: string) => boolean;
-};
-
-type GatewayLogSentinelToolCall = {
-  name: string;
-  args: unknown;
 };
 
 const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
@@ -193,8 +189,7 @@ function parseJsonArguments(value: unknown): unknown {
   }
 }
 
-function extractAssistantToolCalls(message: Record<string, unknown>): GatewayLogSentinelToolCall[] {
-  const calls: GatewayLogSentinelToolCall[] = [];
+function hasCurrentChatMessageSend(message: Record<string, unknown>) {
   const rawContent = message.content;
   if (Array.isArray(rawContent)) {
     for (const block of rawContent) {
@@ -210,43 +205,35 @@ function extractAssistantToolCalls(message: Record<string, unknown>): GatewayLog
       ) {
         continue;
       }
-      calls.push({
-        name: readNonEmptyString(block.name) ?? "unknown",
-        args: parseJsonArguments(block.input ?? block.arguments ?? block.args ?? null),
-      });
+      if (
+        isCurrentChatMessageSend(block.name, block.input ?? block.arguments ?? block.args ?? null)
+      ) {
+        return true;
+      }
     }
   }
 
-  const rawToolCalls =
-    message.tool_calls ?? message.toolCalls ?? message.function_call ?? message.functionCall;
-  const toolCalls = Array.isArray(rawToolCalls) ? rawToolCalls : rawToolCalls ? [rawToolCalls] : [];
-  for (const call of toolCalls) {
-    if (!isRecord(call)) {
-      continue;
+  for (const call of readQaMessageFunctionCalls(message)) {
+    if (isCurrentChatMessageSend(call.tool, call.args)) {
+      return true;
     }
-    const functionRecord = isRecord(call.function) ? call.function : undefined;
-    calls.push({
-      name: readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name) ?? "unknown",
-      args: parseJsonArguments(
-        call.arguments ?? functionRecord?.arguments ?? call.input ?? functionRecord?.input ?? null,
-      ),
-    });
   }
-  return calls;
+  return false;
 }
 
-function isCurrentChatMessageSend(call: GatewayLogSentinelToolCall) {
-  if (call.name !== "message") {
+function isCurrentChatMessageSend(name: unknown, rawArgs: unknown) {
+  if (readNonEmptyString(name) !== "message") {
     return false;
   }
-  if (!isRecord(call.args) || readNonEmptyString(call.args.action)?.toLowerCase() !== "send") {
+  const args = parseJsonArguments(rawArgs);
+  if (!isRecord(args) || readNonEmptyString(args.action)?.toLowerCase() !== "send") {
     return false;
   }
   const explicitTarget =
-    readNonEmptyString(call.args.conversationId) ??
-    readNonEmptyString(call.args.conversation) ??
-    readNonEmptyString(call.args.to) ??
-    readNonEmptyString(call.args.target);
+    readNonEmptyString(args.conversationId) ??
+    readNonEmptyString(args.conversation) ??
+    readNonEmptyString(args.to) ??
+    readNonEmptyString(args.target);
   if (!explicitTarget) {
     return true;
   }
@@ -271,7 +258,7 @@ function createDirectReplyFinding(): GatewayLogSentinelFinding {
 
 export function createDirectReplyTranscriptSentinelScanner() {
   let lastAssistantText = "";
-  const toolCalls: GatewayLogSentinelToolCall[] = [];
+  let sentToCurrentChat = false;
   return {
     recordMessage(message: Record<string, unknown>) {
       if (message.role !== "assistant") {
@@ -281,12 +268,11 @@ export function createDirectReplyTranscriptSentinelScanner() {
       if (text) {
         lastAssistantText = text;
       }
-      toolCalls.push(...extractAssistantToolCalls(message));
+      sentToCurrentChat ||= hasCurrentChatMessageSend(message);
     },
     findings(): GatewayLogSentinelFinding[] {
       const hasDirectReply =
-        toolCalls.some(isCurrentChatMessageSend) &&
-        normalizeTranscriptText(lastAssistantText).toLowerCase() === "sent.";
+        sentToCurrentChat && normalizeTranscriptText(lastAssistantText).toLowerCase() === "sent.";
       return hasDirectReply ? [createDirectReplyFinding()] : [];
     },
   };
@@ -296,20 +282,8 @@ export function scanDirectReplyTranscriptSentinels(
   transcriptBytes: string,
 ): GatewayLogSentinelFinding[] {
   const scanner = createDirectReplyTranscriptSentinelScanner();
-  for (const line of transcriptBytes.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      const message = isRecord(parsed) && isRecord(parsed.message) ? parsed.message : undefined;
-      if (message) {
-        scanner.recordMessage(message);
-      }
-    } catch {
-      // Ignore malformed QA transcript rows and keep sentinel scans deterministic.
-    }
+  for (const message of readQaTranscriptMessages(transcriptBytes)) {
+    scanner.recordMessage(message);
   }
   return scanner.findings();
 }

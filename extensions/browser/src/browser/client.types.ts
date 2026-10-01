@@ -12,6 +12,21 @@ type BrowserCdpLookup = typeof dnsLookupCb;
 /** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
 
+export type ProfileStatus = {
+  name: string;
+  transport?: BrowserTransport;
+  cdpPort: number | null;
+  cdpUrl: string | null;
+  color: string;
+  driver: "openclaw" | "existing-session" | "extension";
+  running: boolean;
+  tabCount: number;
+  isDefault: boolean;
+  isRemote: boolean;
+  missingFromConfig?: boolean;
+  reconcileReason?: string | null;
+};
+
 export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
 
 export type BrowserGraphicsDevice = {
@@ -149,13 +164,4 @@ export type BrowserOpenResult = BrowserTab & {
   resolvedProfile?: string;
 };
 
-/** ARIA snapshot node exposed in structured snapshot responses. */
-export type SnapshotAriaNode = {
-  ref: string;
-  role: string;
-  name: string;
-  value?: string;
-  description?: string;
-  backendDOMNodeId?: number;
-  depth: number;
-};
+export type { AriaSnapshotNode as SnapshotAriaNode } from "./cdp-ax.js";

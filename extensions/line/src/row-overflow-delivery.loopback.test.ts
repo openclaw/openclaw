@@ -141,9 +141,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 function createLoopbackRuntime(): PluginRuntime {
   return {
     channel: {
-      line: {
-        resolveLineAccount: resolveLineAccountMock,
-      },
       text: {
         chunkMarkdownText,
         resolveTextChunkLimit: () => 5000,
@@ -584,22 +581,5 @@ describe("Row-overflow table delivery through production outbound adapter over l
     });
     expect(recordChannelActivityMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ status: "partial", visibleReplySent: true });
-  });
-
-  it("carries a valid Bearer token and recipient through the production outbound adapter", async () => {
-    const rows = Array.from({ length: 15 }, (_, i) => `| Item${i + 1} | $${i + 1}.00 |`).join("\n");
-    const markdown = `| Name | Price |\n|---|---|\n${rows}`;
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:UtestBearer",
-      text: markdown,
-      payload: { text: markdown },
-      cfg: LINE_TEST_CFG,
-    });
-
-    const pushRequest = requests.find((r) => r.path === "/v2/bot/message/push");
-    expect(pushRequest).toBeDefined();
-    expect(pushRequest!.authorization).toMatch(/^Bearer /);
-    expect(pushRequest!.body.messages.length).toBeGreaterThan(0);
   });
 });

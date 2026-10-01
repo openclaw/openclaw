@@ -13,7 +13,11 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
-import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
+import {
+  missingRequiredParamLabels,
+  REQUIRED_PARAM_GROUPS,
+  type RequiredParamGroup,
+} from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
@@ -52,7 +56,7 @@ function reserveQuestionPromptDelivery(
   try {
     const { questions, timeoutSeconds } =
       toolName === "secrets" ? normalizeSecretsRequestParams(args) : normalizeAskUserParams(args);
-    const reservation = reserveAskUserPromptDelivery({
+    return reserveAskUserPromptDelivery({
       toolCallId,
       sessionKey,
       runId,
@@ -60,42 +64,20 @@ function reserveQuestionPromptDelivery(
       questions,
       timeoutSeconds,
     });
-    if (!reservation) {
-      return undefined;
-    }
-    return reservation;
   } catch {
     // Argument validation owns malformed calls; do not deliver an unusable prompt first.
     return undefined;
   }
 }
 
-function getRequiredParamGroupsForTool(
-  toolName: string,
-): readonly RequiredParamGroup[] | undefined {
-  return TRACE_REQUIRED_PARAM_GROUPS[toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
-}
-
 function collectMissingRequiredParamLabels(toolName: string, args: unknown): string[] {
-  const groups = getRequiredParamGroupsForTool(toolName);
+  const groups: readonly RequiredParamGroup[] | undefined =
+    TRACE_REQUIRED_PARAM_GROUPS[toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
   if (!groups?.length) {
     return [];
   }
   const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
-  if (!record) {
-    return groups.map((group) => group.label ?? group.keys.join(" or "));
-  }
-  return groups
-    .filter((group) => {
-      const satisfied =
-        group.validator?.(record) ??
-        group.keys.some((key) => {
-          const value = record[key];
-          return typeof value === "string" && (group.allowEmpty || value.trim().length > 0);
-        });
-      return !satisfied;
-    })
-    .map((group) => group.label ?? group.keys.join(" or "));
+  return missingRequiredParamLabels(record, groups);
 }
 
 function buildToolExecutionStartTraceMeta(params: {
@@ -135,15 +117,7 @@ function traceToolExecutionStart(params: {
   if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
     return;
   }
-  params.ctx.log.trace(
-    "embedded run tool start",
-    buildToolExecutionStartTraceMeta({
-      ctx: params.ctx,
-      toolName: params.toolName,
-      toolCallId: params.toolCallId,
-      args: params.args,
-    }),
-  );
+  params.ctx.log.trace("embedded run tool start", buildToolExecutionStartTraceMeta(params));
 }
 
 const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
@@ -410,27 +384,24 @@ export function handleToolExecutionStart(
       );
     }
   };
-  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    let onBlockReplyFlushResult: void | Promise<void>;
+  const flushBeforeStart = (
+    flush: () => void | Promise<void>,
+    next: () => void | Promise<void>,
+  ): void | Promise<void> => {
+    let result: void | Promise<void>;
     try {
-      onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
-        reason: "tool_start",
-        assistantMessageIndex: ctx.state.assistantMessageIndex,
-      });
+      result = flush();
     } catch (error) {
       cancelQuestionPromptReservation();
       throw error;
     }
-    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.then(
-        () => continueToolExecutionStart(),
-        (error: unknown) => {
-          cancelQuestionPromptReservation();
-          throw error;
-        },
-      );
+    if (isPromiseLike<void>(result)) {
+      return result.then(next, (error: unknown) => {
+        cancelQuestionPromptReservation();
+        throw error;
+      });
     }
-    return continueToolExecutionStart();
+    return next();
   };
 
   const continueToolExecutionStart = (): void | Promise<void> => {
@@ -551,9 +522,8 @@ export function handleToolExecutionStart(
     };
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     emitTrackedItemEvent(ctx, itemData);
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "tool",
+    const createStartEvent = () => ({
+      stream: "tool" as const,
       data: {
         phase: "start",
         name: toolName,
@@ -563,18 +533,9 @@ export function handleToolExecutionStart(
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
+    emitAgentEvent({ runId: ctx.params.runId, ...createStartEvent() });
     // Best-effort typing signal; do not block tool summaries on slow emitters.
-    emitAgentEventCallbackBestEffort(ctx, {
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: toolName,
-        toolCallId,
-        ...(evt.parentToolCallId ? { parentToolCallId: evt.parentToolCallId } : {}),
-        args: sanitizeToolArgs(args) as Record<string, unknown>,
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
-    });
+    emitAgentEventCallbackBestEffort(ctx, createStartEvent());
 
     if (
       ctx.params.onToolResult &&
@@ -616,21 +577,16 @@ export function handleToolExecutionStart(
   if (evt.lifecycleProvenance === "nested") {
     return continueToolExecutionStart();
   }
-  let flushBlockReplyBufferResult: void | Promise<void>;
-  try {
-    flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
-  } catch (error) {
-    cancelQuestionPromptReservation();
-    throw error;
-  }
-  if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-    return flushBlockReplyBufferResult.then(
-      () => continueAfterBlockReplyFlush(),
-      (error: unknown) => {
-        cancelQuestionPromptReservation();
-        throw error;
-      },
-    );
-  }
-  return continueAfterBlockReplyFlush();
+  return flushBeforeStart(
+    () => ctx.flushBlockReplyBuffer(),
+    () =>
+      flushBeforeStart(
+        () =>
+          ctx.params.onBlockReplyFlush?.({
+            reason: "tool_start",
+            assistantMessageIndex: ctx.state.assistantMessageIndex,
+          }),
+        continueToolExecutionStart,
+      ),
+  );
 }

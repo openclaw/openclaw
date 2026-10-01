@@ -28,6 +28,7 @@ export type GitCheckoutDiffInput = { cwd: string; baseCommit?: string } & (
 );
 
 export type GitReadOperations = {
+  "checkout.revision": { input: { root: string; includeIndex: boolean }; output: string | null };
   "checkout.context": { input: { root: string }; output: GitCheckoutContext | null };
   "checkout.diff": { input: GitCheckoutDiffInput; output: Omit<SessionsDiffResult, "sessionKey"> };
   "repository.branches": {

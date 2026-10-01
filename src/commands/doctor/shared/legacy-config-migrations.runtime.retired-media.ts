@@ -1,4 +1,5 @@
 // Media and voice compatibility migrations retired from canonical runtime config.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRecord } from "../../../config/legacy.shared.js";
 import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
 
@@ -227,9 +228,6 @@ const RETIRED_AGENT_TUNING_PATHS = [
   ["memory", "search", "query", "hybrid", "mmr", "lambda"],
   ["memory", "search", "query", "hybrid", "temporalDecay", "halfLifeDays"],
   ["memory", "search", "cache", "maxEntries"],
-  ["cliBackends", "*", "reliability", "outputLimits"],
-  ["cliBackends", "*", "reliability", "watchdog", "fresh", "noOutputTimeoutMs"],
-  ["cliBackends", "*", "reliability", "watchdog", "resume", "noOutputTimeoutMs"],
   ["runRetries"],
   ["tools", "loopDetection", "genericRepeat"],
   ["tools", "loopDetection", "knownPollNoProgress"],
@@ -312,11 +310,7 @@ export function consolidateMediaCapabilityConfig(
   if (!media) {
     return;
   }
-  const sharedModels = Array.isArray(media.models)
-    ? media.models.filter(
-        (value): value is Record<string, unknown> => getRecord(value) !== undefined,
-      )
-    : [];
+  const sharedModels = Array.isArray(media.models) ? media.models.filter(isRecord) : [];
   const migratedModels: Record<string, unknown>[] = [];
   let changed = false;
 
@@ -325,23 +319,18 @@ export function consolidateMediaCapabilityConfig(
     if (!config) {
       continue;
     }
-    const legacyModels = Array.isArray(config.models)
-      ? config.models.filter(
-          (value): value is Record<string, unknown> => getRecord(value) !== undefined,
-        )
-      : [];
-    const migratedBySignature = new Map<string, Record<string, unknown>>();
-    const eligibleLegacyModels = legacyModels.flatMap((legacyModel) => {
-      const scoped = scopeLegacyMediaModel(legacyModel, capability);
-      return scoped ? [scoped] : [];
-    });
-    for (const migrated of eligibleLegacyModels) {
-      const signature = mediaModelSignature(migrated);
-      const duplicate = migratedBySignature.get(signature);
-      if (duplicate) {
+    const legacyModels = Array.isArray(config.models) ? config.models.filter(isRecord) : [];
+    const migratedSignatures = new Set<string>();
+    for (const legacyModel of legacyModels) {
+      const migrated = scopeLegacyMediaModel(legacyModel, capability);
+      if (!migrated) {
         continue;
       }
-      migratedBySignature.set(signature, migrated);
+      const signature = mediaModelSignature(migrated);
+      if (migratedSignatures.has(signature)) {
+        continue;
+      }
+      migratedSignatures.add(signature);
       migratedModels.push(migrated);
     }
     if (Object.hasOwn(config, "models")) {

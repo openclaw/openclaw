@@ -1,4 +1,5 @@
 import type { Server } from "node:net";
+import { platform } from "node:os";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../infra/file-lock.js";
@@ -62,7 +63,7 @@ export async function acquireTestPortBlock(params: {
 /** Hold the real loopback listener as well as the cooperative port claim. */
 export async function reserveTestPortListener<T extends Server>(params: {
   offsets: number[];
-  port?: number;
+  port?: number | TestPortClaim;
   signal?: AbortSignal;
   createListener: () => T;
   verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
@@ -70,7 +71,14 @@ export async function reserveTestPortListener<T extends Server>(params: {
   const verifyCleanup = params.verifyCleanup ?? ((cleanup: () => Promise<void>) => cleanup());
   const seen = new Set<number>();
   while (true) {
-    const claim = await acquireTestPortBlock(params);
+    const claim =
+      typeof params.port === "object"
+        ? params.port
+        : await acquireTestPortBlock({
+            offsets: params.offsets,
+            port: params.port,
+            signal: params.signal,
+          });
     let reservation: { listener: T; releaseListener: () => Promise<void> } | undefined;
     let bindError: unknown;
     try {
@@ -111,13 +119,16 @@ export async function reserveTestPortListener<T extends Server>(params: {
           () => verifyCleanup(claim.release),
         );
       } catch (rollbackError) {
-        // An unrelated listener can win after the free-port probe closes. Only
-        // initial automatic selection may move, after both provisional owners drain.
+        // Windows can deny a candidate after its probe too. Only initial automatic
+        // selection may move, after both provisional owners drain.
         if (
           rollbackError !== error ||
           params.port !== undefined ||
           error !== bindError ||
-          !hasErrnoCode(error, "EADDRINUSE")
+          !(
+            hasErrnoCode(error, "EADDRINUSE") ||
+            (platform() === "win32" && hasErrnoCode(error, "EACCES"))
+          )
         ) {
           throw rollbackError;
         }

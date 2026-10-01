@@ -590,7 +590,7 @@ describe("Gateway GitHub publication", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-1",
       ownerEpoch: 2,
     });
@@ -636,7 +636,7 @@ describe("Gateway GitHub publication", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-idempotency",
       ownerEpoch: 2,
     });
@@ -683,7 +683,7 @@ describe("Gateway GitHub publication", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-snapshot",
       ownerEpoch: 2,
     });
@@ -940,7 +940,7 @@ describe("Gateway GitHub publication", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-publication",
       ownerEpoch: 2,
     });

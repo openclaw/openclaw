@@ -1,6 +1,3 @@
-// Fast `openclaw status --json` scan policy.
-// Skips channel tables and most network/update work unless `--all` asks for fuller evidence.
-
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -30,49 +27,29 @@ const STATUS_JSON_CHANNEL_ENV_VARS = new Set(
   ),
 );
 
-function hasMeaningfulStatusJsonChannelConfig(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return Object.keys(value).some((key) => key !== "enabled");
-}
-
 function hasExplicitStatusJsonChannelConfig(cfg: OpenClawConfig): boolean {
   if (!isRecord(cfg.channels)) {
     return false;
   }
-  for (const [key, value] of Object.entries(cfg.channels)) {
-    if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
-      continue;
-    }
-    // `enabled` alone can be a default scaffold; require another configured field.
-    if (hasMeaningfulStatusJsonChannelConfig(value)) {
-      return true;
-    }
-  }
-  return false;
+  // `enabled` alone can be a default scaffold; require another configured field.
+  return Object.entries(cfg.channels).some(
+    ([key, value]) =>
+      !IGNORED_CHANNEL_CONFIG_KEYS.has(key) &&
+      isRecord(value) &&
+      Object.keys(value).some((field) => field !== "enabled"),
+  );
 }
 
 function hasStatusJsonChannelEnvConfig(env: NodeJS.ProcessEnv = process.env): boolean {
-  for (const [key, value] of Object.entries(env)) {
-    if (typeof value !== "string" || value.trim().length === 0) {
-      continue;
-    }
-    if (
-      STATUS_JSON_CHANNEL_ENV_VARS.has(key) ||
-      STATUS_JSON_CHANNEL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return Object.entries(env).some(
+    ([key, value]) =>
+      typeof value === "string" &&
+      value.trim().length > 0 &&
+      (STATUS_JSON_CHANNEL_ENV_VARS.has(key) ||
+        STATUS_JSON_CHANNEL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))),
+  );
 }
 
-function hasPotentialConfiguredChannelsForStatusJson(cfg: OpenClawConfig): boolean {
-  return hasExplicitStatusJsonChannelConfig(cfg) || hasStatusJsonChannelEnvConfig();
-}
-
-/** Runs the default fast status JSON scan. */
 export async function scanStatusJsonFast(
   opts: StatusGatewayProbeBudget & {
     all?: boolean;
@@ -90,7 +67,8 @@ export async function scanStatusJsonFast(
     showSecrets: false,
     runtime,
     allowMissingConfigFastPath: true,
-    resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannelsForStatusJson(cfg),
+    resolveHasConfiguredChannels: (cfg) =>
+      hasExplicitStatusJsonChannelConfig(cfg) || hasStatusJsonChannelEnvConfig(),
     includeChannelsData: false,
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,

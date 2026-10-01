@@ -150,12 +150,27 @@ export class DesktopPictureInPicture implements ReactiveController {
     canvas.style.cssText =
       "display:block;width:100%;height:100%;object-fit:contain;pointer-events:none";
     doc.body.style.cssText =
-      "margin:0;height:100vh;background:Canvas;color:CanvasText;overflow:hidden";
+      "margin:0;height:100vh;background:var(--bg);color:var(--text);overflow:hidden";
     doc.body.replaceChildren(canvas);
     const context = canvas.getContext("2d");
     if (!context) {
       throw new Error("Picture-in-Picture canvas is unavailable");
     }
+    const openerRoot = this.host.ownerDocument.documentElement;
+    const syncTheme = () => {
+      const style = getComputedStyle(openerRoot);
+      doc.documentElement.style.setProperty("--bg", style.getPropertyValue("--bg"));
+      doc.documentElement.style.setProperty("--text", style.getPropertyValue("--text"));
+      doc.documentElement.style.colorScheme = style.colorScheme;
+    };
+    syncTheme();
+    // Theme preferences can publish before a lazy palette loads. Observe the theme
+    // owner's applied presentation, including same-mode custom palette replacements.
+    const themeObserver = new MutationObserver(syncTheme);
+    themeObserver.observe(openerRoot, {
+      attributes: true,
+      attributeFilter: ["data-theme", "data-theme-mode", "style"],
+    });
     let frame = 0;
     let lastPaint = -Infinity;
     const onClose = () => {
@@ -165,6 +180,7 @@ export class DesktopPictureInPicture implements ReactiveController {
     };
     popup.addEventListener("pagehide", onClose, { once: true });
     this.stopMirror = () => {
+      themeObserver.disconnect();
       popup.cancelAnimationFrame(frame);
       popup.removeEventListener("pagehide", onClose);
       canvas.remove();

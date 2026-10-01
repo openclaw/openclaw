@@ -246,20 +246,14 @@ export async function sendPayloadWithChunkedTextAndMedia<
   if (!text && urls.length === 0) {
     return params.emptyResult;
   }
-  const [firstUrl, ...remainingUrls] = urls;
-  if (firstUrl !== undefined) {
+  if (urls.length > 0) {
     // Caption-limited transports get text only on the first media item; the
     // final result still represents the last platform send.
-    let lastResult = await params.sendMedia({
-      ...params.ctx,
-      text,
-      mediaUrl: firstUrl,
-    });
-    await params.onResult?.(lastResult);
-    for (const mediaUrl of remainingUrls) {
+    let lastResult = params.emptyResult;
+    for (const [index, mediaUrl] of urls.entries()) {
       lastResult = await params.sendMedia({
         ...params.ctx,
-        text: "",
+        text: index === 0 ? text : "",
         mediaUrl,
       });
       await params.onResult?.(lastResult);
@@ -269,13 +263,8 @@ export async function sendPayloadWithChunkedTextAndMedia<
   const limit = params.textChunkLimit;
   const chunkedText = limit && params.chunker ? params.chunker(text, limit) : [text];
   const chunks = resolveTextChunksWithFallback(text, chunkedText);
-  const [firstChunk, ...remainingChunks] = chunks;
-  if (firstChunk === undefined) {
-    return params.emptyResult;
-  }
-  let lastResult = await params.sendText({ ...params.ctx, text: firstChunk });
-  await params.onResult?.(lastResult);
-  for (const chunk of remainingChunks) {
+  let lastResult = params.emptyResult;
+  for (const chunk of chunks) {
     lastResult = await params.sendText({ ...params.ctx, text: chunk });
     await params.onResult?.(lastResult);
   }
@@ -418,6 +407,21 @@ export async function sendTextMediaPayload(params: {
   // Reply fanout may be single-use for implicit replies, so resolve it exactly
   // once per platform send rather than copying the initial id into every part.
   const nextReplyToId = createReplyToFanout(params.ctx);
+  const sendAndReport = async (
+    send: (
+      onDeliveryResult: NonNullable<SendPayloadContext["onDeliveryResult"]>,
+    ) => Promise<SendPayloadResult>,
+  ) => {
+    let childReported = false;
+    const result = await send(async (deliveryResult) => {
+      childReported = true;
+      await params.ctx.onDeliveryResult?.(deliveryResult);
+    });
+    if (!childReported) {
+      await params.ctx.onDeliveryResult?.(result);
+    }
+    return result;
+  };
   if (urls.length > 0) {
     const audioAsVoice = params.ctx.payload.audioAsVoice ?? params.ctx.audioAsVoice;
     let hasSent = false;
@@ -425,21 +429,16 @@ export async function sendTextMediaPayload(params: {
       text,
       mediaUrls: urls,
       send: async ({ text: textLocal, mediaUrl }) => {
-        let childReported = false;
-        const result = await params.adapter.sendMedia!({
-          ...params.ctx,
-          text: textLocal,
-          mediaUrl,
-          ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
-          replyToId: nextReplyToId(),
-          onDeliveryResult: async (deliveryResult) => {
-            childReported = true;
-            await params.ctx.onDeliveryResult?.(deliveryResult);
-          },
-        });
-        if (!childReported) {
-          await params.ctx.onDeliveryResult?.(result);
-        }
+        const result = await sendAndReport((onDeliveryResult) =>
+          params.adapter.sendMedia!({
+            ...params.ctx,
+            text: textLocal,
+            mediaUrl,
+            ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
+            replyToId: nextReplyToId(),
+            onDeliveryResult,
+          }),
+        );
         hasSent = true;
         return result;
       },
@@ -459,19 +458,14 @@ export async function sendTextMediaPayload(params: {
   const chunks = resolveTextChunksWithFallback(text, chunkedText);
   let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
   for (const chunk of chunks) {
-    let childReported = false;
-    lastResult = await params.adapter.sendText!({
-      ...params.ctx,
-      text: chunk,
-      replyToId: nextReplyToId(),
-      onDeliveryResult: async (deliveryResult) => {
-        childReported = true;
-        await params.ctx.onDeliveryResult?.(deliveryResult);
-      },
-    });
-    if (!childReported) {
-      await params.ctx.onDeliveryResult?.(lastResult);
-    }
+    lastResult = await sendAndReport((onDeliveryResult) =>
+      params.adapter.sendText!({
+        ...params.ctx,
+        text: chunk,
+        replyToId: nextReplyToId(),
+        onDeliveryResult,
+      }),
+    );
   }
   return lastResult!;
 }
@@ -491,19 +485,8 @@ export function formatTextWithAttachmentLinks(
   mediaUrls: string[],
 ): string {
   const trimmedText = text?.trim() ?? "";
-  if (!trimmedText && mediaUrls.length === 0) {
-    return "";
-  }
-  const mediaBlock = mediaUrls.length
-    ? mediaUrls.map((url) => `Attachment: ${url}`).join("\n")
-    : "";
-  if (!trimmedText) {
-    return mediaBlock;
-  }
-  if (!mediaBlock) {
-    return trimmedText;
-  }
-  return `${trimmedText}\n\n${mediaBlock}`;
+  const mediaBlock = mediaUrls.map((url) => `Attachment: ${url}`).join("\n");
+  return [trimmedText, mediaBlock].filter(Boolean).join("\n\n");
 }
 
 /** Send a caption with only the first media item, mirroring caption-limited channel transports. */

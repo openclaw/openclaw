@@ -1,6 +1,3 @@
-/**
- * Manages active embedded-agent run handles, queues, aborts, and waiters.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
@@ -52,6 +49,7 @@ import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runt
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
@@ -81,39 +79,24 @@ import {
   type EmbeddedRunRegistration,
   type EmbeddedRunWaiter,
   type EmbeddedAgentQueueFailureReason,
+  type EmbeddedAgentQueueMessageOutcome,
 } from "./run-state.js";
 import {
+  canSteerEmbeddedRunDuringCompaction,
   isEmbeddedRunHandleAbortable,
-  isEmbeddedRunHandleCompacting,
   isEmbeddedRunHandleSupersedable,
 } from "./runs.probes.js";
 
-export type { EmbeddedAgentQueueHandle, EmbeddedAgentQueueMessageOptions } from "./run-state.js";
+export type {
+  EmbeddedAgentQueueHandle,
+  EmbeddedAgentQueueMessageOptions,
+  EmbeddedAgentQueueMessageOutcome,
+} from "./run-state.js";
 
 export type EmbeddedRunTimeoutRecoveryMarker = {
   sessionId: string;
   recoveryToken: symbol;
 };
-
-export type EmbeddedAgentQueueMessageOutcome =
-  | {
-      queued: true;
-      sessionId: string;
-      target: "embedded_run" | "reply_run";
-      gatewayHealth: "live";
-      /** Input is non-replayable, but its delivery or commitment could not be confirmed. */
-      transcriptCommit?: "unconfirmed";
-      errorMessage?: string;
-      deliveredAtMs?: number;
-      enqueuedAtMs?: number;
-    }
-  | {
-      queued: false;
-      sessionId: string;
-      reason: EmbeddedAgentQueueFailureReason;
-      gatewayHealth: "live";
-      errorMessage?: string;
-    };
 
 type PreparedEmbeddedAgentQueueMessage =
   | {
@@ -126,6 +109,7 @@ type PreparedEmbeddedAgentQueueMessage =
     }
   | {
       kind: "embedded_run";
+      runId?: string;
       queueMessage: EmbeddedAgentQueueHandle["queueMessage"];
       options: EmbeddedAgentQueueMessageOptions;
     };
@@ -153,14 +137,6 @@ export function formatEmbeddedAgentQueueFailureSummary(
   const errorPart = outcome.errorMessage ? ` error=${outcome.errorMessage}` : "";
   return `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=${outcome.gatewayHealth}${errorPart}`;
 }
-function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
-  const normalizedSessionKey = sessionKey?.trim();
-  if (!normalizedSessionKey) {
-    return;
-  }
-  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(normalizedSessionKey, sessionId);
-}
-
 function clearActiveRunSessionIndex(
   index: Map<string, string>,
   sessionId: string,
@@ -202,14 +178,6 @@ function normalizeSessionFileRegistryKey(sessionFile: string | undefined): strin
   } catch {
     return resolved;
   }
-}
-
-function setActiveRunSessionFile(sessionFile: string | undefined, sessionId: string): void {
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
-  if (!normalizedSessionFile) {
-    return;
-  }
-  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(normalizedSessionFile, sessionId);
 }
 
 function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
@@ -516,6 +484,10 @@ export function supersedeEmbeddedAgentRunByRunId(runId: string, beforeCancel: ()
     } else {
       handle.abort();
     }
+    const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+    if (registration) {
+      notifyEmbeddedRunEnded(registration.sessionId, handle, true);
+    }
     return true;
   }
   return supersedeReplyRunByRunId(normalizedRunId, beforeCancel);
@@ -605,7 +577,56 @@ export async function queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
   options: ReplyMessageInjectionOptions | undefined,
   canInject: () => boolean,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
-  return queueEmbeddedAgentMessageAsync(sessionId, text, options, canInject);
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const onQueueSettled = options?.onQueueSettled;
+  if (!handle || !onQueueSettled) {
+    return queueEmbeddedAgentMessageAsync(sessionId, text, options, canInject);
+  }
+  // Bind custody before dispatch: a backend can accept synchronously, then end
+  // without reporting per-input settlement. Never follow a same-session successor.
+  const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set<EmbeddedRunWaiter>();
+  const operation = resolveActiveReplyOperationForSessionId(sessionId);
+  const abortSignal =
+    operation && getAttachedBackend(operation) === handle ? operation.abortSignal : undefined;
+  let settled = false;
+  const close = (notify: boolean) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    waiters.delete(waiter);
+    if (waiters.size === 0 && EMBEDDED_RUN_WAITERS.get(sessionId) === waiters) {
+      EMBEDDED_RUN_WAITERS.delete(sessionId);
+    }
+    abortSignal?.removeEventListener("abort", settle);
+    if (notify) {
+      onQueueSettled();
+    }
+  };
+  const settle = () => close(true);
+  const waiter: EmbeddedRunWaiter = { handle, resolve: settle, settleOnAbort: true };
+  waiters.add(waiter);
+  EMBEDDED_RUN_WAITERS.set(sessionId, waiters);
+  abortSignal?.addEventListener("abort", settle, { once: true });
+  if (abortSignal?.aborted || handle.isAborted?.()) {
+    settle();
+  }
+  try {
+    const outcome = await queueEmbeddedAgentMessageAsync(
+      sessionId,
+      text,
+      { ...options, onQueueSettled: settle },
+      canInject,
+    );
+    if (!outcome.queued) {
+      // Admission can retry without transcript waiting; rejection never owns custody.
+      close(false);
+    }
+    return outcome;
+  } catch (error) {
+    close(false);
+    throw error;
+  }
 }
 
 async function queueEmbeddedAgentMessageAsync(
@@ -626,6 +647,7 @@ async function queueEmbeddedAgentMessageAsync(
       sessionId,
       target: "embedded_run",
       gatewayHealth: "live",
+      ...(prepared.kind === "embedded_run" && prepared.runId ? { runId: prepared.runId } : {}),
       transcriptCommit: "unconfirmed",
       errorMessage,
       enqueuedAtMs,
@@ -670,6 +692,7 @@ async function queueEmbeddedAgentMessageAsync(
         try {
           if (await claimPendingUserInputAnswer(text, options)) {
             options.onQueueAccepted?.(true);
+            options.onQueueSettled?.();
             logActiveRunMessageAccepted(sessionId);
             return {
               queued: true,
@@ -698,6 +721,7 @@ async function queueEmbeddedAgentMessageAsync(
       sessionId,
       target: "embedded_run",
       gatewayHealth: "live",
+      ...(prepared.runId ? { runId: prepared.runId } : {}),
       ...(deliveredAtMs !== undefined ? { deliveredAtMs } : {}),
       enqueuedAtMs,
     };
@@ -754,8 +778,7 @@ function prepareEmbeddedAgentQueueMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
     return reject("stale_run");
   }
-  // An indeterminate compaction probe fails closed: steering is refused, not delivered.
-  if (isEmbeddedRunHandleCompacting(sessionId, handle) !== false) {
+  if (!canSteerEmbeddedRunDuringCompaction(sessionId, handle)) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return reject("compacting");
   }
@@ -820,7 +843,12 @@ function prepareEmbeddedAgentQueueMessage(
   ) {
     return reject("no_active_run");
   }
-  return { kind: "embedded_run", queueMessage: injection.queueMessage, options: backendOptions };
+  return {
+    kind: "embedded_run",
+    runId: handle.runId,
+    queueMessage: injection.queueMessage,
+    options: backendOptions,
+  };
 }
 
 function revokeCompletionClaim(sessionId: string, runId?: string): void {
@@ -867,6 +895,7 @@ export function abortEmbeddedAgentRun(
       return false;
     }
     revokeCompletionClaim(sessionId, handle.runId);
+    notifyEmbeddedRunEnded(sessionId, handle, true);
     return true;
   }
 
@@ -882,20 +911,14 @@ export function abortEmbeddedAgentRun(
   });
   let aborted = false;
   for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-    // An indeterminate compaction probe skips the handle rather than aborting an unknown state.
-    if (
-      replyOwnedSessionIds.has(id) ||
-      (mode === "compacting" && isEmbeddedRunHandleCompacting(id, handle) !== true)
-    ) {
-      continue;
-    }
-    if (!isEmbeddedRunHandleAbortable(id, handle)) {
+    if (replyOwnedSessionIds.has(id) || !isEmbeddedRunHandleAbortable(id, handle, mode)) {
       continue;
     }
     diag.debug(`aborting ${mode === "compacting" ? "compacting " : ""}run: sessionId=${id}`);
     try {
       handle.abort(opts?.reason);
       revokeCompletionClaim(id, handle.runId);
+      notifyEmbeddedRunEnded(id, handle, true);
       aborted = true;
     } catch (err) {
       diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
@@ -943,17 +966,9 @@ export function prepareEmbeddedAgentRunCompletionClaim(
   resolveCurrentRegistration: () => EmbeddedRunCompletionRegistration | undefined;
   registered: Promise<EmbeddedRunCompletionRegistration | undefined>;
 } {
-  let registrationSettled = false;
-  let settleRegistration!: (registration: EmbeddedRunCompletionRegistration | undefined) => void;
-  const registered = new Promise<EmbeddedRunCompletionRegistration | undefined>((resolve) => {
-    settleRegistration = (registration) => {
-      if (registrationSettled) {
-        return;
-      }
-      registrationSettled = true;
-      resolve(registration);
-    };
-  });
+  const { promise: registered, resolve: settleRegistration } = createDeferredCore<
+    EmbeddedRunCompletionRegistration | undefined
+  >();
   const claim: EmbeddedRunCompletionClaim = {
     runId,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
@@ -1205,6 +1220,7 @@ function projectActiveEmbeddedRunOwner(
           handle.abort();
         }
         revokeCompletionClaim(registration.sessionId, runId);
+        notifyEmbeddedRunEnded(registration.sessionId, handle, true);
         return true;
       } catch {
         return false;
@@ -1257,11 +1273,7 @@ export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
   return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile);
 }
 
-export function resolveActiveEmbeddedRunSessionIdBySessionFile(
-  sessionFile: string,
-): string | undefined {
-  return resolveActiveEmbeddedRunHandleSessionIdBySessionFile(sessionFile);
-}
+export { resolveActiveEmbeddedRunHandleSessionIdBySessionFile as resolveActiveEmbeddedRunSessionIdBySessionFile };
 
 export function getActiveEmbeddedRunSnapshot(
   sessionId: string,
@@ -1366,20 +1378,14 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   ) {
     return { aborted: false, drained: false, forceCleared: false };
   }
-  let releaseStaleExpiryBarrier: (() => void) | undefined;
-  const staleExpiryBarrier =
-    params.reason === "stuck_recovery"
-      ? new Promise<void>((resolve) => {
-          releaseStaleExpiryBarrier = resolve;
-        })
-      : undefined;
+  const staleExpiryBarrier = params.reason === "stuck_recovery" ? createDeferredCore() : undefined;
   // Recovery is a staleness expiry: stamp run_stalled on the reply operation
   // BEFORE any handle abort, or the run loop's abort handler re-enters
   // abortByUser and misattributes the watchdog kill to the user.
   const expiredReplyRun =
     params.reason === "stuck_recovery" &&
     expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery", {
-      afterClearBarrier: staleExpiryBarrier,
+      afterClearBarrier: staleExpiryBarrier?.promise,
       followupAdmissionBarrierTimeout: settleMs + 1_000,
     });
   const stampedStaleReplyRun =
@@ -1445,7 +1451,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   } finally {
     // Queue drains registered on the stale owner must not start while its
     // backend can still claim the same session and requeue the adopted turn.
-    releaseStaleExpiryBarrier?.();
+    staleExpiryBarrier?.resolve();
   }
 }
 
@@ -1536,7 +1542,11 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
   }
 }
 
-function notifyEmbeddedRunEnded(sessionId: string, endedHandle: EmbeddedAgentQueueHandle) {
+function notifyEmbeddedRunEnded(
+  sessionId: string,
+  endedHandle: EmbeddedAgentQueueHandle,
+  aborted = false,
+) {
   const waiters = EMBEDDED_RUN_WAITERS.get(sessionId);
   if (!waiters || waiters.size === 0) {
     return;
@@ -1544,6 +1554,9 @@ function notifyEmbeddedRunEnded(sessionId: string, endedHandle: EmbeddedAgentQue
   const sessionIdle = !ACTIVE_EMBEDDED_RUNS.has(sessionId);
   diag.debug(`notifying waiters: sessionId=${sessionId} waiterCount=${waiters.size}`);
   for (const waiter of waiters) {
+    if (aborted && !waiter.settleOnAbort) {
+      continue;
+    }
     if (waiter.handle ? waiter.handle !== endedHandle : !sessionIdle) {
       continue;
     }
@@ -1660,9 +1673,15 @@ export function setActiveEmbeddedRun(
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.set(handle.runId, handle);
   }
   clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY, sessionId);
-  setActiveRunSessionKey(sessionKey, sessionId);
+  const normalizedSessionKey = sessionKey?.trim();
+  if (normalizedSessionKey) {
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(normalizedSessionKey, sessionId);
+  }
   clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, sessionId);
-  setActiveRunSessionFile(sessionFile, sessionId);
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
+  if (normalizedSessionFile) {
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(normalizedSessionFile, sessionId);
+  }
   logSessionStateChange({
     sessionId,
     sessionKey,
@@ -1704,6 +1723,20 @@ export function updateActiveEmbeddedRunSnapshot(
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);
 }
 
+function removeActiveEmbeddedRun(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+  sessionKey?: string,
+  opts?: { retainFinalizing?: boolean },
+) {
+  handle.closeDiagnostics?.();
+  ACTIVE_EMBEDDED_RUNS.delete(sessionId);
+  clearEmbeddedRunAbortability(handle, opts);
+  ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
+  clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY, sessionId, sessionKey?.trim());
+  clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, sessionId);
+}
+
 export function clearActiveEmbeddedRun(
   sessionId: string,
   handle: EmbeddedAgentQueueHandle,
@@ -1713,16 +1746,7 @@ export function clearActiveEmbeddedRun(
 ) {
   const activeHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (activeHandle === handle) {
-    handle.closeDiagnostics?.();
-    ACTIVE_EMBEDDED_RUNS.delete(sessionId);
-    clearEmbeddedRunAbortability(handle, { retainFinalizing: true });
-    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
-    clearActiveRunSessionIndex(
-      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
-      sessionId,
-      sessionKey?.trim(),
-    );
-    clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, sessionId);
+    removeActiveEmbeddedRun(sessionId, handle, sessionKey, { retainFinalizing: true });
     logSessionStateChange({
       sessionId,
       sessionKey,
@@ -1757,16 +1781,7 @@ async function forceClearEmbeddedAgentRun(
   if (handle && handle === expectedHandle) {
     forcedTerminalSettlement = EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.get(handle);
     EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(handle);
-    handle.closeDiagnostics?.();
-    ACTIVE_EMBEDDED_RUNS.delete(sessionId);
-    clearEmbeddedRunAbortability(handle);
-    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
-    clearActiveRunSessionIndex(
-      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
-      sessionId,
-      sessionKey?.trim(),
-    );
-    clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, sessionId);
+    removeActiveEmbeddedRun(sessionId, handle, sessionKey);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
     if (!handle.diagnosticOwner) {
       markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
@@ -1787,33 +1802,6 @@ async function forceClearEmbeddedAgentRun(
 
 const testing = {
   persistForceClearedEmbeddedRunTerminalState,
-  resetActiveEmbeddedRuns() {
-    for (const handle of ACTIVE_EMBEDDED_RUNS.values()) {
-      EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(handle);
-    }
-    for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
-      for (const waiter of waiters) {
-        if (waiter.timer) {
-          clearTimeout(waiter.timer);
-        }
-        waiter.resolve(!waiter.handle);
-      }
-    }
-    EMBEDDED_RUN_WAITERS.clear();
-    ACTIVE_EMBEDDED_RUNS.clear();
-    ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.clear();
-    for (const claim of EMBEDDED_RUN_COMPLETION_CLAIMS.values()) {
-      claim.settleRegistration(undefined);
-    }
-    EMBEDDED_RUN_COMPLETION_CLAIMS.clear();
-    RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.clear();
-    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
-    ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.clear();
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
-  },
 };
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

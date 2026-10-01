@@ -418,10 +418,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       env: { ...process.env, ...session.start.env, ...shellEnvironment },
       agentDir,
     });
-    return { session, appServer: withPreparedProcessEnv(trusted) };
+    return withPreparedProcessEnv(trusted);
   };
-  let resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
-  let appServer = resolvedAppServer.appServer;
+  let appServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
@@ -491,8 +490,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         modelProvider: reviewerPolicyContext.modelProvider,
         model: reviewerPolicyContext.model,
       });
-      resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
-      appServer = resolvedAppServer.appServer;
+      appServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
     }
     const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
       appServer,
@@ -524,7 +522,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       resolveFinalAppServer(
         await resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
         selection,
-      ).appServer;
+      );
     assertCurrent();
     // Host capabilities are identity-keyed; carry generation proof separately.
     return {

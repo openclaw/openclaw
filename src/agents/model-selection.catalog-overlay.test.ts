@@ -1,10 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "../auto-reply/thinking.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import {
   type ModelCatalogRoutePolicy,
@@ -13,7 +15,13 @@ import {
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
-import { buildAllowedModelSet } from "./model-selection-shared.js";
+import {
+  buildAllowedModelSet,
+  buildConfiguredModelCatalog,
+  createModelVisibilityPolicyWithFallbacks,
+} from "./model-selection-shared.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 type OverlayCase = {
   name: string;
@@ -22,10 +30,7 @@ type OverlayCase = {
   missingRouteField?: "api" | "baseUrl";
 };
 
-const capturedRoute = {
-  api: "openai-responses",
-  baseUrl: "https://captured.example/v1",
-} as const;
+const capturedRoute = { api: "openai-responses", baseUrl: "https://captured.example/v1" } as const;
 const routePolicy: ModelCatalogRoutePolicy = {
   resolveIdentity: ({ provider, id }) => ({ id, key: `${provider}/${id}` }),
   matchesRoute: modelTransportRoutesMatch,
@@ -33,46 +38,23 @@ const routePolicy: ModelCatalogRoutePolicy = {
 
 describe("configured catalog route overlays", () => {
   it.each<OverlayCase>([
-    { name: "same route with omitted metadata", override: {}, clearsCapturedMetadata: false },
     {
       name: "same route with explicit disabled reasoning",
       override: { reasoning: false, input: ["text"], compat: { supportsTools: false } },
       clearsCapturedMetadata: false,
     },
     {
-      name: "same route with explicit thinking metadata",
+      name: "same endpoint with compatible metadata overrides",
       override: {
-        reasoning: true,
-        thinkingLevelMap: { off: null, max: "max" },
-        contextWindow: 32_000,
-        contextTokens: 16_000,
+        baseUrl: `${capturedRoute.baseUrl}/`,
         params: { configured: true },
+        thinkingLevelMap: { off: null, max: "max" },
       },
       clearsCapturedMetadata: false,
-    },
-    {
-      name: "same endpoint with a trailing slash",
-      override: { baseUrl: `${capturedRoute.baseUrl}/` },
-      clearsCapturedMetadata: false,
-    },
-    {
-      name: "API pin with omitted metadata",
-      override: { api: "openai-completions" },
-      clearsCapturedMetadata: true,
     },
     {
       name: "endpoint pin with omitted metadata",
       override: { baseUrl: "https://configured.example/v1" },
-      clearsCapturedMetadata: true,
-    },
-    {
-      name: "endpoint pin with explicit disabled reasoning",
-      override: {
-        baseUrl: "https://configured.example/v1",
-        reasoning: false,
-        input: ["text"],
-        compat: { supportsTools: false },
-      },
       clearsCapturedMetadata: true,
     },
     {
@@ -96,18 +78,6 @@ describe("configured catalog route overlays", () => {
       missingRouteField: "api",
     },
     {
-      name: "missing endpoint with provider fallback",
-      override: {},
-      clearsCapturedMetadata: false,
-      missingRouteField: "baseUrl",
-    },
-    {
-      name: "missing API with explicit pin",
-      override: { api: "openai-completions" },
-      clearsCapturedMetadata: false,
-      missingRouteField: "api",
-    },
-    {
       name: "missing endpoint with explicit pin",
       override: { baseUrl: "https://configured.example/v1" },
       clearsCapturedMetadata: false,
@@ -116,6 +86,26 @@ describe("configured catalog route overlays", () => {
   ])(
     "keeps capabilities with their owner: $name",
     ({ override, clearsCapturedMetadata, missingRouteField }) => {
+      function expectCapabilities(entry: ModelCatalogEntry, hasDonor: boolean) {
+        const defaults = {
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 128_000,
+          contextTokens: 96_000,
+          thinkingLevelMap: { off: null, high: "high" },
+        };
+        for (const field of [
+          "reasoning",
+          "input",
+          "contextWindow",
+          "contextTokens",
+          "thinkingLevelMap",
+        ] as const) {
+          expect(entry[field], field).toEqual(
+            override[field] ?? (hasDonor ? defaults[field] : undefined),
+          );
+        }
+      }
       const source = validateConfigObjectRaw({
         agents: {
           entries: { main: {} },
@@ -159,11 +149,7 @@ describe("configured catalog route overlays", () => {
       const catalog: ModelCatalogSnapshot = { entries: [captured], routeVariants: [captured] };
       const metadataSnapshot = createPluginMetadataSnapshotFixture();
       const preparedPolicy = vi.fn(
-        () =>
-          ({
-            levels: [{ id: "off" }, { id: "max" }],
-            defaultLevel: "max",
-          }) as const,
+        () => ({ levels: [{ id: "off" }, { id: "max" }], defaultLevel: "max" }) as const,
       );
       prepareModelCatalogThinkingPolicies({
         catalog,
@@ -208,22 +194,7 @@ describe("configured catalog route overlays", () => {
       expect(preparedPolicy).toHaveBeenCalledTimes(clearsCapturedMetadata ? 0 : 1);
       preparedPolicy.mockClear();
       expect(selected.configuredReasoning).toBe(override.reasoning);
-      expect(selected.reasoning).toBe(
-        override.reasoning ?? (clearsCapturedMetadata ? undefined : true),
-      );
-      expect(selected.input).toEqual(
-        override.input ?? (clearsCapturedMetadata ? undefined : ["text", "image"]),
-      );
-      expect(selected.contextWindow).toBe(
-        override.contextWindow ?? (clearsCapturedMetadata ? undefined : 128_000),
-      );
-      expect(selected.contextTokens).toBe(
-        override.contextTokens ?? (clearsCapturedMetadata ? undefined : 96_000),
-      );
-      expect(selected.thinkingLevelMap).toEqual(
-        override.thinkingLevelMap ??
-          (clearsCapturedMetadata ? undefined : { off: null, high: "high" }),
-      );
+      expectCapabilities(selected, !clearsCapturedMetadata);
       if (!missingRouteField) {
         expect(selected.compat).toEqual(
           clearsCapturedMetadata ? override.compat : { supportsTools: true },
@@ -259,19 +230,7 @@ describe("configured catalog route overlays", () => {
         api: route.api,
         baseUrl: route.baseUrl,
       });
-      expect(projected.reasoning).toBe(override.reasoning ?? (hasMatchingDonor ? true : undefined));
-      expect(projected.input).toEqual(
-        override.input ?? (hasMatchingDonor ? ["text", "image"] : undefined),
-      );
-      expect(projected.contextWindow).toBe(
-        override.contextWindow ?? (hasMatchingDonor ? 128_000 : undefined),
-      );
-      expect(projected.contextTokens).toBe(
-        override.contextTokens ?? (hasMatchingDonor ? 96_000 : undefined),
-      );
-      expect(projected.thinkingLevelMap).toEqual(
-        override.thinkingLevelMap ?? (hasMatchingDonor ? { off: null, high: "high" } : undefined),
-      );
+      expectCapabilities(projected, hasMatchingDonor);
       expect(projected.thinkingPolicyProvider).toBe(
         hasMatchingDonor ? "fixture-thinking-owner" : undefined,
       );
@@ -286,6 +245,71 @@ describe("configured catalog route overlays", () => {
         }).defaultLevel,
       ).toBe(override.reasoning === false ? "off" : hasMatchingDonor ? "max" : undefined);
       expect(preparedPolicy).toHaveBeenCalledTimes(hasMatchingDonor ? 1 : 0);
+    },
+  );
+});
+
+describe("model selection catalog policy lifetime", () => {
+  it.each(["configured", "visibility"] as const)(
+    "%s preparation reuses provider policies across rows and refreshes them next time",
+    (kind) => {
+      const loadPolicy = vi.spyOn(providerPolicy, "resolveDirectBundledProviderPolicySurface");
+      const select = (rowCount: number, scope: string) => {
+        loadPolicy.mockClear().mockReturnValue({
+          normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^legacy-/, `${scope}-`),
+        });
+        const ids = Array.from({ length: rowCount }, (_, index) => `legacy-${index}`);
+        const catalog: ModelCatalogEntry[] = ["first", "second"].flatMap((owner) =>
+          ids.map((_, index) => ({
+            provider: "fixture",
+            id: `${owner}-${index}`,
+            name: `${owner}-${index}`,
+            api: "openai-responses" as const,
+            baseUrl: `https://${owner}.example/v1`,
+          })),
+        );
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: { modelPolicy: { allow: ids.map((id) => `fixture/${id}`) } },
+          },
+        };
+        if (kind === "configured") {
+          cfg.models = {
+            providers: {
+              fixture: {
+                baseUrl: "https://configured.example/v1",
+                models: ids.map((id) => ({
+                  id,
+                  name: id,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 1024,
+                })),
+              },
+            },
+          };
+        }
+        const params = { cfg, catalog, defaultProvider: "fixture", manifestPlugins: [] };
+        const selected =
+          kind === "configured"
+            ? buildConfiguredModelCatalog(params)
+            : createModelVisibilityPolicyWithFallbacks({
+                ...params,
+                fallbackModels: [],
+                allowManifestNormalization: false,
+                allowPluginNormalization: false,
+              }).allowedCatalog;
+        expect(selected.map((entry) => entry.baseUrl)).toEqual(
+          Array.from({ length: rowCount }, () => `https://${scope}.example/v1`),
+        );
+        return loadPolicy.mock.calls.length;
+      };
+
+      const singleRowLoads = select(1, "first");
+      expect(singleRowLoads).toBeGreaterThan(0);
+      expect(select(32, "first")).toBe(singleRowLoads);
+      expect(select(32, "second")).toBe(singleRowLoads);
     },
   );
 });

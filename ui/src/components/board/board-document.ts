@@ -5,7 +5,6 @@ import {
 } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { icons } from "../../components/icons.ts";
@@ -22,6 +21,7 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import "../../styles/board-document.css";
@@ -37,12 +37,14 @@ type DashboardDocumentState =
 
 type ProviderBinding = {
   client: NonNullable<ApplicationGatewaySnapshot["client"]>;
+  sessions: Pick<SessionCapability, "describe">;
   sessionKey: string;
   capabilityKey: string;
 };
 
 export class OpenClawBoardDocument extends OpenClawLightDomElement {
   @property({ attribute: false }) gatewaySnapshot?: ApplicationGatewaySnapshot;
+  @property({ attribute: false }) sessions!: Pick<SessionCapability, "describe">;
   @property({ attribute: false }) sessionKey: string | null = null;
   @property({ attribute: false }) preparedSession: BoardGetParams | null = null;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
@@ -56,9 +58,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   private provider: BoardProvider | null = null;
   private providerLease: BoardProviderLease | null = null;
   private binding: (ProviderBinding & { session: BoardGetParams }) | null = null;
-  private unsubscribeSnapshot: (() => void) | null = null;
-  private unsubscribeLoadError: (() => void) | null = null;
-  private unsubscribeEvents: (() => void) | null = null;
+  private providerSubscriptions: (() => void)[] = [];
   private bindingGeneration = 0;
 
   override connectedCallback(): void {
@@ -76,18 +76,14 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     if (
       changed.has("sessionKey") ||
       changed.has("preparedSession") ||
+      changed.has("sessions") ||
       changed.has("gatewaySnapshot")
     ) {
       this.synchronizeProvider();
     }
   }
 
-  private providerCapabilities(snapshot: ApplicationGatewaySnapshot): {
-    canPinWidgets: boolean;
-    canPinMcpApps: boolean;
-    canMutate: boolean;
-    canGrant: boolean;
-  } {
+  private providerCapabilities(snapshot: ApplicationGatewaySnapshot) {
     const canMutate = hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
     return {
       canMutate,
@@ -129,6 +125,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     const capabilityKey = JSON.stringify(capabilities);
     if (
       this.binding?.client === client &&
+      this.binding.sessions === this.sessions &&
       this.binding.sessionKey === sessionKey &&
       (!this.preparedSession || this.binding.session.agentId === this.preparedSession.agentId) &&
       this.binding.capabilityKey === capabilityKey
@@ -140,7 +137,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     this.documentState = "loading";
     const generation = this.bindingGeneration;
     void this.bindProvider(
-      { client, sessionKey, capabilityKey },
+      { client, sessions: this.sessions, sessionKey, capabilityKey },
       capabilities,
       generation,
       this.preparedSession,
@@ -156,10 +153,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     try {
       const described = preparedSession
         ? null
-        : await binding.client.request<{ session?: GatewaySessionRow | null }>(
-            "sessions.describe",
-            { key: binding.sessionKey },
-          );
+        : await binding.sessions.describe({ key: binding.sessionKey }, { client: binding.client });
       if (generation !== this.bindingGeneration) {
         return;
       }
@@ -188,21 +182,22 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       this.provider = provider;
       this.providerLease = lease;
       this.binding = { ...binding, session };
-      this.unsubscribeSnapshot = provider.snapshot$.subscribe(() =>
-        this.reconcileProvider(provider),
+      this.providerSubscriptions.push(
+        provider.snapshot$.subscribe(() => this.reconcileProvider(provider)),
       );
-      this.unsubscribeLoadError = provider.loadError$.subscribe(() =>
-        this.reconcileProvider(provider),
+      this.providerSubscriptions.push(
+        provider.loadError$.subscribe(() => this.reconcileProvider(provider)),
       );
-      this.unsubscribeEvents = provider.events.subscribe((event) => {
-        const command = event.command;
-        if (command.kind !== "focus_tab") {
-          return;
-        }
-        if (provider.snapshot$.value.tabs.some((tab) => tab.tabId === command.tabId)) {
-          this.activeTabId = command.tabId;
-        }
-      });
+      this.providerSubscriptions.push(
+        provider.events.subscribe(({ command }) => {
+          if (
+            command.kind === "focus_tab" &&
+            provider.snapshot$.value.tabs.some((tab) => tab.tabId === command.tabId)
+          ) {
+            this.activeTabId = command.tabId;
+          }
+        }),
+      );
       this.reconcileProvider(provider);
     } catch (error) {
       if (generation === this.bindingGeneration) {
@@ -245,12 +240,10 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
 
   private releaseProvider(): void {
     this.bindingGeneration += 1;
-    this.unsubscribeSnapshot?.();
-    this.unsubscribeLoadError?.();
-    this.unsubscribeEvents?.();
-    this.unsubscribeSnapshot = null;
-    this.unsubscribeLoadError = null;
-    this.unsubscribeEvents = null;
+    for (const unsubscribe of this.providerSubscriptions) {
+      unsubscribe();
+    }
+    this.providerSubscriptions = [];
     this.providerLease?.release();
     this.provider = null;
     this.providerLease = null;

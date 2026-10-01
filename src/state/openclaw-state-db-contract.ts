@@ -4,6 +4,7 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
+// v20 fences possibly delivered cron completions across restart recovery.
 // v19 preserves original channel-owner authorization across recovery.
 // v18 binds shared GitHub publication to its original requesting authority.
 // v17 records one-use prepared worker capacity and node workspace ownership.
@@ -19,7 +20,7 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 19;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 20;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
@@ -43,6 +44,7 @@ export const FIRST_USE_STATE_TABLES = [
   "mcp_oauth_pending_authorizations",
   "node_worker_launch_containers",
   "node_worker_launch_cleanup",
+  "node_worker_launch_process_scopes",
   "node_worker_launches",
   "node_worker_prepared_workspaces",
   "node_worker_turns",
@@ -107,7 +109,6 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
-export const STATE_WAL_COORDINATOR_WAIT_MS = 350;
 /** User-facing guide for schema refusals; lives here so error sites avoid import cycles. */
 export const OPENCLAW_DATABASE_SCHEMA_DOCS_URL =
   "https://docs.openclaw.ai/reference/database-schemas";

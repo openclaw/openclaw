@@ -141,7 +141,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await page.locator(".chat-tool-msg-summary", { hasText: "Exec" }).waitFor();
+      await page
+        .locator(".chat-tool-msg-summary")
+        .getByRole("img", { name: "exec", exact: true })
+        .waitFor();
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
       let agentSequence = 0;
       const commentaryText = "The active commentary stays visible.";
@@ -785,8 +788,10 @@ suite.define(() => {
           timestamp: Date.now(),
         },
       ]);
-      const sessionListsBeforeTerminal = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const rosterMatch = { includeGlobal: true };
+      const sessionListsBeforeTerminal = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", {
         activeRunIds: [activeRunId],
         hasActiveRun: true,
@@ -797,7 +802,7 @@ suite.define(() => {
         updatedAt: Date.now(),
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeTerminal);
       const terminalSessions = chatSessionListResponse([
         {

@@ -19,7 +19,7 @@ import {
   pageOwnerLifecycleReceiptsInDatabase,
   summarizeOwnerLifecycleReceiptsInDatabase,
   type OwnerLifecycleCursor,
-  type OwnerLifecycleStage,
+  type OwnerLifecycleSchemaFacts,
 } from "./execution-owner-lifecycle-receipts.js";
 import {
   pageMessageDeliveryReceiptsForRunInDatabase,
@@ -34,7 +34,7 @@ type ProvenancedDecisionReceipt = {
 
 const MAX_AGGREGATE_MISSING_EVIDENCE = 16;
 const MISSING_EVIDENCE_TRUNCATED = "decision.missing_evidence_truncated";
-type DecisionStage = "approval" | "message" | "generic" | OwnerLifecycleStage;
+type DecisionStage = "approval" | "message" | "generic" | "cron";
 type DecisionCursor =
   | {
       stage: DecisionStage;
@@ -42,7 +42,8 @@ type DecisionCursor =
     }
   | {
       offset: number;
-    };
+    }
+  | { retired: true };
 
 export class ExecutionDecisionCursorError extends Error {
   constructor(message = "invalid execution decision cursor") {
@@ -68,6 +69,10 @@ function parseDecisionCursor(value: string | undefined): DecisionCursor | undefi
   if (!Number.isSafeInteger(occurredAt) || !Number.isSafeInteger(rowId)) {
     return null;
   }
+  // Retired source cursors stay syntactically valid, but never alias a retained owner.
+  if (match[1] === "t" || match[1] === "f") {
+    return { retired: true };
+  }
   const stage =
     match[1] === "a"
       ? "approval"
@@ -75,11 +80,7 @@ function parseDecisionCursor(value: string | undefined): DecisionCursor | undefi
         ? "message"
         : match[1] === "g"
           ? "generic"
-          : match[1] === "c"
-            ? "cron"
-            : match[1] === "t"
-              ? "task"
-              : "flow";
+          : "cron";
   return {
     stage,
     ...(occurredAt === 0 && rowId === 0 ? {} : { after: { occurredAt, rowId } }),
@@ -99,8 +100,6 @@ function formatDecisionCursor(
     message: "m",
     generic: "g",
     cron: "c",
-    task: "t",
-    flow: "f",
   }[stage];
   return `${prefix}:${cursor?.occurredAt ?? 0}:${cursor?.rowId ?? 0}`;
 }
@@ -213,6 +212,7 @@ function projectDecisionDisplay({
 export function presentExecutionDecisionReceiptsInDatabase(
   db: DatabaseSync,
   params: {
+    schema: OwnerLifecycleSchemaFacts;
     context: ExecutionIdentityContextV1;
     decisionCursor?: string;
     decisionLimit?: number;
@@ -222,6 +222,11 @@ export function presentExecutionDecisionReceiptsInDatabase(
   const cursor = parseDecisionCursor(params.decisionCursor);
   if (cursor === null) {
     throw new ExecutionDecisionCursorError();
+  }
+  if (cursor && "retired" in cursor) {
+    throw new ExecutionDecisionCursorError(
+      "decision cursor is no longer retained; restart inspection without --cursor",
+    );
   }
   const decisionLimit = params.decisionLimit ?? 50;
   const now = params.now;
@@ -245,15 +250,7 @@ export function presentExecutionDecisionReceiptsInDatabase(
     now,
   });
   const cronSummary = summarizeOwnerLifecycleReceiptsInDatabase(db, {
-    stage: "cron",
-    context: params.context,
-  });
-  const taskSummary = summarizeOwnerLifecycleReceiptsInDatabase(db, {
-    stage: "task",
-    context: params.context,
-  });
-  const flowSummary = summarizeOwnerLifecycleReceiptsInDatabase(db, {
-    stage: "flow",
+    schema: params.schema,
     context: params.context,
   });
   const stages: Array<{
@@ -331,20 +328,12 @@ export function presentExecutionDecisionReceiptsInDatabase(
         };
       },
     },
-    ...(["cron", "task", "flow"] as const).map((stage) => ({
-      stage,
-      count: { cron: cronSummary, task: taskSummary, flow: flowSummary }[stage].count,
-      page: ({
-        after,
-        offset,
-        limit,
-      }: {
-        after?: OwnerLifecycleCursor;
-        offset?: number;
-        limit: number;
-      }) => {
+    {
+      stage: "cron",
+      count: cronSummary.count,
+      page: ({ after, offset, limit }) => {
         const page = pageOwnerLifecycleReceiptsInDatabase(db, {
-          stage,
+          schema: params.schema,
           context: params.context,
           after,
           offset,
@@ -353,13 +342,13 @@ export function presentExecutionDecisionReceiptsInDatabase(
         return {
           entries: page.entries.map((entry) => ({
             receipt: entry.receipt,
-            provenance: { state: "verified" as const, producer: entry.displayProducer },
+            provenance: { state: "verified", producer: entry.displayProducer },
             selectorId: entry.selectorId,
           })),
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
       },
-    })),
+    },
   ];
   const decisions: ProvenancedDecisionReceipt[] = [];
   let remainingLimit = decisionLimit;
@@ -431,13 +420,7 @@ export function presentExecutionDecisionReceiptsInDatabase(
     }
   }
   const ownerCoverage = new Set<DecisionReceiptV1["enforcement"]["coverageState"]>(
-    [
-      approvalSummary.coverageState,
-      messageSummary.coverageState,
-      cronSummary.coverageState,
-      taskSummary.coverageState,
-      flowSummary.coverageState,
-    ].filter(
+    [approvalSummary.coverageState, messageSummary.coverageState, cronSummary.coverageState].filter(
       (coverageState): coverageState is NonNullable<typeof coverageState> =>
         coverageState !== undefined,
     ),
@@ -448,8 +431,6 @@ export function presentExecutionDecisionReceiptsInDatabase(
     ...approvalSummary.missingEvidence,
     ...messageSummary.missingEvidence,
     ...cronSummary.missingEvidence,
-    ...taskSummary.missingEvidence,
-    ...flowSummary.missingEvidence,
     ...(hasUnverifiedGenericDecisions ? ["decision.display_provenance"] : []),
   ]);
   const coverageState = boundedEvidence.truncated

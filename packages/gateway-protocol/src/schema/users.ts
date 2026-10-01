@@ -100,6 +100,18 @@ export const UsersLinkEmailParamsSchema = closedObject({
 });
 export const UsersLinkEmailResultSchema = closedObject({ profile: UserProfileSchema });
 
+export const UsersMergeParamsSchema = closedObject({
+  sourceProfileId: UserProfileIdSchema,
+  targetProfileId: UserProfileIdSchema,
+});
+export const UsersMergeResultSchema = closedObject({
+  profile: UserProfileSchema,
+  movedAliasKinds: Type.Array(
+    Type.Union([Type.Literal("email"), Type.Literal("provider"), Type.Literal("channel")]),
+    { maxItems: 3, uniqueItems: true },
+  ),
+});
+
 const ChannelIdentityPartSchema = Type.String({
   minLength: 1,
   maxLength: 512,
@@ -304,6 +316,8 @@ export type UsersSelfParams = Static<typeof UsersSelfParamsSchema>;
 export type UsersSelfResult = Static<typeof UsersSelfResultSchema>;
 export type UsersLinkEmailParams = Static<typeof UsersLinkEmailParamsSchema>;
 export type UsersLinkEmailResult = Static<typeof UsersLinkEmailResultSchema>;
+export type UsersMergeParams = Static<typeof UsersMergeParamsSchema>;
+export type UsersMergeResult = Static<typeof UsersMergeResultSchema>;
 export type UsersLinkChannelIdentityParams = Static<typeof UsersLinkChannelIdentityParamsSchema>;
 export type UsersLinkChannelIdentityResult = Static<typeof UsersLinkChannelIdentityResultSchema>;
 export type UsersUnlinkChannelIdentityParams = Static<

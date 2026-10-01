@@ -17,6 +17,36 @@ const ACTIVATION_HINT_METADATA = {
 
 export const PLUGIN_COMPAT_RECORDS = [
   {
+    code: "channel-webhook-listener-config-inputs",
+    status: "deprecated",
+    owner: "config",
+    introduced: "2026-09-26",
+    deprecated: "2026-09-26",
+    warningStarts: "2026-09-26",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Use legacyWebhook for canonical listener config. Doctor migrates stored webhookPort/webhookHost and webhook.port inputs; deprecated optional TypeScript properties preserve config producer source compatibility until an approved SDK major removal.",
+    docsPath: "/gateway/doctor/config-migrations#channel-webhook-listeners",
+    surfaces: [
+      "TelegramAccountConfig.webhookPort",
+      "TelegramAccountConfig.webhookHost",
+      "FeishuConfig.webhookPort",
+      "FeishuConfig.webhookHost",
+      "FeishuAccountConfig.webhookPort",
+      "FeishuAccountConfig.webhookHost",
+      "MSTeamsWebhookConfig.port",
+      "NextcloudTalkAccountConfig.webhookPort",
+      "NextcloudTalkAccountConfig.webhookHost",
+    ],
+    diagnostics: ["TypeScript @deprecated annotations and plugin-owned Doctor migration"],
+    tests: [
+      "extensions/telegram/src/doctor.test.ts",
+      "extensions/feishu/src/doctor-contract.test.ts",
+      "extensions/msteams/config-doctor-api.test.ts",
+      "extensions/nextcloud-talk/src/doctor-contract.test.ts",
+    ],
+  },
+  {
     code: "conversation-binding-sync-mutations",
     status: "deprecated",
     owner: "channel",
@@ -75,33 +105,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     ],
     releaseNote:
       "Node-host plugins can await managed workspace acquisition while existing synchronous callers retain their immediate lease contract.",
-  },
-  {
-    code: "plugin-tasks-sync-reads",
-    status: "deprecated",
-    owner: "sdk",
-    introduced: "2026-09-12",
-    deprecated: "2026-09-12",
-    warningStarts: "2026-09-12",
-    removalGate: "next-plugin-sdk-major",
-    replacement:
-      "Await the 14 read methods on api.runtime.tasks.async.runs, flows, and managedFlows, plus createManaged, tryCreateManaged, setWaiting, resume, finish, fail, requestCancel, and runTask on api.runtime.tasks.async.managedFlows. Reconcile outcome-unknown errors before retrying creation or child linkage. Retain synchronous methods until supported external-plugin migration and explicit breaking-release approval; native cancellation remains on the existing surface.",
-    docsPath: "/plugins/sdk-runtime/background-work",
-    surfaces: [
-      "api.runtime.tasks.runs get/list/findLatest/resolve",
-      "api.runtime.tasks.flows get/list/findLatest/resolve/getTaskSummary",
-      "api.runtime.tasks.managedFlows get/list/findLatest/resolve/getTaskSummary",
-      "api.runtime.tasks.managedFlows createManaged/tryCreateManaged/setWaiting/resume/finish/fail/requestCancel/runTask",
-    ],
-    diagnostics: [
-      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
-    ],
-    tests: [
-      "src/infra/sqlite-worker-task-runtime.test.ts",
-      "src/infra/sqlite-worker-managed-task-link.test.ts",
-    ],
-    releaseNote:
-      "Plugins can opt into worker-backed task and flow reads plus managed-flow writes and child linkage through tasks.async while synchronous methods remain available for external compatibility. Cold registry and configuration preparation remains synchronous.",
   },
   {
     code: "plugin-state-sync-keyed-store",
@@ -245,31 +248,32 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "deprecated-session-store-beta5-api",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-05-21",
     deprecated: "2026-07-12",
     warningStarts: "2026-07-12",
-    removeAfter: "2026-10-12",
     replacement:
-      "`getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations",
-    docsPath: "/plugins/sdk-migration#removed-session-and-transcript-file-apis",
+      "Use `getSessionEntry(...)` and `listSessionEntries(...)` for reads; `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` for row mutations; and session identity with `session-transcript-runtime` for active transcripts. The supported-plugin cutoff excludes v2026.7.1-beta.5 and other packages importing the retired bridge.",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis",
     surfaces: [
       "openclaw/plugin-sdk/session-store-runtime loadSessionStore",
       "openclaw/plugin-sdk/session-store-runtime updateSessionStore",
       "openclaw/plugin-sdk/session-store-runtime resolveSessionFilePath",
       "openclaw/plugin-sdk/session-store-runtime resolveSessionStoreEntry",
+      "openclaw/plugin-sdk/session-store-runtime LoadSessionStoreOptions",
+      "openclaw/plugin-sdk/session-store-runtime UpdateSessionStoreOptions",
       "openclaw package root loadSessionStore",
       "openclaw package root saveSessionStore",
     ],
-    diagnostics: ["plugin SDK deprecation"],
+    diagnostics: ["plugin compatibility registry and migration guide"],
     tests: [
       "src/plugin-sdk/session-store-runtime.test.ts",
       "src/index.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "The beta.5 session-store import set and package-root whole-store aliases remain available while official plugins and package consumers migrate to row-level session access.",
+      "The September 30, 2026 approved cutoff retired the beta.5 session-store bridge, its option types, and package-root loadSessionStore/saveSessionStore aliases ahead of the former October 12 window. Plugins must use scoped row APIs and identity-backed transcript APIs; the session-store-runtime subpath and resolveStorePath remain available.",
   },
   {
     code: "plugin-sdk-session-agent-resolution-aliases",
@@ -344,10 +348,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/hooks",
     surfaces: ["before_tool_call block result", "before_tool_call approval result"],
     diagnostics: ["hook runner contract probe"],
-    tests: [
-      "src/plugins/hooks.security.test.ts",
-      "src/agents/agent-tools.before-tool-call.e2e.test.ts",
-    ],
+    tests: ["src/agents/agent-tools.before-tool-call.e2e.test.ts"],
   },
   {
     code: "hook.llm-observer.privacy-payload",

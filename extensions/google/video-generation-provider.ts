@@ -1,4 +1,3 @@
-// Google provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -17,8 +16,8 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
-import { parseGeminiAuth, resolveGoogleGenerativeAiApiOrigin } from "./api.js";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
+import { parseGeminiAuth } from "./gemini-auth.js";
 import {
   createGoogleVideoGenerationProviderMetadata,
   DEFAULT_GOOGLE_VIDEO_MODEL,
@@ -29,6 +28,7 @@ import {
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
+import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;

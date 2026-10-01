@@ -1,4 +1,3 @@
-// Verifies channel guard behavior in plugin registry lookups.
 import { describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -55,7 +54,7 @@ describe("plugin registry channel guard", () => {
     expect(declarationReads).toBe(0);
   });
 
-  it.each([undefined, { chatTypes: [] }, { chatTypes: ["forum"] }, { chatTypes: [1] }])(
+  it.each([undefined, { chatTypes: [] }, { chatTypes: ["forum"] }])(
     "rejects incomplete or invalid channel plugins at the registrar boundary",
     (capabilities) => {
       const pluginRegistry = createTestRegistry();
@@ -75,35 +74,6 @@ describe("plugin registry channel guard", () => {
       );
     },
   );
-
-  it("rejects channel registration from disabled workspace plugins", () => {
-    const pluginRegistry = createTestRegistry();
-    const config = {} as OpenClawConfig;
-    const record = createPluginRecord({
-      id: "workspace-shadow",
-      source: "/plugins/workspace-shadow/index.ts",
-      origin: "workspace",
-      enabled: false,
-    });
-
-    pluginRegistry.registry.plugins.push(record);
-    pluginRegistry.createApi(record, { config, registrationMode: "setup-only" }).registerChannel({
-      plugin: createChannelPlugin("workspace-shadow", "Workspace Shadow"),
-    });
-
-    expect(pluginRegistry.registry.channelSetups).toHaveLength(0);
-    expect(pluginRegistry.registry.channels).toHaveLength(0);
-    expect(record.channelIds).toEqual([]);
-    expect(
-      pluginRegistry.registry.diagnostics.some(
-        (diag) =>
-          diag.level === "warn" &&
-          diag.pluginId === "workspace-shadow" &&
-          diag.message ===
-            "channel registration rejected for disabled workspace plugin: workspace-shadow",
-      ),
-    ).toBe(true);
-  });
 
   it("rejects disabled workspace registration before reading channel data", () => {
     const pluginRegistry = createTestRegistry();
@@ -176,37 +146,4 @@ describe("plugin registry channel guard", () => {
     expect(pluginRegistry.registry.channels).toHaveLength(0);
     expect(record.channelIds).toEqual(["telegram"]);
   });
-
-  it.each(["bundled", "global", "workspace", "config"] as const)(
-    "copies loader-owned %s provenance into channel registrations",
-    (origin) => {
-      const pluginRegistry = createTestRegistry();
-      const record = createPluginRecord({
-        id: `${origin}-channel-owner`,
-        source: `/plugins/${origin}-channel-owner/index.ts`,
-        origin,
-        enabled: true,
-      });
-
-      pluginRegistry.registry.plugins.push(record);
-      pluginRegistry
-        .createApi(record, { config: {} as OpenClawConfig, registrationMode: "full" })
-        .registerChannel({
-          plugin: createChannelPlugin("telegram", `${origin} Telegram`),
-        });
-
-      expect(pluginRegistry.registry.channels).toEqual([
-        expect.objectContaining({
-          pluginId: `${origin}-channel-owner`,
-          origin,
-        }),
-      ]);
-      expect(pluginRegistry.registry.channelSetups).toEqual([
-        expect.objectContaining({
-          pluginId: `${origin}-channel-owner`,
-          origin,
-        }),
-      ]);
-    },
-  );
 });

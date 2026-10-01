@@ -69,6 +69,7 @@ describe("channel ownership startup", () => {
     const runtimeConfig = JSON.parse(await readFile(state.configPath, "utf8")) as OpenClawConfig;
     const log = createSubsystemLogger("gateway/channel-ownership-test");
     manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => runtimeConfig,
       getPluginRegistry: () => registry,
       channelLogs: { discord: log },

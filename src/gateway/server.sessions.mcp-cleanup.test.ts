@@ -4,6 +4,10 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { startCatalogRecoveryMcpServer } from "../agents/agent-bundle-mcp-catalog-recovery.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -38,17 +42,17 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
       import("./server-methods/sessions-mutations.js"),
       import("./server-methods/sessions-delete.js"),
     ]);
-    const { acquireSessionMcpRuntime, releaseSessionMcpRuntime, retireSessionMcpRuntime } =
+    const { acquireSessionMcpRuntime, retireSessionMcpRuntime } =
       await import("../agents/agent-bundle-mcp-manager-api.js");
+    const { releaseSessionMcpRuntime } =
+      await import("../agents/agent-bundle-mcp-manager-cleanup.js");
     const { createSessionMcpRuntimeManager } =
       await import("../agents/agent-bundle-mcp-manager.js");
     const { SESSION_MCP_RUNTIME_MANAGER_KEY } =
       await import("../agents/agent-bundle-mcp-runtime-shared.js");
-    let nowMs = Date.now();
-    const manager = createSessionMcpRuntimeManager({
-      now: () => nowMs,
-      enableIdleSweepTimer: false,
-    });
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const manager = createSessionMcpRuntimeManager({ scheduler });
     const terminate = createDeferred();
     const server = await startCatalogRecoveryMcpServer("idle-session-cleanup", {
       holdTermination: terminate.promise,
@@ -95,7 +99,7 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
       } finally {
         await releaseSessionMcpRuntime(lease);
       }
-      nowMs = lease.runtime.lastUsedAt + 1;
+      clock.setTime(lease.runtime.lastUsedAt + 1);
       sweep = manager.sweepIdleRuntimes();
       await withTestTimeout(server.terminationStarted, 2_000, "MCP idle disposal did not start");
       expect(manager.peekSession({ sessionId })).toBeUndefined();
@@ -131,7 +135,11 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
         await manager.disposeAll();
       } finally {
         try {
-          await server.close();
+          try {
+            await server.close();
+          } finally {
+            await scheduler.stop();
+          }
         } finally {
           if (previousManager) {
             Object.defineProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, previousManager);

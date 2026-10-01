@@ -10,8 +10,10 @@ import {
   setPluginToolMeta,
   type PluginToolMcpMeta,
 } from "../plugins/tool-metadata.js";
+import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
   buildSafeToolName,
+  compareMcpCatalogTools,
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
@@ -126,10 +128,7 @@ function toJsonAgentToolResult(params: {
 }
 
 function requireStringArg(input: unknown, key: string): string {
-  if (!isRecord(input)) {
-    throw new Error(`${key} is required`);
-  }
-  const value = input[key];
+  const value = isRecord(input) ? input[key] : undefined;
   if (typeof value !== "string") {
     throw new Error(`${key} is required`);
   }
@@ -157,13 +156,10 @@ function serverAllowsUtilityTool(
   operation: string,
   sessionDeniedOnly: boolean,
 ): boolean {
-  // Two disjoint passes share this gate: the executable pass (sessionDeniedOnly=false)
-  // admits only non-denied utilities; the denied-inventory pass admits only denied ones.
-  // Membership must EQUAL the pass selector, hence the != rejection.
-  if ((server.deniedToolNames?.includes(operation) === true) !== sessionDeniedOnly) {
-    return false;
-  }
-  return isMcpToolAllowed(server.toolFilter, operation);
+  return (
+    (server.deniedToolNames?.includes(operation) === true) === sessionDeniedOnly &&
+    isMcpToolAllowed(server.toolFilter, operation)
+  );
 }
 
 /**
@@ -207,17 +203,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
     : sessionDeniedOnly
       ? (params.catalog.sessionDeniedTools ?? [])
       : params.catalog.tools;
-  const sortedCatalogTools = [...catalogTools].toSorted((a, b) => {
-    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
-    if (serverOrder !== 0) {
-      return serverOrder;
-    }
-    const toolOrder = a.toolName.localeCompare(b.toolName);
-    if (toolOrder !== 0) {
-      return toolOrder;
-    }
-    return a.serverName.localeCompare(b.serverName);
-  });
+  const sortedCatalogTools = catalogTools.toSorted(compareMcpCatalogTools);
 
   for (const tool of sortedCatalogTools) {
     const appOnly = isAppOnlyTool(tool);
@@ -407,8 +393,6 @@ export async function materializeBundleMcpToolsForRun(params: {
     disposal ??= (async () => {
       // Failure to release the lease cannot strand this view's private runtime.
       try {
-        // Keep lifecycle imports out of read-only tool metadata loading.
-        const { releaseSessionMcpRuntime } = await import("./agent-bundle-mcp-manager-api.js");
         await releaseSessionMcpRuntime({ runtime, releaseLease });
       } finally {
         await params.disposeRuntime?.();

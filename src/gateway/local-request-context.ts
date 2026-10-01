@@ -30,6 +30,7 @@ import {
   readPreparedGatewayModelCatalogBatch,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "./server-model-catalog.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
@@ -41,33 +42,31 @@ type LocalGatewayRequestContextParams = {
   getRuntimeConfig: () => OpenClawConfig;
 };
 
-function cronUnavailable(): never {
+async function cronUnavailable(): Promise<never> {
   throw new Error("Cron is unavailable in local embedded agent gateway context.");
 }
 
 const unavailableCron: GatewayCronServiceContract = {
-  start: async () => {
-    cronUnavailable();
-  },
+  start: cronUnavailable,
   stop: () => {},
   pauseScheduling: () => {},
   resumeScheduling: () => {},
-  status: async () => cronUnavailable(),
-  list: async () => cronUnavailable(),
-  listPage: async () => cronUnavailable(),
-  add: async () => cronUnavailable(),
-  update: async () => cronUnavailable(),
-  updateWithPrecondition: async () => cronUnavailable(),
-  remove: async () => cronUnavailable(),
-  removeStaleJobFamily: async () => cronUnavailable(),
-  removeAgentJobsTransactional: async () => cronUnavailable(),
-  quiesceJobs: async () => cronUnavailable(),
-  run: async () => cronUnavailable(),
-  enqueueRun: async () => cronUnavailable(),
+  status: cronUnavailable,
+  list: cronUnavailable,
+  listPage: cronUnavailable,
+  add: cronUnavailable,
+  update: cronUnavailable,
+  updateWithPrecondition: cronUnavailable,
+  remove: cronUnavailable,
+  removeStaleJobFamily: cronUnavailable,
+  removeAgentJobsTransactional: cronUnavailable,
+  quiesceJobs: cronUnavailable,
+  run: cronUnavailable,
+  enqueueRun: cronUnavailable,
   getJob: () => undefined,
   readJob: async () => undefined,
-  readScratch: async (): Promise<never> => cronUnavailable(),
-  writeScratch: async () => cronUnavailable(),
+  readScratch: cronUnavailable,
+  writeScratch: cronUnavailable,
   getDefaultAgentId: () => undefined,
   wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
 };
@@ -108,6 +107,8 @@ function createLocalGatewayRequestContext(
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    resolveSessionRequestTargets: (request) =>
+      resolveSessionRequestTargets({ ...request, context }),
     // Embedded calls have no running Gateway application owner.
     isConfigReloadSettled: () => false,
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
@@ -131,6 +132,9 @@ function createLocalGatewayRequestContext(
     logHealth: { error: (message) => logGateway.error(message) },
     logGateway,
     publishPresence: () => {},
+    getPresenceSnapshot: () => {
+      throw new Error("Presence requires a running Gateway connection.");
+    },
     broadcast: () => {},
     broadcastToConnIds: () => {},
     nodeSendToSession: () => {},
@@ -152,6 +156,7 @@ function createLocalGatewayRequestContext(
     unsubscribeSessionEvents: (connId) => {
       sessionEvents.delete(connId);
     },
+    forgetConnectionAncestors: () => {},
     subscribeSessionMessageEvents: () => undefined,
     unsubscribeSessionMessageEvents: () => {},
     unsubscribeAllSessionEvents: (connId) => {

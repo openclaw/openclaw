@@ -1,6 +1,7 @@
 /**
  * Projects provider assistant messages into ordered visible stream state.
  */
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -38,28 +39,18 @@ export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
-const RESPONSES_API_IDS = new Set([
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "azure-openai-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-  "openclaw-azure-openai-responses-transport",
-]);
-
 export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
-  return RESPONSES_API_IDS.has(api);
+  return OPENAI_RESPONSES_APIS.has(normalizeOptionalString(message.api) ?? "");
 }
 
 export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  const api = normalizeOptionalString(message.api) ?? "";
   return api === "anthropic-messages";
 }
 
@@ -67,7 +58,7 @@ export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | unde
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  const api = normalizeOptionalString(message.api) ?? "";
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
 }
 
@@ -113,12 +104,7 @@ export function resolveAssistantStreamItemId(params: {
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const contentIndex =
-    typeof params.contentIndex === "number" &&
-    Number.isInteger(params.contentIndex) &&
-    params.contentIndex >= 0
-      ? params.contentIndex
-      : undefined;
+  const contentIndex = resolveAssistantStreamContentIndex(params.contentIndex);
   const indexedBlock = contentIndex !== undefined ? content[contentIndex] : undefined;
   const indexedRecord =
     indexedBlock && typeof indexedBlock === "object"
@@ -264,7 +250,9 @@ export function shouldSuppressDeterministicApprovalOutput(
   return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
 }
 
-export function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): boolean {
+export function hasMessageToolOnlySourceDelivery(
+  ctx: Pick<EmbeddedAgentSubscribeContext, "params" | "state">,
+): boolean {
   return (
     ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
     (ctx.state.messageToolOnlySourceReplyDelivered ||

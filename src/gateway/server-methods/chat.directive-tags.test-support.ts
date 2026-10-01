@@ -4,13 +4,20 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect } from "vitest";
+import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   loadExactSessionEntryCandidates,
   replaceSessionEntry,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
-import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import {
+  retainGatewayPluginMetadata,
+  type GatewayPluginMetadataOwner,
+} from "../../plugins/plugin-metadata-lifecycle.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
@@ -18,6 +25,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 
 type ChatDirectiveSessionState = {
@@ -47,6 +55,7 @@ export function createChatDirectiveSuiteResources() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
   const databasePath = path.join(root, "openclaw-agent.sqlite");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  let metadataOwner: GatewayPluginMetadataOwner | undefined;
   return {
     root,
     databasePath,
@@ -54,6 +63,13 @@ export function createChatDirectiveSuiteResources() {
     // The caller retains cleanup ownership before opening can fail.
     open() {
       openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
+      // Session cases share the installed inventory through per-case runtime resets.
+      metadataOwner = retainGatewayPluginMetadata(createTestGatewayScheduler());
+      const snapshot = metadataOwner.runBootstrap(() =>
+        loadPluginMetadataSnapshot({ config: {}, allowCurrent: false }),
+      );
+      metadataOwner.publish(snapshot);
+      setGatewayPluginMetadataSnapshot(snapshot, { config: {} });
     },
     loadSessionEntry(
       state: ChatDirectiveSessionState,
@@ -105,11 +121,15 @@ export function createChatDirectiveSuiteResources() {
       };
     },
     async close() {
-      await drainAgentDatabaseResources({ path: databasePath, agentId: "main" }, async () =>
-        disposeOpenClawAgentDatabaseByPath(databasePath, { env }),
-      );
-      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
-      fs.rmSync(root, { recursive: true, force: true });
+      try {
+        await drainAgentDatabaseResources({ path: databasePath, agentId: "main" }, async () =>
+          disposeOpenClawAgentDatabaseByPath(databasePath, { env }),
+        );
+        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+        fs.rmSync(root, { recursive: true, force: true });
+      } finally {
+        await metadataOwner?.close();
+      }
     },
   };
 }
@@ -157,4 +177,41 @@ export function expectClaimOnlyTranscriptMedia(
   for (const value of forbiddenValues) {
     expect(serialized).not.toContain(value);
   }
+}
+
+export function createChatDirectiveReplyBackend(params: {
+  cancel?: ReplyBackendHandle["cancel"];
+  isStopped?: ReplyBackendHandle["isStopped"];
+  isStreaming?: ReplyBackendHandle["isStreaming"];
+  legacy?: boolean;
+  queueMessage: NonNullable<ReplyBackendHandle["queueMessage"]>;
+  runId?: string;
+  supportsQueueMessageImages?: boolean;
+  taskSuggestionDeliveryMode?: "gateway";
+}): ReplyBackendHandle {
+  return {
+    kind: "embedded",
+    cancel: params.cancel ?? (() => {}),
+    runId: params.runId,
+    supportsQueueMessageImages: params.supportsQueueMessageImages,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+    ...(params.legacy
+      ? {
+          queueMessage: params.queueMessage,
+          isStopped: params.isStopped,
+          isStreaming: params.isStreaming,
+        }
+      : {
+          // Production steering adapters use V2. The mock queue is this fixture
+          // backend's final handoff, so retain the source guard at that boundary.
+          messageInjectionV2: {
+            version: 2 as const,
+            isAvailable: () => true,
+            queueMessage: (text, options, assertCurrent) => {
+              assertCurrent();
+              return params.queueMessage(text, options);
+            },
+          },
+        }),
+  };
 }

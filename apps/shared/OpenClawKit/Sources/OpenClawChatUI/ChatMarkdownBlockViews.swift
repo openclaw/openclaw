@@ -96,13 +96,15 @@ struct ChatMathBlockView: View {
     }
 }
 
-#if os(macOS)
 @MainActor
-private struct ChatMathPlatformView: NSViewRepresentable {
+private struct ChatMathPlatformView {
     let latex: String
     let fontSize: CGFloat
     let textColor: Color
+}
 
+#if os(macOS)
+extension ChatMathPlatformView: NSViewRepresentable {
     func makeNSView(context: Context) -> MTMathUILabel {
         MTMathUILabel()
     }
@@ -117,12 +119,7 @@ private struct ChatMathPlatformView: NSViewRepresentable {
     }
 }
 #else
-@MainActor
-private struct ChatMathPlatformView: UIViewRepresentable {
-    let latex: String
-    let fontSize: CGFloat
-    let textColor: Color
-
+extension ChatMathPlatformView: UIViewRepresentable {
     func makeUIView(context: Context) -> MTMathUILabel {
         MTMathUILabel()
     }

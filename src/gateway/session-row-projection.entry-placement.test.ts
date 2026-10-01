@@ -1,7 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.js";
+import { recordSessionParticipant as recordNativeParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
@@ -13,7 +16,7 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 
 afterEach(() => vi.restoreAllMocks());
 
-it("reuses placement facts after transcript writes and refreshes actual placement changes", async () => {
+it("reuses placement after runtime events and entry writes and refreshes actual placement changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
@@ -28,7 +31,7 @@ it("reuses placement facts after transcript writes and refreshes actual placemen
     };
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
     const placements = createWorkerSessionPlacementStore();
-    placements.startDispatch(target);
+    await placements.startDispatch(target);
     const projection = await createSessionRowProjection({
       cfg,
       modelCatalog: [],
@@ -69,6 +72,39 @@ it("reuses placement facts after transcript writes and refreshes actual placemen
         });
       }
       await updateSessionEntry(target, () => ({ label: "Updated by the entry worker" }));
+      await describe();
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({
+          label: "Updated by the entry worker",
+          placement: expect.objectContaining({ state: "requested" }),
+        }),
+      });
+      expect(reads).not.toHaveBeenCalled();
+
+      for (const [index, record] of [recordNativeParticipant, recordSessionParticipant].entries()) {
+        const identity = { type: "agent" as const, id: `peer-${index}` };
+        for (const promptedAt of [10, 20]) {
+          expect(await record(target, { identity, promptedAt })).toBe(
+            promptedAt === 10 ? "inserted" : "updated",
+          );
+          await describe();
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+            session: expect.objectContaining({
+              participantCount: index + 1,
+              participants: expect.arrayContaining([expect.objectContaining({ identity })]),
+              placement: expect.objectContaining({ state: "requested" }),
+            }),
+          });
+        }
+      }
+      expect(reads).not.toHaveBeenCalled();
+
+      emitSessionLifecycleEvent({
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        reason: "worker-runtime-install",
+        scope: "runtime",
+      });
       await describe();
       expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
         session: expect.objectContaining({

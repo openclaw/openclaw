@@ -6,7 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as diskSpace from "./disk-space.js";
+import {
+  registerCanaryProgressWorkerTests,
+  registerCanaryUncertainReceiptTests,
+} from "./update-candidate-canary-progress.test-support.js";
 import * as readiness from "./update-candidate-canary-readiness.test-support.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
@@ -30,6 +36,9 @@ import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), snapshot: vi.fn(), signal: vi.fn() }));
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+}));
 vi.mock("node:child_process", async (importOriginal) =>
   (await import("./update-candidate-canary-mocks.test-support.js")).mockCanaryChildProcesses(
     await importOriginal<typeof import("node:child_process")>(),
@@ -49,7 +58,39 @@ vi.mock("../process/kill-tree.js", async (importOriginal) => ({
   signalProcessTree: mocks.signal,
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const admission = vi.hoisted(
+  (): {
+    active: boolean;
+    beforeGrant?: (stage: string) => void;
+  } => ({ active: false }),
+);
+vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sqlite-worker-operation-admission.js")>();
+  return {
+    ...actual,
+    createSqliteWorkerOperationAdmission: (
+      ...args: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
+    ) => {
+      const [admit, attachment] = args;
+      return actual.createSqliteWorkerOperationAdmission((request, grant) => {
+        admission.active = true;
+        try {
+          admission.beforeGrant?.(request.stage);
+          admit(request, grant);
+        } finally {
+          admission.active = false;
+        }
+      }, attachment);
+    },
+  };
+});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    admission.beforeGrant = undefined;
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 let root: string;
 let nextPid = 41_000;
 const children = new Map<number, FakeChild>();
@@ -231,62 +272,7 @@ describe("update candidate canary", () => {
     }
   });
 
-  it("streams database copy progress and retains completed size and timing in the update ledger", async () => {
-    stubHealthyGateway();
-    const snapshot = mocks.snapshot.getMockImplementation()!;
-    mocks.snapshot.mockImplementation(
-      async (
-        command,
-        options: {
-          input: string;
-          onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
-        },
-      ) => {
-        const request: unknown = JSON.parse(options.input);
-        if (isRecord(request) && request.mode === "snapshot") {
-          for (const status of ["copying", "completed"]) {
-            const frame = Buffer.from(
-              `State schema progress: ${JSON.stringify({
-                phase: "database snapshot",
-                path: path.join(root, "state", "openclaw.sqlite"),
-                snapshot: {
-                  status,
-                  copiedPages: status === "copying" ? 460222 : 920445,
-                  totalPages: 920445,
-                  ...(status === "completed" ? { copiedBytes: 3770142720 } : {}),
-                  elapsedMs: 2500,
-                },
-              })}\n`,
-            );
-            // Process chunks may split the protocol prefix or a JSON value.
-            options.onOutputChunk?.(frame.subarray(0, 13), "stderr");
-            options.onOutputChunk?.(frame.subarray(13), "stderr");
-          }
-        }
-        return snapshot(command, options);
-      },
-    );
-    const onProgress = vi.fn();
-    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), onProgress });
-    expect(result.status).toBe("ok");
-    expect(onProgress).toHaveBeenCalledWith(
-      expect.objectContaining({
-        step: "candidate-state-snapshot",
-        status: "in_progress",
-        detail: expect.stringContaining("copying, attempt 1, 460222/920445 pages"),
-      }),
-    );
-    const retained = result.steps.flatMap(updateRunStepsFromResultStep);
-    expect(retained).toContainEqual(
-      expect.objectContaining({
-        step: "diagnostic:candidate-state-snapshot",
-        status: "completed",
-        detail: expect.stringContaining(
-          "completed, attempt 1, 920445/920445 pages, 3,770,142,720 bytes, 2.500 seconds",
-        ),
-      }),
-    );
-  });
+  registerCanaryProgressWorkerTests(() => root, mocks, admission);
 
   it.each([
     [0, undefined, "error"],
@@ -298,6 +284,13 @@ describe("update candidate canary", () => {
       databasePath = path.join(root, "runtime-budget.sqlite");
       await fs.writeFile(databasePath, "");
       await fs.truncate(databasePath, sqliteBytes);
+      // The sparse database models validation cost, not this host's free disk space.
+      const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+        targetPath,
+        checkedPath: targetPath,
+        availableBytes: 16 * 1024 ** 3,
+        totalBytes: 32 * 1024 ** 3,
+      }));
       const now = Date.now.bind(Date);
       let doctorElapsed = 0;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + doctorElapsed);
@@ -327,6 +320,7 @@ describe("update candidate canary", () => {
         }
       } finally {
         clock.mockRestore();
+        capacity.mockRestore();
       }
     },
   );
@@ -809,13 +803,17 @@ describe("update candidate canary", () => {
         ),
       );
       const result = await validateUpdateCandidateCanary(canaryStateOptions(250));
-      expect(result.status).toBe(failure === "readiness" ? "ok" : "error");
+      expect(result.status).toBe("error");
       expect(result.phase).toBe(failure);
       if (failure === "plugins") {
         expect(renderSteps(result.steps)).toContain("incompatible plugin");
       }
       if (failure === "readiness") {
-        readiness.expectCanaryReadinessWarning(result.steps.at(-1), "readyz", 503);
+        expect(result.steps.at(-1)).toMatchObject({
+          exitCode: 1,
+          failureFacts: [{ check: "readyz", message: expect.stringContaining("stalled") }],
+        });
+        expect(result.steps.at(-1)?.advisory).toBeUndefined();
       }
       expect(result.steps.some((step) => step.exitCode !== 0)).toBe(true);
       expect(result.logTail.length).toBeLessThanOrEqual(40);
@@ -870,21 +868,75 @@ describe("update candidate canary", () => {
     expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("--update-canary"))).toBe(false);
   });
 
-  it("aborts further validation and removes private state when recording a step fails", async () => {
-    await expect(
-      validateUpdateCandidateCanary({
-        ...canaryStateOptions(3_000),
-        onStep: () => {
-          throw new Error("ledger unavailable");
-        },
-      }),
-    ).rejects.toThrow("ledger unavailable");
-    expect(mocks.spawn).not.toHaveBeenCalled();
-    const snapshotInput = JSON.parse(mocks.snapshot.mock.calls.at(-1)![1].input) as {
-      targetStateDir: string;
-    };
-    await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  it.each(["sync", "async"])(
+    "aborts further validation when %s step recording fails",
+    async (mode) => {
+      await expect(
+        validateUpdateCandidateCanary({
+          ...canaryStateOptions(3_000),
+          onStep: () => {
+            if (mode === "async") {
+              return Promise.reject(new Error("ledger unavailable"));
+            }
+            throw new Error("ledger unavailable");
+          },
+        }),
+      ).rejects.toThrow("ledger unavailable");
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      const snapshotInput = JSON.parse(mocks.snapshot.mock.calls.at(-1)![1].input) as {
+        targetStateDir: string;
+      };
+      await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  registerCanaryUncertainReceiptTests({
+    mocks,
+    canaryStateOptions,
+    setRuntimeError: (value) => {
+      runtimeError = value;
+    },
   });
+
+  it.each(["candidate-state-snapshot", "candidate-doctor"])(
+    "joins %s recording before starting the next child or observing cancellation",
+    async (name) => {
+      stubHealthyGateway();
+      const entered = createDeferredCore();
+      const receipt = createDeferredCore();
+      const controller = new AbortController();
+      const pending = validateUpdateCandidateCanary({
+        ...canaryStateOptions(3_000),
+        signal: controller.signal,
+        onStep: (step) => {
+          if (step.name === name && step.exitCode === 0) {
+            entered.resolve();
+            return receipt.promise;
+          }
+          return undefined;
+        },
+      });
+      await entered.promise;
+      const expectedChildren = name === "candidate-doctor" ? 1 : 0;
+      expect(mocks.spawn).toHaveBeenCalledTimes(expectedChildren);
+      controller.abort(new Error("cancelled during step recording"));
+      receipt.resolve();
+      const result = await pending;
+      expect(result.status).toBe("error");
+      expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain(
+        "cancelled during step recording",
+      );
+      expect(mocks.spawn).toHaveBeenCalledTimes(expectedChildren);
+      const snapshotInput = JSON.parse(mocks.snapshot.mock.calls.at(-1)![1].input) as {
+        targetStateDir: string;
+      };
+      await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   it.each([0, 1])("bounds multibyte stdout at the byte ceiling plus %i", async (overflow) => {
     runtimeError = true;

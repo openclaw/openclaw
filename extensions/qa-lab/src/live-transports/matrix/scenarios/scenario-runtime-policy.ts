@@ -2,6 +2,7 @@ import { MATRIX_QA_SECONDARY_ROOM_KEY } from "./scenario-contract.js";
 import {
   buildExactMarkerPrompt,
   buildMatrixQaToken,
+  resolveMatrixQaActorSyncParams,
   resolveMatrixQaNoReplyWindowMs,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
@@ -14,16 +15,11 @@ export async function runMxidPrefixedCommandBlockScenario(
 ): Promise<MatrixQaScenarioExecution> {
   const token = buildMatrixQaToken("MATRIX_QA_MXID_COMMAND");
   return await runNoReplyExpectedScenario({
-    accessToken: context.observerAccessToken,
-    actorId: "observer",
+    ...resolveMatrixQaActorSyncParams(context, "observer"),
     actorUserId: context.observerUserId,
-    baseUrl: context.baseUrl,
     body: `${context.sutUserId} /new`,
     mentionUserIds: [context.sutUserId],
-    observedEvents: context.observedEvents,
     roomId: context.roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
     sutUserId: context.sutUserId,
     timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
     token,
@@ -35,16 +31,11 @@ export async function runMentionMetadataSpoofBlockScenario(
 ): Promise<MatrixQaScenarioExecution> {
   const token = buildMatrixQaToken("MATRIX_QA_METADATA_SPOOF");
   return await runNoReplyExpectedScenario({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
+    ...resolveMatrixQaActorSyncParams(context, "driver"),
     actorUserId: context.driverUserId,
-    baseUrl: context.baseUrl,
     body: buildExactMarkerPrompt(token),
     mentionUserIds: [context.sutUserId],
-    observedEvents: context.observedEvents,
     roomId: context.roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
     sutUserId: context.sutUserId,
     timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
     token,

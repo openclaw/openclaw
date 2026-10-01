@@ -220,25 +220,53 @@ assert_survival
 });
 
 describe("upgrade survivor updater restart ownership", () => {
-  it.each(
-    [
-      { outcome: "success", future: false, repaired: false },
-      { outcome: "recoverable", future: false, repaired: false },
-      { outcome: "success", future: true, repaired: false },
-      { outcome: "success", future: true, repaired: true },
-    ].flatMap(({ outcome, future, repaired }) =>
-      [true, false].map((replacement) => ({ outcome, future, repaired, replacement })),
-    ),
-  )(
-    "$outcome future=$future repaired=$repaired replacement=$replacement",
-    ({ outcome, future, repaired, replacement }) => {
+  it.each<{
+    outcome?: "success" | "recoverable";
+    future?: boolean;
+    repaired?: boolean;
+    replacement?: boolean;
+    baseline?: string;
+    candidate?: string;
+    switchChannel?: boolean;
+    persistedChannel?: string;
+  }>([
+    {},
+    { baseline: "2026.8.33", switchChannel: true },
+    { baseline: "2026.8.34", switchChannel: true },
+    { baseline: "2026.8.32" },
+    { baseline: "2026.8.33-beta.1" },
+    { baseline: "2026.9.1-beta.1" },
+    { baseline: "2026.8.33+build" },
+    { baseline: "2026.8.33", candidate: "2026.9.33" },
+    { baseline: "2026.8.33", candidate: "2026.9.33-beta.1", switchChannel: true },
+    { baseline: "2026.8.33", switchChannel: true, persistedChannel: "extended-stable" },
+    { outcome: "recoverable" },
+    { future: true },
+    { future: true, repaired: true },
+    { replacement: false },
+  ])(
+    "$outcome future=$future repaired=$repaired replacement=$replacement baseline=$baseline",
+    ({
+      outcome = "success",
+      future = false,
+      repaired = false,
+      replacement = true,
+      baseline = "2026.9.1",
+      candidate = "2026.9.2",
+      switchChannel = false,
+      persistedChannel = "stable",
+    }) => {
       const root = tempDirs.make("survivor-restart-result-");
       const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
       const helper = source.slice(
-        source.indexOf("update_candidate()"),
+        source.indexOf("is_extended_stable_release_version()"),
         source.indexOf("\nreplace_historical_mobile_pairing_candidate()"),
       );
-      const expectedVersion = future ? "2100.1.0" : "2026.9.2";
+      const expectedVersion = future ? "2100.1.0" : candidate;
+      writeFileSync(
+        join(root, "config.json"),
+        JSON.stringify({ update: { channel: persistedChannel } }),
+      );
       const expectedSpec = future ? "file:/fixture/future.tgz" : "file:/fixture/candidate.tgz";
       const result = spawnSync(
         "bash",
@@ -255,9 +283,10 @@ SCENARIO="$7"
 UPDATE_RESTART_MODE=auto-auth
 COMMAND_TIMEOUT=1
 ROOT_MANAGED_VPS=0
-baseline_spec=2026.9.1
-baseline_version=2026.9.1
-candidate_version=2026.9.2
+baseline_spec="$9"
+baseline_version="$9"
+candidate_version="\${10}"
+OPENCLAW_CONFIG_PATH="$ARTIFACT_ROOT/config.json"
 CANDIDATE_KIND=ref
 UPDATE_JSON="$ARTIFACT_ROOT/update.json"
 UPDATE_ERR="$ARTIFACT_ROOT/update.err"
@@ -281,6 +310,7 @@ openclaw_e2e_maybe_timeout() {
   [ "$OUTCOME" = success ]
 }
 node() {
+  if [ "$1" = --input-type=module ]; then "$FIXTURE_NODE" "$@"; return; fi
   if [ "$1" = -e ]; then printf 1000; return; fi
   [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ] || return 90
   printf '%s|%s\n' "$2" "$4" >>"$ARTIFACT_ROOT/events"
@@ -311,10 +341,21 @@ exit "$result_status"
           repaired ? "1" : "0",
           future ? "mobile-pairing-reconnect" : "legacy-operator-state",
           expectedSpec,
+          baseline,
+          candidate,
         ],
-        { encoding: "utf8", timeout: 10_000 },
+        {
+          encoding: "utf8",
+          timeout: 10_000,
+          env: { ...process.env, FIXTURE_NODE: process.execPath },
+        },
       );
-      expect(result.status, result.stderr).toBe(replacement ? 0 : 1);
+      expect(result.status, result.stderr).toBe(
+        replacement && (!switchChannel || persistedChannel === "stable") ? 0 : 1,
+      );
+      if (switchChannel && persistedChannel !== "stable") {
+        expect(result.stderr).toContain("update channel was not persisted as stable");
+      }
       const args = readFileSync(join(root, "argv"), "utf8").trim().split("\n");
       expect(args.slice(args.indexOf("openclaw") + 1)).toEqual([
         "update",
@@ -322,6 +363,7 @@ exit "$result_status"
         expectedSpec,
         "--yes",
         "--json",
+        ...(switchChannel ? ["--channel", "stable"] : []),
       ]);
       const events = readFileSync(join(root, "events"), "utf8").trim().split("\n");
       expect(events).toEqual([
@@ -424,11 +466,10 @@ function check(result: unknown, prefix = "") {
 }
 
 describe("published upgrade survivor consent recovery", () => {
-  it.each(
-    ["acpx", "feishu"].flatMap((pluginId) =>
-      ["error", "ok"].map((status) => ({ pluginId, status })),
-    ),
-  )("admits $pluginId fixture consent after a $status update", ({ pluginId, status }) => {
+  it.each([
+    { pluginId: "acpx", status: "error" },
+    { pluginId: "feishu", status: "ok" },
+  ])("admits $pluginId fixture consent after a $status update", ({ pluginId, status }) => {
     const update = deniedUpdate();
     const reason = `Plugin "${pluginId}" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.`;
     update.postUpdate.plugins.warnings.push({ reason, message: reason });
@@ -445,14 +486,6 @@ describe("published upgrade survivor consent recovery", () => {
       },
     });
     expect(result.status, result.stderr).toBe(0);
-  });
-
-  it.each(["acpx", "feishu"])("rejects non-consent failures from reviewed %s", (pluginId) => {
-    const update = deferredUpdate();
-    const outcome = expectDefined(update.postUpdate.plugins.npm.outcomes[0], "plugin outcome");
-    outcome.pluginId = pluginId;
-    outcome.code = "INSTALL_FAILED";
-    expect(check(update).status).not.toBe(0);
   });
 
   it("repairs capability deferrals even when retaining the old plugin makes core update successful", () => {

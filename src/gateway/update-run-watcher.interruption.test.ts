@@ -3,6 +3,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { noteStaleUpdateRuns } from "../commands/doctor-update-run.js";
+import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type { InterruptedUpdateSettlement } from "../infra/update-run-interruption-contract.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
@@ -10,12 +11,12 @@ import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
-  reconcileAbandonedUpdateRuns,
   recordUpdateRunPhase,
   recordUpdateRunRepairAttempt,
   recordUpdateRunStep,
 } from "../infra/update-run-ledger.js";
 import { readInterruptedUpdateCandidate } from "../infra/update-run-read.kernel.js";
+import { reconcileUpdateRunsInNativeKernelForTest } from "../infra/update-run-reconciliation.test-support.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
@@ -25,6 +26,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { startUpdateRunWatcher } from "./update-run-watcher.js";
 
 const observation = vi.hoisted(() => ({
@@ -38,6 +40,12 @@ const observation = vi.hoisted(() => ({
   settle: vi.fn(),
 }));
 // Keep the real ledger kernels; worker transport has separate boundary coverage.
+vi.mock("../infra/update-run-reconciliation.js", async (original) => ({
+  ...(await original<typeof import("../infra/update-run-reconciliation.js")>()),
+  reconcileAbandonedUpdateRunsAsync: async (
+    ...args: Parameters<typeof reconcileUpdateRunsInNativeKernelForTest>
+  ) => reconcileUpdateRunsInNativeKernelForTest(...args),
+}));
 vi.mock("../infra/update-run-interruption-worker.js", async () => {
   const { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } =
     await import("../state/openclaw-state-db-readonly.js");
@@ -67,6 +75,8 @@ vi.mock("../infra/update-run-reader.js", async (original) => {
   const actual = await original<typeof import("../infra/update-run-reader.js")>();
   return {
     ...actual,
+    getUpdateRunAsync: async (...args: Parameters<typeof actual.getUpdateRun>) =>
+      actual.getUpdateRun(...args),
     listUpdateRunsAsync: async (...args: Parameters<typeof actual.listUpdateRuns>) =>
       actual.listUpdateRuns(...args),
   };
@@ -105,10 +115,14 @@ await import("../infra/update-run-interruption-health.js");
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let watcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+let lifecycle: ReturnType<typeof createGatewayUpdateLifecycle>;
 const now = Date.parse("2026-09-18T22:00:00Z");
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(now);
+  scheduler = createTestGatewayScheduler();
+  lifecycle = createGatewayUpdateLifecycle(scheduler);
   vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("update-interruption-"));
   observation.installedBuild = "candidate-build";
   observation.servingBuild = "candidate-build";
@@ -133,7 +147,9 @@ function health() {
 }
 afterEach(async () => {
   await watcher?.stop();
+  await lifecycle.stop();
   watcher = undefined;
+  await scheduler.stop();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -169,10 +185,10 @@ it.each([false, true])(
   async (abandoned) => {
     const runId = interruptedRun();
     if (abandoned) {
-      reconcileAbandonedUpdateRuns();
+      reconcileUpdateRunsInNativeKernelForTest();
     }
     const broadcast = vi.fn();
-    watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
     await vi.waitFor(() => expect(getUpdateRun(runId)?.status).toBe("succeeded"));
     expect(getUpdateRun(runId)).toMatchObject({
       reason: null,
@@ -193,7 +209,7 @@ it.each([false, true])(
 
 it("explains an older abandoned run whose target identity was never recorded", async () => {
   const runId = interruptedRun({ receipt: false });
-  reconcileAbandonedUpdateRuns();
+  reconcileUpdateRunsInNativeKernelForTest();
   await noteStaleUpdateRuns({});
   expect(note).toHaveBeenCalledWith(expect.stringContaining(runId), "Update history");
   expect(note).toHaveBeenCalledWith(
@@ -253,7 +269,7 @@ it.each([
   if (boundary === "unsettled") {
     observation.settle.mockResolvedValue({ ...health(), healthy: false });
   }
-  watcher = startUpdateRunWatcher({ broadcast: vi.fn(), log: { warn: vi.fn() } });
+  watcher = startUpdateRunWatcher({ lifecycle, broadcast: vi.fn(), log: { warn: vi.fn() } });
   await vi.advanceTimersByTimeAsync(0);
   await watcher.stop();
   expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
@@ -288,7 +304,7 @@ it("cancels pending verification at watcher shutdown without publishing a late s
     return probe.promise;
   });
   const broadcast = vi.fn();
-  watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+  watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
   await started.promise;
   let stopped = false;
   const stop = watcher.stop().then(() => {
@@ -313,7 +329,7 @@ it("cancels pending verification at watcher shutdown without publishing a late s
 
 it.each([false, true])("Doctor respects read-only preflight: %s", async (readOnly) => {
   const runId = interruptedRun();
-  reconcileAbandonedUpdateRuns();
+  reconcileUpdateRunsInNativeKernelForTest();
   await noteStaleUpdateRuns({ migrateState: !readOnly });
   expect(getUpdateRun(runId)?.status).toBe(readOnly ? "failed" : "succeeded");
   if (readOnly) {
@@ -340,7 +356,7 @@ it.each(["repair", "acknowledgement"])(
       recordUpdateRunStep(runId, { step: "reconcile:acknowledged", status: "completed" });
     }
     vi.setSystemTime(Date.now() + 31 * 60_000);
-    reconcileAbandonedUpdateRuns();
+    reconcileUpdateRunsInNativeKernelForTest();
     await noteStaleUpdateRuns({});
     expect(getUpdateRun(runId)).toMatchObject({ status: "failed", reason: "abandoned" });
     expect(observation.settle).not.toHaveBeenCalled();
@@ -406,7 +422,7 @@ it.each([true, false])(
     const second = getUpdateRun(runId)!;
     expect(second.updatedAtMs).toBe(first.updatedAtMs);
     expect(second.steps.filter((step) => step.step === "reconcile:settle")).toEqual([diagnostic]);
-    expect(reconcileAbandonedUpdateRuns()).toEqual([
+    expect(reconcileUpdateRunsInNativeKernelForTest()).toEqual([
       expect.objectContaining({ runId, status: "failed", reason: "abandoned" }),
     ]);
   },

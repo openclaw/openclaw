@@ -1,9 +1,9 @@
-// Mattermost plugin module implements client behavior.
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   collectErrorGraphCandidates,
   PlatformMessageNotDispatchedError,
+  readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -25,8 +25,10 @@ import {
   ssrfPolicyFromPrivateNetworkOptIn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asOptionalObjectRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 
@@ -90,6 +92,7 @@ export const MattermostPostSchema = z
     type: z.string().nullable().optional(),
     root_id: z.string().nullable().optional(),
     create_at: z.number().nullable().optional(),
+    delete_at: z.number().nullable().optional(),
     props: z.record(z.string(), z.unknown()).nullable().optional(),
   })
   .passthrough();
@@ -456,20 +459,6 @@ export async function sendMattermostTyping(
   });
 }
 
-async function createMattermostDirectChannel(
-  client: MattermostClient,
-  userIds: string[],
-  signal?: AbortSignal,
-  timeoutMs?: number,
-): Promise<MattermostChannel> {
-  return await client.request<MattermostChannel>("/channels/direct", {
-    method: "POST",
-    body: JSON.stringify(userIds),
-    signal,
-    timeoutMs,
-  });
-}
-
 export type CreateDmChannelRetryOptions = {
   /** Maximum number of retry attempts (default: 3) */
   maxRetries?: number;
@@ -545,11 +534,15 @@ export async function createMattermostDirectChannelWithRetry(
 
   return await retryAsync(
     async () => {
-      // Use AbortController for per-request timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        return await createMattermostDirectChannel(client, userIds, controller.signal, timeoutMs);
+        return await client.request<MattermostChannel>("/channels/direct", {
+          method: "POST",
+          body: JSON.stringify(userIds),
+          signal: controller.signal,
+          timeoutMs,
+        });
       } catch (err) {
         // Normalize before rethrowing so shouldRetry/onRetry below always see Errors.
         throw err instanceof Error ? err : new Error(String(err));
@@ -584,19 +577,19 @@ export function isRetryableError(error: Error): boolean {
     ...(Array.isArray(current.errors) ? current.errors : []),
   ]);
   const messages = candidates
-    .map((candidate) => normalizeLowercaseStringOrEmpty(readErrorMessage(candidate)))
+    .map((candidate) =>
+      normalizeLowercaseStringOrEmpty(
+        readStringField(asOptionalObjectRecord(candidate), "message"),
+      ),
+    )
     .filter((message): message is string => Boolean(message));
 
-  // Retry on 5xx server errors FIRST (before checking 4xx)
-  // Use "mattermost api" prefix to avoid matching port numbers (e.g., :443) or IP octets
-  // This prevents misclassification when a 5xx error detail contains a 4xx substring
-  // e.g., "Mattermost API 503: upstream returned 404"
+  // Provider status takes precedence over statuses mentioned in its details and network errors.
+  // Require the API prefix so port numbers and IP octets cannot become HTTP statuses.
   if (messages.some((message) => /mattermost api 5\d{2}\b/.test(message))) {
     return true;
   }
 
-  // Check for explicit 429 rate limiting FIRST (before generic "429" text match)
-  // This avoids retrying when error detail contains "429" but it's not the status code
   if (
     messages.some(
       (message) => /mattermost api 429\b/.test(message) || message.includes("too many requests"),
@@ -605,17 +598,10 @@ export function isRetryableError(error: Error): boolean {
     return true;
   }
 
-  // Check for explicit 4xx status codes - these are client errors and should NOT be retried
-  // (except 429 which is handled above)
-  // Use "mattermost api" prefix to avoid matching port numbers like :443
   if (messages.some((message) => /mattermost api 4\d{2}\b/.test(message))) {
     return false;
   }
 
-  // Retry on network/transient errors only if no explicit Mattermost API status code is present
-  // This avoids false positives like:
-  // - "400 Bad Request: connection timed out" (has status code)
-  // - "connect ECONNRESET 104.18.32.10:443" (has port number, not status)
   const hasMattermostApiStatusCode = messages.some((message) =>
     /mattermost api \d{3}\b/.test(message),
   );
@@ -631,33 +617,13 @@ export function isRetryableError(error: Error): boolean {
     return true;
   }
 
-  if (
-    candidates.some((candidate) =>
-      RETRYABLE_NETWORK_ERROR_NAMES.has(readErrorName(candidate) ?? ""),
-    )
-  ) {
+  if (candidates.some((candidate) => RETRYABLE_NETWORK_ERROR_NAMES.has(readErrorName(candidate)))) {
     return true;
   }
 
   return messages.some((message) =>
     RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern)),
   );
-}
-
-function readErrorMessage(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const message = (error as { message?: unknown }).message;
-  return typeof message === "string" && message.trim() ? message : undefined;
-}
-
-function readErrorName(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const name = (error as { name?: unknown }).name;
-  return typeof name === "string" && name.trim() ? name : undefined;
 }
 
 function readErrorCode(error: unknown): string | undefined {

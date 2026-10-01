@@ -1,4 +1,5 @@
 // Canonical agent project ownership for focused runs, full suites, and CI.
+import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
 
 const agentsRoot = "src/agents";
@@ -28,12 +29,7 @@ const coreIsolatedFiles = [
   "src/agents/subagents/registry/subagent-registry-requester-wake-commit.test.ts",
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
-const incompleteTurnFiles = [
-  `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.delivery-resolution.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.error-recovery.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.payload-resolution.test.ts`,
-];
+const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.classification.test.ts`];
 const overflowCompactionFiles = [`${embeddedRoot}/run.overflow-compaction.test.ts`];
 
 export const agentVitestProjectOwners = {
@@ -44,7 +40,7 @@ export const agentVitestProjectOwners = {
     root: agentsRoot,
     dir: agentsRoot,
     include: [`${agentsRoot}/**/*.test.ts`],
-    exclude: databaseWorkerCoreTestFiles,
+    exclude: [...databaseWorkerCoreTestFiles, ...cliProcessTestFiles],
   },
   spawnProductionBoundary: {
     kind: "agentsSpawnProductionBoundary",
@@ -75,6 +71,7 @@ export const agentVitestProjectOwners = {
       ...spawnProductionBoundaryFiles,
       ...coreIsolatedFiles,
       ...databaseWorkerCoreTestFiles,
+      ...cliProcessTestFiles,
     ],
   },
   embedded: {

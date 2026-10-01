@@ -5,34 +5,12 @@ const replyChunks = ["Use `[[reply_to:example-id]]", "` literally.\n\n"] as cons
 
 export const inlineDirectiveCases = [
   {
-    name: "voice marker split from its inline opener",
-    chunks: ["Use `", "[[audio_as_voice]]` literally.\n\n"],
-    marker: "[[audio_as_voice]]",
-    literal: true,
-    audioAsVoice: false,
-  },
-  {
     name: "voice marker in physically split inline code",
+    prepared: true,
     chunks: ["Use `" + "x".repeat(60), "[[audio_as_voice]]` literally.\n\n"],
     marker: "[[audio_as_voice]]",
     literal: true,
     audioAsVoice: false,
-  },
-  {
-    name: "a complete voice marker before its inline closer",
-    chunks: voiceChunks,
-    marker: "[[audio_as_voice]]",
-    literal: true,
-    literalText: voiceLiteral,
-    audioAsVoice: false,
-  },
-  {
-    name: "a complete reply marker before its inline closer",
-    chunks: replyChunks,
-    marker: "[[reply_to:example-id]]",
-    literal: true,
-    literalText: replyLiteral,
-    textOnly: true,
   },
   {
     name: "unconsumed genuine voice intent before a provisional literal",
@@ -45,6 +23,7 @@ export const inlineDirectiveCases = [
   },
   {
     name: "consumed genuine voice intent before a provisional literal",
+    prepared: true,
     chunks: ["[[audio_as_voice]]First voice reply.\n\n", ...voiceChunks],
     marker: "[[audio_as_voice]]",
     literal: true,

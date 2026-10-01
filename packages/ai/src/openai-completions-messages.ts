@@ -71,8 +71,10 @@ export function convertMessages(
     return id;
   };
 
-  const transformedMessages = transformMessages(context.messages, model, (id) =>
-    normalizeToolCallId(id),
+  const transformedMessages = transformMessages(
+    context.messages,
+    model,
+    normalizeToolCallId,
   ) as ProviderMessage[];
 
   // Local chat templates can place tools after system content. Move only the
@@ -113,16 +115,12 @@ export function convertMessages(
     }
 
     if (msg.role === "user") {
-      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
+      let userParam: ChatCompletionMessageParam;
       if (typeof msg.content === "string") {
-        const userParam: ChatCompletionMessageParam = {
+        userParam = {
           role: "user",
           content: sanitizeSurrogates(msg.content),
         };
-        if (isRuntimeContextCarrier) {
-          options.cacheOptOutIndexes?.add(params.length);
-        }
-        params.push(userParam);
       } else {
         const content: Array<ChatCompletionContentPart | ChatCompletionContentPartVideo> =
           msg.content.map((item) => {
@@ -146,12 +144,12 @@ export function convertMessages(
         if (content.length === 0) {
           continue;
         }
-        const userParam = { role: "user", content } as ChatCompletionMessageParam;
-        if (isRuntimeContextCarrier) {
-          options.cacheOptOutIndexes?.add(params.length);
-        }
-        params.push(userParam);
+        userParam = { role: "user", content } as ChatCompletionMessageParam;
       }
+      if (msg.runtimeContextCarrier === true) {
+        options.cacheOptOutIndexes?.add(params.length);
+      }
+      params.push(userParam);
     } else if (msg.role === "assistant") {
       const assistantMsg: ChatCompletionAssistantMessageParam = {
         role: "assistant",

@@ -1,4 +1,3 @@
-// Tracks session metadata mutations made by command handlers during a turn.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../templating.js";
 
@@ -40,16 +39,10 @@ export function markCommandSessionMetadataChanged(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     reason: "command-metadata",
   };
-  const targets = new Set<object>();
-  if (params.rootCtx && typeof params.rootCtx === "object") {
-    targets.add(params.rootCtx);
+  if (params.rootCtx && params.rootCtx !== params.ctx) {
+    addChange(params.rootCtx, change);
   }
-  if (params.ctx && typeof params.ctx === "object") {
-    targets.add(params.ctx);
-  }
-  for (const target of targets) {
-    addChange(target, change);
-  }
+  addChange(params.ctx, change);
 }
 
 export function takeCommandSessionMetadataChanges(

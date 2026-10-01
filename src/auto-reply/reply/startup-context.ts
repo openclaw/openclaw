@@ -208,14 +208,10 @@ async function listStartupMemoryPathsByDate(params: {
       if (result.status !== "fulfilled") {
         continue;
       }
-      const existing = sluggedStatsByStamp.get(result.value.stamp);
-      if (existing) {
-        existing.push({ name: result.value.name, stat: result.value.stat });
-      } else {
-        sluggedStatsByStamp.set(result.value.stamp, [
-          { name: result.value.name, stat: result.value.stat },
-        ]);
-      }
+      const { stamp, name, stat } = result.value;
+      const stampEntries = sluggedStatsByStamp.get(stamp) ?? [];
+      stampEntries.push({ name, stat });
+      sluggedStatsByStamp.set(stamp, stampEntries);
     }
 
     return new Map(
@@ -249,7 +245,6 @@ export async function buildSessionStartupContextPrelude(params: {
   const nowMs = params.nowMs ?? Date.now();
   const timezone = resolveUserTimezone(params.cfg?.agents?.defaults?.userTimezone);
   const limits = resolveStartupContextLimits(params.cfg);
-  const dailyPaths: string[] = [];
   const stamps = buildStartupMemoryDateStamps({
     nowMs,
     timezone,
@@ -259,12 +254,9 @@ export async function buildSessionStartupContextPrelude(params: {
     workspaceDir: params.workspaceDir,
     stamps,
   });
-  for (const stamp of stamps) {
-    const relativePaths = relativePathsByDate.get(stamp) ?? [`${stamp}.md`];
-    for (const relativePath of relativePaths) {
-      dailyPaths.push(`memory/${relativePath}`);
-    }
-  }
+  const dailyPaths = stamps.flatMap((stamp) =>
+    (relativePathsByDate.get(stamp) ?? [`${stamp}.md`]).map((entry) => `memory/${entry}`),
+  );
   const loaded: Array<{ relativePath: string; content: string }> = [];
 
   for (const relativePath of dailyPaths) {

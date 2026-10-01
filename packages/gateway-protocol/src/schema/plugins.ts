@@ -277,6 +277,8 @@ export const PluginCatalogEntrySchema = closedObject({
   runtime: Type.Optional(PluginRuntimeStatusSchema),
   /** Ordered package or registry categories; the first category is primary. */
   categories: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, maxItems: 3 })),
+  /** Additional browse memberships derived from enabled plugins' declared capabilities. */
+  capabilityCategories: Type.Optional(Type.Array(NonEmptyString, { uniqueItems: true })),
   /** Compatibility projection of the primary category. */
   category: Type.Optional(NonEmptyString),
   /** True when the plugin has an install record and can be removed via plugins.uninstall. */
@@ -372,6 +374,7 @@ export const PluginDiscoveryCategorySchema = closedObject({
   description: NonEmptyString,
   icon: PluginDiscoveryIconKeySchema,
   order: Type.Integer({ minimum: 0 }),
+  pinnedPackages: Type.Optional(Type.Array(NonEmptyString, { uniqueItems: true })),
 });
 
 export const PluginDiscoveryCatalogFactsSchema = closedObject({
@@ -392,6 +395,7 @@ export const PluginDiscoveryCatalogFactsSchema = closedObject({
   trending: Type.Optional(Type.Boolean()),
   featuredRank: Type.Optional(Type.Integer({ minimum: 0 })),
   trendingRank: Type.Optional(Type.Integer({ minimum: 0 })),
+  categoryRanks: Type.Optional(Type.Record(NonEmptyString, Type.Integer({ minimum: 0 }))),
   publishedToClawHub: Type.Optional(Type.Boolean()),
 });
 
@@ -549,7 +553,34 @@ export const PluginsInspectResultSchema = closedObject({
       capabilities: Type.Optional(PluginOverviewCapabilitiesSchema),
     }),
   ),
-  credentials: Type.Optional(Type.Array(PluginCredentialDescriptorSchema)),
+  credentials: Type.Optional(
+    Type.Array(
+      closedObject({
+        ...PluginCredentialDescriptorSchema.properties,
+        /** Presence/configuration only; never secret values or service-health validation. */
+        status: Type.Union([
+          Type.Literal("configured"),
+          Type.Literal("missing"),
+          Type.Literal("invalid"),
+          Type.Literal("unresolved"),
+        ]),
+      }),
+    ),
+  ),
+  /** Stored shared OAuth state for matching plugin-owned, operator-configured HTTP servers. */
+  mcpAuth: Type.Optional(
+    Type.Array(
+      closedObject({
+        serverName: NonEmptyString,
+        state: Type.Union([
+          Type.Literal("authorized"),
+          Type.Literal("requires-authorization"),
+          Type.Literal("pending-authorization"),
+          Type.Literal("unauthenticated"),
+        ]),
+      }),
+    ),
+  ),
   decisions: Type.Optional(Type.Array(PluginDecisionProviderStatusSchema)),
   plugin: closedObject({
     id: NonEmptyString,
@@ -681,6 +712,7 @@ export const PluginsReloadParamsSchema = closedObject({
     maxItems: MAX_PLUGIN_RELOAD_TARGETS,
     uniqueItems: true,
   }),
+  waitForDrain: Type.Optional(Type.Boolean()),
   acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
 });
 export const PluginsReloadResultSchema = closedObject({

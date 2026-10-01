@@ -106,7 +106,7 @@ Command failures show bounded tails from both stdout and stderr, with terminal c
 openclaw webhooks gmail run --account you@example.com
 ```
 
-Starts the Gmail watch and runs `gog gmail watch serve` plus periodic watch renewal in the foreground. Unexpected serve-process exits continue to restart after 5 seconds. A bind conflict stops restarts. Run only one watcher per listener and stop the other watcher before retrying. Ctrl-C or SIGTERM cancels pending restarts and renewal work and shuts down the serve process tree. Investigate repeated exits in the logs.
+Starts the Gmail watch and runs `gog gmail watch serve` plus periodic watch renewal in the foreground. Unexpected serve-process exits continue to restart after 5 seconds. Bind conflicts retry after 5, 10, and 20 seconds; if all three retries fail to bind, an error is logged and restarts stop, but watch renewal continues. Run only one watcher per listener, and stop the conflicting process before restarting this command. Ctrl-C or SIGTERM cancels pending restarts and renewal work and shuts down the serve process tree. Investigate repeated exits in the logs.
 
 `run` accepts the same Pub/Sub, OpenClaw delivery, `gog gmail watch serve`, and Tailscale flags as `setup`, except:
 

@@ -3,8 +3,12 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { retainUserProfileCatalog } from "../state/user-profile-list.js";
 import { repairMergedGatewayOwnerProfile } from "../state/user-profiles-owner-migration.js";
 import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -33,13 +37,6 @@ vi.mock("./http-auth-utils.js", async (importOriginal) => ({
   authorizeControlUiReadRequestOrReply,
 }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig }));
-vi.mock("../state/user-profiles.js", async () => ({
-  formatUserProfileAvatarEtag: (sha256: string, mime: string) =>
-    `"${sha256}-${mime.slice("image/".length)}"`,
-  UserProfileNotFoundError: (await import("../state/user-profiles-schema.js"))
-    .UserProfileNotFoundError,
-}));
-
 vi.mock("../state/user-profiles-avatar.js", () => ({ createProfileAvatarReader }));
 
 function emailHash(email: string): string {
@@ -277,7 +274,7 @@ describe("profile avatar HTTP endpoint", () => {
     expect(after.end).toHaveBeenCalledWith(hostAvatar.bytes);
   });
 
-  it("serves 300 saved-avatar requests without main-thread SQL, overload, or unnecessary byte reads", async () => {
+  it("serves warm GET, HEAD, and conditional avatar bursts without worker reads or main-thread SQL", async () => {
     const profiles = await vi.importActual<typeof import("../state/user-profiles.js")>(
       "../state/user-profiles.js",
     );
@@ -288,8 +285,10 @@ describe("profile avatar HTTP endpoint", () => {
     const profile = profiles.ensureProfileForEmail("reader@example.test", options);
     const bytes = new Uint8Array(1024).fill(7);
     expect(profiles.setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
+    const release = retainUserProfileCatalog(options);
     const reader = createReader(profile.id, options);
     const warm = await reader.inspect();
+    await warm.loadBytes();
     const etag = profiles.formatUserProfileAvatarEtag(warm.avatar!.sha256, "image/png");
     const materialize = vi.fn();
     createProfileAvatarReader.mockImplementation((id: string) => {
@@ -308,6 +307,7 @@ describe("profile avatar HTTP endpoint", () => {
       };
     });
     const sql = observeMainThreadSql();
+    const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     try {
       for (const [method, headers, code] of [
         ["HEAD", {}, 200],
@@ -344,9 +344,12 @@ describe("profile avatar HTTP endpoint", () => {
         );
       }
       expect(materialize).toHaveBeenCalledTimes(300);
+      expect(read).not.toHaveBeenCalled();
       sql.expectIdle();
     } finally {
+      read.mockRestore();
       sql.restore();
+      release();
     }
   });
 
@@ -365,7 +368,9 @@ describe("profile avatar HTTP endpoint", () => {
       const next = new Uint8Array([4, 5, 6]);
       profiles.setAvatar(original.id, new Uint8Array([1]), "image/png", options);
       profiles.setAvatar(target.id, next, "image/webp", options);
+      const release = retainUserProfileCatalog(options);
       const reader = createReader(original.id, options);
+      await (await reader.inspect()).loadBytes();
       let changed = false;
       createProfileAvatarReader.mockReturnValue({
         async inspect() {
@@ -402,6 +407,26 @@ describe("profile avatar HTTP endpoint", () => {
         }),
       );
       expect(res.end).toHaveBeenCalledWith(next);
+      release();
+    },
+  );
+
+  it.each(["overloaded", "timeout"] as const)(
+    "returns retryable 503 for avatar %s",
+    async (code) => {
+      createProfileAvatarReader.mockReturnValue({
+        inspect: () => Promise.reject(new WorkerTaskError("Avatar pressure", code)),
+      });
+      const res = response();
+      await handleUserProfileAvatarHttpRequest(
+        request("/ignored"),
+        res.response,
+        "/api/users/profile/avatar",
+        { auth: {} as never },
+      );
+      expect(res.response.statusCode).toBe(503);
+      expect(res.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+      expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
     },
   );
 
@@ -725,8 +750,8 @@ describe("profile avatar HTTP endpoint", () => {
         emails: [`oversized-avatar-${outcome}@example.test`],
         hasAvatar: false,
       });
-      const cancellationStarted = Promise.withResolvers<void>();
-      const cancellation = Promise.withResolvers<void>();
+      const cancellationStarted = createDeferred();
+      const cancellation = createDeferred();
       const cancel = vi.fn(() => {
         cancellationStarted.resolve();
         return cancellation.promise;

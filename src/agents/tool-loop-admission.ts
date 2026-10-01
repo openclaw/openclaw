@@ -55,20 +55,20 @@ async function evaluateToolLoopCall(
   if (!result.stuck) {
     return undefined;
   }
+  const diagnostic = {
+    sessionKey: ctx.sessionKey,
+    sessionId: ctx.sessionId,
+    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
+    toolName,
+    level: result.level,
+    detector: result.detector,
+    count: result.count,
+    message: result.message,
+    pairedToolName: result.pairedToolName,
+  };
   if (result.level === "critical") {
     log.error(`Blocking ${toolName} due to critical loop: ${result.message}`);
-    logToolLoopAction({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-      ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
-      toolName,
-      level: "critical",
-      action: "block",
-      detector: result.detector,
-      count: result.count,
-      message: result.message,
-      pairedToolName: result.pairedToolName,
-    });
+    logToolLoopAction({ ...diagnostic, action: "block" });
     return {
       kind: "critical-tool-loop",
       toolCallId: call.toolCallId ?? "",
@@ -83,18 +83,7 @@ async function evaluateToolLoopCall(
   const warningKey = ctx.runId ? `${ctx.runId}:${baseWarningKey}` : baseWarningKey;
   if (shouldEmitLoopWarning(sessionState, warningKey, result.count)) {
     log.warn(`Loop warning for ${toolName}: ${result.message}`);
-    logToolLoopAction({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-      ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
-      toolName,
-      level: "warning",
-      action: "warn",
-      detector: result.detector,
-      count: result.count,
-      message: result.message,
-      pairedToolName: result.pairedToolName,
-    });
+    logToolLoopAction({ ...diagnostic, action: "warn" });
     return {
       kind: "tool-loop-warning",
       toolCallId: call.toolCallId ?? "",

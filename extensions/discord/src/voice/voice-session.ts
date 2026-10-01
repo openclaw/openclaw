@@ -2,12 +2,11 @@ import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/c
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Client } from "../internal/discord.js";
-import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
 import { getDiscordRuntime } from "../runtime.js";
 import { DiscordAudioTransport } from "./audio-transport.js";
-import { createVoiceCaptureState, stopVoiceCaptureState } from "./capture-state.js";
-import { resolveDiscordVoiceRealtimeBootstrapContext } from "./ingress.js";
+import { stopVoiceCaptureState } from "./capture-state.js";
+import { resolveDiscordVoiceRealtimeAgentContext } from "./ingress.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
 import {
   createVoiceReceiveRecoveryState,
@@ -188,7 +187,7 @@ export class DiscordVoiceSessions {
     }
     const channelInfo = resolved.value;
 
-    const voicePlugin = this.params.client.getPlugin<VoicePlugin>("voice");
+    const voicePlugin = this.params.client.getPlugin("voice");
     if (!voicePlugin) {
       return { ok: false, message: "Discord voice plugin is not available." };
     }
@@ -289,11 +288,11 @@ export class DiscordVoiceSessions {
     );
 
     let stopCompletion: Promise<void> | undefined;
-    const stopEntry = (optionsLocal: { reason: string }): void | Promise<void> => {
+    const stopEntry = (reason: string): void | Promise<void> => {
       if (entry.sessionLifecycle.status === "stopped") {
         return stopCompletion;
       }
-      entry.sessionLifecycle = { status: "stopped", reason: optionsLocal.reason };
+      entry.sessionLifecycle = { status: "stopped", reason };
       // A late callback from an old connection must not remove its replacement.
       if (this.params.sessions.get(guildId) === entry) {
         this.params.sessions.delete(guildId);
@@ -306,7 +305,7 @@ export class DiscordVoiceSessions {
       entry.realtimeLifecycle = {
         status: "stopped",
         generation: realtimeLifecycle.generation,
-        reason: optionsLocal.reason,
+        reason,
       };
       let realtimeCompletion: void | Promise<void> = undefined;
       try {
@@ -319,7 +318,7 @@ export class DiscordVoiceSessions {
       const audioCompletion = this.stopTransport(guildId, audio);
       stopCompletion = Promise.allSettled([realtimeCompletion, audioCompletion]).then(() => {
         entry.conversations.close();
-        this.params.onSessionStopped(entry, optionsLocal.reason);
+        this.params.onSessionStopped(entry, reason);
       });
       const completion = stopCompletion;
       this.pendingStops.add(completion);
@@ -361,16 +360,14 @@ export class DiscordVoiceSessions {
       conversations: new DiscordVoiceConversationQueue(),
       audioInputBudget,
       ttsStreamFallbackWarned: false,
-      capture: createVoiceCaptureState(),
+      capture: new Map(),
       get transcripts(): VoiceSessionEntry["transcripts"] {
         return getTranscripts(entry);
       },
       receiveRecovery: createVoiceReceiveRecoveryState(),
       realtimeLifecycle: { status: "inactive", generation: 0 },
       stop(reason) {
-        return stopEntry({
-          reason: reason ?? `stop guild ${guildId} channel ${channelId}`,
-        });
+        return stopEntry(reason ?? `stop guild ${guildId} channel ${channelId}`);
       },
     };
 
@@ -384,7 +381,7 @@ export class DiscordVoiceSessions {
       }
     };
     const destroyedHandler = () => {
-      void stopEntry({ reason: "audio worker stopped" });
+      void stopEntry("audio worker stopped");
     };
     audio.on("stopped", destroyedHandler);
     if (!entry.captureOnly && isDiscordRealtimeVoiceMode(voiceMode)) {
@@ -473,7 +470,7 @@ export class DiscordVoiceSessions {
     voiceMode: Exclude<DiscordVoiceMode, "stt-tts">,
     options?: { requireLiveEntry?: boolean; isCurrent?: () => boolean },
   ): Promise<{ ok: true } | { ok: false; message: string }> {
-    const bootstrapContextInstructions = await resolveDiscordVoiceRealtimeBootstrapContext({
+    const bootstrapContextInstructions = await resolveDiscordVoiceRealtimeAgentContext({
       entry,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,

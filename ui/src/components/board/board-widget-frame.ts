@@ -230,10 +230,6 @@ export class BoardWidgetFrameLifecycle {
       this.suspend();
       return;
     }
-    this.resume();
-  }
-
-  private resume(): void {
     this.connect();
     this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
     this.updateSandboxHost();
@@ -515,9 +511,12 @@ export class BoardWidgetFrameLifecycle {
       return;
     }
     const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
+    if (!frame || event.source !== frame.contentWindow) {
+      return;
+    }
     const widget = this.host.widget();
     if (!this.host.active()) {
-      if (frame && event.source === frame.contentWindow && event.origin === this.sandboxOrigin) {
+      if (event.origin === this.sandboxOrigin) {
         this.sandboxHost?.handleMessage(event);
       }
       return;
@@ -529,9 +528,7 @@ export class BoardWidgetFrameLifecycle {
       nonce?: unknown;
     } | null;
     if (
-      frame &&
       widget &&
-      event.source === frame.contentWindow &&
       data?.type === WIDGET_SIZE_MESSAGE_TYPE &&
       typeof data.height === "number" &&
       Number.isFinite(data.height) &&
@@ -540,9 +537,7 @@ export class BoardWidgetFrameLifecycle {
       this.host.reportContentHeight(widget.name, data.height);
     }
     if (
-      frame &&
       widget &&
-      event.source === frame.contentWindow &&
       data?.type === WIDGET_SCROLL_MESSAGE_TYPE &&
       data.nonce === this.boardHostNonce &&
       typeof data.deltaY === "number" &&
@@ -551,12 +546,7 @@ export class BoardWidgetFrameLifecycle {
     ) {
       this.host.scrollBy(data.deltaY);
     }
-    if (
-      !frame ||
-      !widget?.viewTicket ||
-      event.source !== frame.contentWindow ||
-      event.origin !== this.sandboxOrigin
-    ) {
+    if (!widget?.viewTicket || event.origin !== this.sandboxOrigin) {
       return;
     }
     const sandboxHost = this.syncSandboxHost(frame, widget);

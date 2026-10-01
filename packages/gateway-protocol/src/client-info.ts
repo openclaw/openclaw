@@ -79,6 +79,7 @@ export type GatewayClientInfo = {
 export const GATEWAY_CLIENT_CAPS = {
   AGENT_KIND: "agent-kind",
   APPROVALS: "approvals",
+  CHAT_ONLY_ASSISTANT_TEXT: "chat-only-assistant-text",
   EXEC_APPROVALS: "exec-approvals",
   INLINE_WIDGETS: "inline-widgets",
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
@@ -93,6 +94,7 @@ export const GATEWAY_CLIENT_CAPS = {
   TERMINAL_UPLOAD_PATH_STYLE: "terminal-upload-path-style",
   TOOL_EVENTS: "tool-events",
   UI_COMMANDS: "ui-commands",
+  ULTRAFAST: "ultrafast",
   USAGE_REFRESHING: "usage-refreshing",
 } as const;
 

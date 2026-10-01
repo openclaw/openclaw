@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { formatErrorMessage } from "./errors.js";
 import type { UpdateRunStep } from "./update-run-record.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-const TEMPORARY_COPY_CLEANUP_BUDGET_MS = 5 * 60_000;
+export const UPDATE_CLEANUP_BUDGET_MS = 5 * 60_000;
 
 export function formatUpdateCleanupCommand(directory: string): string {
   return process.platform === "win32"
@@ -20,20 +21,25 @@ export async function cleanupUpdateTemporaryDirectory(params: {
   name: string;
   /** Recheck custody inside the warning boundary; false skips removal. */
   canRemove?: () => Promise<boolean>;
-  onProgress?: (step: UpdateRunStep) => void;
-  onWarning: (step: UpdateStepResult) => void;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
+  onWarning: (step: UpdateStepResult) => void | Promise<void>;
 }): Promise<void> {
   const started = Date.now();
-  const monotonicDeadline = performance.now() + TEMPORARY_COPY_CLEANUP_BUDGET_MS;
-  const recordProgress = (reason: string, completed = false) =>
-    params.onProgress?.({
-      step: params.name,
-      status: completed ? "completed" : "in_progress",
-      startedAtMs: started,
-      ...(completed ? { endedAtMs: Date.now(), exitCode: 0 } : {}),
-      detail: `Temporary-copy cleanup ${params.directory}; ${reason}; budget=${TEMPORARY_COPY_CLEANUP_BUDGET_MS}ms (5 minutes for large copies on slow disks); deadline=${new Date(started + TEMPORARY_COPY_CLEANUP_BUDGET_MS).toISOString()}.`,
-    });
-  recordProgress(
+  const monotonicDeadline = performance.now() + UPDATE_CLEANUP_BUDGET_MS;
+  let pendingProgress: Promise<void> | undefined;
+  const recordProgress = (reason: string, completed = false) => {
+    pendingProgress = Promise.resolve(
+      params.onProgress?.({
+        step: params.name,
+        status: completed ? "completed" : "in_progress",
+        startedAtMs: started,
+        ...(completed ? { endedAtMs: Date.now(), exitCode: 0 } : {}),
+        detail: `Temporary-copy cleanup ${params.directory}; ${reason}; budget=${UPDATE_CLEANUP_BUDGET_MS}ms (5 minutes for large copies on slow disks); deadline=${new Date(started + UPDATE_CLEANUP_BUDGET_MS).toISOString()}.`,
+      }),
+    );
+    return pendingProgress;
+  };
+  await recordProgress(
     `waiting for ${params.canRemove ? "directory custody verification" : "filesystem removal"}`,
   );
   let canRemove = false;
@@ -50,7 +56,15 @@ export async function cleanupUpdateTemporaryDirectory(params: {
           }
           canRemove = true;
           if (params.canRemove) {
-            recordProgress("waiting for filesystem removal");
+            await recordProgress("waiting for filesystem removal");
+            if (expired || performance.now() >= monotonicDeadline || !(await params.canRemove())) {
+              canRemove = false;
+              return;
+            }
+            if (expired || performance.now() >= monotonicDeadline) {
+              canRemove = false;
+              return;
+            }
           }
           await fs.rm(params.directory, { recursive: true, force: true });
         },
@@ -58,18 +72,30 @@ export async function cleanupUpdateTemporaryDirectory(params: {
         () => performance.now(),
       )) === ABSOLUTE_DEADLINE_EXPIRED;
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     failure = formatErrorMessage(error);
   }
+  // Filesystem removal may outlive its budget; an accepted progress write may not.
+  try {
+    await pendingProgress;
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    failure ??= formatErrorMessage(error);
+  }
   if (canRemove && failure === undefined && !expired) {
-    recordProgress("removed disposable temporary copy", true);
+    await recordProgress("removed disposable temporary copy", true);
     return;
   }
   // Unverified paths may be absent or replaced; never recommend deleting them.
   const command = canRemove ? formatUpdateCleanupCommand(params.directory) : "";
   const reason = expired
-    ? `Temporary-copy cleanup budget expired after ${TEMPORARY_COPY_CLEANUP_BUDGET_MS}ms.`
+    ? `Temporary-copy cleanup budget expired after ${UPDATE_CLEANUP_BUDGET_MS}ms.`
     : (failure ?? "Directory ownership could not be verified.");
-  params.onWarning({
+  await params.onWarning({
     name: params.name,
     command,
     cwd: params.root,

@@ -1,11 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { defaultRuntime } from "../../runtime.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
-import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
-import { registerLocalProvidersCommand } from "./providers-command.js";
+import { formatEnvelopeForText, providerSummaryText } from "./output.js";
+import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 async function closeEmbeddingProviderWithRetry(provider: {
   close?: () => Promise<void> | void;
@@ -23,28 +21,21 @@ async function runMemoryEmbeddingCreate(params: {
   model?: string;
   agent?: string;
 }) {
-  const {
-    requireProviderModelOverride,
-    resolveCapabilityProviderAgentId,
-    resolveLocalCapabilityRuntimeConfig,
-  } = await import("./shared.js");
+  const { requireProviderModelOverride, resolveLocalCapabilityAgent } = await import("./shared.js");
   const { getMemoryEmbeddingCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
   const { createEmbeddingProvider } =
     await import("../../plugin-sdk/memory-core-bundled-runtime.js");
   const modelRef = requireProviderModelOverride(params.model);
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  const { cfg, agentDir } = await resolveLocalCapabilityAgent({
     commandName: "infer embedding create",
     targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
+    agent: params.agent,
   });
   const requestedProvider =
     normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer embedding create");
-  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
-  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const result = await createEmbeddingProvider({
     config: cfg,
-    agentDir: resolveAgentDir(cfg, agentId),
+    agentDir,
     provider: requestedProvider,
     fallback: "none",
     model: modelRef?.model ?? "",
@@ -96,18 +87,17 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption } = await import("./shared.js");
-        const result = await runMemoryEmbeddingCreate({
+        return runMemoryEmbeddingCreate({
           texts: opts.text as string[],
           agent: resolveCapabilityAgentOption(command, opts.agent),
           provider: opts.provider as string | undefined,
           model: opts.model as string | undefined,
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
-    });
+      }),
+    );
 
   registerLocalProvidersCommand(
     embedding,

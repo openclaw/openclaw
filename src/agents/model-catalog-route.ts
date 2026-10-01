@@ -109,14 +109,6 @@ export function createConfiguredModelCatalogOverridesResolver(params: {
   };
 }
 
-function sameLogicalModel(
-  a: ModelCatalogEntry,
-  identity: ModelCatalogLogicalIdentity,
-  policy: ModelCatalogRoutePolicy,
-): boolean {
-  return policy.resolveIdentity(a)?.key === identity.key;
-}
-
 function logicalIdentity(
   entry: ModelCatalogEntry,
   id: string,
@@ -156,7 +148,7 @@ function findModelCatalogRouteDonor(params: {
   const physicalDonor = identity
     ? params.catalog?.find(
         (candidate) =>
-          sameLogicalModel(candidate, identity, params.policy) &&
+          params.policy.resolveIdentity(candidate)?.key === identity.key &&
           params.policy.matchesRoute(candidate, params.route),
       )
     : undefined;

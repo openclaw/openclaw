@@ -1,9 +1,7 @@
-// Qa Lab Matrix module implements client behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixQaMediaMessageContent,
@@ -14,22 +12,27 @@ import {
   type MatrixQaUiaaResponse,
 } from "./client-message-content.js";
 import type { MatrixQaObservedEvent } from "./events.js";
-import { MATRIX_QA_JSON_MAX_BYTES, requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
+import { readMatrixQaJsonResponse, requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
 import {
+  createMatrixQaRoomObserver,
   primeMatrixQaRoom,
-  waitForMatrixQaRoomEvent,
-  waitForOptionalMatrixQaRoomEvent,
   type MatrixQaRoomObserver,
 } from "./sync.js";
 import {
   findMatrixQaProvisionedRoom,
   type MatrixQaParticipantRole,
   type MatrixQaProvisionedTopology,
-  type MatrixQaTopologyRoomSpec,
   type MatrixQaTopologySpec,
 } from "./topology.js";
 
 export type { MatrixQaRoomObserver } from "./sync.js";
+
+type MatrixQaClientRoomEventWaitParams = Parameters<
+  MatrixQaRoomObserver["waitForOptionalRoomEvent"]
+>[0] & {
+  observedEvents: MatrixQaObservedEvent[];
+  since?: string;
+};
 
 type MatrixQaRegisterResponse = {
   access_token?: string;
@@ -109,22 +112,10 @@ async function uploadMatrixQaContent(params: {
     body: uploadBody,
     signal: AbortSignal.timeout(20_000),
   });
-  // Bound the media-upload response body before parsing, mirroring
-  // `requestMatrixJson`. The overflow error is read *outside* the parse
-  // try/catch so it fails closed (propagates) instead of being swallowed into
-  // `{}`; malformed-but-in-bounds JSON still falls back to `{}` as before.
-  const uploadBytes = await readResponseWithLimit(response, MATRIX_QA_JSON_MAX_BYTES, {
-    onOverflow: ({ maxBytes }) => new Error(`Matrix homeserver response exceeds ${maxBytes} bytes`),
-  });
-  let body: { content_uri?: string; error?: string };
-  try {
-    body = JSON.parse(new TextDecoder().decode(uploadBytes)) as {
-      content_uri?: string;
-      error?: string;
-    };
-  } catch {
-    body = {};
-  }
+  const body = (await readMatrixQaJsonResponse(response)) as {
+    content_uri?: string;
+    error?: string;
+  };
   if (response.status !== 200) {
     throw new Error(body.error ?? `Matrix media upload failed with status ${response.status}`);
   }
@@ -170,6 +161,15 @@ export function createMatrixQaClient(params: {
 }) {
   const fetchImpl = params.fetchImpl ?? fetch;
   const syncObserver = params.syncObserver;
+  const resolveRoomObserver = (opts: MatrixQaClientRoomEventWaitParams) =>
+    syncObserver ??
+    createMatrixQaRoomObserver({
+      accessToken: params.accessToken,
+      baseUrl: params.baseUrl,
+      fetchImpl,
+      observedEvents: opts.observedEvents,
+      since: opts.since,
+    });
   const request = <T>(
     options: Omit<Parameters<typeof requestMatrixJson<T>>[0], "baseUrl" | "fetchImpl">,
   ) =>
@@ -295,13 +295,9 @@ export function createMatrixQaClient(params: {
         response: result.body,
       });
     },
-    async sendTextMessage(opts: {
-      body: string;
-      mentionUserIds?: string[];
-      replyToEventId?: string;
-      roomId: string;
-      threadRootEventId?: string;
-    }) {
+    async sendTextMessage(
+      opts: Parameters<typeof buildMatrixQaMessageContent>[0] & { roomId: string },
+    ) {
       const txnId = randomUUID();
       return await sendEvent({
         body: buildMatrixQaMessageContent(opts),
@@ -309,12 +305,9 @@ export function createMatrixQaClient(params: {
         errorLabel: "sendMessage",
       });
     },
-    async sendReplacementMessage(opts: {
-      body: string;
-      mentionUserIds?: string[];
-      roomId: string;
-      targetEventId: string;
-    }) {
+    async sendReplacementMessage(
+      opts: Parameters<typeof buildMatrixQaReplacementMessageContent>[0] & { roomId: string },
+    ) {
       const txnId = randomUUID();
       return await sendEvent({
         body: buildMatrixQaReplacementMessageContent(opts),
@@ -322,17 +315,12 @@ export function createMatrixQaClient(params: {
         errorLabel: "sendReplacementMessage",
       });
     },
-    async sendMediaMessage(opts: {
-      body?: string;
-      buffer: Buffer;
-      contentType?: string;
-      fileName?: string;
-      kind?: "audio" | "file" | "image" | "video";
-      mentionUserIds?: string[];
-      replyToEventId?: string;
-      roomId: string;
-      threadRootEventId?: string;
-    }) {
+    async sendMediaMessage(
+      opts: Omit<Parameters<typeof buildMatrixQaMediaMessageContent>[0], "size" | "url"> & {
+        buffer: Buffer;
+        roomId: string;
+      },
+    ) {
       const contentUri = await uploadMatrixQaContent({
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
@@ -344,14 +332,8 @@ export function createMatrixQaClient(params: {
       const txnId = randomUUID();
       return await sendEvent({
         body: buildMatrixQaMediaMessageContent({
-          body: opts.body,
-          contentType: opts.contentType,
-          fileName: opts.fileName,
-          kind: opts.kind,
-          mentionUserIds: opts.mentionUserIds,
-          replyToEventId: opts.replyToEventId,
+          ...opts,
           size: opts.buffer.byteLength,
-          threadRootEventId: opts.threadRootEventId,
           url: contentUri,
         }),
         endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/send/m.room.message/${encodeURIComponent(txnId)}`,
@@ -409,47 +391,11 @@ export function createMatrixQaClient(params: {
         method: "POST",
       });
     },
-    waitForOptionalRoomEvent(opts: {
-      observedEvents: MatrixQaObservedEvent[];
-      predicate: (event: MatrixQaObservedEvent) => boolean;
-      roomId: string;
-      since?: string;
-      timeoutMs: number;
-    }) {
-      if (syncObserver) {
-        return syncObserver.waitForOptionalRoomEvent({
-          predicate: opts.predicate,
-          roomId: opts.roomId,
-          timeoutMs: opts.timeoutMs,
-        });
-      }
-      return waitForOptionalMatrixQaRoomEvent({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
-        fetchImpl,
-        ...opts,
-      });
+    waitForOptionalRoomEvent(opts: MatrixQaClientRoomEventWaitParams) {
+      return resolveRoomObserver(opts).waitForOptionalRoomEvent(opts);
     },
-    async waitForRoomEvent(opts: {
-      observedEvents: MatrixQaObservedEvent[];
-      predicate: (event: MatrixQaObservedEvent) => boolean;
-      roomId: string;
-      since?: string;
-      timeoutMs: number;
-    }) {
-      if (syncObserver) {
-        return await syncObserver.waitForRoomEvent({
-          predicate: opts.predicate,
-          roomId: opts.roomId,
-          timeoutMs: opts.timeoutMs,
-        });
-      }
-      return await waitForMatrixQaRoomEvent({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
-        fetchImpl,
-        ...opts,
-      });
+    async waitForRoomEvent(opts: MatrixQaClientRoomEventWaitParams) {
+      return await resolveRoomObserver(opts).waitForRoomEvent(opts);
     },
   };
 }
@@ -476,10 +422,6 @@ async function joinRoomWithRetry(params: {
     }
   }
   throw new Error(`Matrix join retry failed: ${formatErrorMessage(lastError)}`);
-}
-
-function resolveProvisionedRoomRequireMention(room: MatrixQaTopologyRoomSpec) {
-  return room.kind === "group" ? room.requireMention !== false : false;
 }
 
 function resolveTopologyMemberAccounts(
@@ -536,7 +478,7 @@ async function provisionMatrixQaTopology(params: {
       memberRoles: members.map((entry) => entry.role),
       memberUserIds: members.map((entry) => entry.account.userId),
       name: room.name,
-      requireMention: resolveProvisionedRoomRequireMention(room),
+      requireMention: room.kind === "group" && room.requireMention !== false,
       roomId,
     });
   }
@@ -571,25 +513,17 @@ export async function provisionMatrixQaRoom(params: {
     baseUrl: params.baseUrl,
     fetchImpl: params.fetchImpl,
   });
+  const registerActor = (role: MatrixQaParticipantRole, deviceName: string) =>
+    anonClient.registerWithToken({
+      deviceName,
+      localpart: params[`${role}Localpart`],
+      password: `${role}-${randomUUID()}`,
+      registrationToken: params.registrationToken,
+    });
   const [driver, sut, observer] = await Promise.all([
-    anonClient.registerWithToken({
-      deviceName: "OpenClaw Matrix QA Driver",
-      localpart: params.driverLocalpart,
-      password: `driver-${randomUUID()}`,
-      registrationToken: params.registrationToken,
-    }),
-    anonClient.registerWithToken({
-      deviceName: "OpenClaw Matrix QA SUT",
-      localpart: params.sutLocalpart,
-      password: `sut-${randomUUID()}`,
-      registrationToken: params.registrationToken,
-    }),
-    anonClient.registerWithToken({
-      deviceName: "OpenClaw Matrix QA Observer",
-      localpart: params.observerLocalpart,
-      password: `observer-${randomUUID()}`,
-      registrationToken: params.registrationToken,
-    }),
+    registerActor("driver", "OpenClaw Matrix QA Driver"),
+    registerActor("sut", "OpenClaw Matrix QA SUT"),
+    registerActor("observer", "OpenClaw Matrix QA Observer"),
   ]);
   const topology = await provisionMatrixQaTopology({
     accounts: {

@@ -37,6 +37,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   getActiveCronJobCount,
   resetCronActiveJobs,
@@ -59,6 +60,7 @@ const noopLogger = { debug() {}, info() {}, warn() {}, error() {} };
 type PollFixture = Awaited<ReturnType<typeof createPollFixture>>;
 
 async function createPollFixture(options: { scratch?: string; isolated?: boolean } = {}) {
+  const scheduler = createTestGatewayScheduler("fake-timers");
   let runner: ReturnType<typeof startHeartbeatRunner> | undefined;
   let cron: CronService | undefined;
   const releases: Array<() => void> = [];
@@ -79,6 +81,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
         await vi.advanceTimersByTimeAsync(1_000);
       }
       await vi.waitFor(() => expect(getActiveCronJobCount()).toBe(0));
+      await scheduler.stop();
     } finally {
       dispose();
       await closeOpenClawAgentDatabasesAsync();
@@ -168,6 +171,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       }
     }
     cron = new CronService({
+      scheduler,
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -207,7 +211,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
     const monitor = "job" in added ? added.job : added;
     if (options.scratch !== undefined) {
       expect(
-        writeCronJobScratch({ storePath, jobId: monitor.id, content: options.scratch }).ok,
+        (await writeCronJobScratch({ storePath, jobId: monitor.id, content: options.scratch })).ok,
       ).toBe(true);
     }
     async function holdLane(lane: string) {
@@ -285,9 +289,12 @@ describe("native heartbeat busy poll settlement", () => {
           await vi.advanceTimersByTimeAsync(firstTick - Date.now());
           await waitForRequest(1);
           expect(request).toHaveBeenCalledOnce();
+          await vi.advanceTimersByTimeAsync(250);
+          // Scratch preflight uses a real worker, which fake-clock advancement cannot join.
+          await runOnce.mock.results[0]?.value;
           // Observe the full original watchdog window on both versions. The
           // unfixed scheduler records a timeout; the fixed poll settled promptly.
-          await vi.advanceTimersByTimeAsync(600_001);
+          await vi.advanceTimersByTimeAsync(600_001 - 250);
           await waitForFinished(1);
           expect(finished()).toHaveLength(1);
           // Finished precedes schedule maintenance and release of the active marker.
@@ -419,6 +426,7 @@ describe("native heartbeat busy poll settlement", () => {
           monitor,
           sessionKey,
           reply,
+          runOnce,
           request,
           waitForRequest,
           finished,
@@ -439,6 +447,7 @@ describe("native heartbeat busy poll settlement", () => {
           await waitForRequest(1);
           expect(request).toHaveBeenCalledOnce();
           await vi.advanceTimersByTimeAsync(250);
+          await runOnce.mock.results[0]?.value;
           expect(finished()).toHaveLength(0);
           expect(peekSystemEventEntries(sessionKey).map((entry) => entry.text)).toContain(text);
           expect(reply).not.toHaveBeenCalled();
@@ -540,12 +549,14 @@ describe("native heartbeat busy poll settlement", () => {
         await waitForRequest(1);
         expect(request).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(250);
+        await runOnce.mock.results[0]?.value;
         expect(deps.isReplyRunActive).toHaveBeenCalledTimes(2);
         expect(finished()).toHaveLength(0);
         expect(reply).not.toHaveBeenCalled();
         const releaseMain = await holdLane(CommandLane.Main);
         await vi.advanceTimersByTimeAsync(60_000);
         expect(runOnce).toHaveBeenCalledTimes(2);
+        await runOnce.mock.results[1]?.value;
         expect(finished()).toHaveLength(0);
         await releaseMain();
         await vi.advanceTimersByTimeAsync(60_000);

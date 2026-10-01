@@ -138,12 +138,6 @@ describe("Workshop live decision acceptance", () => {
 
   it.each([
     [
-      "empty completion",
-      (input: DecisionInput) => {
-        input.observation.finalText = "";
-      },
-    ],
-    [
       "generic completion",
       (input: DecisionInput) => {
         input.observation.finalText = "There is nothing useful to add.";

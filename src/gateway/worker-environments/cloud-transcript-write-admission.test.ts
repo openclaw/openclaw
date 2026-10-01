@@ -15,6 +15,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   measureLaunchTurn,
+  readLaunchToolNames,
   placements,
   root,
   seedActivePlacement,
@@ -54,7 +55,7 @@ describe("cloud transcript write admission", () => {
   it.each(["current", "run", "claim", "environment", "missing", "writer", "lifecycle"] as const)(
     "checks %s authority after admitting the fallback user write",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn();
       await sessionAccess.patchSessionEntryCore(sessionTarget, () => ({
         activeWriterRunId: input.runId,
@@ -80,6 +81,7 @@ describe("cloud transcript write admission", () => {
         ownerEpoch: OWNER_EPOCH,
         runWorkspaceCommand: vi.fn(),
         measureLaunchTurn,
+        readLaunchToolNames,
         launchTurn: launch,
         quiesceWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
@@ -172,7 +174,7 @@ describe("cloud transcript write admission", () => {
   ] as const)(
     "checks $change settlement authority after admitting a workspace report (cleared: $cleared)",
     async ({ change, cleared }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
         throw new Error("expected active placement");
@@ -211,14 +213,16 @@ describe("cloud transcript write admission", () => {
             throw new Error("expected local staged result");
           }
           if (!cleared) {
-            request.source.stagedResult.record(request.source.stagedResult.ref);
+            await request.source.stagedResult.record(request.source.stagedResult.ref);
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
             getAppliedWorkspaceResult: () => ({
               manifestRef: MANIFEST_REF,
               manifest: { version: 1, baseCommit: null, entries: [] },

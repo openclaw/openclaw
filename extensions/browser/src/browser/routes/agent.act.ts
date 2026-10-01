@@ -2,6 +2,7 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveExistingSessionActTimeouts } from "../act-policy.js";
+import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   clickChromeMcpElement,
   clickChromeMcpCoords,
@@ -16,21 +17,17 @@ import {
   type ChromeMcpOperationOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
+import { BROWSER_ACT_ERROR_CODES } from "../errors.js";
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
-import {
-  ACT_ERROR_CODES,
-  browserEvaluateDisabledMessage,
-  jsonActError,
-} from "./agent.act.errors.js";
+import { browserEvaluateDisabledMessage, jsonActError } from "./agent.act.errors.js";
 import {
   assertExistingSessionPostInteractionNavigationAllowed,
   createExistingSessionDeadline,
   waitForExistingSessionCondition,
-  type ExistingSessionOperation,
 } from "./agent.act.existing-session.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
@@ -72,20 +69,25 @@ export function registerBrowserAgentActRoutes(
     const body = readBody(req);
     const kind = toStringOrEmpty(body.kind);
     if (!isActKind(kind)) {
-      return jsonActError(res, 400, ACT_ERROR_CODES.kindRequired, "kind is required");
+      return jsonActError(res, 400, BROWSER_ACT_ERROR_CODES.kindRequired, "kind is required");
     }
     let action: BrowserActRequest;
     try {
       action = normalizeActRequest(body);
     } catch (err) {
-      return jsonActError(res, 400, ACT_ERROR_CODES.invalidRequest, formatErrorMessage(err));
+      return jsonActError(
+        res,
+        400,
+        BROWSER_ACT_ERROR_CODES.invalidRequest,
+        formatErrorMessage(err),
+      );
     }
     const targetId = normalizeOptionalString(body.targetId);
     if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
       return jsonActError(
         res,
         400,
-        ACT_ERROR_CODES.selectorUnsupported,
+        BROWSER_ACT_ERROR_CODES.selectorUnsupported,
         SELECTOR_UNSUPPORTED_MESSAGE,
       );
     }
@@ -97,7 +99,7 @@ export function registerBrowserAgentActRoutes(
       return jsonActError(
         res,
         403,
-        ACT_ERROR_CODES.evaluateDisabled,
+        BROWSER_ACT_ERROR_CODES.evaluateDisabled,
         browserEvaluateDisabledMessage(action.kind === "evaluate" ? "evaluate" : "wait"),
       );
     }
@@ -196,7 +198,12 @@ export function registerBrowserAgentActRoutes(
             }
             const targetIdError = canonicalizeActTargetIds(action, tab, actionTabs);
             if (targetIdError) {
-              return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
+              return jsonActError(
+                res,
+                403,
+                BROWSER_ACT_ERROR_CODES.targetIdMismatch,
+                targetIdError,
+              );
             }
             const profileName = profileCtx.profile.name;
             if (isExistingSession) {
@@ -205,11 +212,11 @@ export function registerBrowserAgentActRoutes(
                 return jsonActError(
                   res,
                   501,
-                  ACT_ERROR_CODES.unsupportedForExistingSession,
+                  BROWSER_ACT_ERROR_CODES.unsupportedForExistingSession,
                   admission.error,
                 );
               }
-              const existingSessionTarget: ExistingSessionOperation = {
+              const existingSessionTarget: ChromeMcpTargetOperation = {
                 profileName,
                 profile: profileCtx.profile,
                 targetId: tab.targetId,
@@ -225,7 +232,7 @@ export function registerBrowserAgentActRoutes(
                   : new Set<string>();
               const runGuardedAction = async <T>(
                 execute: (
-                  target: ExistingSessionOperation,
+                  target: ChromeMcpTargetOperation,
                   checkDeadline: () => void,
                 ) => Promise<T>,
               ): Promise<T> => {
@@ -416,30 +423,26 @@ export function registerBrowserAgentActRoutes(
             if (action.kind === "close" || result.aborted?.reason === "closed") {
               clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
             }
-            switch (action.kind) {
-              case "batch":
-                return await jsonOk(
-                  {
-                    results: result.results ?? [],
-                    ...(result.aborted ? { aborted: result.aborted } : {}),
-                    ...(downloads ? { downloads } : {}),
-                  },
-                  {
-                    ...resultTargetOptions,
-                    resolveCurrentTarget: result.aborted?.reason !== "closed",
-                  },
-                );
-              case "evaluate":
-                return await jsonOk(
-                  { result: result.result, ...(downloads ? { downloads } : {}) },
-                  resultTargetOptions,
-                );
-              case "resize":
-              case "close":
-                return await jsonOk(downloads ? { downloads } : undefined);
-              default:
-                return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
+            if (action.kind === "batch") {
+              return await jsonOk(
+                {
+                  results: result.results ?? [],
+                  ...(result.aborted ? { aborted: result.aborted } : {}),
+                  ...(downloads ? { downloads } : {}),
+                },
+                {
+                  ...resultTargetOptions,
+                  resolveCurrentTarget: result.aborted?.reason !== "closed",
+                },
+              );
             }
+            return await jsonOk(
+              {
+                ...(action.kind === "evaluate" ? { result: result.result } : {}),
+                ...(downloads ? { downloads } : {}),
+              },
+              action.kind === "resize" || action.kind === "close" ? undefined : resultTargetOptions,
+            );
           } catch (error) {
             verificationDeadline?.throwIfAborted();
             requestDeadline?.throwIfAborted();

@@ -1,5 +1,5 @@
 import { clearActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { scheduleCodexNativeHookRelayUnregister } from "./native-hook-relay.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
@@ -171,18 +171,16 @@ export async function cleanupCodexAttempt(
               threadId: resourceState.thread.threadId,
             })
           : true;
-      // Only explicitly retained live threads may skip the next thread/resume.
-      if (!retainLiveThread) {
-        // Clear first: if a newer owner won the binding, its live subscription must remain intact.
-        if (bindingReleased) {
-          if (!(await releaseThreadSubscription())) {
-            if (params.oneShotCliRun) {
-              await runCleanupStep("codex-one-shot-unsubscribe", async () => {
-                throw new Error("Codex one-shot thread unsubscribe was not confirmed");
-              });
-            }
-          }
-        }
+      // Clear first: a newer binding owner keeps its live subscription.
+      if (
+        !retainLiveThread &&
+        bindingReleased &&
+        !(await releaseThreadSubscription()) &&
+        params.oneShotCliRun
+      ) {
+        await runCleanupStep("codex-one-shot-unsubscribe", async () => {
+          throw new Error("Codex one-shot thread unsubscribe was not confirmed");
+        });
       }
     }
   } finally {

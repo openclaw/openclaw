@@ -190,6 +190,15 @@ export async function resolveManagedCodexComputerUseConfig(
   return { ...config, pluginName: UNIFIED_COMPUTER_USE_PLUGIN, mcpServerName: UNIFIED_SERVER };
 }
 
+/** A native plugin disable veto must survive an automatic identity replacement. */
+export function isLegacyCodexComputerUsePluginDisabled(config: unknown): boolean {
+  const plugin =
+    isRecord(config) && isRecord(config.plugins)
+      ? config.plugins["computer-use@openai-bundled"]
+      : undefined;
+  return isRecord(plugin) && plugin.enabled === false;
+}
+
 /** Renaming a server must not discard an operator's legacy server or tool restrictions. */
 export function hasLegacyCodexComputerUseMcpPolicy(config: unknown): boolean {
   if (!isRecord(config)) {
@@ -227,10 +236,9 @@ export async function reconcileManagedCodexComputerUseCache(params: {
   forceRefresh?: boolean;
   previousCacheBinding?: string;
 }): Promise<string | undefined> {
-  const config = await resolveManagedCodexComputerUseConfig(
-    params.config,
-    params.managedMarketplacePath,
-  );
+  // Startup has no effective native policy snapshot. Readiness reconciles the
+  // replacement cache only after checking the disable and tool-policy vetoes.
+  const config = params.config;
   params.assertCurrent();
   const bundledMarketplacePath = params.managedMarketplacePath ?? params.bundledMarketplacePath;
   const cacheBinding = [
@@ -238,7 +246,7 @@ export async function reconcileManagedCodexComputerUseCache(params: {
     bundledMarketplacePath ?? "default",
     config.pluginName,
   ].join("\0");
-  const cache = await ensureCodexComputerUseSharedPluginCache({
+  const shared = await ensureCodexComputerUseSharedPluginCache({
     codexHome: params.codexHome,
     config,
     ...(params.ownershipRoot ? { ownershipRoot: params.ownershipRoot } : {}),
@@ -247,5 +255,5 @@ export async function reconcileManagedCodexComputerUseCache(params: {
     forceRefresh: params.forceRefresh === true || params.previousCacheBinding !== cacheBinding,
   });
   params.assertCurrent();
-  return cache.status === "shared" ? cacheBinding : undefined;
+  return shared ? cacheBinding : undefined;
 }

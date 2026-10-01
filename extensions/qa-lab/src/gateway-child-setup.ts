@@ -46,7 +46,7 @@ import {
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 export type QaGatewayChildStateMutationContext = {
   configPath: string;
   runtimeEnv: NodeJS.ProcessEnv;
@@ -285,7 +285,7 @@ export async function prepareQaGatewayChild(
       cfg,
       stateDir,
     });
-    const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+    const mockAuthProviders = resolvedProvider.mockAuthProviders;
     if (mockAuthProviders && mockAuthProviders.length > 0) {
       if (usesPackagedCandidate) {
         cfg = applyQaMockAuthProfileConfig({ cfg, providers: mockAuthProviders });
@@ -322,11 +322,8 @@ export async function prepareQaGatewayChild(
     : gatewayExecutablePath
       ? [...runtimePreloadArgs, ...gatewayArgsPrefix]
       : [...runtimePreloadArgs, distEntryPath, ...gatewayArgsPrefix];
-  const gatewayLaunchArgsPrefix = gatewayCommand?.processBoundary
-    ? gatewayArgsPrefix
-    : cliArgsPrefix;
   const buildGatewayArgs = () => [
-    ...gatewayLaunchArgsPrefix,
+    ...cliArgsPrefix,
     "gateway",
     "run",
     "--port",
@@ -438,7 +435,7 @@ export async function prepareQaGatewayChild(
           encoding: "utf8",
           mode: 0o600,
         });
-        const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+        const mockAuthProviders = resolvedProvider.mockAuthProviders;
         if (
           usesPackagedCandidate &&
           gatewayCommand &&

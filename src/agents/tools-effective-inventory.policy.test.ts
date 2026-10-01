@@ -17,6 +17,22 @@ function messagingAgentConfig(tools: OpenClawConfig["tools"] = {}): OpenClawConf
   };
 }
 
+function excludedByMessagingProfile(id: string) {
+  return {
+    id,
+    status: "excluded",
+    reasons: [
+      {
+        kind: "profile",
+        label: "messaging profile",
+        source: "agents.entries.assistant.tools.profile",
+        profile: "messaging",
+      },
+    ],
+    alsoAllowPath: "agents.entries.assistant.tools.alsoAllow",
+  };
+}
+
 describe("tool access diagnostics", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -36,19 +52,7 @@ describe("tool access diagnostics", () => {
         { profile: "messaging", source: "agents.entries.assistant.tools.profile", active: true },
       ],
       tools: [
-        ...["exec", "process"].map((id) => ({
-          id,
-          status: "excluded",
-          reasons: [
-            {
-              kind: "profile",
-              label: "messaging profile",
-              source: "agents.entries.assistant.tools.profile",
-              profile: "messaging",
-            },
-          ],
-          alsoAllowPath: "agents.entries.assistant.tools.alsoAllow",
-        })),
+        ...["exec", "process"].map(excludedByMessagingProfile),
         { id: "session_status", status: "allowed", reasons: [] },
       ],
     });
@@ -149,19 +153,9 @@ describe("tool access diagnostics", () => {
       source: "tools.profile",
       active: false,
     });
-    expect(before.toolAccess?.tools.find((tool) => tool.id === "exec")).toEqual({
-      id: "exec",
-      status: "excluded",
-      reasons: [
-        {
-          kind: "profile",
-          label: "messaging profile",
-          source: "agents.entries.assistant.tools.profile",
-          profile: "messaging",
-        },
-      ],
-      alsoAllowPath: "agents.entries.assistant.tools.alsoAllow",
-    });
+    expect(before.toolAccess?.tools.find((tool) => tool.id === "exec")).toEqual(
+      excludedByMessagingProfile("exec"),
+    );
 
     const after = inventory({
       tools: { profile: "full" },
@@ -179,6 +173,28 @@ describe("tool access diagnostics", () => {
       status: "available",
       reasons: [],
     });
+  });
+
+  it("reports the prepared profile that actually constrains the inventory", () => {
+    const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+      config: messagingAgentConfig(),
+      agentId: "assistant",
+      sessionKey: "agent:assistant:main",
+    });
+    const result = resolveEffectiveToolInventory({
+      cfg: { tools: { profile: "full" } },
+      agentId: "assistant",
+      sessionKey: "agent:assistant:main",
+      workspaceDir: "/tmp/tool-access-workspace",
+      agentDir: "/tmp/tool-access-agent",
+      modelApi: null,
+      conversationCapabilityProfile,
+    });
+
+    expect(result.profile).toBe("messaging");
+    expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).not.toContain(
+      "exec",
+    );
   });
 
   it("preserves the prepared session ceiling when explaining a profile exclusion", () => {

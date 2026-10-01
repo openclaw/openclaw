@@ -6,6 +6,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { buildMatchQueryFromTerms } from "./keyword-query.js";
 import {
   projectMemorySearchRow,
   resolveSnippetProjection,
@@ -17,7 +18,25 @@ const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const EXACT_PATH_SPECIFICITY_SQL_FUNCTION = "openclaw_memory_exact_path_specificity";
 const NORMALIZED_CONTAINS_SQL_FUNCTION = "openclaw_memory_normalized_contains";
 
-type SearchSource = MemorySource;
+function loadKeywordRowsWithFallback<T>(
+  plan: { matchQuery: string | null; substringTerms: string[] },
+  loadRows: (matchQuery: string | null, terms: string[]) => T[],
+  fallbackTokens: () => string[],
+  warning: string,
+): { rows: T[]; usedMatch: boolean } {
+  if (plan.matchQuery) {
+    try {
+      return { rows: loadRows(plan.matchQuery, plan.substringTerms), usedMatch: true };
+    } catch (error) {
+      console.warn(`${warning}: ${String(error)}`);
+      return {
+        rows: loadRows(null, uniqueStrings([...fallbackTokens(), ...plan.substringTerms])),
+        usedMatch: false,
+      };
+    }
+  }
+  return { rows: loadRows(null, plan.substringTerms), usedMatch: false };
+}
 
 type PathKeywordSearchResult = SearchRowResult & {
   textScore: 0;
@@ -92,12 +111,7 @@ function escapeLikePattern(term: string): string {
 }
 
 function isAscii(value: string): boolean {
-  for (const codePoint of value) {
-    if ((codePoint.codePointAt(0) ?? 0) > 0x7f) {
-      return false;
-    }
-  }
-  return true;
+  return !/[^\p{ASCII}]/u.test(value);
 }
 
 function resolveUnicodeCandidateAnchors(value: string): string[] {
@@ -155,16 +169,8 @@ function registerSubstringSqlFunction(db: DatabaseSync, terms: readonly string[]
   );
 }
 
-function buildSubstringFilter(params: { terms: string[]; column: string }): {
-  sql: string;
-  params: string[];
-} {
-  return {
-    sql: params.terms
-      .map(() => ` AND ${NORMALIZED_CONTAINS_SQL_FUNCTION}(${params.column}, ?) = 1`)
-      .join(""),
-    params: params.terms,
-  };
+function buildSubstringFilter(terms: string[], column: string): string {
+  return terms.map(() => ` AND ${NORMALIZED_CONTAINS_SQL_FUNCTION}(${column}, ?) = 1`).join("");
 }
 
 function buildExactPathCandidatePatterns(query: string): string[] {
@@ -210,14 +216,6 @@ function buildExactPathCandidatePatterns(query: string): string[] {
     }
   }
   return [...patterns];
-}
-
-function buildMatchQueryFromTerms(terms: string[]): string | null {
-  if (terms.length === 0) {
-    return null;
-  }
-  const quoted = terms.map((term) => `"${term.replaceAll('"', "")}"`);
-  return quoted.join(" AND ");
 }
 
 function planKeywordSearch(params: {
@@ -307,7 +305,7 @@ export async function searchKeyword(params: {
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
   snippetMaxChars: number;
-  sourceFilter: { sql: string; params: SearchSource[] };
+  sourceFilter: { sql: string; params: MemorySource[] };
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
   boostFallbackRanking?: boolean;
@@ -328,13 +326,11 @@ export async function searchKeyword(params: {
   // Lexical FTS is model-agnostic (issue #48300), but old databases may
   // already contain orphaned FTS rows from prior model-scoped cleanup.
   const liveChunkClause = ` AND EXISTS (SELECT 1 FROM memory_index_chunks c WHERE c.id = ${params.ftsTable}.id)`;
-  let rows: Array<MemorySearchRow & { rank: number }>;
-  let usedMatch = false;
-  const loadRows = (matchQuery: string | null, terms: string[]): typeof rows => {
-    const filter = buildSubstringFilter({
-      terms,
-      column: "text",
-    });
+  const loadRows = (
+    matchQuery: string | null,
+    terms: string[],
+  ): Array<MemorySearchRow & { rank: number }> => {
+    const filter = buildSubstringFilter(terms, "text");
     if (terms.length > 0) {
       registerSubstringSqlFunction(params.db, terms);
     }
@@ -348,37 +344,24 @@ export async function searchKeyword(params: {
         `SELECT id, path, source, start_line, end_line, text,\n` +
           `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank\n` +
           `  FROM ${params.ftsTable}\n` +
-          ` WHERE ${matchClause}${filter.sql}${liveChunkClause}${params.sourceFilter.sql}\n` +
+          ` WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}\n` +
           (matchQuery ? ` ORDER BY rank ASC\n` : "") +
           ` LIMIT ?`,
       )
       .all(
         ...(matchQuery ? [matchQuery] : []),
-        ...filter.params,
+        ...terms,
         ...params.sourceFilter.params,
         params.limit,
-      ) as typeof rows;
+      ) as Array<MemorySearchRow & { rank: number }>;
   };
 
-  if (plan.matchQuery) {
-    try {
-      rows = loadRows(plan.matchQuery, plan.substringTerms);
-      usedMatch = true;
-    } catch (matchErr) {
-      // FTS5 MATCH can fail on certain token patterns depending on the
-      // Node.js sqlite runtime and tokenizer (e.g. unicode61 vs trigram).
-      // Log the root cause, then fall back to per-token substring
-      // search so results are still returned instead of being silently dropped.
-      console.warn(
-        `memory search: FTS5 MATCH failed, falling back to substring search: ${String(matchErr)}`,
-      );
-      const queryTokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
-      const allTerms = uniqueStrings([...queryTokens, ...plan.substringTerms]);
-      rows = loadRows(null, allTerms);
-    }
-  } else {
-    rows = loadRows(null, plan.substringTerms);
-  }
+  const { rows, usedMatch } = loadKeywordRowsWithFallback(
+    plan,
+    loadRows,
+    () => normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []),
+    "memory search: FTS5 MATCH failed, falling back to substring search",
+  );
 
   const queryMatchers = params.boostFallbackRanking
     ? uniqueStrings(normalizeSearchTokens(params.rankingQuery ?? params.query)).map((token) => ({
@@ -419,7 +402,7 @@ export async function searchPathKeyword(params: {
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
   snippetMaxChars: number;
-  sourceFilter: { sql: string; params: SearchSource[] };
+  sourceFilter: { sql: string; params: MemorySource[] };
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
 }): Promise<PathKeywordSearchResult[]> {
@@ -434,10 +417,7 @@ export async function searchPathKeyword(params: {
     buildFtsQuery: params.buildFtsQuery,
   });
   const plan = pathPlans[0] ?? { query: params.query, matchQuery: null, substringTerms: [] };
-  const planSubstringFilter = buildSubstringFilter({
-    terms: plan.substringTerms,
-    column: pathColumn,
-  });
+  const planSubstringFilter = buildSubstringFilter(plan.substringTerms, pathColumn);
   registerSubstringSqlFunction(params.db, plan.substringTerms);
   const exactPathQuery = params.exactPathQuery ?? params.query;
   const matchExactPath = prepareExactPathMatcher(exactPathQuery);
@@ -465,7 +445,7 @@ export async function searchPathKeyword(params: {
       ? `candidates AS MATERIALIZED (\n` +
         `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source\n` +
         `    FROM ${params.pathFtsTable}\n` +
-        `   WHERE ${plan.matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${planSubstringFilter.sql}${params.sourceFilter.sql}\n` +
+        `   WHERE ${plan.matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${planSubstringFilter}${params.sourceFilter.sql}\n` +
         `), pattern_candidates AS MATERIALIZED (\n` +
         `  SELECT path, source FROM candidates\n` +
         `   WHERE (${exactCandidatePatterns.map(() => "path LIKE ? ESCAPE '\\'").join(" OR ")})\n` +
@@ -478,7 +458,7 @@ export async function searchPathKeyword(params: {
     const candidateParams = useLexicalCandidates
       ? [
           ...(plan.matchQuery ? [plan.matchQuery] : []),
-          ...planSubstringFilter.params,
+          ...plan.substringTerms,
           ...params.sourceFilter.params,
           ...exactCandidatePatterns,
         ]
@@ -545,15 +525,12 @@ export async function searchPathKeyword(params: {
     specificity: "exact" | "non-exact",
     resultLimit: number,
   ) => {
-    const filter = buildSubstringFilter({
-      terms,
-      column: pathColumn,
-    });
+    const filter = buildSubstringFilter(terms, pathColumn);
     const specificityOperator = specificity === "exact" ? ">" : "=";
     const qualifiedSpecificityClause = ` AND ${EXACT_PATH_SPECIFICITY_SQL_FUNCTION}(${pathColumn}) ${specificityOperator} 0`;
     const queryParams = [
       ...(matchQuery ? [matchQuery] : []),
-      ...filter.params,
+      ...terms,
       ...params.sourceFilter.params,
     ];
     // Filter empty sources before LIMIT, then resolve first chunks only for the
@@ -564,7 +541,7 @@ export async function searchPathKeyword(params: {
           `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source,\n` +
           `         ${matchQuery ? `bm25(${params.pathFtsTable})` : "0"} AS rank\n` +
           `    FROM ${params.pathFtsTable}\n` +
-          `   WHERE ${matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${filter.sql}${params.sourceFilter.sql}${qualifiedSpecificityClause}\n` +
+          `   WHERE ${matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${filter}${params.sourceFilter.sql}${qualifiedSpecificityClause}\n` +
           `     AND EXISTS (SELECT 1 FROM memory_index_chunks live\n` +
           `                  WHERE live.path = ${params.pathFtsTable}.path\n` +
           `                    AND live.source = ${params.pathFtsTable}.source)\n` +
@@ -597,24 +574,12 @@ export async function searchPathKeyword(params: {
         ...loadFilteredLexicalRows(matchQuery, terms, "non-exact", params.limit),
       ];
     };
-    if (lexicalPlan.matchQuery) {
-      try {
-        const rows = loadPartitions(lexicalPlan.matchQuery, lexicalPlan.substringTerms);
-        return { rows, usedMatch: true };
-      } catch (matchErr) {
-        console.warn(
-          `memory search: path FTS5 MATCH failed, falling back to substring search: ${String(matchErr)}`,
-        );
-        const queryTokens = normalizeStringEntries(
-          lexicalPlan.query.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? [],
-        );
-        const allTerms = uniqueStrings([...queryTokens, ...lexicalPlan.substringTerms]);
-        const rows = loadPartitions(null, allTerms);
-        return { rows, usedMatch: false };
-      }
-    }
-    const rows = loadPartitions(null, lexicalPlan.substringTerms);
-    return { rows, usedMatch: false };
+    return loadKeywordRowsWithFallback(
+      lexicalPlan,
+      loadPartitions,
+      () => normalizeStringEntries(lexicalPlan.query.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? []),
+      "memory search: path FTS5 MATCH failed, falling back to substring search",
+    );
   };
 
   const lexicalById = new Map<string, PathKeywordSearchResult>();

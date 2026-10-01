@@ -5,7 +5,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -25,7 +24,7 @@ import {
   withExistingOpenClawStateDatabaseReadOnly,
   executeExistingOpenClawStateRead,
 } from "./openclaw-state-db-readonly.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 // Registry metadata is process-stable: registry writes invalidate after each commit;
 // other-process changes take effect on restart. Polling here puts schema probes back on hot reads.
@@ -42,14 +41,10 @@ const registry = resolveGlobalSingleton<{ memo?: AgentDatabaseRegistryMemo }>(
   () => ({}),
 );
 
-function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions): string {
-  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
-}
-
 function activateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
 ): AgentDatabaseRegistryMemo {
-  const pathname = resolveAgentDatabaseRegistryPath(options);
+  const pathname = resolveDatabasePath(options);
   if (registry.memo?.pathname !== pathname) {
     // One active pathname keeps registry metadata process-stable without retaining
     // an unbounded generation map. Switching back creates a fresh generation.
@@ -71,7 +66,7 @@ export type AgentDatabaseRegistryChange = Readonly<{ previous: symbol; current: 
 export function invalidateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
 ): AgentDatabaseRegistryChange | undefined {
-  const pathname = resolveAgentDatabaseRegistryPath(options);
+  const pathname = resolveDatabasePath(options);
   if (registry.memo?.pathname === pathname) {
     const previous = registry.memo.token;
     registry.memo = { pathname, token: Symbol(pathname) };
@@ -137,7 +132,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
         }
       } finally {
         if (committed) {
-          sessionChanges.emit({ all: true, scope: "stores" });
+          sessionChanges.emit({ all: true, scope: { agentId: params.agentId, topology: true } });
         }
       }
     },
@@ -146,8 +141,12 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
 
 function cloneRegisteredAgentDatabases(
   entries: readonly OpenClawRegisteredAgentDatabase[],
+  options: AgentDatabaseRegistryListOptions,
 ): OpenClawRegisteredAgentDatabase[] {
-  return entries.map((entry) => ({ ...entry }));
+  const cloned = entries.map((entry) => ({ ...entry }));
+  return options.includeIncompatibleSchemaVersions
+    ? cloned
+    : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
 }
 
 function hasUnavailableMissingSqlitePath(pathname: string): boolean {
@@ -210,7 +209,7 @@ export function readRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions,
   artifactPreserving: boolean,
 ): OpenClawRegisteredAgentDatabase[] | Promise<OpenClawRegisteredAgentDatabase[]> {
-  const pathname = resolveAgentDatabaseRegistryPath(options);
+  const pathname = resolveDatabasePath(options);
   const read = ({ db }: { db: DatabaseSync }) =>
     readRegisteredAgentDatabaseRows(db, pathname, artifactPreserving);
   const finish = (entries: OpenClawRegisteredAgentDatabase[] | undefined) => {
@@ -241,23 +240,13 @@ export function listOpenClawRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions = {},
 ): OpenClawRegisteredAgentDatabase[] {
   const memo = activateRegisteredAgentDatabasesMemo(options);
-  if (memo.entries) {
-    const entries = cloneRegisteredAgentDatabases(memo.entries);
-    return options.includeIncompatibleSchemaVersions
-      ? entries
-      : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
-  }
   // Discovery runs per row in list hot paths, so the legacy-schema gate and the
   // query share one process-held state handle instead of opening two connections.
-  const entries = readRegisteredAgentDatabases(
+  const entries = (memo.entries ??= readRegisteredAgentDatabases(
     { ...options, includeIncompatibleSchemaVersions: true },
     false,
-  );
-  memo.entries = entries;
-  const cloned = cloneRegisteredAgentDatabases(entries);
-  return options.includeIncompatibleSchemaVersions
-    ? cloned
-    : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
+  ));
+  return cloneRegisteredAgentDatabases(entries, options);
 }
 
 /** Capture authority now, but activate the canonical memo only if discovery needs it. */
@@ -277,7 +266,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
     const options = {
       ...inputOptions,
       env,
-      path: resolveAgentDatabaseRegistryPath({ ...inputOptions, env }),
+      path: resolveDatabasePath({ ...inputOptions, env }),
     };
     const context = captureOpenClawStateWorkerContext(options);
     const inCapturedScope = AsyncLocalStorage.snapshot();
@@ -312,9 +301,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         assertPreparedCurrent = assertCurrent;
         if (!memo.entries) {
           const reply = await inCapturedScope(() =>
-            withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
-              executeExistingOpenClawStateRead(options, { type: "agentDatabaseRegistry.read" }),
-            ),
+            executeExistingOpenClawStateRead(options, { type: "agentDatabaseRegistry.read" }),
           );
           if (reply && (!reply.ok || reply.type !== "agentDatabaseRegistry.read")) {
             throw new Error("Unexpected agent database registry read result");
@@ -329,15 +316,10 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
           }
           memo.entries ??= result?.entries ?? [];
         }
-        const entries = cloneRegisteredAgentDatabases(memo.entries);
+        const entries = cloneRegisteredAgentDatabases(memo.entries, options);
         assertCurrent();
         return {
-          result: {
-            status: "available",
-            entries: options.includeIncompatibleSchemaVersions
-              ? entries
-              : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION),
-          },
+          result: { status: "available", entries },
           assertCurrent,
           followRegistration,
         };

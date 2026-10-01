@@ -6,12 +6,11 @@ import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
-  type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -20,6 +19,7 @@ import {
   getChatHistoryLoadState,
   isExpiredIncognitoSession,
   isInitialChatHistoryUnavailable,
+  setChatError,
 } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type {
@@ -42,6 +42,7 @@ import {
 } from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
+import { attachmentBatchRejection } from "./components/chat-attachment-admission.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   captureOutboxPayloadOwner,
@@ -55,15 +56,6 @@ import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
 registerChatMessageMetadataEnglish();
-
-export function setChatError(
-  host: { lastError?: string | null; chatError?: string | null },
-  error: string | null,
-) {
-  const message = error === null ? null : formatUiError(error);
-  host.lastError = message;
-  host.chatError = message;
-}
 
 export function createPendingSendMessage(
   host: ChatHost,
@@ -266,7 +258,7 @@ export function finishChatDeliveryAdmission(
   }
   const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
   if (
-    chatSendHoldReason(host, route) ||
+    chatSendHoldReason(host, route, false, current.agentId) ||
     (options?.routingSessionKey && !routeVisible(current.agentId)) ||
     (!sendsDuringActiveRun &&
       routeVisible(current.agentId) &&
@@ -306,6 +298,26 @@ export function finishScopedChatSending(host: ChatHost, scope: StoredChatOutboxS
   }
   host.chatSendingScopeKey = null;
   host.chatSending = false;
+}
+
+export function rejectOversizedQueuedChatDelivery(
+  host: ChatHost,
+  prepared: ChatQueueItem,
+  attachments: readonly ChatAttachment[],
+  sessionKey: string,
+  options: QueuedChatSendOptions | undefined,
+): boolean {
+  const error = attachmentBatchRejection(attachments, host.hello?.policy);
+  if (error === undefined) {
+    return false;
+  }
+  const storageMode = options?.storageMode ?? "durable";
+  const setState = deliveryStateWriter(host, storageMode, prepared.id);
+  if (!restoreRejectedChatDelivery(host, prepared, options)) {
+    setState("failed", error);
+  }
+  surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
+  return true;
 }
 
 /** Settle transport failures without turning an unconfirmed send into a fresh attempt. */

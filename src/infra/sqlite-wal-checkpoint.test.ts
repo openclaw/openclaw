@@ -14,85 +14,66 @@ import {
 } from "./sqlite-reader-lifecycle.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import {
+  createSqliteWalCheckpoint,
   onSqliteWalCheckpoint,
   publishSqliteWalCheckpointObservation,
   type SqliteWalCheckpointSnapshot,
 } from "./sqlite-wal-checkpoint.js";
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
-import { StateDatabaseCoordinatorContentionError } from "./state-database-coordinator-errors.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite WAL checkpoint observations", () => {
-  it("backs off once per interval, warns in health early, and throttles contention logs", async () => {
-    vi.useFakeTimers();
-    const databasePath = path.join(
-      tempDirs.make("openclaw-wal-coordinator-retry-"),
-      "state.sqlite",
-    );
-    const writer = openNodeSqliteDatabase(databasePath);
-    const onCheckpointError = vi.fn();
-    let blocked = true;
-    const runMaintenance = vi.fn((operation: () => boolean) => {
-      if (blocked) {
-        throw new StateDatabaseCoordinatorContentionError("state-lifecycle");
-      }
-      return operation();
-    });
-    const interval = 30 * 60 * 1000;
-    const maintenance = configureSqliteWalMaintenance(writer, {
-      databasePath,
-      checkpointIntervalMs: interval,
-      runMaintenance,
-      onCheckpointError,
-    });
+  it("retains relayed health across native generations and rejects older observations", () => {
+    const databasePath = path.join(tempDirs.make("openclaw-wal-health-relay-"), "state.sqlite");
+    const database = openNodeSqliteDatabase(databasePath);
+    database.exec("PRAGMA journal_mode=WAL; CREATE TABLE events(value TEXT)");
+    const reader = openNodeSqliteDatabase(databasePath);
+    const owner = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+    const replacement = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
     try {
-      await vi.advanceTimersByTimeAsync(interval);
-      expect(runMaintenance).toHaveBeenCalledTimes(1);
-      expect(onCheckpointError).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(999);
-      expect(runMaintenance).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(runMaintenance).toHaveBeenCalledTimes(2);
-      expect(maintenance.health).toMatchObject({
+      expect(owner.checkpoint("PASSIVE")).toBe(true);
+      const completed = owner.snapshot!;
+      expect(completed.lastCompletedAtNs).toBe(completed.observedAtNs);
+      replacement.adopt(completed);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT value FROM events").all();
+      database.exec("INSERT INTO events VALUES ('retained')");
+      expect(replacement.checkpoint("PASSIVE")).toBe(false);
+      owner.adopt(replacement.snapshot!);
+      expect(owner.health).toMatchObject({
         state: "blocked",
-        consecutiveBlocked: 2,
-        warning: true,
+        consecutiveBlocked: 1,
+        lastCompletedAtMs: completed.health.lastCompletedAtMs,
       });
-      expect(onCheckpointError).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(interval);
-      expect(runMaintenance).toHaveBeenCalledTimes(4);
-      await vi.advanceTimersByTimeAsync(interval - 1_000);
-      expect(runMaintenance).toHaveBeenCalledTimes(5);
-      expect(onCheckpointError).toHaveBeenCalledTimes(1);
-      expect(maintenance.health).toMatchObject({
-        state: "blocked",
-        consecutiveBlocked: 5,
-        warning: true,
+      expect(owner.checkpoint("PASSIVE")).toBe(false);
+      const blocked = owner.snapshot;
+      expect(blocked?.lastCompletedAtNs).toBe(completed.observedAtNs);
+      owner.adopt(completed);
+      expect(owner.snapshot).toEqual(blocked);
+      expect(owner.health).toMatchObject({ consecutiveBlocked: 2, warning: true });
+      reader.exec("ROLLBACK");
+      expect(owner.checkpoint("PASSIVE")).toBe(true);
+      owner.adopt(replacement.snapshot!);
+      expect(owner.health).toMatchObject({ state: "complete", consecutiveBlocked: 0 });
+      const recovered = owner.snapshot!;
+      const delayed = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT value FROM events").all();
+      database.exec("INSERT INTO events VALUES ('newer')");
+      expect(delayed.checkpoint("PASSIVE")).toBe(false);
+      const newerBlocked = delayed.snapshot!;
+      delayed.adopt(recovered);
+      expect(delayed.snapshot).toMatchObject({
+        observedAtNs: newerBlocked.observedAtNs,
+        lastCompletedAtNs: recovered.observedAtNs,
+        health: { state: "blocked" },
       });
-      await vi.advanceTimersByTimeAsync(2 * interval + 1_000);
-      expect(runMaintenance).toHaveBeenCalledTimes(10);
-      expect(onCheckpointError).toHaveBeenCalledTimes(2);
-      blocked = false;
-      await vi.advanceTimersByTimeAsync(interval - 1_000);
-      expect(runMaintenance).toHaveBeenCalledTimes(11);
-      expect(maintenance.health).toMatchObject({
-        state: "complete",
-        consecutiveBlocked: 0,
-        warning: false,
-      });
-      expect(onCheckpointError).toHaveBeenCalledTimes(2);
-      blocked = true;
-      await vi.advanceTimersByTimeAsync(interval);
-      expect(maintenance.health?.consecutiveBlocked).toBe(1);
-      maintenance.close();
-      const callsAtClose = runMaintenance.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(interval);
-      expect(runMaintenance).toHaveBeenCalledTimes(callsAtClose);
+      owner.adopt(newerBlocked);
+      expect(owner.snapshot?.lastCompletedAtNs).toBe(recovered.observedAtNs);
     } finally {
-      maintenance.close();
-      writer.close();
-      vi.useRealTimers();
+      reader.close();
+      database.close();
     }
   });
 

@@ -1,19 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
-import { getSubagentSessionListReadSnapshotIdentity } from "../agents/subagents/registry/subagent-registry-state.js";
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { captureCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
 } from "../config/sessions/session-store-read-candidates.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
-import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { findSessionRepositoryWorkspaces } from "../state/session-repository-workspaces.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import {
   identity,
@@ -28,6 +28,8 @@ export async function withSessionRowDatabaseFacts(
     rows: ReadonlyMap<string, Row>;
     dirty: ReadonlySet<string>;
     revision: () => number | undefined;
+    registrySnapshot: () => object | undefined;
+    env: NodeJS.ProcessEnv;
     cfg: OpenClawConfig;
     selected?: ReadonlySet<string>;
   },
@@ -40,7 +42,7 @@ export async function withSessionRowDatabaseFacts(
   },
 ): Promise<void> {
   const revision = owner.revision();
-  const registrySnapshot = getSubagentSessionListReadSnapshotIdentity();
+  const registrySnapshot = owner.registrySnapshot();
   const ids: string[] = [];
   for (const id of owner.selected ?? owner.dirty) {
     ids.push(id);
@@ -66,8 +68,7 @@ export async function withSessionRowDatabaseFacts(
   }
   const rows = ids.flatMap((id) => owner.rows.get(id) ?? []);
   const rowRevisions = new Map(rows.map((row) => [identity(row), row.databaseFactsRevision]));
-  const env = cloneEnvWithPlatformSemantics(process.env);
-  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const env = owner.env;
   const groups = new Map<
     string,
     {
@@ -149,7 +150,11 @@ export async function withSessionRowDatabaseFacts(
           for (const row of group.rows) {
             const prepared = byKey.get(row.key);
             if (prepared) {
-              facts.set(identity(row), { ...prepared, acpMeta: prepared.entry?.acp ?? null });
+              facts.set(identity(row), {
+                ...prepared,
+                acpMeta: prepared.entry?.acp ?? null,
+                repositoryWorkspace: null,
+              });
             }
           }
         }
@@ -171,6 +176,23 @@ export async function withSessionRowDatabaseFacts(
         for (const [index, { prepared }] of acpRows.entries()) {
           prepared.acpMeta = acpMetadata[index] ?? null;
         }
+        const repositoryRows = rows.flatMap((row) => {
+          const prepared = facts.get(identity(row));
+          return prepared?.entry?.repositoryWorkspaceId ? [{ row, prepared }] : [];
+        });
+        if (repositoryRows.length) {
+          const workspaces = await findSessionRepositoryWorkspaces(
+            repositoryRows.map(({ row }) => ({ agentId: row.agentId, sessionKey: row.key })),
+            { path: resolveOpenClawStateSqlitePath(env), env },
+          );
+          const byWorkspace = new Map(
+            workspaces.map((workspace) => [workspace.workspaceId, workspace]),
+          );
+          for (const { prepared } of repositoryRows) {
+            prepared.repositoryWorkspace =
+              byWorkspace.get(prepared.entry!.repositoryWorkspaceId!) ?? null;
+          }
+        }
         for (const databaseOwner of owners) {
           databaseOwner.assertCurrent();
         }
@@ -178,7 +200,7 @@ export async function withSessionRowDatabaseFacts(
         if (
           revision !== undefined &&
           owner.revision() === revision &&
-          registrySnapshot === getSubagentSessionListReadSnapshotIdentity()
+          registrySnapshot === owner.registrySnapshot()
         ) {
           const currentIds = rows
             .filter(
@@ -195,6 +217,7 @@ export async function withSessionRowDatabaseFacts(
           assertCurrent();
         }
       },
+      projectionLane,
     );
   } finally {
     for (const continuation of continuations.toReversed()) {

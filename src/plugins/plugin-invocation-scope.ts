@@ -132,25 +132,19 @@ export function collectRegistryInvocationInstances(
   registry: PluginRegistry,
 ): Set<PluginInstanceHandle> {
   const instances = new Set<PluginInstanceHandle>();
-  for (const record of registry.plugins) {
+  const records = [
+    ...registry.plugins,
+    ...registry.decisionProviders.map(({ host }) => host.record),
+    ...registry.channels.flatMap(({ borrowedRuntimeRecord }) => borrowedRuntimeRecord ?? []),
+  ];
+  for (const record of records) {
     const instance = getPluginInstance(record);
     if (instance) {
       instances.add(instance);
     }
   }
-  for (const { host } of registry.decisionProviders) {
-    const instance = getPluginInstance(host.record);
-    if (instance) {
-      instances.add(instance);
-    }
-  }
-  for (const entry of registry.channels) {
-    const instance = entry.borrowedRuntimeRecord && getPluginInstance(entry.borrowedRuntimeRecord);
-    if (instance) {
-      instances.add(instance);
-    }
-  }
   const values = [
+    ...registry.tools.map(({ factory }) => factory),
     ...registry.channels.map(({ plugin }) => plugin),
     ...[...registry.contextEngines.values()].map(({ factory }) => factory),
     ...registry.widgetPresenters.map(({ presenter }) => presenter),

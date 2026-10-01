@@ -1,4 +1,3 @@
-// Builds provider auth credentials from config and plugin metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -104,18 +103,10 @@ export function buildApiKeyCredential(
   metadata?: Record<string, string>;
 } {
   const secretInput = resolveApiKeySecretInput(provider, input, options);
-  if (typeof secretInput === "string") {
-    return {
-      type: "api_key",
-      provider,
-      key: secretInput,
-      ...(metadata ? { metadata } : {}),
-    };
-  }
   return {
     type: "api_key",
     provider,
-    keyRef: secretInput,
+    ...(typeof secretInput === "string" ? { key: secretInput } : { keyRef: secretInput }),
     ...(metadata ? { metadata } : {}),
   };
 }
@@ -304,16 +295,12 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => path.join(agentsRoot, entry.name, "agent"));
 
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const dir of [normalized, ...discovered]) {
-    const real = safeRealpathSync(path.resolve(dir));
-    if (real && !seen.has(real)) {
-      seen.add(real);
-      result.push(real);
-    }
-  }
-  return result;
+  return uniqueStrings(
+    [normalized, ...discovered].flatMap((dir) => {
+      const real = safeRealpathSync(path.resolve(dir));
+      return real ? [real] : [];
+    }),
+  );
 }
 
 export async function writeOAuthCredentials(

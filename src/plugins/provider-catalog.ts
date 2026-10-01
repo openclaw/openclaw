@@ -1,14 +1,15 @@
-// Builds provider catalog entries from plugin manifest metadata.
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
   ModelCatalogCost,
-  ModelCatalogMediaInputConfig,
   ModelCatalogModel,
   ModelCatalogTieredCost,
   NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -74,12 +75,9 @@ export async function buildSingleProviderApiKeyCatalog(params: {
     return null;
   }
 
-  const explicitProvider =
-    params.allowExplicitBaseUrl && params.ctx.config.models?.providers
-      ? Object.entries(params.ctx.config.models.providers).find(
-          ([configuredProviderId]) => normalizeProviderId(configuredProviderId) === providerId,
-        )?.[1]
-      : undefined;
+  const explicitProvider = params.allowExplicitBaseUrl
+    ? findNormalizedProviderValue(params.ctx.config.models?.providers, providerId)
+    : undefined;
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
 
   return {
@@ -175,17 +173,6 @@ function buildManifestCatalogModelInput(
   return model.input?.filter((item): item is "text" | "image" => item !== "document") ?? ["text"];
 }
 
-function cloneManifestCatalogMediaInput(
-  mediaInput?: ModelCatalogMediaInputConfig,
-): ModelDefinitionConfig["mediaInput"] | undefined {
-  if (!mediaInput?.image) {
-    return undefined;
-  }
-  return {
-    image: { ...mediaInput.image },
-  };
-}
-
 function buildManifestCatalogModel(
   model: ModelCatalogModel,
   options: { providerId?: string; filterDocument?: boolean } = {},
@@ -217,7 +204,11 @@ function buildManifestCatalogModel(
     ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
     ...(model.headers ? { headers: { ...model.headers } } : {}),
     ...(model.compat ? { compat: { ...model.compat } } : {}),
-    ...(model.mediaInput ? { mediaInput: cloneManifestCatalogMediaInput(model.mediaInput) } : {}),
+    ...(model.mediaInput
+      ? {
+          mediaInput: model.mediaInput.image ? { image: { ...model.mediaInput.image } } : undefined,
+        }
+      : {}),
   };
 }
 

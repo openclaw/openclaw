@@ -97,6 +97,12 @@ export function readResidentUserProfileId(
   }
   return resolveCatalogProfile(catalog.rows, profileId)?.id;
 }
+
+/** Committed canonical row identity is the revision of catalog-derived avatar facts. */
+export function readResidentUserProfileRevision(profileId: string, pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  return catalog?.valid ? resolveCatalogProfile(catalog.rows, profileId) : undefined;
+}
 type ProfileCatalog = {
   rows: Map<string, ProfileDisplayRow>;
   identity: DatabasePathIdentity;
@@ -404,20 +410,6 @@ export function retainUserProfileMutationPublication(
       publication.catalogs.clear();
       stopUnusedProfileCatalogObservers();
     },
-  };
-}
-
-export function retainUserProfilePublication(
-  identity: DatabasePathIdentity,
-  profileId: string,
-  before: ProfileDisplayRow | undefined,
-) {
-  const publication = retainUserProfileMutationPublication(identity, [[profileId, before]]);
-  return {
-    reconcile(this: void, observed: ProfileDisplayRow | undefined) {
-      publication.reconcile([[profileId, observed]]);
-    },
-    release: publication.release,
   };
 }
 

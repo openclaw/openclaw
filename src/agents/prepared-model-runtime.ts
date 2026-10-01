@@ -58,6 +58,7 @@ import {
 import {
   refreshCommittedProviderCatalogs,
   createPreparedModelRuntimeCatalogRecovery,
+  createPreparedModelRuntimePluginRecovery,
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
@@ -259,13 +260,6 @@ async function loadPreparedModelRuntimeOwner<T>(
     if (getBlockingReplacement()) {
       continue;
     }
-    if (!activated) {
-      return await projectPublishedModelRuntimeOwner(
-        input,
-        preparedModelRuntimeLeaseContext,
-        project,
-      );
-    }
     try {
       return await projectPublishedModelRuntimeOwner(
         input,
@@ -273,7 +267,7 @@ async function loadPreparedModelRuntimeOwner<T>(
         project,
       );
     } catch (error) {
-      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+      if (!activated || !(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
         throw error;
       }
       // A concurrent publication boundary may retire the standalone owner between build and read.
@@ -287,6 +281,11 @@ export function getPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeSnapshot | undefined {
   return getBlockingReplacement() ? undefined : readPublishedModelRuntimeSnapshot(owners, rawInput);
+}
+
+/** Reads the owner-held publication barrier without starting catalog acquisition. */
+export function getPendingPreparedModelRuntimeReplacement(): Promise<void> | undefined {
+  return getBlockingReplacement()?.promise;
 }
 
 /** Publishes one owner from an explicit startup/activation lifecycle boundary. */
@@ -517,6 +516,15 @@ export const recoverPreparedModelRuntimeCatalogWorker = createPreparedModelRunti
   refreshPreparedModelRuntimeSnapshots,
 );
 
+const recoverRetiredConfiguredPluginGeneration = createPreparedModelRuntimePluginRecovery(
+  owners,
+  () =>
+    gatewayLifecycleActive &&
+    !refreshCancellation.signal.aborted &&
+    !pendingModelRuntimeReplacement,
+  refreshPreparedModelRuntimeSnapshots,
+);
+
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
   config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
@@ -624,6 +632,7 @@ export function refreshPreparedModelRuntimeSnapshots(
           buildTimeoutMs: modelRuntimeBuildTimeoutMs,
           progress: startup?.progress,
           acquisitionSignal,
+          onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
         },
       );
       if (!isPublicationCurrent()) {

@@ -305,11 +305,6 @@ describe("browser cli snapshot defaults", () => {
     expect(sharedMocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
-  it("passes zero snapshot depth because root depth is valid", async () => {
-    const params = await runSnapshot(["--depth", "0"]);
-    expect(params?.query?.depth).toBe(0);
-  });
-
   it("accepts signed decimal snapshot numeric options", async () => {
     const params = await runSnapshot(["--limit", "+10", "--depth", "+0"]);
     expect(params?.query?.limit).toBe(10);

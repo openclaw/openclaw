@@ -5,6 +5,7 @@ import type {
   SessionsListResult,
 } from "../../../api/types.ts";
 import { renderAgentIdentityAvatar } from "../../../components/identity-avatar-view.ts";
+import { renderKbd } from "../../../components/kbd.ts";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/openclaw-mascot.ts";
 import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
@@ -92,9 +93,7 @@ export function resolveAssistantDisplayAvatar(
  * minus channel-originated sessions — those live in their channel sections and
  * are not something the user "starts" from here.
  */
-function selectWelcomeRecentSessions(
-  props: Pick<ChatWelcomeProps, "sessions" | "sessionKey" | "sessionHost">,
-): GatewaySessionRow[] {
+function selectWelcomeRecentSessions(props: ChatWelcomeProps): GatewaySessionRow[] {
   if (!props.sessions) {
     return [];
   }
@@ -170,22 +169,12 @@ function renderWelcomeSuggestions(props: Pick<ChatWelcomeProps, "onDraftChange" 
   `;
 }
 
-function renderWelcomeHero(
-  props: Pick<
-    ChatWelcomeProps,
-    | "currentAgentId"
-    | "agents"
-    | "assistantName"
-    | "assistantAvatar"
-    | "assistantAvatarUrl"
-    | "hint"
-  >,
-) {
+function renderWelcomeHero(props: ChatWelcomeProps) {
   const name = props.assistantName || "Assistant";
   const hint =
     props.hint ??
-    html`${t("chat.welcome.hintBeforeShortcut")}
-      <kbd>/</kbd> ${t("chat.welcome.hintAfterShortcut")}`;
+    html`${t("chat.welcome.hintBeforeShortcut")} ${renderKbd("/")}
+    ${t("chat.welcome.hintAfterShortcut")}`;
   return html`
     <div class="agent-chat__welcome-identity">
       <span class="agent-chat__welcome-avatar" role="img" aria-label=${name}>

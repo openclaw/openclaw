@@ -271,24 +271,39 @@ export async function resolveContextEngineFactory<T extends { engine: ContextEng
   return ref;
 }
 
+export type ContextEngineFactoryPreparation = {
+  completion: Promise<unknown>;
+  assertCurrent?: () => void;
+};
+
 /** Foreground engine resolution shares the same factory execution and physical resource owner. */
 export async function createContextEngineWithResources<T>(
   registry: PluginRegistry,
   registration: ContextEngineRegistration,
   create: (source: ContextEngineFactoryResources | undefined) => Promise<T>,
+  preparation?: ContextEngineFactoryPreparation,
 ): Promise<T> {
+  const completion = preparation?.completion;
+  const assertCurrent = preparation?.assertCurrent;
   return await runContextEngineFactoryResolution(async (abandon) => {
-    const source = retainContextEngineFactorySource(
-      registry,
-      registration,
-      getPluginRegistryInspectionResources(registry),
-      abandon,
-    );
+    let source: ContextEngineFactoryResources | undefined;
     try {
+      source = retainContextEngineFactorySource(
+        registry,
+        registration,
+        getPluginRegistryInspectionResources(registry),
+        abandon,
+      );
+      if (completion) {
+        await completion;
+        assertCurrent?.();
+      }
       return await (source ? source.run(() => create(source)) : create(undefined));
     } catch (error) {
       abandon(source);
       throw error;
+    } finally {
+      await completion;
     }
   });
 }

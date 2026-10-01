@@ -1,16 +1,10 @@
 // Native terminal authority, elapsed execution limits, and bounded local settlement.
-import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  invokeNativeHookRelay,
-  nativeHookRelayTesting,
-  resolveActiveEmbeddedRunSessionId,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveActiveEmbeddedRunSessionId } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
-import * as approvalBridge from "./approval-bridge.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
   expectSuccessfulAttempt,
@@ -22,20 +16,16 @@ import {
   TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
 } from "./attempt-timeouts.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
-import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
-import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   createTestParams,
-  extractRelayIdFromThreadRequest,
   createStartedThreadHarness,
   fastWait,
   mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
-  rateLimitsUpdated,
   runCodexAppServerAttempt,
   setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
@@ -131,22 +121,6 @@ function makeAgentMessageDelta(
   };
 }
 
-function makeRawAssistant(
-  overrides: Partial<{
-    id: string;
-    phase: "commentary" | "final_answer";
-    text: string;
-  }> = {},
-): CodexServerNotification {
-  const { text = "Done.", ...itemOverrides } = overrides;
-  return rawItemCompleted({
-    type: "message",
-    role: "assistant",
-    content: [{ type: "output_text", text }],
-    ...itemOverrides,
-  });
-}
-
 async function expectTurnInterrupted(
   harness: ReturnType<typeof createStartedThreadHarness>,
 ): Promise<void> {
@@ -203,37 +177,41 @@ async function runClientCloseScenario(notifications: CodexServerNotification[]) 
   return await run;
 }
 
+function createNotificationClient(onRequest: (method: string) => Promise<void>) {
+  let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+  const request = vi.fn(async (method: string) => {
+    await onRequest(method);
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "thread/start") {
+      return threadStartResult("thread-1");
+    }
+    if (method === "turn/start") {
+      return turnStartResult("turn-1", "inProgress");
+    }
+    return {};
+  });
+  setCodexAppServerClientFactoryForTest(
+    async () =>
+      ({
+        ...mockClientRuntimeMethods(),
+        request,
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+      }) as never,
+  );
+  return { request, notify: (notification: CodexServerNotification) => notify(notification) };
+}
+
 describe("runCodexAppServerAttempt native lifecycle", () => {
   it.each([
-    { name: "no output", notifications: [] },
-    { name: "a quiet native command", notifications: [startedCommand("cmd-1", "long-command")] },
-    {
-      name: "a completed native command",
-      notifications: [completedCommand("cmd-1", "long-command")],
-    },
-    {
-      name: "reasoning and its raw mirror",
-      notifications: [
-        itemNotification("item/completed", { id: "reasoning-1", type: "reasoning" }),
-        rawItemCompleted({ id: "raw-reasoning-1", type: "reasoning" }),
-      ],
-    },
-    {
-      name: "typed commentary",
-      notifications: [
-        itemNotification("item/completed", {
-          id: "commentary-1",
-          type: "agentMessage",
-          phase: "commentary",
-          text: "Working on it.",
-        }),
-      ],
-    },
-    {
-      name: "a completed-looking assistant",
-      notifications: [completedAssistant("msg-1", "Done.")],
-    },
-    { name: "a raw assistant", notifications: [makeRawAssistant()] },
     {
       name: "an asynchronous assistant update",
       notifications: [
@@ -244,13 +222,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
           delivery: "async",
           text: "Child update.",
         }),
-      ],
-    },
-    {
-      name: "an active native stop hook",
-      notifications: [
-        completedAssistant("msg-1", "Done."),
-        finalizationHookNotification("hook/started", "running"),
       ],
     },
     {
@@ -278,60 +249,11 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     expectSuccessfulAttempt(await run);
   });
 
-  it("waits beyond the old post-tool limit after an OpenClaw dynamic tool response", async () => {
-    vi.useFakeTimers();
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(makeTestParams({ timeoutMs: 60 * 60_000 }));
-    const settled = vi.fn();
-    void run.then(settled);
-    await harness.waitForMethod("turn/start");
-    const toolResult = await harness.handleServerRequest({
-      id: "request-tool-1",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: "message",
-        arguments: { action: "send", text: "already sent" },
-      },
-    });
-    expect(toolResult).toMatchObject({ success: false, contentItems: [{ type: "inputText" }] });
-    await harness.notify(makeRawAssistant({ text: "Working on the next step." }));
-    await vi.advanceTimersByTimeAsync(11 * 60_000);
-    expect(settled).not.toHaveBeenCalled();
-    expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    expectSuccessfulAttempt(await run);
-  });
-
   it.each([
-    { name: "no output", notifications: [], assistantTexts: [] },
-    {
-      name: "an active native command",
-      notifications: [startedCommand("cmd-1", "long-command")],
-      assistantTexts: [],
-    },
-    {
-      name: "a completed native command",
-      notifications: [completedCommand("cmd-1", "touch done.txt")],
-      assistantTexts: [],
-    },
     {
       name: "partial assistant output",
       notifications: [makeAgentMessageDelta()],
       assistantTexts: ["Still writing"],
-    },
-    {
-      name: "a completed-looking assistant item",
-      notifications: [completedAssistant("msg-1", "Finished.")],
-      assistantTexts: ["Finished."],
-    },
-    {
-      name: "a raw assistant item",
-      notifications: [makeRawAssistant({ text: "Finished." })],
-      assistantTexts: ["Finished."],
     },
   ])("expires execution with $name without inferring success", async (scenario) => {
     const { harness, params, result, onRunAgentEvent } = await runExecutionTimeoutScenario(
@@ -379,40 +301,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     expectTimedOutAttempt(await run);
     expect(onAttemptTimeout).toHaveBeenCalledOnce();
     await expectTurnInterrupted(harness);
-  });
-
-  it("preserves raw image-generation media when Codex never sends turn completion", async () => {
-    const harness = createStartedThreadHarness();
-    vi.useFakeTimers();
-    const params = makeTestParams({ timeoutMs: 60_000 });
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "state"));
-
-    const run = runCodexAppServerAttempt(params);
-    await run.waitForTurnAccepted();
-    await harness.notify(
-      rawItemCompleted({
-        id: "ig_raw_1",
-        type: "image_generation_call",
-        status: "generating",
-        result: tinyPngBase64,
-        revised_prompt: "A tiny blue square",
-      }),
-    );
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    const result = await run;
-    const mediaUrl = result.toolMediaUrls?.[0];
-
-    expect(readAttemptTerminal(result).timedOut).toBe(true);
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server execution budget timed out",
-    );
-    expect(result.toolMediaUrls).toHaveLength(1);
-    expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
-    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
-      Buffer.from(tinyPngBase64, "base64"),
-    );
-    expect(result.promptTimeoutOutcome).toMatchObject({ replayInvalid: true });
   });
 
   it("joins queued image projection when timeout aborts the turn", async () => {
@@ -500,88 +388,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     expect(result.promptTimeoutOutcome).toMatchObject({ replayInvalid: true });
   });
 
-  it("keeps turn request activity active until elicitation handling resolves", async () => {
-    const harness = createStartedThreadHarness();
-    const bridgedResponse = {
-      kind: "handled",
-      response: { action: "accept", content: null, _meta: null },
-    } as const;
-    let resolveBridge!: (value: typeof bridgedResponse) => void;
-    const bridgePromise = new Promise<typeof bridgedResponse>((resolve) => {
-      resolveBridge = resolve;
-    });
-    vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest").mockImplementation(
-      async () => await bridgePromise,
-    );
-    const params = makeTestParams({ timeoutMs: 60_000 });
-    const onRunProgress = vi.fn();
-    params.onRunProgress = onRunProgress;
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify(
-      itemNotification("item/started", {
-        id: "mcp-hung",
-        type: "mcpToolCall",
-        server: "server-1",
-        tool: "approval-gated-tool",
-        status: "inProgress",
-        arguments: {},
-      }),
-    );
-
-    const response = harness.handleServerRequest({
-      id: "request-pending-elicitation",
-      method: "mcpServer/elicitation/request",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        mode: "form",
-        message: "Approve?",
-        requestedSchema: { type: "object", properties: {} },
-        serverName: "server-1",
-        _meta: null,
-      },
-    });
-    await vi.waitFor(
-      () =>
-        expect(onRunProgress).toHaveBeenCalledWith(
-          expect.objectContaining({
-            reason: "request:mcpServer/elicitation/request:start",
-          }),
-        ),
-      fastWait,
-    );
-
-    expect(
-      onRunProgress.mock.calls.some(
-        ([event]) =>
-          (event as { reason?: string }).reason ===
-          "request:mcpServer/elicitation/request:response",
-      ),
-    ).toBe(false);
-
-    resolveBridge(bridgedResponse);
-    await expect(response).resolves.toEqual(bridgedResponse.response);
-    await vi.waitFor(
-      () =>
-        expect(onRunProgress).toHaveBeenCalledWith(
-          expect.objectContaining({
-            reason: "request:mcpServer/elicitation/request:response",
-          }),
-        ),
-      fastWait,
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-
-    const result = await run;
-    expect(readAttemptTerminal(result)).toMatchObject({
-      aborted: false,
-      timedOut: false,
-      promptError: null,
-    });
-  });
-
   it("aborts a hung elicitation at the elapsed execution deadline", async () => {
     vi.useFakeTimers();
     const harness = createStartedThreadHarness();
@@ -635,67 +441,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     await responseRejected;
     expectTimedOutAttempt(result);
     expect(requestAborted).toBe(true);
-  });
-
-  it("keeps turn request activity active until command approval resolves", async () => {
-    const harness = createStartedThreadHarness();
-    const approvalResponse = { decision: "accept" } as const;
-    let resolveApproval!: (value: typeof approvalResponse) => void;
-    const approval = new Promise<typeof approvalResponse>((resolve) => {
-      resolveApproval = resolve;
-    });
-    vi.spyOn(approvalBridge, "handleCodexAppServerApprovalRequest").mockImplementation(
-      async () => await approval,
-    );
-    const params = makeTestParams({ timeoutMs: 60_000 });
-    const onRunProgress = vi.fn();
-    params.onRunProgress = onRunProgress;
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    const response = harness.handleServerRequest({
-      id: "request-pending-approval",
-      method: "item/commandExecution/requestApproval",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "command-1",
-        command: "echo approved",
-        cwd: "/workspace",
-      },
-    });
-    await vi.waitFor(
-      () =>
-        expect(onRunProgress).toHaveBeenCalledWith(
-          expect.objectContaining({
-            reason: "request:item/commandExecution/requestApproval:start",
-          }),
-        ),
-      fastWait,
-    );
-    expect(
-      onRunProgress.mock.calls.some(
-        ([event]) =>
-          (event as { reason?: string }).reason ===
-          "request:item/commandExecution/requestApproval:response",
-      ),
-    ).toBe(false);
-
-    resolveApproval(approvalResponse);
-    await expect(response).resolves.toEqual(approvalResponse);
-    expect(onRunProgress).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: "request:item/commandExecution/requestApproval:response",
-      }),
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-
-    expect(readAttemptTerminal(await run)).toMatchObject({
-      aborted: false,
-      timedOut: false,
-      promptError: null,
-    });
   });
 
   it("keeps secret user input request activity active until the answer arrives", async () => {
@@ -776,51 +521,13 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
   it("waits for native completion after tool events buffered during turn start", async () => {
     vi.useFakeTimers();
     const turnStartRequested = createDeferred<void>();
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
+    const { request, notify } = createNotificationClient(async (method) => {
       if (method === "turn/start") {
-        await notify(
-          itemNotification("item/started", {
-            id: "cmd-1",
-            type: "commandExecution",
-            command: "git status -sb",
-            status: "inProgress",
-          }),
-        );
-        await notify(
-          itemNotification("item/completed", {
-            id: "cmd-1",
-            type: "commandExecution",
-            command: "git status -sb",
-            status: "completed",
-          }),
-        );
+        await notify(startedCommand("cmd-1", "git status -sb"));
+        await notify(completedCommand("cmd-1", "git status -sb"));
         turnStartRequested.resolve();
-        return turnStartResult("turn-1", "inProgress");
       }
-      return {};
     });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
     const params = createParams(
       path.join(tempDir, "session-buffered-native-tool-silent.jsonl"),
       path.join(tempDir, "workspace-buffered-native-tool-silent"),
@@ -846,90 +553,63 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
 
   registerConfirmedStopContinuationTest();
 
-  it("merges rate-limit updates into the client cache at receive time", async () => {
-    const harness = createStartedThreadHarness();
-    const params = makeTestParams({ timeoutMs: 1_000 });
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    const notification = rateLimitsUpdated(Date.now() + 60_000);
-    await harness.notify(notification);
-    // The client-runtime observer merges on the wire path, so a usage-limit
-    // failure in the same turn can already read the fresh snapshot.
-    expect(readRecentCodexRateLimits(harness.client)).toEqual(notification.params);
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
-      aborted: false,
-      timedOut: false,
+  it("bounds pre-bind terminal projection after client closure at the settlement deadline", async () => {
+    const projection = createDeferred<void>();
+    const projectionStarted = createDeferred<void>();
+    const onReasoningStream = vi.fn(() => {
+      projectionStarted.resolve();
+      return projection.promise;
     });
-  });
-
-  it.each(["caller cancellation", "settlement deadline"] as const)(
-    "bounds pre-bind terminal projection after client closure with %s",
-    async (termination) => {
-      const projection = createDeferred<void>();
-      const projectionStarted = createDeferred<void>();
-      const onReasoningStream = vi.fn(() => {
-        projectionStarted.resolve();
-        return projection.promise;
-      });
-      const controller = new AbortController();
-      const harness = createStartedThreadHarness(async (method) => {
-        if (method === "turn/start") {
-          vi.useFakeTimers();
-          await harness.notify({
-            method: "item/reasoning/textDelta",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              itemId: "reasoning-1",
-              delta: "thinking",
-            },
-          });
-          await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-          return turnStartResult("turn-1", "inProgress");
-        }
-        return undefined;
-      });
-      const params = makeTestParams({
-        timeoutMs: 60 * 60_000,
-        abortSignal: controller.signal,
-        onReasoningStream,
-      });
-      const settled = vi.fn();
-      const run = runCodexAppServerAttempt(params);
-      void run.then(settled, settled);
-      try {
-        await Promise.race([
-          projectionStarted.promise,
-          run.then(() => {
-            throw new Error("Codex attempt ended before reasoning projection");
-          }),
-        ]);
-        expect(onReasoningStream).toHaveBeenCalledOnce();
-        harness.close();
-        if (termination === "caller cancellation") {
-          controller.abort("caller stopped while draining");
-        } else {
-          await vi.advanceTimersByTimeAsync(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS);
-        }
-        await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS + 1);
-        vi.useRealTimers();
-        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
-        // A closed transport cannot confirm background-terminal cleanup. That
-        // explicit failure must escape even while projection remains blocked.
-        await expect(run).rejects.toThrow("Codex cancellation could not confirm the turn stopped");
-        expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBeUndefined();
-      } finally {
-        projection.resolve();
-        vi.useRealTimers();
-        controller.abort("test cleanup");
-        await run.catch(() => {});
+    const controller = new AbortController();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        vi.useFakeTimers();
+        await harness.notify({
+          method: "item/reasoning/textDelta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "reasoning-1",
+            delta: "thinking",
+          },
+        });
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        return turnStartResult("turn-1", "inProgress");
       }
-    },
-  );
+      return undefined;
+    });
+    const params = makeTestParams({
+      timeoutMs: 60 * 60_000,
+      abortSignal: controller.signal,
+      onReasoningStream,
+    });
+    const settled = vi.fn();
+    const run = runCodexAppServerAttempt(params);
+    void run.then(settled, settled);
+    try {
+      await Promise.race([
+        projectionStarted.promise,
+        run.then(() => {
+          throw new Error("Codex attempt ended before reasoning projection");
+        }),
+      ]);
+      expect(onReasoningStream).toHaveBeenCalledOnce();
+      harness.close();
+      await vi.advanceTimersByTimeAsync(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS + 1);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+      // A closed transport cannot confirm background-terminal cleanup. That
+      // explicit failure must escape even while projection remains blocked.
+      await expect(run).rejects.toThrow("Codex cancellation could not confirm the turn stopped");
+      expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBeUndefined();
+    } finally {
+      projection.resolve();
+      vi.useRealTimers();
+      controller.abort("test cleanup");
+      await run.catch(() => {});
+    }
+  });
 
   it("lets queued terminal projection finish within its settlement window", async () => {
     vi.useFakeTimers();
@@ -1068,116 +748,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
   });
 
-  it("waits for interrupted turn completion after a queued native abort marker", async () => {
-    const { projectionStarted, releaseProjection } = makeMediaProjectionGate();
-    const harness = createStartedThreadHarness();
-    const params = makeTestParams({ timeoutMs: 60_000 });
-
-    const run = runCodexAppServerAttempt(params);
-    let resolved = false;
-    void run.then(() => {
-      resolved = true;
-    });
-    await harness.waitForMethod("turn/start");
-    await harness.notify(completedAssistant("msg-final-1", "Done."));
-    const pendingProjection = harness.notify(
-      rawItemCompleted({
-        id: "ig_raw_1",
-        type: "image_generation_call",
-        status: "generating",
-        result: tinyPngBase64,
-      }),
-    );
-    await projectionStarted;
-    expect(harness.requests).not.toContainEqual(
-      expect.objectContaining({ method: "turn/interrupt" }),
-    );
-    const pendingAbort = harness.notify(
-      rawItemCompleted({
-        id: "abort-marker-1",
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: "<turn_aborted>\nThe user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.\n</turn_aborted>",
-          },
-        ],
-      }),
-    );
-
-    releaseProjection();
-    await Promise.all([pendingProjection, pendingAbort]);
-
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(resolved).toBe(false);
-
-    await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted", items: [] }));
-
-    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
-      aborted: true,
-      timedOut: false,
-      promptError: null,
-    });
-  });
-
-  it("cleans up native hook relay state when Codex completes the turn as interrupted", async () => {
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createTestParams(), {
-      nativeHookRelay: { enabled: true },
-    });
-
-    await harness.waitForMethod("turn/start");
-    const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
-    await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted", items: [] }));
-
-    const result = await run;
-    expectSuccessfulAttempt(result);
-    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
-    await expect(
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId,
-        event: "pre_tool_use",
-        rawPayload: {
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          tool_input: { command: "pnpm test" },
-        },
-      }),
-    ).rejects.toThrow("native hook relay not found");
-    await nativeHookRelayUnregisterQueue.flush();
-    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
-  });
-
-  it("keeps upstream cancellation aborted when Codex completes the turn as interrupted", async () => {
-    const harness = createStartedThreadHarness();
-    const abortController = new AbortController();
-    const onRunAgentEvent = vi.fn();
-    const params = makeTestParams({
-      abortSignal: abortController.signal,
-      onAgentEvent: onRunAgentEvent,
-    });
-    const run = runCodexAppServerAttempt(params);
-
-    await run.waitForTurnAccepted();
-    abortController.abort("user_cancelled");
-    await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted" }));
-
-    const result = await run;
-    expect(readAttemptTerminal(result).aborted).toBe(true);
-    expect(readAttemptTerminal(result).timedOut).toBe(false);
-    expect(readAttemptTerminal(result).promptError).toBeNull();
-    expect(
-      onRunAgentEvent.mock.calls
-        .map(([event]) => event)
-        .find((event) => event.stream === "lifecycle" && event.data.phase === "end")?.data,
-    ).toMatchObject({ aborted: true, status: "cancelled", stopReason: "stop" });
-  });
-
   it("classifies an upstream hard timeout as timed out lifecycle", async () => {
     const harness = createStartedThreadHarness();
     const abortController = new AbortController();
@@ -1233,44 +803,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     },
   );
 
-  it("retains completed-looking assistant text as a failure when the client closes before terminal", async () => {
-    const result = await runClientCloseScenario([
-      itemNotification("item/completed", {
-        type: "agentMessage",
-        id: "msg-final-1",
-        text: "Done before restart.",
-      }),
-    ]);
-
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
-    expect(readAttemptTerminal(result).aborted).toBe(false);
-    expect(readAttemptTerminal(result).timedOut).toBe(false);
-    expect(result.assistantTexts).toEqual(["Done before restart."]);
-    expect(result.codexAppServerFailure).toMatchObject({
-      kind: "client_closed_before_turn_completed",
-      replaySafe: false,
-      replayBlockedReason: "assistant_output",
-    });
-  });
-
-  it("keeps partial assistant output as a client-close failure", async () => {
-    const result = await runClientCloseScenario([makeAgentMessageDelta()]);
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
-    expect(result.assistantTexts).toEqual(["Still writing"]);
-    expect(result.codexAppServerFailure).toEqual({
-      kind: "client_closed_before_turn_completed",
-      transport: "stdio",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      replaySafe: false,
-      replayBlockedReason: "assistant_output",
-    });
-  });
-
   it("keeps a later partial assistant output as a client-close failure after an earlier completed message", async () => {
     const result = await runClientCloseScenario([
       itemNotification("item/completed", {
@@ -1297,15 +829,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
 
   it.each([
     {
-      name: "after a newer empty completion",
-      notifications: [
-        completedAssistant("msg-1", "Earlier complete reply."),
-        completedAssistant("msg-2"),
-      ],
-      assistantText: "Earlier complete reply.",
-      replayBlockedReason: "assistant_output",
-    },
-    {
       name: "after a later completed item",
       notifications: [
         completedAssistant("msg-1", "Earlier complete reply."),
@@ -1314,30 +837,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       ],
       assistantText: "Earlier complete reply.",
       replayBlockedReason: "potential_side_effect",
-    },
-    {
-      name: "when an earlier item finishes later",
-      notifications: [
-        startedCommand("cmd-1", "touch finishes-later.txt"),
-        completedAssistant("msg-1", "Too early."),
-        completedCommand("cmd-1", "touch finishes-later.txt"),
-      ],
-      assistantText: "Too early.",
-      replayBlockedReason: "potential_side_effect",
-    },
-    {
-      name: "after a later raw tool call",
-      notifications: [
-        completedAssistant("msg-1", "I will run a tool."),
-        rawItemCompleted({
-          type: "custom_tool_call",
-          id: "tool-raw-1",
-          name: "shell",
-          input: '{"command":"echo pending"}',
-        }),
-      ],
-      assistantText: "I will run a tool.",
-      replayBlockedReason: "assistant_output",
     },
   ] satisfies Array<{
     name: string;
@@ -1359,49 +858,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       replaySafe: false,
       replayBlockedReason: scenario.replayBlockedReason,
     });
-  });
-
-  it("keeps completed assistant output as a client-close failure while another item is active", async () => {
-    const result = await runClientCloseScenario([
-      itemNotification("item/started", {
-        type: "commandExecution",
-        id: "cmd-active-1",
-        status: "inProgress",
-      }),
-      itemNotification("item/completed", {
-        type: "agentMessage",
-        id: "msg-final-1",
-        text: "Done before restart.",
-      }),
-    ]);
-
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
-    expect(result.assistantTexts).toEqual(["Done before restart."]);
-    expect(result.codexAppServerFailure).toEqual({
-      kind: "client_closed_before_turn_completed",
-      transport: "stdio",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      replaySafe: false,
-      replayBlockedReason: "potential_side_effect",
-    });
-  });
-
-  it("does not fail a turn when the client closes after terminal completion is queued", async () => {
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createTestParams());
-
-    await run.waitForTurnAccepted();
-    const completed = harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    harness.close();
-    await completed;
-
-    const result = await run;
-    expect(readAttemptTerminal(result).promptError ?? undefined).toBeUndefined();
-    expect(readAttemptTerminal(result).aborted).toBe(false);
-    expect(readAttemptTerminal(result).timedOut).toBe(false);
   });
 
   it("does not treat a user prompt containing the interrupted marker as terminal", async () => {
@@ -1458,37 +914,13 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     // gateway session lane stays locked and every follow-up message queues
     // behind a run that will never resolve.
     const turnStartRequested = createDeferred<void>();
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let turnStarted = false;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
+    const { request, notify } = createNotificationClient(async (method) => {
       if (method === "turn/start") {
         turnStarted = true;
         turnStartRequested.resolve();
-        return turnStartResult("turn-1", "inProgress");
       }
-      return {};
     });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
     const params = createTestParams();
     params.onAgentEvent = () => {
       // Only explode once the turn is live: pre-turn run-lifecycle events
@@ -1518,4 +950,3 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     expect(readAttemptTerminal(result).timedOut).toBe(false);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

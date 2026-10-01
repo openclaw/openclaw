@@ -30,6 +30,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import type {
@@ -40,7 +41,6 @@ import type {
 } from "../runtime-api.js";
 import {
   buildProbeChannelStatusSummary,
-  chunkTextForOutbound,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
@@ -65,13 +65,14 @@ import {
 } from "./approval-native.js";
 import { resolveMSTeamsAccount, type ResolvedMSTeamsAccount } from "./channel-config.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
-import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
+import { msteamsDoctor } from "./doctor.js";
 import {
   MSTEAMS_GROUP_MANAGEMENT_ACTIONS,
   withMSTeamsGraphMutationCurrentness,
 } from "./graph-action-context.js";
+import { msteamsOutboundConfig } from "./outbound-config.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
-import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
+import { buildMSTeamsPresentationCard } from "./presentation.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
   assertMSTeamsReadTargetAllowed,
@@ -176,16 +177,6 @@ function resolveGraphActionTarget(
     return currentGraphTarget;
   }
   return currentChatType === "channel" ? "" : (currentChannelTarget ?? "");
-}
-
-function resolveCurrentGraphActionTarget(toolContext?: {
-  currentGraphChannelId?: string;
-  currentMessagingTarget?: string;
-}): string | undefined {
-  return (
-    normalizeOptionalString(toolContext?.currentGraphChannelId) ??
-    normalizeOptionalString(toolContext?.currentMessagingTarget)
-  );
 }
 
 type MSTeamsActionTargetParams = {
@@ -308,24 +299,9 @@ function describeMSTeamsMessageTool({
 }
 
 const msteamsChannelOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
-  chunkerMode: "markdown",
-  textChunkLimit: 4000,
-  resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
-    typeof fallbackLimit === "number" && fallbackLimit > 0 ? Math.min(fallbackLimit, 4000) : 4000,
-  pollMaxOptions: 12,
+  ...msteamsOutboundConfig,
   shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
     shouldSuppressLocalMSTeamsExecApprovalPrompt({ cfg, accountId, payload, hint }),
-  deliveryCapabilities: {
-    durableFinal: {
-      text: true,
-      media: true,
-      payload: true,
-      messageSendingHooks: true,
-    },
-  },
-  presentationCapabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadMSTeamsChannelRuntime,
     renderPresentation: { resolve: (runtime) => runtime.msteamsOutbound.renderPresentation },
@@ -373,13 +349,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         resolveToolPolicy: resolveMSTeamsGroupToolPolicy,
       },
       approvalCapability: msTeamsApprovalCapability,
-      doctor: {
-        dmAllowFromMode: "topOnly",
-        groupModel: "hybrid",
-        groupAllowFromFallbackToAllowFrom: true,
-        warnOnEmptyGroupSenderAllowlist: true,
-        collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
-      },
+      doctor: msteamsDoctor,
       messaging: {
         targetPrefixes: ["msteams", "teams"],
         directTargetStyle: "user-prefixed",
@@ -410,16 +380,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             note: undefined as string | undefined,
           }));
           type ResolveTargetResultEntry = (typeof results)[number];
-          type PendingTargetEntry = { input: string; query: string; index: number };
-
-          const markPendingLookupFailed = (pending: PendingTargetEntry[]) => {
-            pending.forEach(({ index }) => {
-              const entry = results[index];
-              if (entry) {
-                entry.note = "lookup failed";
-              }
-            });
-          };
+          type PendingTargetEntry = { query: string; index: number };
           const resolvePending = async <T>(
             pending: PendingTargetEntry[],
             resolveEntries: (entries: string[]) => Promise<T[]>,
@@ -439,7 +400,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               });
             } catch (err) {
               runtime.error?.(`msteams resolve failed: ${String(err)}`);
-              markPendingLookupFailed(pending);
+              for (const { index } of pending) {
+                results[index]!.note = "lookup failed";
+              }
             }
           };
 
@@ -457,7 +420,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 entry.id = cleaned;
                 return;
               }
-              pending.push({ input: entry.input, query: cleaned, index });
+              pending.push({ query: cleaned, index });
             });
 
             await resolvePending(
@@ -494,7 +457,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               return;
             }
             const query = parsed.channel ? `${parsed.team}/${parsed.channel}` : parsed.team;
-            pending.push({ input: entry.input, query, index });
+            pending.push({ query, index });
           });
 
           await resolvePending(
@@ -653,7 +616,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   }
                 : ctx.params,
             currentChannelId: ctx.toolContext?.currentChannelId,
-            currentGraphChannelId: resolveCurrentGraphActionTarget(ctx.toolContext),
+            currentGraphChannelId:
+              normalizeOptionalString(ctx.toolContext?.currentGraphChannelId) ??
+              normalizeOptionalString(ctx.toolContext?.currentMessagingTarget),
             currentChatType: ctx.toolContext?.currentChatType,
             currentMessageId: ctx.toolContext?.currentMessageId,
             graphOnly: true,
@@ -725,16 +690,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 if (!emoji) {
                   return {
                     isError: true,
-                    content: [
+                    ...textResult(
+                      `React requires an emoji (reaction type). Valid types: ${MSTEAMS_REACTION_TYPES.join(", ")}.`,
                       {
-                        type: "text" as const,
-                        text: `React requires an emoji (reaction type). Valid types: ${MSTEAMS_REACTION_TYPES.join(", ")}.`,
+                        error: "React requires an emoji (reaction type).",
+                        validTypes: [...MSTEAMS_REACTION_TYPES],
                       },
-                    ],
-                    details: {
-                      error: "React requires an emoji (reaction type).",
-                      validTypes: [...MSTEAMS_REACTION_TYPES],
-                    },
+                    ),
                   };
                 }
                 const to = await authorizeActionTarget(target.to);
@@ -903,13 +865,12 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         probeAccount: async ({ cfg }) =>
           await (await loadMSTeamsChannelRuntime()).probeMSTeams(cfg.channels?.msteams),
         formatCapabilitiesProbe: ({ probe }) => {
-          const teamsProbe = probe;
           const lines: Array<{ text: string; tone?: "error" }> = [];
-          const appId = typeof teamsProbe?.appId === "string" ? teamsProbe.appId.trim() : "";
+          const appId = normalizeOptionalString(probe?.appId);
           if (appId) {
             lines.push({ text: `App: ${appId}` });
           }
-          const graph = teamsProbe?.graph;
+          const graph = probe?.graph;
           if (graph) {
             const roles = Array.isArray(graph.roles) ? normalizeStringEntries(graph.roles) : [];
             const scopes = Array.isArray(graph.scopes) ? normalizeStringEntries(graph.scopes) : [];
@@ -926,32 +887,30 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               if (scopes.length > 0) {
                 lines.push({ text: `Graph scopes: ${scopes.map(formatPermission).join(", ")}` });
               }
-            } else if (graph.ok) {
+            } else {
               lines.push({ text: "Graph: ok" });
             }
           }
           return lines;
         },
-        resolveAccountSnapshot: ({ account, runtime }) => ({
+        resolveAccountSnapshot: ({ account }) => ({
           accountId: account.accountId,
           enabled: account.enabled,
           configured: account.configured,
           extra: {
-            port: runtime?.port ?? null,
             tokenStatus: account.tokenStatus,
           },
         }),
       }),
       gateway: {
         startAccount: async (ctx) => {
-          const { monitorMSTeamsProvider } = await import("./index.js");
-          const port = ctx.cfg.channels?.msteams?.webhook?.port ?? 3978;
+          const { monitorMSTeamsProvider } = await import("./monitor.js");
+          const webhookPath = ctx.cfg.channels?.msteams?.webhook?.path || "/api/messages";
           const statusSink = createAccountStatusSink({
             accountId: ctx.accountId,
             setStatus: ctx.setStatus,
           });
-          statusSink({ port });
-          ctx.log?.info(`starting provider (port ${port})`);
+          ctx.log?.info(`starting provider (Gateway route ${webhookPath})`);
           if (isMSTeamsNativeApprovalClientEnabled({ cfg: ctx.cfg, accountId: ctx.accountId })) {
             registerChannelRuntimeContext({
               channelRuntime: ctx.channelRuntime,

@@ -59,15 +59,6 @@ import {
 
 const log = createSubsystemLogger("agents/model-providers");
 
-const PROVIDER_IMPLICIT_MERGERS: Partial<
-  Record<
-    string,
-    (params: { existing: ProviderConfig | undefined; implicit: ProviderConfig }) => ProviderConfig
-  >
-> = {
-  ollama: ({ implicit }) => implicit,
-};
-
 const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 
 type ImplicitProviderParams = {
@@ -113,18 +104,6 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
-function mergeImplicitProviderSet(
-  target: Record<string, ProviderConfig>,
-  additions: Record<string, ProviderConfig> | undefined,
-): void {
-  if (!additions) {
-    return;
-  }
-  for (const [key, value] of Object.entries(additions)) {
-    target[key] = value;
-  }
-}
-
 function mergeImplicitProviderConfig(params: {
   providerId: string;
   existing: ProviderConfig | undefined;
@@ -132,12 +111,8 @@ function mergeImplicitProviderConfig(params: {
   sourceModelFields?: SourceModelFields;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
-  if (!existing) {
+  if (!existing || providerId === "ollama") {
     return implicit;
-  }
-  const merge = PROVIDER_IMPLICIT_MERGERS[providerId];
-  if (merge) {
-    return merge({ existing, implicit });
   }
   return mergeProviderModels(implicit, existing, {
     providerId,
@@ -145,49 +120,22 @@ function mergeImplicitProviderConfig(params: {
   });
 }
 
-function resolveImplicitProviderAuthMarker(params: {
-  ctx: ImplicitProviderContext;
-  providerId: string;
-  provider: ProviderConfig;
-}): ProviderConfig {
-  return resolveMissingProviderApiKey({
-    providerKey: params.providerId,
-    provider: params.provider,
-    env: params.ctx.env,
-    profileApiKey: undefined,
-  });
-}
-
-function resolveConfiguredImplicitProvider(params: {
-  configuredProviders?: Record<string, ProviderConfig> | null;
-  providerIds: readonly string[];
-}): ProviderConfig | undefined {
-  for (const providerId of params.providerIds) {
-    const configured = findNormalizedProviderValue(
-      params.configuredProviders ?? undefined,
-      providerId,
-    );
-    if (configured) {
-      return configured;
-    }
-  }
-  return undefined;
-}
-
 function resolveExistingImplicitProviderFromContext(params: {
   ctx: ImplicitProviderContext;
   providerIds: readonly string[];
 }): ProviderConfig | undefined {
-  return (
-    resolveConfiguredImplicitProvider({
-      configuredProviders: params.ctx.explicitProviders,
-      providerIds: params.providerIds,
-    }) ??
-    resolveConfiguredImplicitProvider({
-      configuredProviders: params.ctx.config?.models?.providers,
-      providerIds: params.providerIds,
-    })
-  );
+  for (const configuredProviders of [
+    params.ctx.explicitProviders,
+    params.ctx.config?.models?.providers,
+  ]) {
+    for (const providerId of params.providerIds) {
+      const configured = findNormalizedProviderValue(configuredProviders ?? undefined, providerId);
+      if (configured) {
+        return configured;
+      }
+    }
+  }
+  return undefined;
 }
 
 function hasRuntimeProviderCatalog(
@@ -364,17 +312,18 @@ async function resolvePluginImplicitProviders(
         implicit: implicitProvider,
         sourceModelFields: ctx.sourceModelFields,
       });
-      discovered[providerId] = resolveImplicitProviderAuthMarker({
-        ctx,
-        providerId,
+      discovered[providerId] = resolveMissingProviderApiKey({
+        providerKey: providerId,
         provider: mergedProvider,
+        env: ctx.env,
+        profileApiKey: undefined,
       });
     }
   }
   return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
 
-async function runProviderCatalogWithTimeout(
+export async function runProviderCatalogWithTimeout(
   params: Parameters<typeof runProviderCatalog>[0] & {
     agentDir: string;
     authStore: AuthProfileStore;
@@ -386,9 +335,9 @@ async function runProviderCatalogWithTimeout(
   let active = true;
   const catalogParams = {
     ...params,
-    isActive: () => active,
+    isActive: () => active && params.isActive?.() !== false,
     reportCatalogOutcome: (outcome: ProviderCatalogOutcome) => {
-      if (active) {
+      if (active && params.isActive?.() !== false) {
         params.reportCatalogOutcome?.(outcome);
       }
     },
@@ -703,7 +652,7 @@ export async function resolveImplicitProviders(
       )
     : undefined;
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
-    mergeImplicitProviderSet(
+    Object.assign(
       providers,
       await resolvePluginImplicitProviders(
         context,

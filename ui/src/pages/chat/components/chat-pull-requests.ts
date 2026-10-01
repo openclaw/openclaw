@@ -9,6 +9,7 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import "./chat-ci-details.ts";
+import "./chat-ci-automation-control.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { icons } from "../../../components/icons.ts";
@@ -81,29 +82,18 @@ export function dismissChatPullRequest(
   return ids;
 }
 
-function stateLabel(state: ControlUiSessionPullRequest["state"]): string {
-  switch (state) {
-    case "merged":
-      return t("chat.pullRequests.merged");
-    case "draft":
-      return t("chat.pullRequests.draft");
-    case "closed":
-      return t("chat.pullRequests.closed");
-    default:
-      return t("chat.pullRequests.open");
-  }
-}
+const STATE_LABEL_KEYS = {
+  merged: "chat.pullRequests.merged",
+  draft: "chat.pullRequests.draft",
+  closed: "chat.pullRequests.closed",
+  open: "chat.pullRequests.open",
+} as const;
 
-function checksLabel(checks: NonNullable<ControlUiSessionPullRequest["checks"]>): string {
-  switch (checks.state) {
-    case "passing":
-      return t("chat.pullRequests.checksPassing");
-    case "failing":
-      return t("chat.pullRequests.checksFailing");
-    default:
-      return t("chat.pullRequests.checksPending");
-  }
-}
+const CHECK_LABEL_KEYS = {
+  passing: "chat.pullRequests.checksPassing",
+  failing: "chat.pullRequests.checksFailing",
+  pending: "chat.pullRequests.checksPending",
+} as const;
 
 function renderChecksRow(label: string, count: number, modifier: string) {
   if (count === 0) {
@@ -120,13 +110,16 @@ function renderChecksRow(label: string, count: number, modifier: string) {
 
 function renderChecks(
   pullRequest: ControlUiSessionPullRequest,
-  props: { gateway?: ApplicationGateway; sessionKey?: string; presented?: boolean },
+  props: {
+    gateway?: ApplicationGateway;
+    sessionKey?: string;
+    sessionId?: string;
+    basePath?: string;
+    presented?: boolean;
+  },
 ) {
   const checks = pullRequest.checks;
-  if (!checks) {
-    return nothing;
-  }
-  const label = checksLabel(checks);
+  const label = checks ? t(CHECK_LABEL_KEYS[checks.state]) : t("chat.pullRequests.ciMonitoring");
   const syncChecksOverlay = (element: EventTarget | null | undefined) => {
     if (!(element instanceof HTMLDetailsElement)) {
       return;
@@ -140,7 +133,7 @@ function renderChecks(
   return html`
     <details
       class="chat-pr__checks"
-      data-checks=${checks.state}
+      data-checks=${checks?.state ?? "none"}
       ${ref(syncChecksOverlay)}
       @toggle=${(event: Event) => syncChecksOverlay(event.currentTarget)}
     >
@@ -167,17 +160,30 @@ function renderChecks(
             </a>
           </div>
           <div class="chat-pr__checks-counts">
-            ${renderChecksRow(t("chat.pullRequests.checksPassed"), checks.passed, "passed")}
-            ${renderChecksRow(t("chat.pullRequests.checksFailed"), checks.failed, "failed")}
-            ${renderChecksRow(t("chat.pullRequests.checksRunning"), checks.running, "running")}
-            ${renderChecksRow(t("chat.pullRequests.checksSkipped"), checks.skipped, "skipped")}
+            ${renderChecksRow(t("chat.pullRequests.checksFailed"), checks?.failed ?? 0, "failed")}
+            ${renderChecksRow(t("chat.pullRequests.checksPassed"), checks?.passed ?? 0, "passed")}
+            ${renderChecksRow(t("chat.pullRequests.checksRunning"), checks?.running ?? 0, "running")}
+            ${renderChecksRow(t("chat.pullRequests.checksSkipped"), checks?.skipped ?? 0, "skipped")}
+            ${!checks ? t("chat.pullRequests.automationNoChecks") : nothing}
           </div>
-          <openclaw-chat-ci-details
+          <openclaw-chat-ci-automation
             .pullRequest=${pullRequest}
             .gateway=${props.gateway}
             .sessionKey=${props.sessionKey ?? ""}
+            .sessionId=${props.sessionId ?? ""}
+            .basePath=${props.basePath ?? ""}
             .presented=${props.presented ?? true}
-          ></openclaw-chat-ci-details>
+          ></openclaw-chat-ci-automation>
+          ${
+            checks
+              ? html`<openclaw-chat-ci-details
+                  .pullRequest=${pullRequest}
+                  .gateway=${props.gateway}
+                  .sessionKey=${props.sessionKey ?? ""}
+                  .presented=${props.presented ?? true}
+                ></openclaw-chat-ci-details>`
+              : nothing
+          }
         </div>
       </wa-popup>
     </details>
@@ -291,6 +297,8 @@ export function renderChatPullRequests(props: {
   pullRequests: ControlUiSessionPullRequest[];
   gateway?: ApplicationGateway;
   sessionKey?: string;
+  sessionId?: string;
+  basePath?: string;
   presented?: boolean;
   branch?: ControlUiSessionBranch;
   status: ControlUiSessionPullRequestSnapshot["status"];
@@ -321,7 +329,6 @@ export function renderChatPullRequests(props: {
     <div class="chat-prs" aria-live="polite">
       ${repeat(visible, chatPullRequestId, (pullRequest) => {
         const merged = pullRequest.state === "merged";
-        const rowPublication = pullRequest === visible[0] ? recovery : undefined;
         return html`
           <article class="chat-pr" data-state=${pullRequest.state}>
             <a
@@ -348,10 +355,11 @@ export function renderChatPullRequests(props: {
               ${
                 pullRequest.state === "open"
                   ? nothing
-                  : html`<span class="chat-pr__state">${stateLabel(pullRequest.state)}</span>`
+                  : html`<span class="chat-pr__state"
+                      >${t(STATE_LABEL_KEYS[pullRequest.state])}</span
+                    >`
               }
               ${!merged || props.status === "unavailable" ? renderStatusWarning(props.status) : nothing}
-              ${rowPublication && !published ? renderGitHubPublicationAction(rowPublication) : nothing}
               <button
                 class="chat-pr__dismiss"
                 type="button"
@@ -369,10 +377,29 @@ export function renderChatPullRequests(props: {
                 ${icons.x}
               </button>
             </span>
-            ${rowPublication ? renderGitHubPublicationDetails(rowPublication) : nothing}
           </article>
         `;
       })}
+      ${recovery ? renderPublicationRecovery(recovery) : nothing}
     </div>
   `;
+}
+
+function renderPublicationRecovery(publication: GitHubPublicationView) {
+  const content = html`<div class="chat-pr__publication-recovery">
+    ${renderGitHubPublicationDetails(publication)}
+    ${
+      publication.result?.status !== "published"
+        ? html`<div>${renderGitHubPublicationAction(publication)}</div>`
+        : nothing
+    }
+  </div>`;
+  // A session attempt has no proven relationship to any listed PR. Keep its
+  // failed receipt inspectable without presenting it as that PR’s current state.
+  return publication.result?.status === "failed"
+    ? html`<details class="chat-pr__publication-history">
+        <summary>${t("githubPublication.failedAttempt")}</summary>
+        ${content}
+      </details>`
+    : content;
 }

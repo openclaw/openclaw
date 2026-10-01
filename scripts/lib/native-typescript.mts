@@ -7,7 +7,13 @@ import {
   type FileSystem,
   type FileSystemEntries,
 } from "typescript/unstable/fs";
-import { API, type Diagnostic, type Project, type Snapshot } from "typescript/unstable/sync";
+import {
+  API,
+  type CreateSnapshotParams,
+  type Diagnostic,
+  type Project,
+  type Snapshot,
+} from "typescript/unstable/sync";
 
 export type NativeTypeScriptSource = { fileName: string; text: string };
 export type NativeTypeScriptParser = ReturnType<typeof createNativeTypeScriptParser>;
@@ -101,8 +107,8 @@ export function createNativeTypeScriptProject(options: ProjectOptions) {
   let snapshot: Snapshot;
   let project: Project;
   try {
-    snapshot = api.updateSnapshot({ openProjects: [configFileName] });
-    const opened = snapshot.getProject(configFileName);
+    snapshot = api.createSnapshot({ openProjects: [configFileName], ensurePrograms: true });
+    const opened = snapshot.getConfiguredProject(configFileName);
     if (!opened) {
       throw new Error(`Native TypeScript did not open ${configFileName}`);
     }
@@ -120,6 +126,33 @@ export function createNativeTypeScriptProject(options: ProjectOptions) {
     api.close();
   };
   return { api, snapshot, project, close, [Symbol.dispose]: close };
+}
+
+/** The async transport keeps its child referenced while close ends the server's input. */
+export async function createNativeTypeScriptProjectAsync(options: ProjectOptions) {
+  const { API: AsyncAPI } = await import("typescript/unstable/async");
+  const cwd = path.resolve(options.cwd);
+  const configFileName = compilerFileName(cwd, options.configFileName);
+  const api = new AsyncAPI({
+    cwd,
+    fs: options.files ? overlayFileSystem(cwd, options.files, options.fs) : options.fs,
+  });
+  try {
+    const snapshot = await api.createSnapshot({
+      openProjects: [configFileName],
+      ensurePrograms: true,
+    });
+    const project = snapshot.getConfiguredProject(configFileName);
+    if (!project) {
+      throw new Error(`Native TypeScript did not open ${configFileName}`);
+    }
+    let closePromise: Promise<void> | undefined;
+    const close = () => (closePromise ??= api.close());
+    return { api, snapshot, project, close, [Symbol.asyncDispose]: close };
+  } catch (error) {
+    await api.close();
+    throw error;
+  }
 }
 
 /** Batch syntax scans share one explicit process; source trees remain local after disposal. */
@@ -145,6 +178,7 @@ export function createNativeTypeScriptParser({
     assertOpen();
     if (sources.length === 0) {
       snapshot?.dispose();
+      snapshot = undefined;
       project = undefined;
       return [];
     }
@@ -186,18 +220,20 @@ export function createNativeTypeScriptParser({
     });
     const previousNames = new Set(sourceNames);
     const currentNames = new Set(names);
-    snapshot = api.updateSnapshot({
+    const changes: CreateSnapshotParams = {
       ...(previous ? {} : { openProjects: [configFileName] }),
       // A config-file change reloads its root list; invalidateAll retains the old roots.
-      fileChanges: {
+      fileNotifications: {
         changed: [configFileName, ...names.filter((name) => previousNames.has(name))],
         created: names.filter((name) => !previousNames.has(name)),
         deleted: sourceNames.filter((name) => !currentNames.has(name)),
       },
-    });
+      ensurePrograms: true,
+    };
+    snapshot = previous ? previous.update(changes) : api.createSnapshot(changes);
     sourceNames = names;
     previous?.dispose();
-    project = snapshot.getProject(configFileName);
+    project = snapshot.getConfiguredProject(configFileName);
     if (!project) {
       throw new Error("Native TypeScript did not open the syntax scan project");
     }

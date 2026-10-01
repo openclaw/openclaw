@@ -9,16 +9,12 @@ import kotlinx.serialization.json.Json
 /** Decoded talk.speak audio bytes plus provider metadata needed for Android playback. */
 internal data class TalkSpeakAudio(
   val bytes: ByteArray,
-  val provider: String,
   val outputFormat: String?,
-  val voiceCompatible: Boolean?,
   val mimeType: String?,
   val fileExtension: String?,
 )
 
-/** Result of requesting remote speech synthesis through the gateway. */
 internal sealed interface TalkSpeakResult {
-  /** Remote synthesis returned audio that Android can route to playback. */
   data class Success(
     val audio: TalkSpeakAudio,
   ) : TalkSpeakResult
@@ -35,7 +31,6 @@ internal sealed interface TalkSpeakResult {
 }
 
 internal interface TalkSpeechSynthesizing {
-  /** Synthesizes assistant text using optional per-utterance talk directives. */
   suspend fun synthesize(
     text: String,
     directive: TalkDirective?,
@@ -91,9 +86,7 @@ internal class TalkSpeakClient(
     return TalkSpeakResult.Success(
       TalkSpeakAudio(
         bytes = bytes,
-        provider = payload.provider,
         outputFormat = payload.outputFormat,
-        voiceCompatible = payload.voiceCompatible,
         mimeType = payload.mimeType,
         fileExtension = payload.fileExtension,
       ),
@@ -121,7 +114,6 @@ internal class TalkSpeakClient(
   }
 }
 
-/** Gateway talk.speak request payload assembled from text plus directive overrides. */
 @Serializable
 internal data class TalkSpeakRequest(
   val text: String,
@@ -140,7 +132,6 @@ internal data class TalkSpeakRequest(
   val latencyTier: Int? = null,
 ) {
   companion object {
-    /** Converts parsed inline talk directives into the gateway RPC payload shape. */
     fun from(
       text: String,
       directive: TalkDirective?,

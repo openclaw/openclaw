@@ -16,6 +16,7 @@ import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { finishUpdateRun, recordUpdateRunDiagnostic } from "./daemon-cli.js";
 import { printResult } from "./update-cli/progress.js";
 
@@ -55,11 +56,7 @@ function finishFromPublishedDriver(
   options: { env: NodeJS.ProcessEnv },
   contention?: { lockPath: string; observed: () => void },
 ): Promise<string> {
-  const entry = resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "daemon-cli",
-    distWorkerPath: "cli/daemon-cli.js",
-  });
+  const entry = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.daemon);
   // Published managed drivers call this stable export without awaiting it.
   // Their child exits naturally after the finalizer's filesystem work settles.
   const child = spawn(

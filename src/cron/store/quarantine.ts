@@ -3,11 +3,11 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createSqliteAuditRecordStore } from "../../infra/sqlite-audit-record-store.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../types-shared.js";
 import { cronStoreKey } from "./key.js";
-import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "./types.js";
 
 type CronQuarantineDatabase = Pick<OpenClawStateKyselyDatabase, "diagnostic_events">;
 
@@ -49,26 +49,33 @@ export function deleteCronQuarantinedJobsFromDatabase(params: {
   }
 }
 
+export function readCronQuarantinedJobsInDatabase(
+  database: DatabaseSync,
+  storeKey: string,
+): CronQuarantinedJob[] {
+  return executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<CronQuarantineDatabase>(database)
+      .selectFrom("diagnostic_events")
+      .select("payload_json")
+      .where("scope", "=", cronQuarantineScope(storeKey))
+      .orderBy("sequence", "asc"),
+  ).rows.map((row) => JSON.parse(row.payload_json) as CronQuarantinedJob);
+}
+
 /** Reads quarantined cron rows without creating or migrating a state database. */
-export function loadCronQuarantinedJobs(
+export async function loadCronQuarantinedJobs(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
-): CronQuarantinedJob[] {
-  const scope = cronQuarantineScope(storePath);
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) =>
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<CronQuarantineDatabase>(db)
-            .selectFrom("diagnostic_events")
-            .select("payload_json")
-            .where("scope", "=", scope)
-            .orderBy("sequence", "asc"),
-        ).rows.map((row) => JSON.parse(row.payload_json) as CronQuarantinedJob),
-      { env },
-    ) ?? []
+): Promise<CronQuarantinedJob[]> {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "cron.quarantine", storeKey: cronStoreKey(storePath) },
   );
+  if (reply && (!reply.ok || reply.type !== "cron.quarantine")) {
+    throw new Error("Unexpected cron quarantine observation result");
+  }
+  return reply?.entries ?? [];
 }
 
 /** Writes recovery records into the caller-owned SQLite transaction when provided. */

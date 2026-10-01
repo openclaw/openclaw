@@ -13,6 +13,7 @@ import {
   listGitWorktrees,
   worktreePathExists,
   requireGit,
+  resolveGitMetadataPath,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
@@ -41,7 +42,8 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   base: string;
   branch?: string | { mode: "existing"; name: string };
   sourceProfile?: WorktreeSourceProfile;
-  prepareCommit?: (commit: string) => Promise<void>;
+  /** Hydrate the registered commit and return its estimated checkout bytes. */
+  prepareCommit?: (commit: string) => Promise<number>;
   rollbackGuard?: () => void;
   /** Restore reuses a warm template, or materializes its snapshot after registration. */
   deferGitCheckout?: boolean;
@@ -80,15 +82,6 @@ function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitC
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-async function indexPath(worktree: string, options: WorktreeFilesystemOptions): Promise<string> {
-  return path.resolve(
-    worktree,
-    normalizeGitPathForFilesystem(
-      await requireGit(worktree, ["rev-parse", "--git-path", "index"], gitOptions(options)),
-    ),
-  );
 }
 
 async function estimateTemplateCloneBytes(
@@ -283,7 +276,11 @@ async function prepareTemplate(options: CheckoutOptions) {
     ) {
       assertOwned(options);
       touchTemplate(options.env, existing.id, options.now(), options.commitGuard);
-      return { record: existing, backend, sourceIndex: await indexPath(existing.path, options) };
+      return {
+        record: existing,
+        backend,
+        sourceIndex: await resolveGitMetadataPath(existing.path, "index", gitOptions(options)),
+      };
     }
   }
   // Restore must not build an obsolete parent tree just to overwrite it with its snapshot.
@@ -324,7 +321,11 @@ async function prepareTemplate(options: CheckoutOptions) {
   );
   assertOwned(options);
   markTemplateReady(options.env, id, options.now(), options.commitGuard);
-  return { record, backend, sourceIndex: await indexPath(record.path, options) };
+  return {
+    record,
+    backend,
+    sourceIndex: await resolveGitMetadataPath(record.path, "index", gitOptions(options)),
+  };
 }
 
 /** Git owns registration, branches and indexes; the backend only materializes files. */
@@ -455,10 +456,10 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         "Worktree source commit changed before sparse materialization; preserve it for recovery.",
       );
     }
-    await options.prepareCommit?.(commit);
+    const checkoutBytes = await options.prepareCommit?.(commit);
     let template: Awaited<ReturnType<typeof prepareTemplate>>;
     let cloneBytes: number | undefined;
-    if (options.enabled && !profile && !options.sourceOnly) {
+    if (options.enabled && checkoutBytes !== 0 && !profile && !options.sourceOnly) {
       try {
         template = await prepareTemplate(options);
         cloneBytes = template ? await estimateTemplateCloneBytes(template) : undefined;

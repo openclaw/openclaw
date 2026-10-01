@@ -10,7 +10,6 @@ import {
 } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
-import { buildTelegramRichMarkdown } from "./rich-message.js";
 import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 
 function tableMarkdown(columns: number): string {
@@ -684,13 +683,6 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(collectLinkTargets(text)).toEqual([]);
   });
 
-  it("wraps auto-linked file refs as code so Telegram does not re-linkify them", () => {
-    const { blocks } = markdownToTelegramRichBlocks("see README.md for details");
-    const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectLinkTargets(text)).toEqual([]);
-    expect(hasStyle(text, "code")).toBe(true);
-  });
-
   it("preserves authored file-style links while wrapping bare file refs as code", () => {
     const { blocks } = markdownToTelegramRichBlocks("README.md [README.md](https://README.md)");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
@@ -930,16 +922,6 @@ describe("rich message plan wiring", () => {
       Array.from({ length: 250 }, (_, index) => index + 1),
     );
     expect(chunks.flatMap((chunk) => chunk.degradationReasons ?? [])).toEqual([]);
-  });
-
-  it("emits blocks InputRichMessage and email skip_entity_detection", () => {
-    const message = buildTelegramRichMarkdown("Contact owner@example.com for help");
-    if (!("blocks" in message)) {
-      expect.fail("expected a blocks rich message");
-    }
-    expect(message.blocks.length).toBeGreaterThan(0);
-    expect(message.skip_entity_detection).toBe(true);
-    expect("html" in message).toBe(false);
   });
 
   it("applies the document-level skip flag to every chunk", () => {

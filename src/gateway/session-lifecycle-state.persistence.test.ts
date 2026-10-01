@@ -355,7 +355,6 @@ it.each(["success", "failed-write"])(
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates,
-        terminalSessions: { closeTaskSessions: vi.fn() },
         refreshConnectedUserProfiles: vi.fn(),
       });
       const persistLifecycleEvent = lifecycleState.persistGatewaySessionLifecycleEvent;
@@ -470,7 +469,7 @@ it.each(["success", "failed-write"])(
         "sessions.changed",
         expect.objectContaining({ runId, status: "killed", hasActiveRun: false, runtimeMs: 1_000 }),
         new Set(["session-observer"]),
-        { dropIfSlow: true },
+        { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
       );
       closeOpenClawAgentDatabasesForTest();
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
@@ -492,7 +491,6 @@ it.each(["success", "failed-write"])(
       subscriptions?.heartbeatUnsub();
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
-      await subscriptions?.taskUnsub();
       getSessionRowProjection(context)?.dispose();
       registration.cleanup();
       persistenceSpy?.mockRestore();
@@ -592,7 +590,6 @@ it.for([
           sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
           chatAbortControllers: new Map(),
           restartRecoveryCandidates: new Map(),
-          terminalSessions: { closeTaskSessions: vi.fn() },
           refreshConnectedUserProfiles: vi.fn(),
         });
 
@@ -632,7 +629,7 @@ it.for([
             expect.objectContaining({
               type: "custom_message",
               customType: "run-failed-before-reply",
-              content: "This turn ended before a reply: Preparation failed",
+              content: "Your request couldn't be completed: Preparation failed",
               display: true,
               details: { runId, error: "Preparation failed" },
             }),
@@ -648,7 +645,6 @@ it.for([
         subscriptions?.heartbeatUnsub();
         subscriptions?.transcriptUnsub();
         subscriptions?.lifecycleUnsub();
-        await subscriptions?.taskUnsub();
         releaseAgentRunContext(runId, claimId);
         routing.loadSessionEntry.mockReset();
         closeOpenClawAgentDatabasesForTest();

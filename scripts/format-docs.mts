@@ -44,14 +44,11 @@ function commandFailureMessage(
   result: CommandResult,
   invocation: CommandInvocation,
 ) {
-  const details: string[] = [];
-  if (invocation) {
-    details.push(`command: ${invocation.command}`);
-    if (invocation.args.length > 0) {
-      const previewArgs = invocation.args.slice(0, 12).join(" ");
-      const suffix = invocation.args.length > 12 ? ` ... (${invocation.args.length} args)` : "";
-      details.push(`args: ${previewArgs}${suffix}`);
-    }
+  const details = [`command: ${invocation.command}`];
+  if (invocation.args.length > 0) {
+    const previewArgs = invocation.args.slice(0, 12).join(" ");
+    const suffix = invocation.args.length > 12 ? ` ... (${invocation.args.length} args)` : "";
+    details.push(`args: ${previewArgs}${suffix}`);
   }
   if (result.error?.message) {
     details.push(result.error.message);
@@ -70,7 +67,7 @@ function commandFailureMessage(
   if (stdoutTail) {
     details.push(`stdout tail:\n${stdoutTail}`);
   }
-  return `${label} failed${details.length > 0 ? `:\n${details.join("\n")}` : ""}`;
+  return `${label} failed:\n${details.join("\n")}`;
 }
 
 export function docsFiles(root = ROOT, deps: FormatDeps = {}) {
@@ -98,7 +95,7 @@ function commandLineBytes(args: string[]) {
   return args.reduce((total, arg) => total + Buffer.byteLength(arg, "utf8") + 3, 0);
 }
 
-export function chunkFilesForCommand(
+function chunkFilesForCommand(
   files: string[],
   prefixArgs: string[],
   maxBytes = DOCS_FORMAT_MAX_COMMAND_LINE_BYTES,

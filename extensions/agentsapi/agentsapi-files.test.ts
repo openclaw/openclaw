@@ -210,6 +210,22 @@ describe("Agents API output attachment publication", () => {
     host.closeHost();
     host.closeAdmission();
   });
+
+  function collect(
+    client: AgentsApiClient,
+    assertCurrent: () => void = () => {},
+    transferSignal = signal,
+  ) {
+    return collectOutputs(
+      client,
+      "session-files",
+      "turn-files",
+      assertCurrent,
+      transferSignal,
+      host.hostCapabilities.prepareReplyMedia,
+    );
+  }
+
   it("persists current-turn deliverables as managed outbound media with the downloaded bytes", async () => {
     const binary = Buffer.from([255, 0, 127, 10]);
     const text = Buffer.from("completed result\n");
@@ -232,27 +248,15 @@ describe("Agents API output attachment publication", () => {
       { binary, text },
     );
 
-    const output = await collectOutputs(
-      client,
-      "session-files",
-      "turn-files",
-      () => {},
-      signal,
-      host.hostCapabilities.prepareReplyMedia,
-    );
+    const output = await collect(client);
 
-    expect(output.toolMediaUrls).toHaveLength(2);
-    expect(output.hostOwnedToolMediaUrls).toEqual(output.toolMediaUrls);
-    expect(output.toolTrustedLocalMedia).toBe(true);
-    expect(await Promise.all(output.toolMediaUrls.map((file) => fs.readFile(file)))).toEqual([
-      binary,
-      text,
-    ]);
-    for (const file of output.toolMediaUrls) {
+    expect(output).toHaveLength(2);
+    expect(await Promise.all(output.map((file) => fs.readFile(file)))).toEqual([binary, text]);
+    for (const file of output) {
       expect(path.dirname(file)).toBe(path.join(stateDir, "media", "outbound"));
     }
     expect((await fs.readdir(path.join(stateDir, "media", "outbound"))).toSorted()).toEqual(
-      output.toolMediaUrls.map((file) => path.basename(file)).toSorted(),
+      output.map((file) => path.basename(file)).toSorted(),
     );
   });
 
@@ -262,16 +266,9 @@ describe("Agents API output attachment publication", () => {
     { name: "a busy session", sessionStatus: "in_progress" },
   ])("does not publish artifacts from $name", async (options) => {
     const client = outputClient([artifact()], {}, options);
-    await expect(
-      collectOutputs(
-        client,
-        "session-files",
-        "turn-files",
-        () => {},
-        signal,
-        host.hostCapabilities.prepareReplyMedia,
-      ),
-    ).rejects.toThrow("requires a completed root turn and idle session");
+    await expect(collect(client)).rejects.toThrow(
+      "requires a completed root turn and idle session",
+    );
     expect(await outboundFiles()).toEqual([]);
   });
 
@@ -282,16 +279,7 @@ describe("Agents API output attachment publication", () => {
     { name: "an oversized file", change: { size_bytes: fileLimit + 1 } },
   ])("rejects $name before persisting any output", async ({ change }) => {
     const client = outputClient([artifact(), artifact({ id: "invalid", ...change })]);
-    await expect(
-      collectOutputs(
-        client,
-        "session-files",
-        "turn-files",
-        () => {},
-        signal,
-        host.hostCapabilities.prepareReplyMedia,
-      ),
-    ).rejects.toThrow("exceeds its hosted path or 5 MiB file bounds");
+    await expect(collect(client)).rejects.toThrow("exceeds its hosted path or 5 MiB file bounds");
     expect(await outboundFiles()).toEqual([]);
   });
 
@@ -314,16 +302,7 @@ describe("Agents API output attachment publication", () => {
     "rejects a complete output inventory exceeding the $name budget",
     async ({ artifacts, message }) => {
       const client = outputClient(artifacts);
-      await expect(
-        collectOutputs(
-          client,
-          "session-files",
-          "turn-files",
-          () => {},
-          signal,
-          host.hostCapabilities.prepareReplyMedia,
-        ),
-      ).rejects.toThrow(message);
+      await expect(collect(client)).rejects.toThrow(message);
       expect(await outboundFiles()).toEqual([]);
     },
   );
@@ -360,16 +339,7 @@ describe("Agents API output attachment publication", () => {
         }
         return mime;
       });
-      await expect(
-        collectOutputs(
-          client,
-          "session-files",
-          "turn-files",
-          assertCurrent,
-          controller.signal,
-          host.hostCapabilities.prepareReplyMedia,
-        ),
-      ).rejects.toThrow(
+      await expect(collect(client, assertCurrent, controller.signal)).rejects.toThrow(
         /no longer active|binding lease revoked|transfer aborted|This operation was aborted/,
       );
       expect(reachedSave).toBe(true);
@@ -399,18 +369,11 @@ describe("Agents API output attachment publication", () => {
       },
     );
     await expect(
-      collectOutputs(
-        client,
-        "session-files",
-        "turn-files",
-        () => {
-          if (!current) {
-            throw revoked;
-          }
-        },
-        signal,
-        host.hostCapabilities.prepareReplyMedia,
-      ),
+      collect(client, () => {
+        if (!current) {
+          throw revoked;
+        }
+      }),
     ).rejects.toBe(revoked);
     expect(await outboundFiles()).toEqual([]);
   });

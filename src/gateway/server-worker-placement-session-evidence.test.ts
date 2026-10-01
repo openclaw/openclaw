@@ -165,7 +165,10 @@ describe("worker placement session evidence", () => {
         claimId: "live-claim",
         runId: "live-run",
       });
-      const requested = identities.map((identity) => placements.startDispatch(identity));
+      const requested: WorkerSessionPlacementRecord[] = [];
+      for (const identity of identities) {
+        requested.push(await placements.startDispatch(identity));
+      }
       for (const identity of identities.slice(0, 2)) {
         await sessionAccessor.upsertSessionEntryCore(identity, {
           sessionId: identity.sessionId,

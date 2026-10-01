@@ -1,25 +1,28 @@
-// QA Lab WhatsApp auth archive and channel readiness setup.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { WhatsAppQaGateway } from "./whatsapp-live.contracts.js";
+import type { QaGatewayChild } from "../../gateway-child.js";
+import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
 
 const WHATSAPP_QA_READY_TIMEOUT_MS = 150_000;
 const WHATSAPP_QA_READY_STABILITY_MS = 20_000;
 const WHATSAPP_QA_AUTH_ARCHIVE_TIMEOUT_MS = 60_000;
 const WHATSAPP_QA_SIGNAL_SESSION_FILE_RE = /^session-[^/\\]+\.json$/u;
 
-type WhatsAppChannelStatus = {
-  busy?: boolean;
-  connected?: boolean;
-  lastConnectedAt?: number;
-  lastDisconnect?: unknown;
-  lastError?: string;
-  lastRunActivityAt?: number | null;
-  restartPending?: boolean;
-  running?: boolean;
-};
+type WhatsAppChannelStatus = Pick<
+  ChannelAccountSnapshot,
+  | "busy"
+  | "connected"
+  | "lastConnectedAt"
+  | "lastDisconnect"
+  | "lastError"
+  | "lastRunActivityAt"
+  | "restartPending"
+  | "running"
+>;
 
 function isWhatsAppChannelReady(status: WhatsAppChannelStatus | undefined) {
   return (
@@ -31,34 +34,14 @@ function isWhatsAppChannelReady(status: WhatsAppChannelStatus | undefined) {
 }
 
 async function waitForWhatsAppChannelRunning(
-  gateway: WhatsAppQaGateway,
+  gateway: QaGatewayChild,
   accountId: string,
 ): Promise<WhatsAppChannelStatus> {
   const startedAt = Date.now();
   let lastStatus: WhatsAppChannelStatus | undefined;
   while (Date.now() - startedAt < WHATSAPP_QA_READY_TIMEOUT_MS) {
     try {
-      const payload = (await gateway.call(
-        "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
-      )) as {
-        channelAccounts?: Record<
-          string,
-          Array<{
-            accountId?: string;
-            busy?: boolean;
-            connected?: boolean;
-            lastConnectedAt?: number;
-            lastDisconnect?: unknown;
-            lastError?: string;
-            lastRunActivityAt?: number | null;
-            restartPending?: boolean;
-            running?: boolean;
-          }>
-        >;
-      };
-      const accounts = payload.channelAccounts?.whatsapp ?? [];
+      const accounts = await readLiveQaChannelAccounts(gateway, "whatsapp");
       const match = accounts.find((entry) => entry.accountId === accountId);
       lastStatus = match
         ? {
@@ -72,20 +55,13 @@ async function waitForWhatsAppChannelRunning(
             running: match.running,
           }
         : undefined;
-      if (isWhatsAppChannelReady(lastStatus)) {
-        if (!lastStatus) {
-          throw new Error(
-            `whatsapp account "${accountId}" status disappeared after readiness check`,
-          );
-        }
+      if (lastStatus && isWhatsAppChannelReady(lastStatus)) {
         return lastStatus;
       }
     } catch {
       // retry
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 750);
-    });
+    await sleep(750);
   }
   throw new Error(
     `whatsapp account "${accountId}" did not become ready` +
@@ -93,7 +69,7 @@ async function waitForWhatsAppChannelRunning(
   );
 }
 
-export async function waitForWhatsAppChannelStable(gateway: WhatsAppQaGateway, accountId: string) {
+export async function waitForWhatsAppChannelStable(gateway: QaGatewayChild, accountId: string) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < WHATSAPP_QA_READY_TIMEOUT_MS) {
     const status = await waitForWhatsAppChannelRunning(gateway, accountId);
@@ -105,9 +81,7 @@ export async function waitForWhatsAppChannelStable(gateway: WhatsAppQaGateway, a
     if (connectedForMs >= WHATSAPP_QA_READY_STABILITY_MS) {
       return;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.max(750, WHATSAPP_QA_READY_STABILITY_MS - connectedForMs));
-    });
+    await sleep(Math.max(750, WHATSAPP_QA_READY_STABILITY_MS - connectedForMs));
   }
   throw new Error(
     `whatsapp account "${accountId}" did not remain ready for ${WHATSAPP_QA_READY_STABILITY_MS}ms`,

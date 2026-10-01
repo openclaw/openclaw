@@ -95,12 +95,14 @@ function readyEnvironment() {
       if (request.source.kind !== "local") {
         throw new Error("expected local workspace");
       }
-      request.source.journal.commit(MANIFEST_REF);
+      await request.source.journal.commit(MANIFEST_REF);
       return {
         manifestRef: MANIFEST_REF,
         changed: false,
         verifyStable: async () => {},
         verifyLocalStable: async () => {},
+        publishStagedResult: async () => {},
+        discardPreparedStagedResult: async () => {},
       };
     },
     syncWorkspace: vi.fn(),
@@ -346,7 +348,7 @@ describe("initial worker setup admission", () => {
   );
 
   it("rejects orphan setup instead of waiting indefinitely or running locally", async () => {
-    const placement = placements.startDispatch(sessionTarget);
+    const placement = await placements.startDispatch(sessionTarget);
     const dispatch = coordinateWorkerPlacementDispatch(
       createCoordinatorTestService({}),
       (_request, run) => run(),

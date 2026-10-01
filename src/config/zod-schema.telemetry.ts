@@ -1,4 +1,3 @@
-// Defines anonymous feature-usage consent and its generated field metadata.
 import { z } from "zod";
 import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { configUiMetadata } from "./zod-schema.sensitive.js";
@@ -14,7 +13,7 @@ const TelemetryConfigShape = {
   }),
 };
 
-export const TelemetryConfigSchema = z.object(TelemetryConfigShape).strict().optional();
+export const TelemetryConfigSchema = z.strictObject(TelemetryConfigShape).optional();
 
 export const { labels: TELEMETRY_FIELD_LABELS, help: TELEMETRY_FIELD_HELP } =
   projectConfigFieldMetadata(TelemetryConfigSchema, "telemetry");

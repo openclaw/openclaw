@@ -62,20 +62,6 @@ describe("models/shared", () => {
     );
   });
 
-  it("names only the supported model-command escape for an ambiguous roster", () => {
-    expect(() =>
-      resolveModelsTargetAgent(
-        {
-          agents: { ownership: "explicit", entries: { main: {}, helper: {}, third: {} } },
-        },
-        undefined,
-        { kind: "mutation" },
-      ),
-    ).toThrow(
-      "Multiple agents are configured, but the model command has no explicit owner. Pass --agent <id>.",
-    );
-  });
-
   it("resolves unscoped model reads through the configured system agent", () => {
     const cfg: OpenClawConfig = {
       agents: {

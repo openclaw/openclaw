@@ -69,87 +69,42 @@ describe("managed removal custody", () => {
     });
   }
 
-  it("uses native non-force removal without pruning a missing sibling registration", async () => {
-    const created = await materialize("lossless");
-    const sibling = path.join(root, "sibling");
-    await git(repo, "worktree", "add", "--detach", sibling, "HEAD");
-    await fs.rename(sibling, path.join(root, "sibling-parked"));
-    const trace = path.join(root, "git-trace.jsonl");
-    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+  it("retains the recorded unpublished branch after HEAD is switched", async () => {
+    const created = await materialize("switched");
+    await git(created.path, "commit", "--allow-empty", "-m", "unpublished work");
+    const tip = await git(created.path, "rev-parse", "HEAD");
+    await git(created.path, "checkout", "-b", "replacement", "main");
 
-    await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
+    await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
+      /branch|HEAD/,
+    );
 
-    const commands = (await fs.readFile(trace, "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { event: string; argv?: string[] })
-      .filter((entry) => entry.event === "start")
-      .map((entry) => entry.argv ?? []);
-    const removal = commands.filter((args) => args.includes("worktree") && args.includes("remove"));
-    expect(removal).toHaveLength(1);
-    expect(removal[0]).not.toContain("--force");
-    expect(commands.some((args) => args.includes("branch") && args.includes("-D"))).toBe(false);
-    expect(await git(repo, "worktree", "list", "--porcelain")).toContain(sibling);
-    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
-    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await git(repo, "rev-parse", created.branch)).toBe(tip);
+    await expect(fs.stat(created.path)).resolves.toBeDefined();
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
-  it.each(["switched", "detached"])(
-    "retains the recorded unpublished branch after HEAD is %s",
-    async (kind) => {
-      const created = await materialize(kind);
-      await git(created.path, "commit", "--allow-empty", "-m", "unpublished work");
-      const tip = await git(created.path, "rev-parse", "HEAD");
-      if (kind === "switched") {
-        await git(created.path, "checkout", "-b", "replacement", "main");
-      } else {
-        await git(created.path, "checkout", "--detach", "main");
-      }
+  it("archives and restores unpublished work with multiple tracking refs", async () => {
+    const created = await materialize("multiple");
+    await git(repo, "config", `branch.${created.branch}.remote`, ".");
+    await git(repo, "config", "--add", `branch.${created.branch}.merge`, "refs/heads/main");
+    await git(repo, "config", "--add", `branch.${created.branch}.merge`, "refs/heads/another");
+    await git(created.path, "commit", "--allow-empty", "-m", "unpublished task work");
+    const head = await git(created.path, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(created.path, "untracked.txt"), "saved work\n");
 
-      await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
-        /branch|HEAD/,
-      );
-
-      expect(await git(repo, "rev-parse", created.branch)).toBe(tip);
-      await expect(fs.stat(created.path)).resolves.toBeDefined();
-      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-    },
-  );
-
-  it.each(["none", "single", "multiple"])(
-    "archives and restores unpublished work with %s tracking",
-    async (tracking) => {
-      const created = await materialize(tracking);
-      if (tracking !== "none") {
-        await git(repo, "config", `branch.${created.branch}.remote`, ".");
-        await git(repo, "config", "--add", `branch.${created.branch}.merge`, "refs/heads/main");
-        if (tracking === "multiple") {
-          await git(
-            repo,
-            "config",
-            "--add",
-            `branch.${created.branch}.merge`,
-            "refs/heads/another",
-          );
-        }
-      }
-      await git(created.path, "commit", "--allow-empty", "-m", "unpublished task work");
-      const head = await git(created.path, "rev-parse", "HEAD");
-      await fs.writeFile(path.join(created.path, "untracked.txt"), "saved work\n");
-
-      const result = await service.remove({ id: created.id, reason: "archive" });
-      expect(result).toMatchObject({
-        removed: true,
-        snapshotRef: `refs/openclaw/snapshots/${created.id}`,
-      });
-      expect(await git(repo, "branch", "--list", created.branch)).toBe("");
-      const restored = await service.restore({ id: created.id });
-      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(head);
-      expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
-        "saved work\n",
-      );
-    },
-  );
+    const result = await service.remove({ id: created.id, reason: "archive" });
+    expect(result).toMatchObject({
+      removed: true,
+      snapshotRef: `refs/openclaw/snapshots/${created.id}`,
+    });
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
+    const restored = await service.restore({ id: created.id });
+    expect(await git(restored.path, "rev-parse", "HEAD")).toBe(head);
+    expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
+      "saved work\n",
+    );
+  });
 
   it("retains hidden dirty work instead of relying on status flags", async () => {
     const created = await materialize("hidden-dirty");

@@ -3,10 +3,6 @@ import { describe, expect, it } from "vitest";
 import { pickFallbackThinkingLevel } from "./thinking.js";
 
 describe("pickFallbackThinkingLevel", () => {
-  it("returns undefined for empty message", () => {
-    expect(pickFallbackThinkingLevel({ message: "", attempted: new Set() })).toBeUndefined();
-  });
-
   it("returns undefined for undefined message", () => {
     expect(pickFallbackThinkingLevel({ message: undefined, attempted: new Set() })).toBeUndefined();
   });

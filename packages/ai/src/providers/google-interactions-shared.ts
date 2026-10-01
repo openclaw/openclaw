@@ -14,7 +14,7 @@ import { calculateCost } from "../model-utils.js";
 import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { parseJsonPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
 import {
-  assignTransportErrorDetails,
+  failTransportStream,
   notifyProviderHttpResponse,
   notifyProviderStreamOpened,
   parseTerminalToolCallArguments,
@@ -50,6 +50,12 @@ function logGoogleInteractionsDebug(message: string, data?: Record<string, unkno
   getAiTransportHost().logDebug("google-interactions", () => ({ message, data }));
 }
 
+function joinTextParts(value: unknown): string {
+  return Array.isArray(value)
+    ? value.map((content) => readStringField(asOptionalRecord(content), "text") ?? "").join("")
+    : "";
+}
+
 function isGoogleInteractionsRequestBody(value: unknown): value is GoogleInteractionsRequestBody {
   const record = asOptionalRecord(value);
   if (!record) {
@@ -73,6 +79,7 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
   apiKey?: string;
 }): Promise<void> {
   const { stream, model, output, options, context, nextToolCallId } = params;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
   try {
     const host = getAiTransportHost();
@@ -149,12 +156,10 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       throw new Error("Google Interactions API returned empty response body");
     }
 
-    const reader = response.body.getReader();
+    reader = response.body.getReader();
     await notifyProviderStreamOpened({
       options,
-      cancelStream: async () => {
-        await reader.cancel();
-      },
+      cancelStream: () => reader?.cancel(),
     });
     stream.push({ type: "start", partial: output });
     const decoder = new TextDecoder();
@@ -206,6 +211,84 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       currentBlockType = null;
     };
 
+    const startTextBlock = (type: "text" | "thinking", text = "") => {
+      endCurrentBlock();
+      currentBlockIndex = output.content.length;
+      output.content.push(
+        type === "text"
+          ? { type, text }
+          : {
+              type,
+              thinking: text,
+              ...(latestThoughtSignature ? { thinkingSignature: latestThoughtSignature } : {}),
+            },
+      );
+      stream.push({
+        type: type === "text" ? "text_start" : "thinking_start",
+        contentIndex: currentBlockIndex,
+        partial: output,
+      });
+      if (text) {
+        stream.push({
+          type: type === "text" ? "text_delta" : "thinking_delta",
+          contentIndex: currentBlockIndex,
+          delta: text,
+          partial: output,
+        });
+      }
+      return type;
+    };
+
+    const appendTextDelta = (type: "text" | "thinking", text: string) => {
+      if (!text) {
+        return;
+      }
+      if (currentBlockType !== type) {
+        currentBlockType = startTextBlock(type);
+      }
+      const block = output.content[currentBlockIndex];
+      if (type === "text") {
+        if (block?.type !== "text") {
+          throw new Error("Google Interactions text delta has no active text block");
+        }
+        block.text += text;
+      } else {
+        if (block?.type !== "thinking") {
+          throw new Error("Google Interactions thought delta has no active thought block");
+        }
+        block.thinking += text;
+      }
+      stream.push({
+        type: type === "text" ? "text_delta" : "thinking_delta",
+        contentIndex: currentBlockIndex,
+        delta: text,
+        partial: output,
+      });
+    };
+
+    const startToolCallBlock = (
+      source: Record<string, unknown> | undefined,
+      args: Record<string, unknown> = {},
+    ) => {
+      endCurrentBlock();
+      currentBlockIndex = output.content.length;
+      const name = readStringField(source, "name") ?? "tool";
+      const toolCall: ToolCall = {
+        type: "toolCall",
+        id: readStringField(source, "id") ?? nextToolCallId(name),
+        name,
+        arguments: args,
+      };
+      currentToolArgs = Object.keys(args).length > 0 ? JSON.stringify(args) : "";
+      output.content.push(toolCall);
+      stream.push({
+        type: "toolcall_start",
+        contentIndex: currentBlockIndex,
+        partial: output,
+      });
+      return toolCall;
+    };
+
     let streamDone = false;
     let sawCompletion = false;
     while (!streamDone) {
@@ -249,38 +332,13 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             code: readStringField(providerError, "code"),
             type: "google_interactions_stream_error",
           });
-          await reader.cancel();
           throw error;
         } else if (eventType === "step.delta") {
           const delta = asOptionalRecord(event.delta);
           const deltaType = delta?.type;
 
           if (deltaType === "text") {
-            const text = readStringField(delta, "text") ?? "";
-            if (text) {
-              if (currentBlockType !== "text") {
-                endCurrentBlock();
-                currentBlockType = "text";
-                currentBlockIndex = output.content.length;
-                output.content.push({ type: "text", text: "" });
-                stream.push({
-                  type: "text_start",
-                  contentIndex: currentBlockIndex,
-                  partial: output,
-                });
-              }
-              const block = output.content[currentBlockIndex];
-              if (!block || block.type !== "text") {
-                throw new Error("Google Interactions text delta has no active text block");
-              }
-              block.text += text;
-              stream.push({
-                type: "text_delta",
-                contentIndex: currentBlockIndex,
-                delta: text,
-                partial: output,
-              });
-            }
+            appendTextDelta("text", readStringField(delta, "text") ?? "");
           } else if (
             deltaType === "thought" ||
             deltaType === "thought_summary" ||
@@ -292,40 +350,11 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             } else if (typeof delta?.content === "string") {
               thinkingText = delta.content;
             } else if (Array.isArray(delta?.content)) {
-              thinkingText = delta.content
-                .map((content) => readStringField(asOptionalRecord(content), "text") ?? "")
-                .join("");
+              thinkingText = joinTextParts(delta.content);
             } else {
               thinkingText = readStringField(asOptionalRecord(delta?.content), "text") ?? "";
             }
-            if (thinkingText) {
-              if (currentBlockType !== "thinking") {
-                endCurrentBlock();
-                currentBlockType = "thinking";
-                currentBlockIndex = output.content.length;
-                output.content.push({
-                  type: "thinking",
-                  thinking: "",
-                  ...(latestThoughtSignature ? { thinkingSignature: latestThoughtSignature } : {}),
-                });
-                stream.push({
-                  type: "thinking_start",
-                  contentIndex: currentBlockIndex,
-                  partial: output,
-                });
-              }
-              const block = output.content[currentBlockIndex];
-              if (!block || block.type !== "thinking") {
-                throw new Error("Google Interactions thought delta has no active thought block");
-              }
-              block.thinking += thinkingText;
-              stream.push({
-                type: "thinking_delta",
-                contentIndex: currentBlockIndex,
-                delta: thinkingText,
-                partial: output,
-              });
-            }
+            appendTextDelta("thinking", thinkingText);
           } else if (
             deltaType === "thought_signature" ||
             (delta && typeof delta.signature === "string" && !delta.text)
@@ -357,24 +386,8 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             const argText =
               readStringField(delta, "arguments") ?? readStringField(delta, "text") ?? "";
             if (currentBlockType !== "toolCall") {
-              endCurrentBlock();
+              currentToolCall = startToolCallBlock(delta);
               currentBlockType = "toolCall";
-              currentBlockIndex = output.content.length;
-              const toolName = readStringField(delta, "name") ?? "tool";
-              const toolCallId = readStringField(delta, "id") ?? nextToolCallId(toolName);
-              currentToolCall = {
-                type: "toolCall",
-                id: toolCallId,
-                name: toolName,
-                arguments: {},
-              };
-              currentToolArgs = "";
-              output.content.push(currentToolCall);
-              stream.push({
-                type: "toolcall_start",
-                contentIndex: currentBlockIndex,
-                partial: output,
-              });
             }
             const streamedToolName = readStringField(delta, "name");
             if (
@@ -403,79 +416,15 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             if (stepSignature) {
               latestThoughtSignature = stepSignature;
             }
-            let initialThinking = "";
-            if (Array.isArray(step.summary)) {
-              initialThinking = step.summary
-                .map((content) => readStringField(asOptionalRecord(content), "text") ?? "")
-                .join("");
-            }
+            const initialThinking = joinTextParts(step.summary);
             if (currentBlockType !== "thinking") {
-              endCurrentBlock();
-              currentBlockType = "thinking";
-              currentBlockIndex = output.content.length;
-              output.content.push({
-                type: "thinking",
-                thinking: initialThinking,
-                ...(latestThoughtSignature ? { thinkingSignature: latestThoughtSignature } : {}),
-              });
-              stream.push({
-                type: "thinking_start",
-                contentIndex: currentBlockIndex,
-                partial: output,
-              });
-              if (initialThinking) {
-                stream.push({
-                  type: "thinking_delta",
-                  contentIndex: currentBlockIndex,
-                  delta: initialThinking,
-                  partial: output,
-                });
-              }
+              currentBlockType = startTextBlock("thinking", initialThinking);
             }
           } else if (step?.type === "model_output") {
-            endCurrentBlock();
-            currentBlockType = "text";
-            currentBlockIndex = output.content.length;
-            const initialText = Array.isArray(step.content)
-              ? step.content
-                  .map((content) => readStringField(asOptionalRecord(content), "text") ?? "")
-                  .join("")
-              : "";
-            output.content.push({ type: "text", text: initialText });
-            stream.push({
-              type: "text_start",
-              contentIndex: currentBlockIndex,
-              partial: output,
-            });
-            if (initialText) {
-              stream.push({
-                type: "text_delta",
-                contentIndex: currentBlockIndex,
-                delta: initialText,
-                partial: output,
-              });
-            }
+            currentBlockType = startTextBlock("text", joinTextParts(step.content));
           } else if (step?.type === "function_call") {
-            endCurrentBlock();
+            currentToolCall = startToolCallBlock(step, asRecord(step.arguments));
             currentBlockType = "toolCall";
-            currentBlockIndex = output.content.length;
-            const toolName = readStringField(step, "name") ?? "tool";
-            const toolCallId = readStringField(step, "id") ?? nextToolCallId(toolName);
-            const stepArgs = asRecord(step.arguments);
-            const initialArgs = Object.keys(stepArgs).length > 0 ? JSON.stringify(stepArgs) : "";
-            currentToolCall = {
-              type: "toolCall",
-              id: toolCallId,
-              name: toolName,
-              arguments: stepArgs,
-            };
-            currentToolArgs = initialArgs;
-            output.content.push(currentToolCall);
-            stream.push({
-              type: "toolcall_start",
-              contentIndex: currentBlockIndex,
-              partial: output,
-            });
           }
         } else if (eventType === "step.stop") {
           latestUsage = asOptionalRecord(event.usage) ?? latestUsage;
@@ -521,14 +470,13 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       }
     }
 
-    if (streamDone) {
-      void reader.cancel().catch(() => {});
-    }
-
     endCurrentBlock();
 
     if (!sawCompletion) {
-      throw new Error("Google Interactions stream ended before interaction.completed");
+      throw Object.assign(new Error("Google Interactions stream ended before a terminal event"), {
+        code: "STREAM_INCOMPLETE",
+        type: "google_incomplete_stream",
+      });
     }
 
     if (latestThoughtSignature) {
@@ -556,12 +504,13 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
     stream.end();
   } catch (error) {
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
-    assignTransportErrorDetails(output, failure, options?.signal);
-    stream.push({
-      type: "error",
-      reason: output.stopReason === "aborted" ? "aborted" : "error",
-      error: output,
-    });
-    stream.end();
+    failTransportStream({ stream, output, signal: options?.signal, error: failure });
+  } finally {
+    if (reader) {
+      // Track cleanup without delaying terminal delivery or replacing the original failure.
+      const cancellation = reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+      getAiTransportHost().observePendingProviderWork?.(cancellation);
+    }
   }
 }

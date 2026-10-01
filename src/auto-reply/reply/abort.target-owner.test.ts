@@ -12,12 +12,14 @@ import {
   patchSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { clearSessionQueues, enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -93,8 +95,11 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     const state = await setupStop();
     const { getOrCreateSessionMcpRuntime } =
       await import("../../agents/agent-bundle-mcp-manager.test-support.js");
-    const { getSessionMcpRuntimeManagerForTesting } =
+    const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
       await import("../../agents/agent-bundle-mcp-manager-api.js");
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
     const manager = getSessionMcpRuntimeManagerForTesting();
     try {
       await getOrCreateSessionMcpRuntime({
@@ -119,73 +124,115 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     }
   });
 
-  it("stops the selected agent's global session in an explicit roster", async () => {
-    const state = await setupStop();
-    const agentId = "selected";
-    const globalKey = "global";
-    const storePath = path.join(
-      state.params.workspaceDir,
-      "agents",
-      agentId,
-      "sessions",
-      "sessions.json",
-    );
-    const cfg = {
-      ...state.cfg,
-      agents: { ownership: "explicit" as const, entries: { other: {}, [agentId]: {} } },
-      session: {
-        scope: "global" as const,
-        store: path.join(
+  it.each([
+    { agentId: "selected", activeAgentId: "selected", otherAgentId: "other" },
+    { agentId: "main", activeAgentId: "main", otherAgentId: "research" },
+    { agentId: "research", activeAgentId: "main", otherAgentId: "main" },
+  ])(
+    "stops only $agentId's global session with $activeAgentId active",
+    async ({ agentId, activeAgentId, otherAgentId }) => {
+      const state = await setupStop();
+      const globalKey = "global";
+      const storePath = path.join(
+        state.params.workspaceDir,
+        "agents",
+        agentId,
+        "sessions",
+        "sessions.json",
+      );
+      const cfg = {
+        ...state.cfg,
+        agents: { ownership: "explicit" as const, entries: { [otherAgentId]: {}, [agentId]: {} } },
+        session: {
+          scope: "global" as const,
+          store: path.join(
+            state.params.workspaceDir,
+            "agents",
+            "{agentId}",
+            "sessions",
+            "sessions.json",
+          ),
+        },
+      };
+      const scope = { agentId, storePath, sessionKey: globalKey };
+      await replaceSessionEntry(scope, state.entry);
+      const otherEntry = { ...state.entry, sessionId: "session-other" };
+      const otherScope = {
+        agentId: otherAgentId,
+        storePath: path.join(
           state.params.workspaceDir,
           "agents",
-          "{agentId}",
+          otherAgentId,
           "sessions",
           "sessions.json",
         ),
-      },
-    };
-    const scope = { agentId, storePath, sessionKey: globalKey };
-    await replaceSessionEntry(scope, state.entry);
-    const ctx = { ...state.ctx, AgentId: agentId, CommandTargetSessionKey: globalKey };
-    const isCommandTargetCurrent = () =>
-      loadSessionEntry(scope)?.sessionId === state.entry.sessionId;
-    const operation = createReplyOperation({
-      sessionKey: globalKey,
-      sessionId: state.entry.sessionId,
-      resetTriggered: false,
-    });
-    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
-    try {
-      const result = await (pathKind === "fast"
-        ? tryFastAbortFromMessage({ cfg, ctx, isCommandTargetCurrent })
-        : handleStopCommand(
-            {
-              ...state.params,
-              cfg,
-              ctx,
-              agentId,
-              sessionKey: globalKey,
-              sessionStore: { [globalKey]: state.entry },
-              storePath,
-              opts: { isCommandTargetCurrent },
-            },
-            true,
-          ));
-      expect(operation.abortSignal.aborted).toBe(true);
-      expect(result).toMatchObject(
-        pathKind === "fast"
-          ? { handled: true, aborted: true }
-          : { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } },
-      );
-      expect(loadSessionEntry(scope)).toMatchObject({
-        sessionId: state.entry.sessionId,
-        abortedLastRun: true,
+        sessionKey: globalKey,
+      };
+      await replaceSessionEntry(otherScope, otherEntry);
+      const ctx = { ...state.ctx, AgentId: agentId, CommandTargetSessionKey: globalKey };
+      const isCommandTargetCurrent = () =>
+        loadSessionEntry(scope)?.sessionId === state.entry.sessionId;
+      const ownsActiveRun = agentId === activeAgentId;
+      const operation = createReplyOperation({
+        agentId: activeAgentId,
+        sessionKey: globalKey,
+        sessionId: ownsActiveRun ? state.entry.sessionId : otherEntry.sessionId,
+        resetTriggered: false,
       });
-    } finally {
-      operation.complete();
-      clearSessionQueues([globalKey]);
-    }
-  });
+      operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+      try {
+        const followups = [
+          { ownerAgentId: agentId, sessionId: state.entry.sessionId },
+          { ownerAgentId: otherAgentId, sessionId: otherEntry.sessionId },
+        ].map(({ ownerAgentId, sessionId }) => {
+          const followup = createQueueTestRun({ prompt: `${ownerAgentId} pending input` });
+          followup.run = {
+            ...followup.run,
+            agentId: ownerAgentId,
+            sessionKey: globalKey,
+            sessionId,
+          };
+          enqueueFollowupRun(
+            globalKey,
+            followup,
+            { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+            "none",
+          );
+          return followup;
+        });
+        const result = await (pathKind === "fast"
+          ? tryFastAbortFromMessage({ cfg, ctx, isCommandTargetCurrent })
+          : handleStopCommand(
+              {
+                ...state.params,
+                cfg,
+                ctx,
+                agentId,
+                sessionKey: globalKey,
+                sessionStore: { [globalKey]: state.entry },
+                storePath,
+                opts: { isCommandTargetCurrent },
+              },
+              true,
+            ));
+        expect.soft(operation.abortSignal.aborted).toBe(ownsActiveRun);
+        expect.soft(getExistingFollowupQueue(globalKey)?.items).toEqual([followups[1]]);
+        expect(result).toMatchObject(
+          pathKind === "fast"
+            ? { handled: true, aborted: ownsActiveRun }
+            : { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } },
+        );
+        expect(loadSessionEntry(scope)).toMatchObject({
+          sessionId: state.entry.sessionId,
+          abortedLastRun: true,
+        });
+        expect(loadSessionEntry(otherScope)?.abortedLastRun).not.toBe(true);
+      } finally {
+        operation.complete();
+        clearSessionQueues([globalKey]);
+      }
+    },
+  );
 
   it("does not reclaim a conversation reassigned after abort preparation", async () => {
     const state = await setupStop();

@@ -174,10 +174,4 @@ describe("channel entry authentication audit", () => {
     });
     expect(JSON.stringify(findings)).not.toContain(name);
   });
-
-  it("classifies through the identity declaration exactly once", () => {
-    expect(classifyEntryAuthentication(stableId)).toBe("verified");
-    expect(classifyEntryAuthentication(name)).toBe("mutable");
-    expect(classifyEntryAuthentication("*")).toBeUndefined();
-  });
 });

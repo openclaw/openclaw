@@ -33,14 +33,13 @@ import type {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import { releaseLegacySourceLock } from "./update-command-runtime.js";
 import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
-
-export type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
@@ -231,7 +230,12 @@ export async function continueMigratedUpdateInFreshProcess(
     const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
     assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
-    const { requesterAuthority, executorFence, ...runIdentity } = run;
+    const {
+      requesterAuthority,
+      executorFence,
+      sourceArtifactLock: _sourceArtifactLock,
+      ...runIdentity
+    } = run;
     const input: MigratedUpdateFinalizationInput = {
       ...handoff,
       params: {
@@ -271,6 +275,7 @@ export async function continueMigratedUpdateInFreshProcess(
         killGraceMs: 500,
         maxOutputBytes: 1024 * 1024,
       });
+    await releaseLegacySourceLock(root, run.sourceArtifactLock);
     const child = executorFence
       ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
       : await runChild();
@@ -297,6 +302,12 @@ export async function continueMigratedUpdateInFreshProcess(
     ) {
       throw new Error("Update finalization did not confirm the admitted run's terminal outcome.");
     }
+    const finalization = {
+      result: response.result,
+      exitCode: response.exitCode,
+      automaticTriage: response.automaticTriage,
+      candidateStartAttempted: response.candidateStartAttempted,
+    };
     const restoreDatabases =
       params.databaseBackup !== undefined &&
       params.packageTransaction !== undefined &&
@@ -307,20 +318,17 @@ export async function continueMigratedUpdateInFreshProcess(
     if (restoreDatabases) {
       // The waiting driver still owns the package transaction and stopped
       // lifecycle. Its database restoration and rollback publish the final result.
-      return {
-        result: response.result,
-        exitCode: response.exitCode,
-        automaticTriage: response.automaticTriage,
-        candidateStartAttempted: false,
-        databaseRollbackAvailable: true,
-      };
+      return { ...finalization, databaseRollbackAvailable: true };
     }
     if (child.stdout) {
       process.stdout.write(child.stdout);
     }
     try {
       await windowsRecovery?.complete(
-        response.result.status === "ok" || isUpdateGatewayReadinessPending(response.result),
+        response.result.status === "ok" ||
+          isUpdateGatewayReadinessPending(response.result) ||
+          (response.result.recovery?.serviceRestartSafe === true &&
+            response.result.recovery.service === "healthy"),
       );
     } catch (cause) {
       throw new UpdateCommandFailure(
@@ -338,12 +346,7 @@ export async function continueMigratedUpdateInFreshProcess(
     if (cleanupFailure) {
       throw cleanupFailure;
     }
-    return {
-      result: response.result,
-      exitCode: response.exitCode,
-      automaticTriage: response.automaticTriage,
-      candidateStartAttempted: response.candidateStartAttempted,
-    };
+    return finalization;
   } catch (error) {
     if (error instanceof UpdateCommandRecoveryPendingError) {
       // A refused compatibility/admission check is not delegated completion and

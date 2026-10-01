@@ -1,6 +1,3 @@
-/**
- * Chutes OAuth PKCE login flow.
- */
 import { randomBytes } from "node:crypto";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -15,25 +12,17 @@ import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import {
+  buildOAuthRequestSignal,
+  type OAuthCredentials,
+  type OAuthPrompt,
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
-
-type OAuthPrompt = {
-  message: string;
-  placeholder?: string;
-};
-
-type OAuthCredentials = {
-  refresh: string;
-  access: string;
-  expires: number;
-  [key: string]: unknown;
-};
 
 type ChutesOAuthAppConfig = {
   clientId: string;
@@ -227,7 +216,7 @@ async function exchangeChutesCodeForTokens(params: {
     email: info?.username,
     accountId: info?.sub,
     clientId: params.app.clientId,
-  } as ChutesStoredOAuth;
+  };
 }
 
 /** Refreshes a stored Chutes OAuth credential through the provider token endpoint. */
@@ -293,18 +282,20 @@ export async function loginChutes(params: {
     state,
     challenge,
   });
-
-  let codeAndState: { code: string; state: string };
-  if (params.manual) {
-    await params.onAuth({ url });
-    params.onProgress?.("Waiting for redirect URL...");
-    codeAndState = parseManualOAuthInput(
+  const promptForCode = async () =>
+    parseManualOAuthInput(
       await params.onPrompt({
         message: "Paste the redirect URL",
         placeholder: `${params.app.redirectUri}?code=...&state=...`,
       }),
       state,
     );
+
+  let codeAndState: { code: string; state: string };
+  if (params.manual) {
+    await params.onAuth({ url });
+    params.onProgress?.("Waiting for redirect URL...");
+    codeAndState = await promptForCode();
   } else {
     const redirect = parseRedirectUri(params.app.redirectUri);
     const callback = waitForLocalOAuthCallback({
@@ -322,13 +313,7 @@ export async function loginChutes(params: {
         throw error;
       }
       params.onProgress?.("OAuth callback not detected; paste redirect URL...");
-      return parseManualOAuthInput(
-        await params.onPrompt({
-          message: "Paste the redirect URL",
-          placeholder: `${params.app.redirectUri}?code=...&state=...`,
-        }),
-        state,
-      );
+      return await promptForCode();
     });
 
     await params.onAuth({ url });

@@ -147,18 +147,18 @@ class ChatUnifiedToolActivityTest {
     assertEquals(listOf("output"), rows.single().tools.map { it.result })
   }
 
-  @Test fun lateBlockedActivityRemainsVisibleOutsideFoldedCompletedWork() {
+  @Test fun latePreparedOutcomeControlsVisibilityOutsideFoldedCompletedWork() {
     val answer = ChatMessage("answer", "assistant", listOf(ChatMessageContent(text = "Done")), 4, runId = "run")
-    val blocked = ChatAgentActivity("tool:read", "tool", "end", "Read project", toolCallId = "read", status = "blocked")
-    val rows = timeline(listOf(user.copy(runId = "run"), result("read"), answer), listOf(first.copy(activity = blocked, isComplete = true)), runs = 0).items
-    assertEquals(1, rows.filterIsInstance<ChatTimelineItem.WorkedSummary>().size)
-    val tool =
-      rows
-        .filterIsInstance<ChatTimelineItem.ToolActivity>()
-        .single()
-        .tools
-        .single()
-    assertEquals("blocked", tool.activity?.status)
-    assertEquals("output", tool.result)
+    for ((status, visible) in listOf("blocked" to true, "failed" to true, "skipped" to false, "completed" to false, null to false)) {
+      val activity = ChatAgentActivity("tool:read", "tool", "end", "Read project", toolCallId = "read", status = status)
+      val rows = timeline(listOf(user.copy(runId = "run"), result("read"), answer), listOf(first.copy(activity = activity, isError = true, isComplete = true)), runs = 0).items
+      assertEquals(1, rows.filterIsInstance<ChatTimelineItem.WorkedSummary>().size)
+      val tools = rows.filterIsInstance<ChatTimelineItem.ToolActivity>().flatMap { it.tools }
+      assertEquals("status=$status", if (visible) 1 else 0, tools.size)
+      if (visible) {
+        assertEquals(status, tools.single().activity?.status)
+        assertEquals("output", tools.single().result)
+      }
+    }
   }
 }

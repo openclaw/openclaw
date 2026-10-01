@@ -1,9 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { teamsMeetingsConfig } from "./config.js";
-import { getTeamsMeetingsSetupStatus } from "./runtime-setup.js";
+import { teamsMeetingsPlugin } from "../index.js";
 
-const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+const resolveTeamsMeetingsConfig = teamsMeetingsPlugin.config.resolveConfig;
 
 function runtimeWithNode(invoke: (params: Record<string, unknown>) => Promise<unknown>) {
   return {
@@ -25,6 +24,23 @@ function runtimeWithNode(invoke: (params: Record<string, unknown>) => Promise<un
 }
 
 describe("Microsoft Teams meetings runtime setup", () => {
+  it("reports live-caption capture for observe-only setup without probing audio", async () => {
+    const runtime = runtimeWithNode(async () => ({ ok: true }));
+    const status = await teamsMeetingsPlugin.setupStatus({
+      config: resolveTeamsMeetingsConfig({ chromeNode: { node: "teams-node" } }),
+      fullConfig: {},
+      runtime,
+      options: { mode: "transcribe", transport: "chrome-node" },
+    });
+
+    expect(status.checks).toContainEqual({
+      id: "captions",
+      message: "Teams live-caption capture is enabled and ready",
+      ok: true,
+    });
+    expect(runtime.nodes.invoke).not.toHaveBeenCalled();
+  });
+
   it("probes remote talk-back prerequisites through the selected Chrome node", async () => {
     const runtime = runtimeWithNode(async () => ({ ok: true }));
     const config = resolveTeamsMeetingsConfig({
@@ -35,7 +51,7 @@ describe("Microsoft Teams meetings runtime setup", () => {
       },
       chromeNode: { node: "teams-node" },
     });
-    const status = await getTeamsMeetingsSetupStatus({
+    const status = await teamsMeetingsPlugin.setupStatus({
       config,
       fullConfig: {},
       runtime,
@@ -68,7 +84,7 @@ describe("Microsoft Teams meetings runtime setup", () => {
     const runtime = runtimeWithNode(async () => {
       throw new Error("SoX audio command not found on the node.");
     });
-    const status = await getTeamsMeetingsSetupStatus({
+    const status = await teamsMeetingsPlugin.setupStatus({
       config: resolveTeamsMeetingsConfig({ chromeNode: { node: "teams-node" } }),
       fullConfig: {},
       runtime,
@@ -87,7 +103,7 @@ describe("Microsoft Teams meetings runtime setup", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const runCommandWithTimeout = vi.fn();
     try {
-      const status = await getTeamsMeetingsSetupStatus({
+      const status = await teamsMeetingsPlugin.setupStatus({
         config: resolveTeamsMeetingsConfig({}),
         fullConfig: {},
         runtime: { system: { runCommandWithTimeout } } as unknown as PluginRuntime,

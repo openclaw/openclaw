@@ -1,4 +1,3 @@
-// Small interactive prompt helpers for CLI confirmations.
 import { stdin as input, stdout as output } from "node:process";
 import readline from "node:readline/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -42,13 +41,8 @@ export async function promptYesNo(question: string, defaultYes = false): Promise
   if (isYes()) {
     return true;
   }
-  const rl = readline.createInterface({ input, output });
   const suffix = defaultYes ? " [Y/n] " : " [y/N] ";
-  const answer = normalizeLowercaseStringOrEmpty(
-    await questionUntilClose(rl, `${question}${suffix}`).finally(() => {
-      rl.close();
-    }),
-  );
+  const answer = normalizeLowercaseStringOrEmpty(await promptText(`${question}${suffix}`));
   if (!answer) {
     return defaultYes;
   }

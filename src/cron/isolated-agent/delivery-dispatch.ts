@@ -32,7 +32,7 @@ import {
   resolveCronAwarenessMainSessionKey,
   resolveCronAwarenessText,
   commitDirectCronOutboundRoute,
-  resolveDirectCronDeliverySessionKey,
+  resolveCronDeliveryRouteSessionKey,
   resolveDirectCronTranscriptMirrorText,
   isSameSessionKey,
   shouldQueueCronAwareness,
@@ -46,7 +46,6 @@ import {
   logCronDeliveryWarn,
   maybeApplyTtsToCronPayloads,
   normalizeSilentReplyText,
-  resolveCronDeliveryBestEffort,
   resolveDescendantSubagentFollowup,
   resolveStaleCronDeliveryError,
   retryTransientDirectCronDelivery,
@@ -69,7 +68,7 @@ import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 const deliveryOutboundRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-outbound.runtime.js"),
 );
-export { queueCronMessageToolDeliveryAwareness, resolveCronDeliveryBestEffort };
+export { queueCronMessageToolDeliveryAwareness };
 /** Dispatches cron run output through verified message-tool or direct delivery paths. */
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
@@ -252,14 +251,24 @@ export async function dispatchCronDelivery(
         }),
       );
       deliveryAttempted = true;
+      // Custom session targets retain their caller-selected identity.
       const { sessionKey: deliverySessionKey, route: directCronOutboundRoute } =
-        await resolveDirectCronDeliverySessionKey({
-          cfg: params.cfgWithAgentDefaults,
-          job: params.job,
-          agentId: params.agentId,
-          agentSessionKey: params.agentSessionKey,
-          delivery,
-        });
+        await (async () => {
+          if (
+            typeof params.job.sessionTarget === "string" &&
+            params.job.sessionTarget.startsWith("session:")
+          ) {
+            return { sessionKey: params.agentSessionKey, route: null };
+          }
+          return await resolveCronDeliveryRouteSessionKey({
+            cfg: params.cfgWithAgentDefaults,
+            job: params.job,
+            agentId: params.agentId,
+            agentSessionKey: params.agentSessionKey,
+            delivery,
+            warningContext: "direct delivery mirror",
+          });
+        })();
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
@@ -283,14 +292,8 @@ export async function dispatchCronDelivery(
       let hadPartialFailure = false;
       let completedByConcurrentDelivery = false;
       let payloadMayHaveReachedRecipientBeforeFailure = false;
-      // Once-only early commit: the durable sender fires `onDeliveryResult`
-      // after each identified platform result, before later fallible work in
-      // the batch. Committing the route there (not only after the batch
-      // returns) means a first successful sub-send followed by a later failure
-      // still records the route — matching `commitOutboundSessionRoute` in
-      // gateway server-methods/send.ts (passed as `onDeliveryResult` there too).
-      // A fully failed send never reaches this callback, so the route stays
-      // untouched; the post-batch safety nets below remain as a second layer.
+      // Commit once on the first identified platform result, before later
+      // batch work can fail. A fully failed send must not create a route.
       let directCronRouteCommitted = false;
       const commitDirectCronRouteEarly = async () => {
         if (directCronRouteCommitted || !directCronOutboundRoute) {
@@ -315,6 +318,9 @@ export async function dispatchCronDelivery(
           }
         : undefined;
       const runDelivery = async () => {
+        await params.deliveryAttemptFence?.beforeAttempt();
+        params.abortSignal?.throwIfAborted();
+        params.deliveryAttemptFence?.assertCurrent();
         attemptedPayloadsForMirror.length = 0;
         const send = await sendDurableMessageBatchCore({
           cfg: params.cfgWithAgentDefaults,
@@ -332,19 +338,12 @@ export async function dispatchCronDelivery(
           completionRetention: DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
           deps: createOutboundSendDeps(params.deps),
           signal: params.abortSignal,
+          assertDirectAdapterHandoff: params.deliveryAttemptFence?.assertCurrent,
           onError,
           onPayload: (payload) => {
             attemptedPayloadsForMirror.push(payload);
           },
-          onDeliveryResult: () => {
-            // Early commit: persist the route as soon as the first platform
-            // result confirms a recipient was reached, before later sub-sends
-            // in the batch can fail. Returning the promise lets the durable
-            // sender await it (as gateway send.ts does with
-            // commitOutboundSessionRoute), so the route row lands before any
-            // later fallible work in the batch. See commitDirectCronRouteEarly.
-            return commitDirectCronRouteEarly();
-          },
+          onDeliveryResult: commitDirectCronRouteEarly,
         });
         payloadMayHaveReachedRecipientBeforeFailure ||=
           durableMessageBatchMayHaveReachedRecipient(send);
@@ -407,14 +406,7 @@ export async function dispatchCronDelivery(
           text: failureAwarenessText,
           targetText: failureAwarenessText,
         });
-        // Even when the batch throws (e.g. a partial_failed batch with
-        // best-effort disabled), a payload may already have reached the
-        // recipient. Persist the route so later sends can continue the
-        // conversation — matching the partial-failure safety net in gateway
-        // server-methods/send.ts. A fully failed send (no recipient-reached
-        // evidence) leaves the route untouched. commitDirectCronRouteEarly is
-        // once-only, so this is a no-op if the early onDeliveryResult commit
-        // already ran for a recipient-reached sub-send.
+        // Preserve a reached recipient's route even when the batch throws.
         if (payloadMayHaveReachedRecipientBeforeFailure) {
           await commitDirectCronRouteEarly();
         }
@@ -422,32 +414,15 @@ export async function dispatchCronDelivery(
       }
       if (completedByConcurrentDelivery) {
         recordDelivery("delivered");
-        // Another process completed the same fenced recipient intent. The
-        // local send failed, so its onDeliveryResult never fired and the
-        // resolved route was never committed. Persist it now so later
-        // conversation sends to this target have a route — matching the
-        // post-success invariant (the concurrent completion IS a success).
-        // commitDirectCronRouteEarly is once-only, so this is a no-op if the
-        // early onDeliveryResult commit already ran for a recipient-reached
-        // sub-send before the failure.
+        // Concurrent completion is success even if our result callback never ran.
         await commitDirectCronRouteEarly();
         return null;
       }
-      // Only mark delivered when ALL payloads succeeded (no partial failure).
-      // A partial batch is not a durable completion, so we never mint a full
-      // receipt for it — but it may still have reached the recipient.
+      // A partial batch may reach the recipient without completing delivery.
       if (deliveryResults.length > 0) {
         recordDelivery(hadPartialFailure ? "not-delivered" : "delivered", deliveryState.error);
       }
-      // Persist the outbound route once any payload is confirmed to have
-      // reached the recipient, matching the post-success invariant in
-      // message-action-send.ts and the partial-failure safety net in gateway
-      // server-methods/send.ts (which commits on `sent` OR `partial_failed`).
-      // A fully failed send (no recipient-reached evidence) must not mint a
-      // conversation identity or rebind the session route; a partial batch
-      // that already delivered must not lose the route later sends need.
-      // commitDirectCronRouteEarly is once-only, so this is a no-op if the
-      // early onDeliveryResult commit already ran mid-batch.
+      // Cover successful/partial sends that did not invoke the early callback.
       if (deliveryState.delivered || payloadMayHaveReachedRecipientBeforeFailure) {
         await commitDirectCronRouteEarly();
       }

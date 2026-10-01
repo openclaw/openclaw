@@ -97,6 +97,9 @@ export function redactSensitiveCommandText(text: string): string {
       return `config set ${displayPath} <redacted secret>`;
     }
   }
+  if (operation.kind === "config-unset") {
+    return `config unset ${redactSystemAgentConfigPath(operation.path)}`;
+  }
   if (operation.kind === "config-set-ref") {
     const displayPath = redactSystemAgentConfigPath(operation.path);
     return `config set-ref ${displayPath} <redacted reference>`;
@@ -158,7 +161,7 @@ export class ChatTurnRouter {
     proposalHash: string,
     beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentChatReply | null> {
-    return await resolveOperatorApprovalDecision({
+    return await resolveOperatorApprovalDecision<SystemAgentChatReply>({
       decision,
       proposalHash,
       getProposal: () => this.getPendingOperatorProposal(),
@@ -231,6 +234,7 @@ export class ChatTurnRouter {
     }
     if (
       typed.kind === "config-set" ||
+      typed.kind === "config-unset" ||
       typed.kind === "config-set-ref" ||
       typed.kind === "config-get" ||
       typed.kind === "config-schema"
@@ -299,8 +303,11 @@ export class ChatTurnRouter {
       throw new Error("OpenClaw host received a non-persistent approved operation.");
     }
     const capture = createCaptureRuntime();
-    const result = await this.executeOperation(operation, capture, true, beforePersistentApply);
-    const configWrite = operation.kind === "config-set" || operation.kind === "config-set-ref";
+    const result = await this.executeOperation(operation, capture, beforePersistentApply);
+    const configWrite =
+      operation.kind === "config-set" ||
+      operation.kind === "config-unset" ||
+      operation.kind === "config-set-ref";
     if (configWrite && result === undefined) {
       return {
         text: await resolveConfigWriteRepair(capture.read(), (message) =>
@@ -446,8 +453,8 @@ export class ChatTurnRouter {
       return {
         text:
           this.options.surface === "gateway"
-            ? "Opening Settings → Profile → Connected accounts. Check the Gateway, person, and Personal scope, then sign in or select a saved account. Nothing has changed yet; never paste credentials into this conversation."
-            : "Run `openclaw models accounts list` to see your personal accounts, or `openclaw models accounts login <provider>` for protected sign-in. Check the Gateway and person shown before signing in. You can also use Settings → Profile → Connected accounts in the Control UI. Nothing has changed; never paste credentials into this conversation.",
+            ? "Opening Settings → Profile → Connected accounts. Check the Gateway, person, and Personal scope, then sign in or select a saved account. Nothing has changed yet."
+            : "Run `openclaw models accounts list` to see your personal accounts, or `openclaw models accounts login <provider>` for protected sign-in. Check the Gateway and person shown before signing in. You can also use Settings → Profile → Connected accounts in the Control UI. Nothing has changed.",
         action: "none",
         ...(this.options.surface === "gateway" ? { handoff: recordedOperation } : {}),
       };
@@ -491,13 +498,13 @@ export class ChatTurnRouter {
       return await this.startWizard(this.wizard.startChannel(recordedOperation.channel));
     }
     if (recordedOperation.kind === "skills-setup") {
-      return await this.startWizard(this.wizard.startSkills());
+      return await this.startWizard(this.wizard.startSetup("skills"));
     }
     if (recordedOperation.kind === "search-setup") {
-      return await this.startWizard(this.wizard.startSearch());
+      return await this.startWizard(this.wizard.startSetup("search"));
     }
     if (recordedOperation.kind === "gateway-config-setup") {
-      return await this.startWizard(this.wizard.startGateway());
+      return await this.startWizard(this.wizard.startSetup("gateway"));
     }
     if (recordedOperation.kind === "memory-import") {
       return await this.startWizard(this.wizard.startMemoryImport());
@@ -530,7 +537,7 @@ export class ChatTurnRouter {
     if (isPersistentSystemAgentOperation(recordedOperation)) {
       return await this.applyApprovedPersistentOperation(recordedOperation);
     }
-    const result = await this.executeOperation(recordedOperation, capture, true);
+    const result = await this.executeOperation(recordedOperation, capture);
     const reply = capture.read();
     if (result?.exitsInteractive === true) {
       return { text: reply, action: "exit" };
@@ -541,16 +548,13 @@ export class ChatTurnRouter {
   private async executeOperation(
     operation: SystemAgentOperation,
     capture: CaptureRuntime,
-    approved: boolean,
     beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentOperationResult | undefined> {
     try {
       const execute = this.dependencies.executeOperation ?? executeSystemAgentOperation;
-      if (approved) {
-        await this.callbacks.requirePersistentApplyInference(capture);
-      }
+      await this.callbacks.requirePersistentApplyInference(capture);
       return await execute(operation, capture, {
-        approved,
+        approved: true,
         ...(this.options.requesterAgentId
           ? { requesterAgentId: this.options.requesterAgentId }
           : {}),

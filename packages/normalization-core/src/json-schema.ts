@@ -45,7 +45,8 @@ export function normalizeTypeBoxValidationErrors<T extends TypeBoxValidationErro
           return (
             typeof property === "string" &&
             child.schemaPath === `${error.schemaPath}/additionalProperties` &&
-            child.instancePath === `${error.instancePath}/${property}`
+            child.instancePath ===
+              `${error.instancePath}/${property.replace(/~/g, "~0").replace(/\//g, "~1")}`
           );
         })
       ) {
@@ -62,23 +63,27 @@ const schemaMapKeywords = new Set([
   "$defs",
   "definitions",
   "dependentSchemas",
+  "dependencies",
   "patternProperties",
   "properties",
 ]);
 const schemaValueKeywords = new Set([
   "additionalItems",
   "additionalProperties",
+  "allOf",
+  "anyOf",
   "contains",
   "else",
   "if",
   "items",
   "not",
+  "oneOf",
+  "prefixItems",
   "propertyNames",
   "then",
   "unevaluatedItems",
   "unevaluatedProperties",
 ]);
-const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
 const schemaResourceKeywords = new Set([
   "$anchor",
   "$defs",
@@ -95,12 +100,21 @@ type NormalizationOptions = {
   format?: "annotation";
 };
 
-function normalizeSchemaMap(value: unknown, options: NormalizationOptions): unknown {
+function normalizeSchemaMap(
+  value: unknown,
+  options: NormalizationOptions,
+  preserveStringArrays: boolean,
+): unknown {
   if (!isRecord(value)) {
     return value;
   }
   return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, normalizeJsonSchemaNode(entry, options)]),
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      preserveStringArrays && isStringArray(entry)
+        ? entry
+        : normalizeJsonSchemaNode(entry, options),
+    ]),
   );
 }
 
@@ -125,18 +139,6 @@ function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
     return match;
   });
   return compilesUnicodePattern(repaired) ? repaired : pattern;
-}
-
-function normalizeSchemaDependencies(value: unknown, options: NormalizationOptions): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      isStringArray(entry) ? entry : normalizeJsonSchemaNode(entry, options),
-    ]),
-  );
 }
 
 function normalizePatternProperties(
@@ -230,12 +232,9 @@ function normalizeJsonSchemaNode(schema: unknown, options: NormalizationOptions)
           return [key, normalizePatternProperties(value, options)];
         }
         if (schemaMapKeywords.has(key)) {
-          return [key, normalizeSchemaMap(value, options)];
+          return [key, normalizeSchemaMap(value, options, key === "dependencies")];
         }
-        if (key === "dependencies") {
-          return [key, normalizeSchemaDependencies(value, options)];
-        }
-        if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
+        if (schemaValueKeywords.has(key)) {
           return [key, normalizeJsonSchemaNode(value, options)];
         }
         return [key, value];

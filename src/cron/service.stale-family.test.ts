@@ -1,5 +1,6 @@
 import { constants, type DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { seedCronStoreInCurrentDatabase } from "../../test/helpers/cron/store.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -7,10 +8,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
-import { saveCronJobsStoreWithRevisionNative } from "./store.js";
 import { deleteStaleCronJobFamilyRows, type CronJobFamilyIdentity } from "./store/row-codec.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -87,8 +88,8 @@ async function withFamilyStore(
         makeJob(`unrelated-${index}`, { description: "x".repeat(workload.descriptionBytes) }),
       ),
     ];
-    saveCronJobsStoreWithRevisionNative(activeStore, { version: 1, jobs: [active] });
-    saveCronJobsStoreWithRevisionNative(staleStore, { version: 1, jobs: stale });
+    seedCronStoreInCurrentDatabase(activeStore, { version: 1, jobs: [active] });
+    seedCronStoreInCurrentDatabase(staleStore, { version: 1, jobs: stale });
     runOpenClawStateWriteTransaction(({ db }) => {
       const insert = db.prepare(
         "INSERT INTO cron_job_scratch (store_key, job_id, content, revision, updated_at_ms) VALUES (?, ?, ?, 1, 1800000000000)",
@@ -99,6 +100,7 @@ async function withFamilyStore(
       }
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: activeStore,
       cronEnabled: false,
       log: createNoopLogger(),

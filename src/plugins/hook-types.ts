@@ -57,6 +57,7 @@ import type {
   PluginHeartbeatPromptContributionResult,
 } from "./host-hook-turn-types.js";
 import type { SkillInstallSpecMetadata } from "./install-security-scan.types.js";
+import type { PluginHookSessionContext } from "./session-end-transcript.js";
 
 export type {
   PluginHookBeforeModelResolveAttachment,
@@ -186,23 +187,6 @@ const promptInjectionHookNameSet = new Set<PluginHookName>(PROMPT_INJECTION_HOOK
 export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   promptInjectionHookNameSet.has(hookName);
 
-const CONVERSATION_HOOK_NAMES = [
-  "before_model_resolve",
-  "agent_turn_prepare",
-  "before_prompt_build",
-  "before_agent_reply",
-  "llm_input",
-  "llm_output",
-  "before_agent_finalize",
-  "agent_end",
-  "before_agent_run",
-] as const satisfies readonly PluginHookName[];
-
-const conversationHookNameSet = new Set<PluginHookName>(CONVERSATION_HOOK_NAMES);
-
-export const isConversationHookName = (hookName: PluginHookName): boolean =>
-  conversationHookNameSet.has(hookName);
-
 const PLUGIN_HOOK_AGENT_TRIGGERS = ["cron", "heartbeat", "user"] as const;
 
 export type PluginHookAgentTrigger = (typeof PLUGIN_HOOK_AGENT_TRIGGERS)[number];
@@ -315,11 +299,7 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   readonly hookInvocation?: Readonly<{ assertActive(): void }>;
 };
 
-export type PluginHookContextWindowSource =
-  | "model"
-  | "modelsConfig"
-  | "agentContextTokens"
-  | "default";
+type PluginHookContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
 
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;
@@ -731,12 +711,6 @@ export type PluginHookBeforeMessageWriteResult = {
   message?: AgentMessage;
 };
 
-type PluginHookSessionContext = {
-  agentId?: string;
-  sessionId: string;
-  sessionKey?: string;
-};
-
 export type PluginHookSessionStartEvent = {
   sessionId: string;
   sessionKey?: string;
@@ -1103,6 +1077,8 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
   eligibleDispatchKinds?: readonly PluginHookReplyDispatchKind[];
   requiresToolAuthority?: true;
+  /** Host-resolved transcript authority. Never infer this again from plugin identity. */
+  conversationAccessAllowed?: true;
   source: string;
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

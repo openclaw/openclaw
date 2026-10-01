@@ -1,10 +1,13 @@
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { availableWorkerSlots } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
-  formatNodeRunnerUpdateRequired,
+  formatNodeRunnerInventoryIssue,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_STATUS_WAIT_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
+  NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   resolveNodeWorkerExecutionIssue,
   type NodeRunnerInventoryIssue,
@@ -29,18 +32,6 @@ export type NodeWorkerBundleStatusObservation = {
   bundleHash: string;
   status: NodeWorkerBundleStatus;
 };
-
-export function sameBundleStatusObservation(
-  left: NodeWorkerBundleStatusObservation | undefined,
-  right: NodeWorkerBundleStatusObservation | undefined,
-): boolean {
-  return (
-    left?.bundleHash === right?.bundleHash &&
-    left?.status.status === right?.status.status &&
-    (left?.status.status !== "installed" ||
-      (right?.status.status === "installed" && left.status.version === right.status.version))
-  );
-}
 
 export type NodeRunnerRegistrySession = {
   nodeId: string;
@@ -161,7 +152,7 @@ export async function waitForNodeRunnerAvailability(
       }
       const issue = transport.getIssue?.(nodeId);
       if (issue) {
-        throw new Error(formatNodeRunnerUpdateRequired(nodeId, issue));
+        throw new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
       }
       await racePromiseWithAbortSignal(changed.promise, options.signal);
       changed = createDeferredCore();
@@ -216,26 +207,6 @@ export function collectNodeRunnerCatalogState(params: {
   return { sessionHostNodeIds, issuesByNodeId, workerSlotsByNodeId, workerBundleByNodeId };
 }
 
-export function sameNodeWorkerHostDeclaration(
-  left: NodeWorkerHostDeclaration | undefined,
-  right: NodeWorkerHostDeclaration | undefined,
-): boolean {
-  return (
-    left?.enabled === right?.enabled &&
-    (left?.enabled !== true ||
-      (right?.enabled === true &&
-        left.capacity.total === right.capacity.total &&
-        left.capacity.available === right.capacity.available &&
-        left.bundlePrewarm === right.bundlePrewarm &&
-        left.bundleRetention === right.bundleRetention &&
-        left.bundleStatus === right.bundleStatus &&
-        left.portalStream === right.portalStream &&
-        left.environmentSession === right.environmentSession &&
-        left.preparedWorkspace === right.preparedWorkspace &&
-        left.capturedExecPolicy === right.capturedExecPolicy))
-  );
-}
-
 export function resolveNodeWorkerSupervisorProof(
   node: NodeRunnerRegistrySession,
   runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
@@ -265,10 +236,7 @@ export function resolveNodeWorkerSupervisorProof(
     clientId: node.clientId,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: {
-      ...declaration.workerHost,
-      capacity: { ...declaration.workerHost.capacity },
-    },
+    workerHost: structuredClone(declaration.workerHost),
     commands: [...node.commands],
   };
 }
@@ -278,19 +246,26 @@ export function resolveNodeRunnerInventoryIssue(
   runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
 ): NodeRunnerInventoryIssue | undefined {
   const declaration = runnerInventoryByConn.get(node.connId);
-  return declaration &&
-    node.client.invalidated !== true &&
-    declaration.nodeId === node.nodeId &&
-    declaration.pairingIdentity === node.pairingIdentity &&
-    declaration.pairingGeneration !== undefined &&
-    declaration.pairingGeneration === node.pairingGeneration &&
-    isNodeWorkerHostClientId(node.clientId) &&
-    declaration.clientId === node.clientId &&
-    node.clientMode === "node" &&
-    declaration.clientMode === "node" &&
-    declaration.protocolFeatures.length === 1 &&
-    declaration.protocolFeatures[0] !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE
-    ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
+  if (
+    !declaration ||
+    node.client.invalidated === true ||
+    declaration.nodeId !== node.nodeId ||
+    declaration.pairingIdentity !== node.pairingIdentity ||
+    declaration.pairingGeneration === undefined ||
+    declaration.pairingGeneration !== node.pairingGeneration ||
+    !isNodeWorkerHostClientId(node.clientId) ||
+    declaration.clientId !== node.clientId ||
+    node.clientMode !== "node" ||
+    declaration.clientMode !== "node" ||
+    declaration.protocolFeatures.length !== 1
+  ) {
+    return undefined;
+  }
+  if (declaration.protocolFeatures[0] !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE) {
+    return NODE_RUNNER_UPDATE_REQUIRED_ISSUE;
+  }
+  return declaration.workerHost?.enabled === false && declaration.workerHost.reason
+    ? { code: "worker-host-unavailable", message: declaration.workerHost.reason }
     : undefined;
 }
 
@@ -302,8 +277,10 @@ export function isNodeWorkerSupervisorProofCurrent(
     launchEligibility?: boolean;
     commands?: readonly string[];
     environmentSession?: boolean;
+    statusWait?: boolean;
     preparedWorkspace?: boolean;
     capturedExecPolicy?: boolean;
+    workspaceQuiescence?: boolean;
   } = {},
 ): boolean {
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
@@ -316,12 +293,16 @@ export function isNodeWorkerSupervisorProofCurrent(
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
-    (!requirements.launchEligibility || current.workerHost.capacity.available > 0) &&
+    (!requirements.launchEligibility || availableWorkerSlots(current.workerHost.capacity) > 0) &&
     (!requirements.environmentSession ||
       current.workerHost.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION) &&
+    (!requirements.statusWait ||
+      current.workerHost.statusWait === NODE_WORKER_STATUS_WAIT_VERSION) &&
     (!requirements.preparedWorkspace ||
       current.workerHost.preparedWorkspace === NODE_WORKER_PREPARED_WORKSPACE_VERSION) &&
     (!requirements.capturedExecPolicy || !resolveNodeWorkerExecutionIssue(current.workerHost)) &&
+    (!requirements.workspaceQuiescence ||
+      current.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION) &&
     (requirements.commands ?? []).every((command) => current.commands.includes(command))
   );
 }

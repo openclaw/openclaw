@@ -9,7 +9,7 @@ const removalDatePendingCompatCodes = new Set<PluginCompatCode>([
   "agent-harness-sdk-alias",
   "plugin-sdk-shipped-channel-setup-exports",
 ]);
-const retiredPluginSdkSubpathCodes = [
+const retiredPluginSdkSurfaceCodes = [
   "plugin-sdk-channel-streaming-subpath",
   "plugin-sdk-text-runtime-subpath",
   "plugin-sdk-channel-secret-runtime-subpath",
@@ -18,6 +18,7 @@ const retiredPluginSdkSubpathCodes = [
   "plugin-sdk-channel-logging-subpath",
   "plugin-sdk-group-access-subpath",
   "plugin-sdk-zod-subpath",
+  "deprecated-session-store-beta5-api",
 ] as const satisfies readonly PluginCompatCode[];
 const deprecationMarkingCodes = [
   "plugin-sdk-channel-setup-input-fields",
@@ -151,10 +152,10 @@ describe("plugin compatibility registry", () => {
     ]);
   });
 
-  it("keeps retired Plugin SDK subpaths as migration tombstones", () => {
+  it("keeps retired Plugin SDK surfaces as migration tombstones", () => {
     const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
 
-    for (const code of retiredPluginSdkSubpathCodes) {
+    for (const code of retiredPluginSdkSurfaceCodes) {
       expect(records.get(code)).toMatchObject({
         status: "removed",
         releaseNote: expect.stringMatching(/\S/u),
@@ -192,12 +193,6 @@ describe("plugin compatibility registry", () => {
         "openclaw/plugin-sdk/media-runtime buildAgentMediaPayload",
         "openclaw/plugin-sdk/plugin-runtime",
         "openclaw/plugin-sdk/security-runtime",
-      ]),
-    );
-    expect(records.get("deprecated-session-store-beta5-api")?.surfaces).toEqual(
-      expect.arrayContaining([
-        "openclaw package root loadSessionStore",
-        "openclaw package root saveSessionStore",
       ]),
     );
   });

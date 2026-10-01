@@ -15,10 +15,6 @@ export type AgentsRouteLocation = {
   canonicalLocation?: RouteLocation;
 };
 
-function routeLocation(location: RouteLocation): RouteLocation {
-  return restoreBridgedRouteLocation(location, INTERNAL_AGENT_PATH_PARAM);
-}
-
 function legacyAgentId(params: URLSearchParams): string | null {
   const agentId = params.get("agent")?.trim() ?? "";
   return agentId && !agentId.includes("/") && agentId !== "." && agentId !== ".." ? agentId : null;
@@ -28,7 +24,7 @@ export function resolveAgentsRouteLocation(
   sourceLocation: RouteLocation,
   basePath = "",
 ): AgentsRouteLocation {
-  const location = routeLocation(sourceLocation);
+  const location = restoreBridgedRouteLocation(sourceLocation, INTERNAL_AGENT_PATH_PARAM);
   const pathRoute = agentRouteFromPath(location.pathname, basePath);
   const params = new URLSearchParams(location.search);
   const hadLegacyAgent = params.has("agent");

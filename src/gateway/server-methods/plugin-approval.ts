@@ -1,6 +1,9 @@
 // Gateway RPC handlers for plugin approval requests and decisions.
 import { randomUUID } from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeNullableString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -108,8 +111,17 @@ export function createPluginApprovalHandlers(
         return;
       }
 
-      const normalizeTrimmedString = (value?: string | null): string | null =>
-        normalizeOptionalString(value) || null;
+      if (p.policySubject && !trustedAgentRuntime) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "plugin approval policy subject requires agent runtime authority",
+          ),
+        );
+        return;
+      }
 
       const rawSessionKey = normalizeOptionalString(
         trustedAgentRuntime?.sessionKey ?? p.sessionKey,
@@ -155,14 +167,15 @@ export function createPluginApprovalHandlers(
         );
         return;
       }
-      const rawDetail = normalizeTrimmedString(p.detail);
+      const rawDetail = normalizeNullableString(p.detail);
       // Untrusted display metadata gets the same escape as title/description:
       // pluginId/toolName/agentId are interpolated into channel approval text.
       // Host-minted runtime identity values stay authoritative and unescaped.
-      const sanitizeMeta = (value?: string | null): string | null =>
-        normalizeTrimmedString(value) === null
-          ? null
-          : sanitizeExecApprovalDisplayText(normalizeTrimmedString(value)!);
+      const sanitizeMeta = (value?: string | null): string | null => {
+        const normalized = normalizeNullableString(value);
+        return normalized === null ? null : sanitizeExecApprovalDisplayText(normalized);
+      };
+      const turnSource = trustedAgentRuntime ?? p;
       const request: PluginApprovalRequestPayload = {
         pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
@@ -175,6 +188,9 @@ export function createPluginApprovalHandlers(
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,
+        ...(trustedAgentRuntime && p.policySubject
+          ? { policySubject: { ...p.policySubject } }
+          : {}),
         ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
         ...(Array.isArray(p.allowedDecisions)
           ? {
@@ -188,18 +204,10 @@ export function createPluginApprovalHandlers(
           (sessionOwner?.ok ? sessionOwner.agentId : sanitizeMeta(p.agentId)),
         sessionKey,
         runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
-        turnSourceChannel: trustedAgentRuntime
-          ? normalizeTrimmedString(trustedAgentRuntime.turnSourceChannel)
-          : normalizeTrimmedString(p.turnSourceChannel),
-        turnSourceTo: trustedAgentRuntime
-          ? normalizeTrimmedString(trustedAgentRuntime.turnSourceTo)
-          : normalizeTrimmedString(p.turnSourceTo),
-        turnSourceAccountId: trustedAgentRuntime
-          ? normalizeTrimmedString(trustedAgentRuntime.turnSourceAccountId)
-          : normalizeTrimmedString(p.turnSourceAccountId),
-        turnSourceThreadId: trustedAgentRuntime
-          ? (trustedAgentRuntime.turnSourceThreadId ?? null)
-          : (p.turnSourceThreadId ?? null),
+        turnSourceChannel: normalizeNullableString(turnSource.turnSourceChannel),
+        turnSourceTo: normalizeNullableString(turnSource.turnSourceTo),
+        turnSourceAccountId: normalizeNullableString(turnSource.turnSourceAccountId),
+        turnSourceThreadId: turnSource.turnSourceThreadId ?? null,
       };
 
       // Always server-generate the ID — never accept plugin-provided IDs.

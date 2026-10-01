@@ -40,6 +40,17 @@ native connection and embedded dashboard. Its validity follows the session
 duration configured by the Access administrator. No shared Gateway token needs
 to be copied from the website.
 
+Dashboard apps embedded over HTTPS can also sign in when they use the same
+Cloudflare Access team and account as the Gateway. Embedded apps must also be
+on the same site as the Gateway under WebKit's rules, because WebKit blocks
+other sites' cookies inside frames. Other sites fall back to the tab's own
+sign-in link. OpenClaw opens the same browser sign-in
+flow for each app; an existing browser session can complete
+that round trip automatically. Each app receives its own application cookie.
+Cookies stay limited to the Gateway's exact origin and validated embedded app
+origins on HTTPS port 443. Embedded sessions persist across app restarts until
+they expire and are removed when you sign out or change accounts.
+
 Browser sign-in currently supports Cloudflare Access. For Gateways that use a
 shared token or password, expand **Token or password** and provide the
 credential supplied by the administrator. Other browser sign-in providers are
@@ -49,6 +60,9 @@ not supported by this flow. Existing private-network `ws://` and secure
 A signed-in native operator device may still need a one-time approval on the
 Gateway. The Gateway's existing [automatic device approval policy](/gateway/trusted-proxy-auth#automatic-device-approval)
 determines whether verified proxy identities can enroll automatically.
+
+While OpenClaw is active and you are present, it automatically renews browser sign-in for saved Gateways in use during the last quarter of the session lifetime (at least 15 minutes, up to 7 days); a failed attempt retries after half that window, at most daily. The default browser may open to finish sign-in.
+Renewing the same account quietly reconnects the native connection and keeps the current dashboard in place; a failed automatic attempt leaves the existing session usable until it expires.
 
 When the browser session expires, opening the saved Gateway shows a sign-in
 page and starts sign-in in your browser. A window restored at launch waits for

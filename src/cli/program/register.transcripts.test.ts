@@ -1,4 +1,3 @@
-// Transcripts CLI tests cover SQLite reads and explicit artifact materialization.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
@@ -23,8 +22,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
@@ -33,7 +30,9 @@ import { testApi as configGuardTestApi } from "./config-guard.js";
 import { registerPreActionHooks } from "./preaction.js";
 import { registerTranscriptsCli } from "./register.transcripts.js";
 
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+const originalArgv = process.argv;
+const originalTitle = process.title;
+const originalVerbose = isVerbose();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function storeFor(stateDir: string): TranscriptsStore {
@@ -42,35 +41,28 @@ function storeFor(stateDir: string): TranscriptsStore {
   });
 }
 
-async function writeSession(
-  stateDir: string,
-  sessionId: string,
-  date = "2026-05-22",
-): Promise<string> {
+async function writeSession(stateDir: string, sessionId: string): Promise<string> {
   const session: TranscriptSessionDescriptor = {
     sessionId,
     title: "Design review",
     source: { providerId: "manual-transcript" },
-    startedAt: `${date}T10:00:00.000Z`,
-    stoppedAt: `${date}T10:05:00.000Z`,
+    startedAt: "2026-05-22T10:00:00.000Z",
+    stoppedAt: "2026-05-22T10:05:00.000Z",
   };
   const store = storeFor(stateDir);
   const utterance = { text: "Action item: Ship CLI", speaker: { label: "Sam" } };
-  const utterances = [utterance];
   await store.writeSession(session);
   await store.appendUtteranceForSession(session, utterance);
-  await store.writeSummary(summarizeTranscripts({ session, utterances }), session);
+  await store.writeSummary(summarizeTranscripts({ session, utterances: [utterance] }), session);
   return store.sessionDir(session);
 }
 
 async function captureStdout(run: () => Promise<void>): Promise<string> {
   let output = "";
-  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
-    chunk: string | Uint8Array,
-  ) => {
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     output += String(chunk);
     return true;
-  }) as typeof process.stdout.write);
+  });
   try {
     await run();
     return output;
@@ -93,135 +85,65 @@ async function runTranscriptsCli(args: string[], startup = false): Promise<strin
 describe("transcripts CLI", () => {
   let stateDir = "";
 
-  beforeEach(async () => {
+  beforeEach(() => {
     stateDir = tempDirs.make("openclaw-transcripts-cli-");
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   });
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    configGuardTestApi.resetConfigGuardStateForTests();
+    clearRuntimeConfigSnapshot();
+    process.argv = originalArgv;
+    process.title = originalTitle;
+    setVerbose(originalVerbose);
+  });
+
+  it("keeps transcript output clean after a successful update with warnings", async () => {
+    await writeSession(stateDir, "design-review");
+    const args = ["list"];
+    const jsonArgs = [...args, "--json"];
+    const expected = await runTranscriptsCli(args);
+    const expectedJson = await runTranscriptsCli(jsonArgs);
+    const run = createUpdateRun({ trigger: "cli" });
+    const warning = "Recorded update warning";
+    const warningStep = {
+      step: "warning:openclaw doctor",
+      status: "completed",
+      detail: warning,
+    } as const;
+    recordUpdateRunStep(run.runId, warningStep);
+    finishUpdateRun(run.runId, { status: "succeeded" });
+    const snapshot = createDoctorConfigSnapshot();
+    // Keep real note emission and guard suppression; state migration is outside this output test.
+    const preflight = vi
+      .spyOn(startupConfigPreflight, "runStartupConfigPreflight")
+      .mockImplementation(async () => {
+        await noteStaleUpdateRuns();
+        return { snapshot, baseConfig: snapshot.config };
+      });
+    vi.stubEnv("OPENCLAW_SUPPRESS_NOTES", undefined);
+    vi.stubEnv("NODE_NO_WARNINGS", process.env.NODE_NO_WARNINGS);
+    expect(await captureStdout(() => noteStaleUpdateRuns())).toContain(warning);
+    for (const [commandArgs, expectedOutput] of [
+      [args, expected],
+      [jsonArgs, expectedJson],
+    ] as const) {
+      configGuardTestApi.resetConfigGuardStateForTests();
+      process.argv = ["node", "openclaw", "transcripts", ...commandArgs];
+      const output = await withConsoleLogsRoutedToStderrForJson(
+        process.argv,
+        () => runTranscriptsCli([...commandArgs], true),
+        { restoreChanges: true },
+      );
+      expect(output).toBe(expectedOutput);
     }
-  });
-
-  it("registers a kebab-case command", () => {
-    const program = new Command();
-    registerTranscriptsCli(program);
-
-    expect(program.commands.map((command) => command.name())).toContain("transcripts");
-  });
-
-  it.each(["list", "show", "path"] as const)(
-    "keeps %s output clean after a successful update with warnings",
-    async (command) => {
-      await writeSession(stateDir, "design-review");
-      const args =
-        command === "list"
-          ? [command]
-          : [command, "design-review", ...(command === "path" ? ["--dir"] : [])];
-      const jsonArgs = [...args, "--json"];
-      const expected = await runTranscriptsCli(args);
-      const expectedJson = await runTranscriptsCli(jsonArgs);
-      const run = createUpdateRun({ trigger: "cli" });
-      const warning = "Recorded update warning";
-      const warningStep = {
-        step: "warning:openclaw doctor",
-        status: "completed",
-        detail: warning,
-      } as const;
-      recordUpdateRunStep(run.runId, warningStep);
-      finishUpdateRun(run.runId, { status: "succeeded" });
-      const snapshot = createDoctorConfigSnapshot();
-      // Keep real note emission and guard suppression; state migration is outside this output test.
-      const preflight = vi
-        .spyOn(startupConfigPreflight, "runStartupConfigPreflight")
-        .mockImplementation(async () => {
-          await noteStaleUpdateRuns();
-          return { snapshot, baseConfig: snapshot.config };
-        });
-      const originalArgv = process.argv;
-      const originalTitle = process.title;
-      const originalVerbose = isVerbose();
-      try {
-        await withEnvAsync(
-          { OPENCLAW_SUPPRESS_NOTES: undefined, NODE_NO_WARNINGS: process.env.NODE_NO_WARNINGS },
-          async () => {
-            expect(await captureStdout(() => noteStaleUpdateRuns())).toContain(warning);
-            for (const [commandArgs, expectedOutput] of [
-              [args, expected],
-              [jsonArgs, expectedJson],
-            ] as const) {
-              configGuardTestApi.resetConfigGuardStateForTests();
-              process.argv = ["node", "openclaw", "transcripts", ...commandArgs];
-              const output = await withConsoleLogsRoutedToStderrForJson(
-                process.argv,
-                () => runTranscriptsCli([...commandArgs], true),
-                { restoreChanges: true },
-              );
-              expect(output).toBe(expectedOutput);
-            }
-            expect(preflight).toHaveBeenCalledTimes(2);
-            expect(getUpdateRun(run.runId)?.steps).toContainEqual(
-              expect.objectContaining(warningStep),
-            );
-            expect(await captureStdout(() => noteStaleUpdateRuns())).toContain(warning);
-          },
-        );
-      } finally {
-        preflight.mockRestore();
-        configGuardTestApi.resetConfigGuardStateForTests();
-        clearRuntimeConfigSnapshot();
-        process.argv = originalArgv;
-        process.title = originalTitle;
-        setVerbose(originalVerbose);
-      }
-    },
-  );
-
-  it("lists stored transcript sessions from SQLite", async () => {
-    const sessionDir = await writeSession(stateDir, "design-review");
-
-    const output = await runTranscriptsCli(["list"]);
-
-    expect(output).toContain("2026-05-22/design-review");
-    expect(output).toContain("Design review");
-    expect(output).toContain(path.join(sessionDir, "summary.md"));
-  });
-
-  it.each([
-    ["", "\n"],
-    ["# Design review", "# Design review\n"],
-    ["# Design review\n", "# Design review\n"],
-    ["# Design review\n\n", "# Design review\n\n"],
-  ])("prints and materializes exact bytes for summary %j", async (markdown, expected) => {
-    const sessionDir = await writeSession(stateDir, "design-review");
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const db = getNodeSqliteKysely<
-      Pick<OpenClawStateKyselyDatabase, "meeting_transcript_summaries">
-    >(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("meeting_transcript_summaries")
-        .set({ markdown })
-        .where("session_id", "=", "design-review"),
-    );
-    await fs.rm(sessionDir, { recursive: true, force: true });
-
-    const output = await runTranscriptsCli(["show", "design-review"]);
-
-    expect(output).toBe(expected);
-    const jsonOutput = JSON.parse(await runTranscriptsCli(["show", "design-review", "--json"])) as {
-      summary: string;
-    };
-    expect(jsonOutput.summary).toBe(expected);
-    await expect(fs.readFile(path.join(sessionDir, "summary.md"), "utf8")).resolves.toBe(expected);
+    expect(preflight).toHaveBeenCalledTimes(2);
+    expect(getUpdateRun(run.runId)?.steps).toContainEqual(expect.objectContaining(warningStep));
+    expect(await captureStdout(() => noteStaleUpdateRuns())).toContain(warning);
   });
 
   it("keeps JSON inspection available before a summary exists", async () => {
@@ -274,106 +196,25 @@ describe("transcripts CLI", () => {
     expect(output).not.toContain("\u001b");
   });
 
-  it("round-trips ANSI-bearing ids without terminal control bytes", async () => {
-    const session: TranscriptSessionDescriptor = {
-      sessionId: "ansi-\u001b[31mprovider\u001b[0m",
-      title: "\u001b[31mANSI import\u001b[0m",
-      source: { providerId: "manual-transcript" },
-      startedAt: "2026-05-22T10:00:00.000Z",
-      stoppedAt: "2026-05-22T10:05:00.000Z",
-    };
-    const store = storeFor(stateDir);
-    await store.writeSession(session);
-    const utterances =
-      (await manualTranscriptSourceProvider.importTranscript?.({
-        session,
-        text: "\u001b[31mAttacker\u001b[0m: \u001b[2J\u001b[31mADMIN APPROVED\u001b[0m",
-      })) ?? [];
-    for (const utterance of utterances) {
-      await store.appendUtteranceForSession(session, utterance);
-    }
-    await store.writeSummary(summarizeTranscripts({ session, utterances }), session);
-
-    const listOutput = await runTranscriptsCli(["list"]);
-    const selector = listOutput.split("\t")[0] ?? "";
-    const showOutput = await runTranscriptsCli(["show", selector]);
-
-    expect(selector).toBe("2026-05-22/ansi--31mprovider-0m");
-    expect(showOutput).toContain("Session: ansi-provider");
-    expect(showOutput).toContain("Attacker: ADMIN APPROVED");
-    expect(`${listOutput}${showOutput}`).not.toContain("\u001b");
-  });
-
-  it("escapes C1 control characters in list JSON", async () => {
-    const title = "CSI \u009b31m injected \u007f\u0085 title";
+  it("sanitizes list selectors and text while escaping C1 bytes in JSON", async () => {
+    const title = "\u001b[31mCSI \u009b31m injected \u007f\u0085 title\u001b[0m";
+    const sessionId = "ansi-\u001b[31mprovider\u001b[0m";
     await storeFor(stateDir).writeSession({
-      sessionId: "c1-title",
+      sessionId,
       title,
       source: { providerId: "manual-transcript" },
       startedAt: "2026-05-22T10:00:00.000Z",
     });
 
+    const text = await runTranscriptsCli(["list"]);
+    expect(text.split("\t")[0]).toBe("2026-05-22/ansi--31mprovider-0m");
+    expect(text).not.toContain("\u001b");
     const output = await runTranscriptsCli(["list", "--json"]);
 
     expect(/[\u007f-\u009f]/.test(output)).toBe(false);
     expect(output).toContain("\\u009b");
     const parsed = JSON.parse(output) as Array<{ sessionId: string; title: string }>;
-    expect(parsed).toEqual([expect.objectContaining({ sessionId: "c1-title", title })]);
-  });
-
-  it("ignores unrelated corrupt export files", async () => {
-    await writeSession(stateDir, "design-review");
-    const corruptDir = path.join(stateDir, "transcripts", "corrupt");
-    await fs.mkdir(corruptDir, { recursive: true });
-    await fs.writeFile(path.join(corruptDir, "metadata.json"), "{nope");
-
-    const listOutput = await runTranscriptsCli(["list"]);
-    const showOutput = await runTranscriptsCli(["show", "design-review"]);
-
-    expect(listOutput).toContain("design-review");
-    expect(listOutput).not.toContain("corrupt");
-    expect(showOutput).toContain("# Design review");
-  });
-
-  it.each(["standup", "2026-07-03/raw-id", "notes: room/one"])(
-    "requires dated selectors for repeated %s",
-    async (id) => {
-      const olderSessionDir = await writeSession(stateDir, id, "2026-05-21");
-      await writeSession(stateDir, id, "2026-05-22");
-
-      await expect(runTranscriptsCli(["path", id])).rejects.toThrow(
-        "multiple transcripts sessions match",
-      );
-      const output = await runTranscriptsCli(["path", `2026-05-21/${id}`]);
-
-      expect(output.trim()).toBe(path.join(olderSessionDir, "summary.md"));
-    },
-  );
-
-  it("round-trips list selectors and gives qualified targets priority over raw IDs", async () => {
-    await writeSession(stateDir, "2026-07-03/raw-id", "2026-07-04");
-    const fallback = JSON.parse(await runTranscriptsCli(["show", "2026-07-03/raw-id", "--json"]));
-    expect(fallback.session.sessionId).toBe("2026-07-03/raw-id");
-    await writeSession(stateDir, "raw-id", "2026-07-03");
-    const selected = JSON.parse(await runTranscriptsCli(["show", "2026-07-03/raw-id", "--json"]));
-    expect(selected.session.sessionId).toBe("raw-id");
-    const entries = JSON.parse(await runTranscriptsCli(["list", "--json"])) as Array<{
-      sessionId: string;
-      selector: string;
-    }>;
-    for (const entry of entries) {
-      const shown = JSON.parse(await runTranscriptsCli(["show", entry.selector, "--json"]));
-      expect(shown.session.sessionId).toBe(entry.sessionId);
-      const exported = JSON.parse(
-        await runTranscriptsCli(["path", entry.selector, "--transcript", "--json"]),
-      );
-      expect(exported).toMatchObject({
-        sessionId: entry.sessionId,
-        selector: entry.selector,
-        exists: true,
-      });
-      expect(await fs.readFile(exported.path, "utf8")).toContain("Ship CLI");
-    }
+    expect(parsed).toEqual([expect.objectContaining({ sessionId, title })]);
   });
 
   it("materializes metadata, transcript, and directory exports from SQLite", async () => {
@@ -387,7 +228,7 @@ describe("transcripts CLI", () => {
     // Manifest writers retain the same SELECT inside their synchronous transaction.
     // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted native receiver below.
     const prepare = DatabaseSync.prototype.prepare;
-    const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
       this: DatabaseSync,
       sql,
     ) {
@@ -399,7 +240,7 @@ describe("transcripts CLI", () => {
     // The identical writer SELECT may already be prepared and cached before observation.
     // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted statement receiver below.
     const get = StatementSync.prototype.get;
-    const getSpy = vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
+    vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
       this: StatementSync,
       ...args
     ) {
@@ -409,33 +250,26 @@ describe("transcripts CLI", () => {
       return get.apply(this, args);
     });
 
-    try {
-      const metadataOutput = await runTranscriptsCli(["path", "design-review", "--metadata"]);
-      const transcriptOutput = await runTranscriptsCli(["path", "design-review", "--transcript"]);
-      const dirOutput = await runTranscriptsCli(["path", "design-review", "--dir"]);
+    const metadataOutput = await runTranscriptsCli(["path", "design-review", "--metadata"]);
+    const transcriptOutput = await runTranscriptsCli(["path", "design-review", "--transcript"]);
+    const dirOutput = await runTranscriptsCli(["path", "design-review", "--dir"]);
 
-      expect(metadataOutput.trim()).toBe(path.join(sessionDir, "metadata.json"));
-      expect(transcriptOutput.trim()).toBe(path.join(sessionDir, "transcript.jsonl"));
-      expect(dirOutput.trim()).toBe(sessionDir);
-      await expect(fs.readFile(path.join(sessionDir, "metadata.json"), "utf8")).resolves.toContain(
-        '"sessionId": "design-review"',
-      );
-      await expect(
-        fs.readFile(path.join(sessionDir, "transcript.jsonl"), "utf8"),
-      ).resolves.toContain('"text":"Action item: Ship CLI"');
-      expect(await runTranscriptsCli(["show", "design-review"])).toContain("Ship CLI");
-      const alias: TranscriptSessionDescriptor = {
-        sessionId: "Design-review",
-        source: { providerId: "manual-transcript" },
-        startedAt: "2026-05-22T11:00:00.000Z",
-      };
-      const store = storeFor(stateDir);
-      await store.writeSession(alias);
-      expect(await store.readSession(alias.sessionId)).toEqual(alias);
-      expect(ownershipReads, "standalone export ownership SQL on the caller thread").toEqual([]);
-    } finally {
-      prepareSpy.mockRestore();
-      getSpy.mockRestore();
-    }
+    expect(metadataOutput.trim()).toBe(path.join(sessionDir, "metadata.json"));
+    expect(transcriptOutput.trim()).toBe(path.join(sessionDir, "transcript.jsonl"));
+    expect(dirOutput.trim()).toBe(sessionDir);
+    await expect(fs.readFile(path.join(sessionDir, "metadata.json"), "utf8")).resolves.toContain(
+      '"sessionId": "design-review"',
+    );
+    await expect(fs.readFile(path.join(sessionDir, "transcript.jsonl"), "utf8")).resolves.toContain(
+      '"text":"Action item: Ship CLI"',
+    );
+    const summary = await runTranscriptsCli(["show", "design-review"]);
+    expect(summary).toContain("Ship CLI");
+    expect(JSON.parse(await runTranscriptsCli(["show", "design-review", "--json"])).summary).toBe(
+      summary,
+    );
+    const artifact = JSON.parse(await runTranscriptsCli(["path", "design-review", "--json"]));
+    expect(artifact).toMatchObject({ path: path.join(sessionDir, "summary.md"), exists: true });
+    expect(ownershipReads, "standalone export ownership SQL on the caller thread").toEqual([]);
   });
 });

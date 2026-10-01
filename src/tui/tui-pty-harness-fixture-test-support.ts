@@ -22,6 +22,7 @@ import { tuiPtyRuntimeEntrypoints } from "./tui-pty-runtime-test-support.js";
 import {
   createTuiStartupRelease,
   TUI_PTY_STARTUP_SESSION_FIXTURE,
+  type TuiStartupFixtureOptions,
 } from "./tui-pty-startup-session-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
 import { TUI_PTY_TASK_FIXTURE } from "./tui-pty-task-fixture-test-support.js";
@@ -40,18 +41,16 @@ export async function disposeActiveTuiFixtures(): Promise<void> {
 }
 
 export async function startTuiFixture(
-  opts: {
+  opts: TuiStartupFixtureOptions & {
     env?: NodeJS.ProcessEnv;
     execPath?: string;
-    holdStartupHistory?: boolean;
-    holdSessionDescription?: boolean;
     holdReconnect?: boolean;
   } = {},
 ) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
   const configPath = path.join(tempDir, "openclaw.json");
   await writeFile(configPath, "{}\n");
-  const scriptPath = await writeTuiPtyFixtureScript(tempDir);
+  const scriptPath = await writeTuiPtyFixtureScript(tempDir, opts);
   const logPath = path.join(tempDir, "fixture-log.jsonl");
   const startupRelease = createTuiStartupRelease(tempDir, opts);
   const reconnectRelease = createTuiReconnectRelease(tempDir, opts.holdReconnect);
@@ -84,7 +83,10 @@ export async function startTuiFixture(
     logPath,
     releaseStartup: startupRelease.releaseStartup,
     releaseReconnect: reconnectRelease.releaseReconnect,
-    waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
+    waitForLogEntry: async (
+      predicate: (entry: FixtureLogEntry, index: number) => boolean,
+      timeoutMs?: number,
+    ) =>
       await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
     cleanup: async () => {
       await run.dispose();
@@ -93,7 +95,7 @@ export async function startTuiFixture(
   };
 }
 
-export async function writeTuiPtyFixtureScript(dir: string) {
+export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixtureOptions = {}) {
   const tuiUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.tui);
   const prepared = tuiUrl.pathname.endsWith(".js");
   // Direct source runs retain TSX; prepared runs compile this final generated fixture before launch.
@@ -107,7 +109,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
   const tuiBackendTypeUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui-backend.ts")).href;
   const source = `
       import { appendFileSync, existsSync, watch, watchFile, unwatchFile } from "node:fs";
-      import { dirname } from "node:path";
+      import { dirname, join } from "node:path";
+      import { DatabaseSync } from "node:sqlite";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
       import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
       import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
@@ -117,7 +120,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
       const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
-      ${TUI_PTY_STARTUP_SESSION_FIXTURE.variables}
+      ${TUI_PTY_STARTUP_SESSION_FIXTURE.variables(opts.failInitialHistory === true)}
       const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
       const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
       let verboseLevel = process.env.OPENCLAW_TUI_PTY_VERBOSE_LEVEL;
@@ -682,6 +685,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           title: "openclaw tui pty fixture",
           ${TUI_PTY_RESET_FIXTURE.options}
         });
+        ${TUI_PTY_STARTUP_SESSION_FIXTURE.returnedState}
       }
 
       main().catch((error) => {

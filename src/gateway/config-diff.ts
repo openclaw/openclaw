@@ -1,4 +1,3 @@
-// Config path diff helper used by gateway mutation diagnostics.
 import { isDeepStrictEqual } from "node:util";
 import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

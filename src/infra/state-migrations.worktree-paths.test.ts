@@ -9,6 +9,7 @@ import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/ser
 import type { OpenClawConfig } from "../config/config.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -101,7 +102,7 @@ describe("managed worktree path state migrations", () => {
       insertRegistryWorktree(env, canonical, { provisionedPaths: [] });
       insertRegistryWorktree(env, moved, { provisionedPaths: [] });
 
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       const { DatabaseSync } = requireNodeSqlite();
       const beforeCleanupOutcome = new DatabaseSync(database.path);
       try {

@@ -1,15 +1,14 @@
 /** Synchronous binding reads with lazy mutation, lease, and auth machinery. */
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createCodexManagedThreadStore,
   type CodexManagedThreadStore,
-  type StoredCodexManagedThread,
 } from "./managed-thread-store.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./session-binding-meta.js";
 import {
+  readCurrentNativePendingAssignments,
   readCurrentCodexAppServerBinding,
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
@@ -26,10 +25,7 @@ export type { StoredCodexAppServerBinding } from "./session-binding.js";
 /** Keeps lifecycle/auth loading behind mutations while sharing the canonical read codec. */
 export function createLazyCodexAppServerBindingStore(
   state: CodexBindingStateStore,
-  managedThreadState?: Pick<
-    PluginStateKeyedStore<StoredCodexManagedThread>,
-    "entries" | "lookup" | "registerIfAbsent"
-  >,
+  managedThreadState?: Parameters<typeof createCodexManagedThreadStore>[0],
 ): CodexAppServerBindingStore {
   let resolved: Promise<CodexAppServerBindingStore> | undefined;
   const store = () =>
@@ -49,6 +45,8 @@ export function createLazyCodexAppServerBindingStore(
             readCurrentCodexAppServerBindings(state, identities)
         : undefined;
     },
+    readNativeSubagentAssignments: (identity, owner) =>
+      readCurrentNativePendingAssignments(state, identity, owner),
     readNativeSubagentSubmissions: (identity, owner) =>
       readCurrentCodexNativeSubagentSubmissions(state, identity, owner),
     hasOtherThreadOwner: async (threadId, currentIdentity) =>

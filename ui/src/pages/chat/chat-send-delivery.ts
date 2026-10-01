@@ -13,6 +13,7 @@ import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessio
 import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
 import { readChatResetTargetAccess } from "./chat-commands.ts";
+import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   flushStoredChatOutbox,
@@ -39,10 +40,10 @@ import {
   finishChatDeliveryAdmission,
   finishScopedChatSending,
   reconnectSafeQueuedSendState,
+  rejectOversizedQueuedChatDelivery,
   prepareQueuedChatPayload,
   publishPendingSendMessage,
   resolveQueuedChatLeaf,
-  setChatError,
   settleQueuedChatSendFailure,
   updateQueuedSendItem,
   waitForQueuedChatHistory,
@@ -303,6 +304,10 @@ async function sendPreparedChatMessage(
       surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
     }
     return "pending";
+  }
+
+  if (rejectOversizedQueuedChatDelivery(host, prepared, attachments, sessionKey, options)) {
+    return "failed";
   }
 
   const requestConnectionIsCurrent = captureChatConnectionOwner(host);
@@ -716,5 +721,4 @@ export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
       target: options.target,
     });
   },
-  setChatError,
 };

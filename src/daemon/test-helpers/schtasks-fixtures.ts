@@ -1,4 +1,6 @@
 /** Shared Windows schtasks fixtures and temp-env helpers for daemon tests. */
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -98,4 +100,33 @@ export async function writeNodeScript(env: Record<string, string>, port = "18789
     ].join("\r\n"),
     "utf8",
   );
+}
+
+export type SpawnSyncResult = {
+  pid: number;
+  output: (string | null)[];
+  stdout: string;
+  stderr: string;
+  status: number;
+  signal: null;
+};
+export function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyncResult {
+  return {
+    pid: 0,
+    output: [null, "", ""],
+    stdout: "",
+    stderr: "",
+    status: 0,
+    signal: null,
+    ...overrides,
+  };
+}
+
+export function createSpawnChild(unref: () => void, error?: Error): ChildProcess {
+  const child = new EventEmitter() as ChildProcess;
+  child.unref = unref;
+  queueMicrotask(() => {
+    child.emit(error ? "error" : "spawn", error);
+  });
+  return child;
 }

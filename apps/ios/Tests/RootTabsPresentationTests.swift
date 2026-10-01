@@ -418,11 +418,6 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
-    @Test func `chat header follows the agent badge presentation`() {
-        #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: true, agentDisplayName: "OpenClaw") == "OpenClaw")
-        #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: false, agentDisplayName: "OpenClaw") == "Chat")
-    }
-
     @Test func `chat transport identity distinguishes unresolved and resolved agents`() {
         #expect(IOSChatViewModelOwner.transportAgentID(nil).isEmpty)
         #expect(IOSChatViewModelOwner.transportAgentID("   ").isEmpty)
@@ -982,9 +977,7 @@ struct RootTabsPresentationTests {
 
     @Test func `i pad split prefers integrated visible sidebar`() {
         #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: nil))
-        #expect(!RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .split))
         #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
-        #expect(RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .drawer))
     }
 
     @Test func `destination headers own hidden sidebar reveal control`() {

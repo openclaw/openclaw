@@ -19,7 +19,9 @@ import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-opt
 import {
   bindsClaudeThinkingPrefix,
   requiresClaudeAdaptiveThinking,
+  requiresClaudeBetweenToolsThinking,
   resolveAnthropicThinkingEffort,
+  resolveClaudeSonnet55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
@@ -157,54 +159,44 @@ export async function convertAnthropicMessages(
       continue;
     }
     if (msg.role === "user") {
+      let content: AnthropicWireMessage["content"];
       if (typeof msg.content === "string") {
-        if (msg.content.trim().length > 0) {
-          if (
-            msg.runtimeContextCarrier &&
-            !(msg.runtimeContextCarrierRetained ?? modelRetainsRuntimeContext)
-          ) {
-            options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
-          }
-          const userParam: AnthropicWireMessage = {
-            role: "user",
-            content: sanitizeTransportPayloadText(msg.content),
-          };
-          params.push(userParam);
+        if (msg.content.trim().length === 0) {
+          continue;
         }
-        continue;
-      }
-      const normalizedContent =
-        !managed || model.input.includes("image")
-          ? await normalizeAnthropicInlineContent(msg.content, imageBudget)
-          : msg.content.map((item) =>
-              item.type === "image"
-                ? { type: "text" as const, text: NON_VISION_USER_IMAGE_PLACEHOLDER }
-                : item,
-            );
-      const blocks: Array<TextBlockParam | ImageBlockParam> = normalizedContent.map((item) =>
-        item.type === "text"
-          ? {
-              type: "text",
-              text: sanitizeTransportPayloadText(item.text),
-            }
-          : {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: resolveAnthropicImageMediaType(item.mimeType),
-                data: item.data,
+        content = sanitizeTransportPayloadText(msg.content);
+      } else {
+        const normalizedContent =
+          !managed || model.input.includes("image")
+            ? await normalizeAnthropicInlineContent(msg.content, imageBudget)
+            : msg.content.map((item) =>
+                item.type === "image"
+                  ? { type: "text" as const, text: NON_VISION_USER_IMAGE_PLACEHOLDER }
+                  : item,
+              );
+        const blocks: Array<TextBlockParam | ImageBlockParam> = normalizedContent.map((item) =>
+          item.type === "text"
+            ? {
+                type: "text",
+                text: sanitizeTransportPayloadText(item.text),
+              }
+            : {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: resolveAnthropicImageMediaType(item.mimeType),
+                  data: item.data,
+                },
               },
-            },
-      );
-      let filteredBlocks =
-        !managed || model.input.includes("image")
-          ? blocks
-          : blocks.filter((block) => block.type !== "image");
-      filteredBlocks = filteredBlocks.filter(
-        (block) => block.type !== "text" || block.text.trim().length > 0,
-      );
-      if (filteredBlocks.length === 0) {
-        continue;
+        );
+        content = blocks.filter((block) =>
+          block.type === "text"
+            ? block.text.trim().length > 0
+            : !managed || model.input.includes("image"),
+        );
+        if (content.length === 0) {
+          continue;
+        }
       }
       if (
         msg.runtimeContextCarrier &&
@@ -212,11 +204,7 @@ export async function convertAnthropicMessages(
       ) {
         options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
       }
-      const userParam: AnthropicWireMessage = {
-        role: "user",
-        content: filteredBlocks,
-      };
-      params.push(userParam);
+      params.push({ role: "user", content });
       continue;
     }
     if (msg.role === "assistant") {
@@ -264,27 +252,14 @@ export async function convertAnthropicMessages(
               type: "text",
               text: sanitizeTransportPayloadText(block.thinking),
             });
-          } else {
-            const thinking =
-              thinkingSignature === "reasoning_content"
-                ? sanitizeTransportPayloadText(block.thinking)
-                : block.thinking;
-            if (thinkingSignature === "reasoning_content") {
-              if (allowReasoningContentReplay) {
-                blocks.push({
-                  type: "thinking",
-                  thinking,
-                  signature: thinkingSignature ?? "",
-                });
-                reasoningContent.push(thinking);
-              }
-              continue;
+          } else if (!isReasoningContent || allowReasoningContentReplay) {
+            const thinking = isReasoningContent
+              ? sanitizeTransportPayloadText(block.thinking)
+              : block.thinking;
+            blocks.push({ type: "thinking", thinking, signature: thinkingSignature ?? "" });
+            if (isReasoningContent) {
+              reasoningContent.push(thinking);
             }
-            blocks.push({
-              type: "thinking",
-              thinking,
-              signature: thinkingSignature ?? "",
-            });
           }
           continue;
         }
@@ -365,14 +340,11 @@ export function buildAnthropicGenerationParams({
 }) {
   const params: Pick<
     MessageCreateParamsStreaming,
-    | "temperature"
-    | "stop_sequences"
-    | "tools"
-    | "thinking"
-    | "output_config"
-    | "metadata"
-    | "tool_choice"
-  > = {};
+    "temperature" | "stop_sequences" | "tools" | "output_config" | "metadata" | "tool_choice"
+  > & {
+    // SDK 0.127.0 does not yet include Sonnet 5.5's between_tools setting.
+    thinking?: MessageCreateParamsStreaming["thinking"] | { type: "between_tools" };
+  } = {};
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   // Thinking and post-4.6 Claude models reject custom temperature values.
   if (
@@ -400,7 +372,6 @@ export function buildAnthropicGenerationParams({
       // older Claude 4 models (whose API default is also "summarized").
       const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
       if (supportsClaudeAdaptiveThinking(model)) {
-        // Adaptive thinking: Claude decides when and how much to think.
         params.thinking = { type: "adaptive", display };
         const effort =
           options?.effort ??
@@ -411,7 +382,6 @@ export function buildAnthropicGenerationParams({
           params.output_config = { effort };
         }
       } else {
-        // Budget-based thinking for older models.
         params.thinking = {
           type: "enabled",
           budget_tokens: options?.thinkingBudgetTokens ?? 1024,
@@ -419,7 +389,9 @@ export function buildAnthropicGenerationParams({
         };
       }
     } else if (options?.thinkingEnabled === false) {
-      params.thinking = { type: "disabled" };
+      params.thinking = requiresClaudeBetweenToolsThinking(model)
+        ? { type: "between_tools" }
+        : { type: "disabled" };
     }
   }
 
@@ -432,7 +404,9 @@ export function buildAnthropicGenerationParams({
 
   if (options?.toolChoice) {
     const normalizedToolChoice = normalizeAnthropicToolChoice(
-      mandatoryAdaptiveThinking || options?.thinkingEnabled === true,
+      mandatoryAdaptiveThinking ||
+        options?.thinkingEnabled === true ||
+        resolveClaudeSonnet55ModelIdentity(model) !== undefined,
       options.toolChoice,
     );
     const projectedToolChoice = toolProjection
@@ -457,20 +431,18 @@ export function convertAnthropicTools(
   const projection = projectAnthropicTools(tools, (name) =>
     isOAuthTokenLocal ? toClaudeCodeToolName(name) : name,
   );
-  const convertedTools: AnthropicTool[] = [];
-  for (const tool of projection.tools) {
-    const convertedTool: AnthropicTool = {
-      name: tool.wireName,
-      description: tool.description,
-      input_schema: tool.inputSchema,
-    };
-    if (supportsEagerToolInputStreaming) {
-      convertedTool.eager_input_streaming = true;
-    }
-    convertedTools.push(convertedTool);
-  }
   return {
     projection,
-    tools: convertedTools,
+    tools: projection.tools.map((tool) => {
+      const projected: AnthropicTool = {
+        name: tool.wireName,
+        description: tool.description,
+        input_schema: tool.inputSchema,
+      };
+      if (supportsEagerToolInputStreaming) {
+        projected.eager_input_streaming = true;
+      }
+      return projected;
+    }),
   };
 }

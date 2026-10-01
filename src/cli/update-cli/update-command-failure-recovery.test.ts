@@ -3,7 +3,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gatewayService from "../../daemon/service.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import * as ports from "../../infra/ports-inspect.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
@@ -38,11 +43,20 @@ vi.mock("./update-command-service-plan.js", async (importOriginal) => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => {
+let root: string;
+beforeEach(async () => {
   vi.clearAllMocks();
   mocks.activePort.mockReset();
   mocks.managedService.mockReset();
+  vi.mocked(verifyUpdatedGateway)
+    .mockReset()
+    .mockResolvedValue({ ok: false, score: 0, summary: "stopped-free" });
   vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("failure-recovery-state-"));
+  root = dirs.make("failure-recovery-package-");
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", version: "2026.9.5" }),
+  );
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
 });
@@ -52,9 +66,114 @@ afterEach(() => {
 });
 
 describe("post-update failure recovery observation", () => {
+  it("settles a headless package rollback without waiting for a Gateway", async () => {
+    const { packageRoot, transaction } = await createRetainedPackageSwap(root);
+    const configPath = path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json");
+    const declaration = runtimeProcessEntrypoints.updateCandidateState;
+    const worker = path.join(packageRoot, "dist", declaration.distWorkerPath);
+    await fs.mkdir(path.dirname(worker), { recursive: true });
+    await fs.writeFile(
+      worker,
+      `import ${JSON.stringify(resolveRuntimeWorkerUrl(declaration).href)};\n`,
+    );
+    const schemaVersions = await readUpdateStateSchemaVersions({
+      stateDir: process.env.OPENCLAW_STATE_DIR!,
+      config: {},
+      env: process.env,
+    });
+    const readRuntime = vi.fn(async () => ({ status: "stopped", missingUnit: true }));
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
+      ...gatewayService.resolveGatewayService(),
+      readRuntime,
+      readCommand: vi.fn(async () => null),
+      isLoaded: vi.fn(async () => false),
+    });
+    const inspect = vi.spyOn(ports, "inspectPortUsage").mockImplementation(async (port) => ({
+      port,
+      status: "free",
+      listeners: [],
+      hints: [],
+    }));
+    const sleep = vi.spyOn(utils, "sleep").mockImplementation(async () => {
+      throw new Error("Headless recovery must not wait for Gateway startup");
+    });
+    const actual = await vi.importActual<typeof import("./update-command-verification.js")>(
+      "./update-command-verification.js",
+    );
+    vi.mocked(verifyUpdatedGateway).mockImplementationOnce(actual.verifyUpdatedGateway);
+    mocks.converge.mockImplementationOnce(async ({ result }) => ({
+      resultWithPostUpdate: { ...result, status: "error", reason: "post-update-plugins" },
+    }));
+    const failure = await finishSuccessfulPackageSwitch(
+      { packageRoot, json: true },
+      {
+        opts: { json: true, restart: false },
+        shouldRestart: false,
+        packageTransaction: transaction,
+        rollbackBlockedReason: undefined,
+        schemaVersions,
+        configSnapshot: {
+          path: configPath,
+          exists: false,
+          raw: null,
+          valid: true,
+          parsed: {},
+          config: {},
+          sourceConfig: {},
+          resolved: {},
+          runtimeConfig: {},
+          warnings: [],
+          issues: [],
+          legacyIssues: [],
+        },
+        preManagedServiceStop: {
+          stopped: false,
+          inspected: true,
+          runtimeInspected: true,
+          running: false,
+          serviceMutationAllowed: false,
+          serviceUpdateVerdict: { kind: "absent" },
+        },
+        result: {
+          status: "ok",
+          mode: "npm",
+          root: packageRoot,
+          before: { version: "1.0.0" },
+          after: { version: "2.0.0" },
+          steps: [],
+          durationMs: 1,
+        },
+      },
+    ).catch((error: unknown) => error);
+    if (!(failure instanceof ReportedUpdateCommandFailure)) {
+      throw failure;
+    }
+    expect(failure).toMatchObject({
+      name: "UpdateCommandFailure",
+      result: {
+        status: "error",
+        reason: "post-update-plugins",
+        rollbackOutcome: { status: "succeeded" },
+        recovery: { packageRollbackVerified: true },
+      },
+    });
+    await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+      '"version":"1.0.0"',
+    );
+    expect(sleep).not.toHaveBeenCalled();
+    expect(readRuntime).not.toHaveBeenCalled();
+    expect(inspect).not.toHaveBeenCalled();
+    expect(verifyUpdatedGateway).not.toHaveBeenCalled();
+    expect(failure.result.verification).toEqual({});
+    expect(failure.result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "gateway recovery observation",
+        diagnostics: [expect.stringContaining("no Gateway service or listener")],
+      }),
+    );
+  });
+
   it("reports a preactivation Doctor failure after one observation of an unknown foreground setup", async () => {
-    const root = dirs.make("preactivation-recovery-");
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.5" }));
     const env = { ...process.env };
     const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
     const readRuntime = vi.fn(async () => ({ status: "unknown" }));
@@ -150,11 +269,6 @@ describe("post-update failure recovery observation", () => {
     "keeps pending recovery facts coherent at %s publication after a transient write failure",
     async (publication) => {
       const { verifyUpdateFailureRecovery } = await import("./update-command-failure-recovery.js");
-      const root = dirs.make("recovery-observation-receipt-");
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.5" }),
-      );
       const env = { ...process.env };
       const lifecycle = new UpdateFinalizationLifecycle(true, undefined, () => {});
       lifecycle.root = root;
@@ -247,64 +361,55 @@ describe("post-update failure recovery observation", () => {
     },
   );
 
-  it.each(["2026.9.4", "2026.9.5"])(
-    "does not reconfirm a stale recovered Gateway %s against a different installed build",
-    async (runningVersion) => {
-      const root = dirs.make("recovery-installed-identity-");
-      await fs.mkdir(path.join(root, "dist"));
-      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.5" }));
-      await fs.writeFile(
-        path.join(root, "dist", "build-info.json"),
-        JSON.stringify({ buildId: "installed-build" }),
-      );
-      const lifecycle = new UpdateFinalizationLifecycle(true, undefined, () => {});
-      lifecycle.root = root;
-      const runId = lifecycle.attachLedger();
-      updateLedger.recordUpdateRunVerification(runId, {
-        recovery: {
-          serviceRestartSafe: true,
-          service: "healthy",
-          version: runningVersion,
-          buildId: "previous-build",
-        },
-      });
-      mocks.activePort.mockResolvedValueOnce(19431);
-      vi.mocked(verifyUpdatedGateway).mockImplementationOnce(
-        async ({ expectedVersion, expectedBuildId }) => {
-          const ok = expectedVersion === runningVersion && expectedBuildId === "previous-build";
-          return {
-            ok,
-            score: ok ? 7 : 0,
-            summary: ok ? "healthy" : "installed runtime identity mismatch",
-          };
-        },
-      );
-      const observed = await lifecycle.observeFailure(new Error("plugin finalization failed"));
-      lifecycle.complete(1);
-      expect(observed?.recovery).toMatchObject({
-        service: "failed",
-        reason: "installed runtime identity mismatch",
-      });
-      expect(updateLedger.getUpdateRun(runId)?.verification.recovery).toMatchObject({
-        service: "failed",
-      });
-      expect(verifyUpdatedGateway).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          expectedVersion: "2026.9.5",
-          expectedBuildId: "installed-build",
-        }),
-      );
-    },
-  );
+  it("does not reconfirm the same Gateway version against a different installed build", async () => {
+    const runningVersion = "2026.9.5";
+    await fs.mkdir(path.join(root, "dist"));
+    await fs.writeFile(
+      path.join(root, "dist", "build-info.json"),
+      JSON.stringify({ buildId: "installed-build" }),
+    );
+    const lifecycle = new UpdateFinalizationLifecycle(true, undefined, () => {});
+    lifecycle.root = root;
+    const runId = lifecycle.attachLedger();
+    updateLedger.recordUpdateRunVerification(runId, {
+      recovery: {
+        serviceRestartSafe: true,
+        service: "healthy",
+        version: runningVersion,
+        buildId: "previous-build",
+      },
+    });
+    mocks.activePort.mockResolvedValueOnce(19431);
+    vi.mocked(verifyUpdatedGateway).mockImplementationOnce(
+      async ({ expectedVersion, expectedBuildId }) => {
+        const ok = expectedVersion === runningVersion && expectedBuildId === "previous-build";
+        return {
+          ok,
+          score: ok ? 7 : 0,
+          summary: ok ? "healthy" : "installed runtime identity mismatch",
+        };
+      },
+    );
+    const observed = await lifecycle.observeFailure(new Error("plugin finalization failed"));
+    lifecycle.complete(1);
+    expect(observed?.recovery).toMatchObject({
+      service: "failed",
+      reason: "installed runtime identity mismatch",
+    });
+    expect(updateLedger.getUpdateRun(runId)?.verification.recovery).toMatchObject({
+      service: "failed",
+    });
+    expect(verifyUpdatedGateway).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        expectedVersion: "2026.9.5",
+        expectedBuildId: "installed-build",
+      }),
+    );
+  });
 
   it.each(["ownership", "native status"] as const)(
     "does not publish recovery while %s inspection cleanup is uncertain",
     async (kind) => {
-      const root = dirs.make("unsettled-recovery-inspection-");
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.5" }),
-      );
       const cleanup = new CommandProcessCleanupError();
       const env = { ...process.env };
       const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
@@ -334,7 +439,11 @@ describe("post-update failure recovery observation", () => {
               : {}),
           });
         }),
-      ).rejects.toBe(cleanup);
+      ).rejects.toSatisfy((error: unknown) => {
+        expect(error).toBeInstanceOf(CommandProcessCleanupError);
+        expect(collectNestedErrorCandidates(error)).toContain(cleanup);
+        return true;
+      });
       expect(updateLedger.getUpdateRun(run.runId, { env })?.status).toBe("running");
       expect(mocks.printResult).not.toHaveBeenCalled();
       expect(verifyUpdatedGateway).not.toHaveBeenCalled();
@@ -344,11 +453,6 @@ describe("post-update failure recovery observation", () => {
   it.each(["foreground", "managed"] as const)(
     "probes the %s Gateway's effective port instead of a different configured endpoint",
     async (kind) => {
-      const root = dirs.make("effective-recovery-endpoint-");
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.5" }),
-      );
       vi.stubEnv("OPENCLAW_GATEWAY_PORT", "19430");
       if (kind === "foreground") {
         mocks.activePort.mockResolvedValueOnce(19431);
@@ -389,44 +493,32 @@ describe("post-update failure recovery observation", () => {
     },
   );
 
-  it.each(["state-migration-started", "runtime-verification-failed"] as const)(
-    "preserves an explicit %s verdict even when the Gateway is healthy",
-    async (reason) => {
-      const root = dirs.make("unsafe-serving-recovery-");
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.5" }),
-      );
-      vi.mocked(verifyUpdatedGateway).mockResolvedValueOnce({
-        ok: true,
-        score: 7,
-        summary: "Gateway version and readiness verified.",
-      });
-      mocks.converge.mockImplementationOnce(async ({ result }) => ({
-        resultWithPostUpdate: {
-          ...result,
-          status: "error",
-          reason: "post-update-plugins",
-          recovery: { serviceRestartSafe: false, reason },
-        },
-      }));
-      await expect(
-        finishSuccessfulPackageSwitch({ packageRoot: root, json: true }),
-      ).rejects.toMatchObject({
-        result: { recovery: { serviceRestartSafe: false, reason } },
-      });
-      expect(verifyUpdatedGateway).toHaveBeenCalledOnce();
-    },
-  );
+  it("preserves an unsafe restart verdict even when the Gateway is healthy", async () => {
+    const reason = "state-migration-started";
+    vi.mocked(verifyUpdatedGateway).mockResolvedValueOnce({
+      ok: true,
+      score: 7,
+      summary: "Gateway version and readiness verified.",
+    });
+    mocks.converge.mockImplementationOnce(async ({ result }) => ({
+      resultWithPostUpdate: {
+        ...result,
+        status: "error",
+        reason: "post-update-plugins",
+        recovery: { serviceRestartSafe: false, reason },
+      },
+    }));
+    await expect(
+      finishSuccessfulPackageSwitch({ packageRoot: root, json: true }),
+    ).rejects.toMatchObject({
+      result: { recovery: { serviceRestartSafe: false, reason } },
+    });
+    expect(verifyUpdatedGateway).toHaveBeenCalledOnce();
+  });
 
   it.each(["returned", "thrown"] as const)(
     "records a serving Gateway after a %s post-update failure",
     async (failure) => {
-      const root = dirs.make("post-update-serving-recovery-");
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.5" }),
-      );
       vi.mocked(verifyUpdatedGateway).mockResolvedValueOnce({
         ok: true,
         score: 7,

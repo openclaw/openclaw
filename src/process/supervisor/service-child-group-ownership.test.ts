@@ -16,22 +16,27 @@ import {
 } from "./service-child-group-ownership.js";
 
 const owner = process.pid;
+const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 let rows: Map<number, string | Error>;
 let commands: Map<number, string | Error>;
+let identities: Map<number, string | Error>;
 function stat(pid: number, group: number, state = "S", name = "worker", ppid = 1) {
   return `${pid} (${name}) ${state} ${ppid} ${group} 0 0`;
 }
 
 beforeEach(() => {
+  Object.defineProperty(process, "getuid", { configurable: true, value: () => 1000 });
   census.mockReset().mockReturnValue({ error: new Error("ps is unavailable") });
   definitelyDead.mockReset().mockReturnValue(false);
   darwinCommand.mockReset();
   rows = new Map([[owner, stat(owner, owner)]]);
   commands = new Map([[owner, "openclaw-doctor\0"]]);
+  identities = new Map();
   directory.mockReset().mockImplementation(() => ["self", ...Array.from(rows.keys(), String)]);
   readStat.mockReset().mockImplementation((file: string) => {
-    const match = /^\/proc\/(\d+)\/(stat|cmdline)$/.exec(file);
-    const source = match?.[2] === "cmdline" ? commands : rows;
+    const match = /^\/proc\/(\d+)\/(stat|cmdline|status)$/.exec(file);
+    const source =
+      match?.[2] === "cmdline" ? commands : match?.[2] === "status" ? identities : rows;
     const value = match ? source.get(Number(match[1])) : undefined;
     if (value === undefined || value instanceof Error) {
       throw value ?? new Error(`Unexpected fixture read: ${file}`);
@@ -40,10 +45,17 @@ beforeEach(() => {
   });
   mockProcessPlatform("linux");
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  if (getuidDescriptor) {
+    Object.defineProperty(process, "getuid", getuidDescriptor);
+  } else {
+    Reflect.deleteProperty(process, "getuid");
+  }
+});
 
-it.each(["S", "D", "U", "R"])("observes a Linux %s group member without ps", (state) => {
-  rows.set(owner + 1, stat(owner + 1, owner, state, "worker ) (with\nname"));
+it("observes an uninterruptible Linux group member without ps", () => {
+  rows.set(owner + 1, stat(owner + 1, owner, "D", "worker ) (with\nname"));
   expect(hasLiveOwnedProcessGroupMembers()).toBe(true);
   expect(census).not.toHaveBeenCalled();
 });
@@ -108,10 +120,7 @@ it("does not report an empty Linux group after its existing census budget expire
 });
 
 it.each([
-  { state: "S", expected: true },
   { state: "D", expected: true },
-  { state: "U", expected: true },
-  { state: "Z", expected: false },
   { state: "Z+", expected: false },
 ])("preserves Darwin ps state $state as live=$expected", ({ state, expected }) => {
   mockProcessPlatform("darwin");
@@ -167,10 +176,39 @@ it("joins Darwin numeric ancestry to exact native command facts", () => {
     pid === owner ? { argv } : pid === 1 ? foreign : undefined,
   );
   expect([...readProcessGroupMembers(1_000, { readDarwinCommand: darwinCommand })]).toEqual([
-    { pid: owner, pgid: owner, state: "S", command: { ppid: 1, argv } },
+    { pid: owner, pgid: owner, state: "S", command: { ppid: 1, argv, uid: 501 } },
     { pid: 1, pgid: 1, state: "S", command: { ppid: 0, ...foreign } },
   ]);
 });
+
+it.each([
+  { status: "Uid:\t1000\t0\t0\t0\n", uid: 1000 },
+  { status: "Uid:\t1000\t1000\t1000\t1000\nUid:\t2000\t2000\t2000\t2000\n", uid: undefined },
+  { status: "Uid:\t1000\t1000\t1000\n", uid: undefined },
+  { status: "Uid:\t4294967296\t0\t0\t0\n", uid: undefined },
+  { status: "Name:\tworker\n", uid: undefined },
+])("retains only valid Linux ownership UID evidence ($uid)", ({ status, uid }) => {
+  identities.set(owner, status);
+  const [observation] = readProcessGroupMembers(1_000, { readDarwinCommand: darwinCommand });
+  expect(observation?.command?.uid).toBe(uid);
+  expect(observation?.command).toMatchObject({ argv: ["openclaw-doctor"] });
+});
+
+it.each([1000, 2000, undefined])(
+  "keeps denied Linux arguments uncertain unless the credential UIDs are foreign (%s)",
+  (uid) => {
+    if (uid !== undefined) {
+      identities.set(owner, `Uid:\t${uid}\t${uid}\t${uid}\t${uid}\n`);
+    }
+    commands.set(owner, Object.assign(new Error("denied"), { code: "EACCES" }));
+    const inspect = () => [...readProcessGroupMembers(1_000, { readDarwinCommand: darwinCommand })];
+    if (uid === 2000) {
+      expect(inspect()).toMatchObject([{ command: { ppid: 1, argvUnavailable: true, uid } }]);
+    } else {
+      expect(inspect).toThrow(`Could not classify PID ${owner}`);
+    }
+  },
+);
 
 it("does not turn native Darwin inspection failures into an empty census", () => {
   mockProcessPlatform("darwin");

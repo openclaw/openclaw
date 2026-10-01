@@ -2,6 +2,7 @@
  * Ordered credential resolution for one provider request.
  */
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -63,7 +64,7 @@ function shouldDeferSyntheticProfileAuth(params: {
   resolvedApiKey: string | undefined;
   modelApi?: string;
 }): boolean {
-  const providerConfig = authConfig.resolveProviderConfig(params.cfg, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   return (
     shouldDeferProviderSyntheticProfileAuthWithPlugin({
       provider: params.provider,
@@ -115,6 +116,7 @@ export async function resolveProviderEntryApiKeyAuth(params: {
   agentDir?: string;
   modelApi?: string;
   modelBaseUrl?: string;
+  capability?: string;
   secretSentinels?: boolean;
   signal?: AbortSignal;
 }): Promise<ResolvedProviderAuth | undefined> {
@@ -140,6 +142,7 @@ export async function resolveProviderEntryApiKeyAuth(params: {
       provider,
       modelApi: params.modelApi,
       modelBaseUrl: params.modelBaseUrl,
+      capability: params.capability,
       profileId: binding.auth.profileId ?? provider,
       mode: binding.auth.mode,
       authFlow: binding.auth.authFlow,
@@ -193,6 +196,7 @@ export async function resolveApiKeyForProviderCore(input: {
   modelId?: string;
   modelApi?: string;
   modelBaseUrl?: string;
+  capability?: string;
   /** Keep SecretRef-backed model credentials opaque until a sentinel-aware transport boundary. */
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
@@ -244,6 +248,7 @@ export async function resolveApiKeyForProviderCore(input: {
         provider,
         modelApi: params.modelApi,
         modelBaseUrl: params.modelBaseUrl,
+        capability: params.capability,
         profileId,
         mode: authConfig.profileTypeToAuthMode(configuredProfileType),
         authFlow:
@@ -290,6 +295,7 @@ export async function resolveApiKeyForProviderCore(input: {
       provider,
       modelApi: params.modelApi,
       modelBaseUrl: params.modelBaseUrl,
+      capability: params.capability,
       profileId: resolvedProfileId,
       mode: result.mode,
       authFlow: result.authFlow,
@@ -356,6 +362,7 @@ export async function resolveApiKeyForProviderCore(input: {
       provider,
       modelApi: params.modelApi,
       modelBaseUrl: params.modelBaseUrl,
+      capability: params.capability,
       mode,
       authFlow,
     });
@@ -418,6 +425,7 @@ export async function resolveApiKeyForProviderCore(input: {
     signal: params.signal,
     modelApi: params.modelApi,
     modelBaseUrl: params.modelBaseUrl,
+    capability: params.capability,
     secretSentinels: params.secretSentinels,
   });
   params.signal?.throwIfAborted();
@@ -453,7 +461,7 @@ export async function resolveApiKeyForProviderCore(input: {
       };
     }
   }
-  const providerConfig = authConfig.resolveProviderConfig(cfg, provider);
+  const providerConfig = resolveMergedModelProviderConfig(cfg, provider);
   const configuredLocalKey = authConfig.resolveUsableCustomProviderApiKey({
     cfg,
     provider,

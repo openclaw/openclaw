@@ -6,10 +6,10 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { markCronJobActive } from "../active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob, CronRunOutcome } from "../types.js";
 import { applyJobResultAndDrainNotifications } from "./notification.test-helpers.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
@@ -71,7 +71,7 @@ describe("cron failure incident startup recovery", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [pendingJob] });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TEMP TRIGGER reject_recovered_cron_row
+      CREATE TRIGGER reject_recovered_cron_row
       BEFORE UPDATE ON cron_jobs
       WHEN NEW.store_key = '${cronStoreKey(store.storePath)}' AND NEW.job_id = '${pendingJob.id}'
       BEGIN
@@ -85,7 +85,7 @@ describe("cron failure incident startup recovery", () => {
     } finally {
       database.exec("DROP TRIGGER IF EXISTS reject_recovered_cron_row");
     }
-    const entry = readCronTaskRunHistoryPage({
+    const entry = readCronRunHistoryPageForTests({
       storeKey: cronStoreKey(store.storePath),
       jobId: pendingJob.id,
       status: "ok",

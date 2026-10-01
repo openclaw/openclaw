@@ -72,6 +72,16 @@ You can also enable the global rolling-history detectors in **Settings → Agent
 | --------- | ------- | ------------------------------------------------------------------------------------------------- |
 | `enabled` | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard. |
 
+Execution titles do not distinguish otherwise identical exec calls. Code Mode
+also supplies private outcome identities: bookkeeping counters and continuation
+IDs do not count as progress. Automatically retained values use their original
+value identity rather than a fresh result-reference ID. Pending work is compared by its operation and
+arguments, while changed output, returned values, and errors remain meaningful.
+The displayed receipts and guest data are unchanged, including guest fields
+named telemetry or pendingToolCalls. This does not detect arbitrary
+semantically equivalent JavaScript rewrites or make background processes survive
+a Gateway restart.
+
 For `exec`, no-progress hashing compares stable command outcomes (status,
 exit code, timed-out flag, output) and ignores volatile runtime metadata such
 as duration, PID, session ID, and working directory.
@@ -93,6 +103,11 @@ semantic outcome keep full outcome comparison.
 Calls rejected by argument validation (for example `exec` without `command`) never
 run, but they are recorded as failed calls, so repeating one is detected like any
 other loop. They do not extend or end an `exec` failure streak.
+
+Window observations from `computer` `get_window_state` are compared without fresh
+observation and element references. Pixels, element labels, values, bounds, and
+other observation data still count as changes. Model-facing results retain fresh
+references, and stale references remain invalid for subsequent input.
 
 Outcome comparisons also ignore fresh external-content wrapper nonces, including
 wrapped errors and JSON results. Delivered security markers remain unchanged;

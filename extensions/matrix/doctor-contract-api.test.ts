@@ -1,4 +1,3 @@
-// Matrix tests cover doctor contract state migrations.
 import "fake-indexeddb/auto";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -79,6 +78,10 @@ function createMigrationParams(stateDir: string) {
   };
 }
 
+function accountStorageRoot(stateDir: string, accountId = "default", token = "0123456789abcdef") {
+  return path.join(stateDir, "matrix", "accounts", accountId, "matrix.example.org__bot", token);
+}
+
 function migrationById(id: string) {
   const migration = stateMigrations.find((entry) => entry.id === id);
   if (!migration) {
@@ -109,14 +112,7 @@ describe("matrix doctor contract state migrations", () => {
 
   it("migrates legacy sync cache JSON to SQLite plugin state", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const storageRootDir = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "default",
-      "matrix.example.org__bot",
-      "0123456789abcdef",
-    );
+    const storageRootDir = accountStorageRoot(stateDir);
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
       path.join(storageRootDir, "bot-storage.json"),
@@ -202,14 +198,7 @@ describe("matrix doctor contract state migrations", () => {
 
   it("migrates Matrix storage metadata JSON to SQLite plugin state", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const storageRootDir = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "default",
-      "matrix.example.org__bot",
-      "0123456789abcdef",
-    );
+    const storageRootDir = accountStorageRoot(stateDir);
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
       path.join(storageRootDir, "storage-meta.json"),
@@ -271,14 +260,7 @@ describe("matrix doctor contract state migrations", () => {
 
   it("migrates Matrix recovery-key JSON to SQLite plugin state", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const storageRootDir = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "default",
-      "matrix.example.org__bot",
-      "0123456789abcdef",
-    );
+    const storageRootDir = accountStorageRoot(stateDir);
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
       path.join(storageRootDir, "recovery-key.json"),
@@ -503,22 +485,8 @@ describe("matrix doctor contract state migrations", () => {
 
   it("detects, imports, and retires schema-v1 inbound dedupe rows without upgrading the source", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const sqliteRoot = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "ops",
-      "matrix.example.org__bot",
-      "0123456789abcdef",
-    );
-    const jsonRoot = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "home",
-      "matrix.example.org__bot",
-      "fedcba9876543210",
-    );
+    const sqliteRoot = accountStorageRoot(stateDir, "ops");
+    const jsonRoot = accountStorageRoot(stateDir, "home", "fedcba9876543210");
     fs.mkdirSync(sqliteRoot, { recursive: true });
     fs.mkdirSync(jsonRoot, { recursive: true });
     const roomId = "!room:example.org";
@@ -815,14 +783,7 @@ describe("matrix doctor contract state migrations", () => {
 
   it("archives malformed inbound dedupe JSON without importing it", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const jsonRoot = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "home",
-      "matrix.example.org__bot",
-      "0123456789abcdef",
-    );
+    const jsonRoot = accountStorageRoot(stateDir, "home");
     fs.mkdirSync(jsonRoot, { recursive: true });
     const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");
     fs.writeFileSync(jsonPath, "not-json");
@@ -846,14 +807,7 @@ describe("matrix doctor contract state migrations", () => {
 
   it("keeps inbound dedupe sources when retention-aware import is unavailable", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const jsonRoot = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "home",
-      "matrix.example.org__bot",
-      "0123456789abcdef",
-    );
+    const jsonRoot = accountStorageRoot(stateDir, "home");
     fs.mkdirSync(jsonRoot, { recursive: true });
     const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");
     fs.writeFileSync(

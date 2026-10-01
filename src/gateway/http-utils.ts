@@ -1,5 +1,3 @@
-// Gateway HTTP request helpers.
-// Resolves OpenAI-compatible agent/model/session headers and re-exports auth helpers.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import {
@@ -55,6 +53,7 @@ export {
 export const OPENCLAW_MODEL_ID = "openclaw";
 /** Default OpenAI-compatible model alias that targets the default OpenClaw agent. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
+const AGENT_MODEL_PATTERN = /^(?:openclaw[:/]|agent:)(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i;
 
 class UnknownGatewayAgentError extends Error {
   constructor(readonly agentId: string) {
@@ -85,14 +84,16 @@ export function isAgentSelectionRequiredError(err: unknown): err is AgentSelecti
   return err instanceof AgentSelectionRequiredError;
 }
 
-export function isInvalidGatewayModelError(err: unknown): err is InvalidGatewayModelError {
-  return err instanceof InvalidGatewayModelError;
+export function isGatewayAgentRequestError(err: unknown): err is Error {
+  return (
+    isAgentSelectionRequiredError(err) ||
+    err instanceof InvalidGatewayModelError ||
+    isUnknownGatewayAgentError(err)
+  );
 }
 
-export function isGatewaySessionKeyOverrideError(
-  err: unknown,
-): err is GatewaySessionKeyOverrideError {
-  return err instanceof GatewaySessionKeyOverrideError;
+export function isGatewayRequestContextError(err: unknown): err is Error {
+  return isGatewayAgentRequestError(err) || err instanceof GatewaySessionKeyOverrideError;
 }
 
 function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
@@ -129,10 +130,7 @@ export function resolveAgentIdFromModel(
     return resolveDefaultAgentId(cfg);
   }
 
-  const m =
-    raw.match(/^openclaw[:/](?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i) ??
-    raw.match(/^agent:(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i);
-  const agentId = m?.groups?.agentId;
+  const agentId = raw.match(AGENT_MODEL_PATTERN)?.groups?.agentId;
   if (!agentId) {
     return undefined;
   }
@@ -149,10 +147,7 @@ export function isOpenClawAgentModelId(model: string | undefined): boolean {
   if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
     return true;
   }
-  return (
-    /^openclaw[:/][a-z0-9][a-z0-9_-]{0,63}$/i.test(raw) ||
-    /^agent:[a-z0-9][a-z0-9_-]{0,63}$/i.test(raw)
-  );
+  return AGENT_MODEL_PATTERN.test(raw);
 }
 
 /** Validates and resolves the `x-openclaw-model` override for OpenAI-compatible requests. */

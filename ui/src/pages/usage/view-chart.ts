@@ -113,7 +113,6 @@ export function renderDailyChartCompact(
     return Math.max(minBarPx, ratio * chartAreaPx);
   });
 
-  // Calculate bar width based on number of days
   const barMaxWidth = daily.length > 30 ? 12 : daily.length > 20 ? 18 : daily.length > 14 ? 24 : 32;
   const showTotals = daily.length <= 14;
   const selectedDaySet = new Set(selectedDays);
@@ -173,13 +172,10 @@ export function renderDailyChartCompact(
             ${daily.map((d, idx) => {
               const heightPx = expectDefined(barHeights[idx], "daily usage bar height");
               const isSelected = selectedDaySet.has(d.date);
-              const label = formatDayLabel(d.date);
-              // Shorter label for many days (just day number)
               const showDateLabel =
                 daily.length <= 14 ||
                 idx % Math.ceil(daily.length / 6) === 0 ||
                 idx === daily.length - 1;
-              const shortLabel = label;
               const labelClass = showDateLabel
                 ? "daily-bar-label"
                 : "daily-bar-label daily-bar-label--hidden";
@@ -250,7 +246,7 @@ export function renderDailyChartCompact(
                             aria-hidden="true"
                           ></div>`
                     }
-                    <div class="${labelClass}">${shortLabel}</div>
+                    <div class="${labelClass}">${formatDayLabel(d.date)}</div>
                   </div>
                 </openclaw-tooltip>
               `;

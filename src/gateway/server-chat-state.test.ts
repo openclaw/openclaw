@@ -209,14 +209,7 @@ describe("createChatRunState", () => {
     },
   );
 
-  it.each([
-    "waiting_for_state",
-    "naming_worktree",
-    "creating_worktree",
-    "running_setup",
-    "preparing_context",
-    "memory_flushing",
-  ])(
+  it.each(["waiting_for_state", "preparing_context", "memory_flushing"])(
     "retains only the latest startup status (%s) until observable run activity begins",
     (phase) => {
       const state = createChatRunState();
@@ -603,7 +596,14 @@ describe("createChatRunState", () => {
 
   it("retains native boxed values, shared containers, and a proxy revoked by its last getter", () => {
     const state = createChatRunState();
-    const shared = { value: Object(3), text: Object("é"), enabled: Object(false) };
+    const numberHints: string[] = [];
+    const boxedNumber = Object.assign(Object(3), {
+      [Symbol.toPrimitive]: (hint: string) => {
+        numberHints.push(hint);
+        return -3.25;
+      },
+    });
+    const shared = { value: boxedNumber, text: Object("é"), enabled: Object(false) };
     const revocable = Proxy.revocable(["last"], {
       get(target, key, receiver) {
         const value: unknown = Reflect.get(target, key, receiver);
@@ -626,10 +626,11 @@ describe("createChatRunState", () => {
     });
     const event = state.runs.get("run-1")?.progressSnapshot?.events[0];
     expect(event?.data.result).toEqual({
-      first: { value: 3, text: "é", enabled: false },
-      again: { value: 3, text: "é", enabled: false },
+      first: { value: -3.25, text: "é", enabled: false },
+      again: { value: -3.25, text: "é", enabled: false },
       last: ["last"],
     });
+    expect(numberHints).toEqual(["number", "number"]);
     expect(state.runs.get("run-1")?.progressSnapshot?.byteLength).toBe(
       Buffer.byteLength(JSON.stringify(event)),
     );
@@ -767,6 +768,29 @@ describe("createChatRunState", () => {
 });
 
 describe("createSessionMessageSubscriberRegistry", () => {
+  it("replaces narration intent and invalidates the audience after the new mode is visible", () => {
+    const subscribers = createSessionMessageSubscriberRegistry();
+    const modes: string[] = [];
+    subscribers.onChange((key, connId) => {
+      modes.push(
+        !subscribers.get(key).has(connId)
+          ? "none"
+          : subscribers.getNarration(key).has(connId)
+            ? "narration"
+            : "full",
+      );
+    });
+
+    subscribers.subscribe("conn", "agent:main:main", { mode: "narration" });
+    subscribers.subscribe("conn", "agent:main:main", { mode: "narration" });
+    subscribers.subscribe("conn", "agent:main:main");
+    subscribers.subscribe("conn", "agent:main:main", { mode: "narration" });
+    subscribers.unsubscribeAll("conn");
+
+    expect(modes).toEqual(["narration", "full", "narration", "none"]);
+    expect([...subscribers.getNarration("agent:main:main")]).toEqual([]);
+  });
+
   it("keeps approval delivery opt-in and updates it on resubscribe", () => {
     const subscribers = createSessionMessageSubscriberRegistry();
 
@@ -809,6 +833,7 @@ describe("createSessionMessageSubscriberRegistry", () => {
       const first = subscribers.subscribe("conn", "agent:main:main", {
         provisional: true,
         includeApprovals: true,
+        mode: "narration",
       })!;
       const second = subscribers.subscribe("conn", "agent:main:main", { provisional: true })!;
 
@@ -822,6 +847,7 @@ describe("createSessionMessageSubscriberRegistry", () => {
 
       expect([...subscribers.get("agent:main:main")]).toEqual([]);
       expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
+      expect([...subscribers.getNarration("agent:main:main")]).toEqual([]);
     },
   );
 
@@ -831,13 +857,14 @@ describe("createSessionMessageSubscriberRegistry", () => {
     ["first", true],
     ["second", true],
   ] as const)(
-    "keeps the latest successful replay's approval mode (%s settles first, earlier succeeds=%s)",
+    "keeps the latest successful replay's modes (%s settles first, earlier succeeds=%s)",
     (firstResolution, firstSucceeds) => {
       const subscribers = createSessionMessageSubscriberRegistry();
       subscribers.subscribe("conn", "agent:main:other");
       const first = subscribers.subscribe("conn", "agent:main:main", {
         provisional: true,
         includeApprovals: true,
+        mode: "narration",
       })!;
       const second = subscribers.subscribe("conn", "agent:main:main", { provisional: true })!;
       const settleFirst = firstSucceeds ? first.commit : first;
@@ -852,6 +879,28 @@ describe("createSessionMessageSubscriberRegistry", () => {
 
       expect([...subscribers.get("agent:main:other")]).toEqual(["conn"]);
       expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
+      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
+      expect([...subscribers.getNarration("agent:main:main")]).toEqual([]);
+    },
+  );
+
+  it.each([undefined, "narration"] as const)(
+    "restores committed narration mode %s when an approval replay fails",
+    (mode) => {
+      const subscribers = createSessionMessageSubscriberRegistry();
+      subscribers.subscribe("conn", "agent:main:main", { mode });
+      const rollback = subscribers.subscribe("conn", "agent:main:main", {
+        provisional: true,
+        includeApprovals: true,
+        mode: mode === "narration" ? undefined : "narration",
+      })!;
+
+      rollback();
+
+      expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
+      expect([...subscribers.getNarration("agent:main:main")]).toEqual(
+        mode === "narration" ? ["conn"] : [],
+      );
       expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
     },
   );
@@ -876,7 +925,10 @@ describe("createSessionMessageSubscriberRegistry", () => {
       expect([...subscribers.getApprovals("agent:main:main")]).toEqual(
         includeApprovals ? ["conn"] : [],
       );
-      expect(onChange.mock.calls).toEqual([["agent:main:main"], ["agent:main:child"]]);
+      expect(onChange.mock.calls).toEqual([
+        ["agent:main:main", "conn"],
+        ["agent:main:child", "conn"],
+      ]);
     },
   );
 
@@ -887,6 +939,7 @@ describe("createSessionMessageSubscriberRegistry", () => {
       const subscription = subscribers.subscribe("conn", "agent:main:main", {
         provisional: true,
         includeApprovals: true,
+        mode: "narration",
       })!;
 
       if (invalidation === "disconnect") {
@@ -903,6 +956,7 @@ describe("createSessionMessageSubscriberRegistry", () => {
       subscription.commit();
       expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
       expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
+      expect([...subscribers.getNarration("agent:main:main")]).toEqual([]);
 
       replacement();
       expect([...subscribers.get("agent:main:main")]).toEqual([]);

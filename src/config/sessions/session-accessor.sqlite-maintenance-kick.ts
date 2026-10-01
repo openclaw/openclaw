@@ -1,6 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { getChildLogger } from "../../logging/logger.js";
+import {
+  GatewayDrainingError,
+  getGatewayRestartDrainSignal,
+  isGatewayRestartDrainError,
+} from "../../process/gateway-work-admission.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -15,11 +20,9 @@ import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
-import {
-  createSessionMaintenancePlanningOperation,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { createSessionMaintenancePlanningOperation } from "./session-accessor.sqlite-reclamation.js";
 import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -60,15 +63,21 @@ const MAX_MAINTENANCE_REJECTIONS = 3;
 export function kickSessionEntryMaintenanceAfterWrite(
   params: SessionEntryMaintenanceRequest,
 ): void {
+  const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(params.scope));
+  const owner = maintenanceByStore.get(databasePath);
+  if (getGatewayRestartDrainSignal().aborted) {
+    if (owner) {
+      retireMaintenanceOwner(databasePath, owner);
+    }
+    return;
+  }
   if (params.skipMaintenance) {
     return;
   }
-  const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(params.scope));
   const database = getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(params.scope));
   if (!database) {
     return;
   }
-  const owner = maintenanceByStore.get(databasePath);
   if (owner?.database === database) {
     owner.activeSessionKeys.add(params.activeSessionKey);
     Object.assign(owner, params, { generation: owner.generation + 1 });
@@ -149,6 +158,7 @@ async function runPendingMaintenance(
   owner: SessionEntryMaintenanceOwner,
 ): Promise<void> {
   const isCurrent = () =>
+    !getGatewayRestartDrainSignal().aborted &&
     maintenanceByStore.get(databasePath) === owner &&
     owner.database.db.isOpen &&
     getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(owner.scope)) === owner.database;
@@ -157,7 +167,7 @@ async function runPendingMaintenance(
     return;
   }
   const generation = owner.generation;
-  const activeSessionKeys = [...owner.activeSessionKeys];
+  let activeSessionKeys = [...owner.activeSessionKeys];
   owner.activeSessionKeys.clear();
   let nextMaintenanceAt: number | undefined = Infinity;
   let planningChanged = false;
@@ -206,13 +216,24 @@ async function runPendingMaintenance(
       return;
     }
     let { ageCapture } = prepared;
+    let admitted = false;
     const assertInputsCurrent = () => {
       if (!isCurrent()) {
-        throw new Error("SQLite automatic maintenance owner retired");
+        throw getGatewayRestartDrainSignal().aborted
+          ? new GatewayDrainingError()
+          : new Error("SQLite automatic maintenance owner retired");
       }
       if (
-        owner.generation !== generation ||
-        (operation.input.preservation !== null &&
+        (admitted &&
+          [...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key))) ||
+        !isDeepStrictEqual(
+          maintenance,
+          owner.maintenanceConfig
+            ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
+            : resolveMaintenanceConfig(),
+        ) ||
+        (admitted &&
+          operation.input.preservation !== null &&
           !isDeepStrictEqual(
             operation.input.preservation,
             captureSessionMaintenancePreservation(operation.input.storePath),
@@ -224,19 +245,28 @@ async function runPendingMaintenance(
         );
       }
     };
-    const assertCurrent = () => {
-      assertInputsCurrent();
+    const runPlanning = () => {
       if (!isSessionEntryMaintenanceAgeCaptureCurrent(owner.database.db, ageCapture)) {
-        planningChanged = true;
-        throw new SqliteReclamationInputsChangedError(
-          "SQLite automatic maintenance age fact changed before commit",
-        );
+        ageCapture = captureSessionEntryMaintenanceAgeFact(owner.database.db, maintenance);
+        operation.input.ageFact = ageCapture.fact;
       }
-    };
-    const runPlanning = () =>
-      runSqliteSessionReclamation({
+      return runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-plan" },
-        assertCommitAllowed: assertCurrent,
+        assertCommitAllowed: assertInputsCurrent,
+        refreshMaintenanceProtection: () => {
+          // Refresh only at writer admission; commit still checks this exact live capture.
+          admitted = false;
+          assertInputsCurrent();
+          activeSessionKeys = [...new Set([...activeSessionKeys, ...owner.activeSessionKeys])];
+          operation.input.activeSessionKeys = activeSessionKeys;
+          if (operation.input.preservation !== null) {
+            operation.input.preservation = captureSessionMaintenancePreservation(
+              operation.input.storePath,
+            );
+          }
+          admitted = true;
+          return { activeSessionKeys, preservation: operation.input.preservation };
+        },
         onWorkerResult: (result) => {
           if (result.kind === "maintenance-plan" && isCurrent()) {
             adoptSessionEntryMaintenanceAgeFact(owner.database.db, ageCapture, result.ageFact);
@@ -245,6 +275,7 @@ async function runPendingMaintenance(
         forceInProcess: false,
         plan: operation,
       });
+    };
     let result = await runPlanning();
     if (result.kind === "maintenance-preservation-required") {
       await runExclusiveSqliteSessionWrite(
@@ -266,6 +297,12 @@ async function runPendingMaintenance(
       );
       result = await runPlanning();
     }
+    if (result.kind === "maintenance-plan-stale") {
+      planningChanged = true;
+      throw new SqliteReclamationInputsChangedError(
+        "SQLite maintenance snapshot changed before commit",
+      );
+    }
     if (result.kind !== "maintenance-plan") {
       throw new Error("SQLite automatic maintenance returned another operation's result");
     }
@@ -278,7 +315,7 @@ async function runPendingMaintenance(
           "SQLite automatic maintenance database path changed after no-op planning",
         );
       }
-      // A synchronous writer can change pressure after the Worker acknowledges its fact.
+      // A no-op cannot publish an age hint that a concurrent writer invalidated.
       if (
         captureSessionEntryMaintenanceAgeFact(owner.database.db, maintenance).fact !==
         result.ageFact
@@ -308,14 +345,22 @@ async function runPendingMaintenance(
           { error, path: databasePath, rejections: owner.rejections },
         );
       } else {
-        scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
+        owner.running = true;
+        owner.retryDelayMs = undefined;
+        await runPendingMaintenance(databasePath, owner);
       }
       return;
     }
-    getChildLogger({ subsystem: "session-sqlite" }).warn(
-      "SQLite automatic session maintenance failed",
-      { error, path: databasePath },
-    );
+    // Drain cancels discretionary work; independent failures stay visible.
+    if (
+      !isGatewayRestartDrainError(error) &&
+      !(planningChanged && getGatewayRestartDrainSignal().aborted)
+    ) {
+      getChildLogger({ subsystem: "session-sqlite" }).warn(
+        "SQLite automatic session maintenance failed",
+        { error, path: databasePath },
+      );
+    }
   }
   // Writes during finalization also coalesce behind the next quiet window.
   if (!isCurrent()) {

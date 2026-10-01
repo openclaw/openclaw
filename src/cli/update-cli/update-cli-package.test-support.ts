@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type Mock } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
+import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { runCommandWithTimeout as RunCommandWithTimeout } from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
@@ -104,6 +104,9 @@ export const writeNpmPackageInstall = async (
         "openclaw",
       )
     : packageRoot;
+  if (stagePrefix) {
+    await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
+  }
   await writeOpenClawPackageFixture(installedRoot, version, {
     entrySource: "export {};\n",
     inventory: true,
@@ -335,6 +338,9 @@ export function createUpdateCliPackageFixtures({
   ) => {
     serviceReadCommand.mockResolvedValue({
       programArguments,
+      ...(process.platform === "win32"
+        ? { sourcePath: resolveGatewayTaskScriptPath(process.env) }
+        : {}),
       environment: {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
@@ -371,19 +377,6 @@ export function createUpdateCliPackageFixtures({
     });
   };
 
-  const mockPackageReplacementFailure = (message: string, beforeFailure?: () => Promise<void>) => {
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
-      if (argv[1] === "--version") {
-        return commandResult({ stdout: "12.0.0\n" });
-      }
-      if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
-        await beforeFailure?.();
-        throw new Error(message);
-      }
-      return commandResult();
-    });
-  };
-
   const mockGatewayInstallFailure = (entrypoint: string, stderr = "launchctl bootstrap failed") => {
     const message =
       "Service definition refresh failed; the previous definition was restored: Error: launchctl bootstrap failed";
@@ -414,7 +407,6 @@ export function createUpdateCliPackageFixtures({
     mockRunningManagedGateway,
     mockStoppedManagedGitGateway,
     mockNpmGlobalRoot,
-    mockPackageReplacementFailure,
     mockGatewayInstallFailure,
   };
 }
@@ -428,25 +420,37 @@ export function createCurrentProcessFreshDoctorFixture(
     params: {
       postCoreResumeAttempt?: boolean;
       packageRoot?: string;
-      candidateAdmission?: boolean;
     } = {},
   ) => {
-    // Package Doctor precedes the fresh-process decision; it must have a real entrypoint.
+    const installedEntrypoint = params.packageRoot
+      ? vi.fn<typeof resolveGatewayInstallEntrypoint>()
+      : vi.mocked(resolveGatewayInstallEntrypoint);
+    // Staged admission and publication probes read the fixture they request;
+    // they must not consume the installed Doctor/finalization responses.
     if (params.packageRoot) {
-      vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
-      if (params.candidateAdmission) {
-        // Native capability admission resolves the staged candidate before package Doctor.
-        vi.mocked(resolveGatewayInstallEntrypoint).mockImplementationOnce(async (root) =>
-          path.join(expectDefined(root, "capability candidate root"), "dist", "index.js"),
-        );
-      }
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-        path.join(params.packageRoot, "dist", "index.js"),
-      );
+      vi.mocked(resolveGatewayInstallEntrypoint)
+        .mockReset()
+        .mockImplementation(async (root) => {
+          if (root && root !== params.packageRoot) {
+            const actual = await vi.importActual<
+              typeof import("../../daemon/gateway-entrypoint.js")
+            >("../../daemon/gateway-entrypoint.js");
+            return actual.resolveGatewayInstallEntrypoint(root, async (candidate) => {
+              try {
+                await fs.access(candidate);
+                return true;
+              } catch {
+                return false;
+              }
+            });
+          }
+          return installedEntrypoint(root);
+        });
+      installedEntrypoint.mockResolvedValueOnce(path.join(params.packageRoot, "dist", "index.js"));
     }
     if (params.postCoreResumeAttempt !== false) {
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(undefined);
+      installedEntrypoint.mockResolvedValueOnce(undefined);
     }
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(freshEntrypoint);
+    installedEntrypoint.mockResolvedValueOnce(freshEntrypoint);
   };
 }

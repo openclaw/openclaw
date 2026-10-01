@@ -1,4 +1,3 @@
-// Log tail helpers read recent log lines with optional parsing and redaction.
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,13 +5,12 @@ import { StringDecoder } from "node:string_decoder";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { isMissingPathError } from "../infra/errno.js";
 import { clamp } from "../utils.js";
-import { isRollingLogFilePath, isSameRollingLogFileFamily } from "./log-file-path.js";
+import { isSameRollingLogFileFamily } from "./log-file-path.js";
 import "./logger.js";
 import { getResolvedLoggerFileTarget } from "./logger-settings-internal.js";
 import { parseLogLine, type ParsedLogLine } from "./parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "./redact.js";
 
-// Tail reader for the active log file, with cursor reset and line redaction.
 const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
@@ -25,7 +23,6 @@ function missingPathToNull(error: unknown): null {
   return null;
 }
 
-/** Payload returned to log-tail callers with cursor and truncation metadata. */
 export type LogTailPayload = {
   file: string;
   cursor: number;
@@ -44,13 +41,10 @@ type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
 type ResolvedLogFile = { file: string; stat: Stats | null };
 
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
-async function resolveLogFile(
-  file: string,
-  options?: { rolling?: boolean },
-): Promise<ResolvedLogFile> {
+async function resolveLogFile(file: string, rolling: boolean): Promise<ResolvedLogFile> {
   const stat = await fs.stat(file).catch(missingPathToNull);
   const source = { file, stat };
-  if (stat || !(options?.rolling ?? isRollingLogFilePath(file))) {
+  if (stat || !rolling) {
     return source;
   }
 
@@ -276,13 +270,12 @@ async function readLogSlice(
   }
 }
 
-/** Reads and redacts the configured log tail with bounded bytes and line count. */
 export async function readConfiguredLogTail(
   params?: { cursor?: number; limit?: number; maxBytes?: number },
   filter?: (line: string) => boolean,
 ): Promise<LogTailPayload> {
   const target = getResolvedLoggerFileTarget();
-  const { file, stat } = await resolveLogFile(target.file, { rolling: target.rolling });
+  const { file, stat } = await resolveLogFile(target.file, target.rolling);
   const result = await readLogSlice({
     file,
     stat,

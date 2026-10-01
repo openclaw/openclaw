@@ -143,7 +143,7 @@ describe("exec approval signed agent runtime", () => {
           sessionId: source.sessionId,
           ownerEpoch: 3,
         });
-        let placement = placements.startDispatch(source);
+        let placement = await placements.startDispatch(source);
         for (const [to, patch] of [
           ["provisioning", { environmentId: "worker-approval-environment" }],
           ["syncing", { workerBundleHash: "a".repeat(64) }],

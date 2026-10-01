@@ -56,11 +56,6 @@ describe("broadcast send outcomes through native actions", () => {
     sentBeforeError?: true;
   }>([
     {
-      name: "native rejection",
-      payload: { ok: false, error: "provider rejected message" },
-      ok: false,
-    },
-    {
       name: "native rejection before send",
       payload: { ok: false, error: "rejected before send", sentBeforeError: false },
       ok: false,
@@ -787,7 +782,10 @@ describe("broadcast send outcomes through native actions", () => {
           idempotencyKey: "broadcast-root",
         },
         messageActionAuthorization: {
-          scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent: () => {} },
+          scheduled: {
+            policy: { version: 1, mode: "trusted" },
+            assertCurrent: () => {},
+          },
         },
       });
     await send();

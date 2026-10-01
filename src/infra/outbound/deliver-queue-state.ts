@@ -126,14 +126,11 @@ export function createQueuedDeliveryOwner(
     fail(record: QueuedDeliveryFailureRecorder, error: string): Promise<void> {
       owner.signal?.throwIfAborted();
       // Internal transitions retain captured state; caller-supplied recorders keep their public arguments.
-      const recordInState =
-        record === failDelivery
-          ? failDelivery
-          : record === failDeliveryAfterPlatformSend
-            ? failDeliveryAfterPlatformSend
-            : record === failDeliveryBeforePlatformSend
-              ? failDeliveryBeforePlatformSend
-              : undefined;
+      const recordInState = [
+        failDelivery,
+        failDeliveryAfterPlatformSend,
+        failDeliveryBeforePlatformSend,
+      ].find((candidate) => candidate === record);
       return recordInState
         ? recordInState(owner.queueId, error, owner.stateDir, owner.claimId, context)
         : record(owner.queueId, error, owner.stateDir, owner.claimId);

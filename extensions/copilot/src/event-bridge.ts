@@ -24,6 +24,7 @@ import {
   type AssistantUsageSnapshot,
   type AttemptTranscriptJournalProjection,
 } from "./event-bridge-transcript.js";
+import { createPromptError } from "./prompt-error.js";
 import { normalizeCopilotUsage } from "./usage-bridge.js";
 
 export type { AssistantMessage, AssistantUsageSnapshot } from "./event-bridge-transcript.js";
@@ -65,12 +66,6 @@ interface EventBridgeOptions {
     stream: "item" | "plan";
     data: Record<string, unknown>;
   }) => void | Promise<void>;
-  onNativeSubagentEvent?: (
-    event: Extract<
-      SessionEvent,
-      { type: "subagent.started" | "subagent.completed" | "subagent.failed" }
-    >,
-  ) => void;
   onCompactionComplete?: (payload: {
     messagesRemoved?: number;
     success: boolean;
@@ -129,7 +124,6 @@ interface EventBridgeController {
 }
 
 type MessageAccumulator = { text: string };
-type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 
 export function attachEventBridge(
   session: SessionLike,
@@ -294,12 +288,7 @@ export function attachEventBridge(
     }
   });
 
-  registerListener(session, unsubscribeFns, "assistant.message", (event) => {
-    if (!isRootSessionEvent(event) || event.ephemeral === true) {
-      return;
-    }
-    handleAssistantMessage(event);
-  });
+  registerListener(session, unsubscribeFns, "assistant.message", handleAssistantMessage);
 
   registerListener(session, unsubscribeFns, "assistant.usage", (event) => {
     if (!isRootSessionEvent(event)) {
@@ -473,10 +462,6 @@ export function attachEventBridge(
     });
   });
 
-  for (const eventType of ["subagent.started", "subagent.completed", "subagent.failed"] as const) {
-    registerListener(session, unsubscribeFns, eventType, forwardNativeSubagentEvent);
-  }
-
   registerListener(session, unsubscribeFns, "session.compaction_start", (event) => {
     if (!isRootSessionEvent(event)) {
       return;
@@ -566,9 +551,7 @@ export function attachEventBridge(
     awaitCompactionChain() {
       return compactionChain;
     },
-    async awaitCompactionCompletion() {
-      await awaitStableCompaction();
-    },
+    awaitCompactionCompletion: awaitStableCompaction,
     awaitSessionIdle() {
       return observedSessionIdle ? Promise.resolve() : sessionIdle;
     },
@@ -806,19 +789,6 @@ export function attachEventBridge(
     agentEventChain = agentEventChain.then(invoke, invoke).catch(() => undefined);
   }
 
-  function forwardNativeSubagentEvent(
-    event: Extract<
-      SessionEvent,
-      { type: "subagent.started" | "subagent.completed" | "subagent.failed" }
-    >,
-  ): void {
-    try {
-      options.onNativeSubagentEvent?.(event);
-    } catch {
-      // Native task mirroring must not corrupt the Copilot turn.
-    }
-  }
-
   async function awaitStableCompaction(): Promise<void> {
     const idle = activeCompactionCount > 0 ? compactionIdle : undefined;
     if (idle) {
@@ -832,15 +802,6 @@ export function attachEventBridge(
       await awaitStableCompaction();
     }
   }
-}
-
-function createPromptError(code: string, message: string, cause?: unknown): PromptErrorWithCode {
-  const error = new Error(message) as PromptErrorWithCode;
-  error.code = code;
-  if (cause !== undefined) {
-    error.cause = cause;
-  }
-  return error;
 }
 
 function ensureMessageAccumulator(

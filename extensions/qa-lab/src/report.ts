@@ -17,10 +17,13 @@ function pushQaReportDetailsBlock(lines: string[], label: string, details: strin
   lines.push("", "```text", details, "```");
 }
 
-function formatQaReportCheck(check: QaReportCheck, indent = "") {
+function pushQaReportCheck(lines: string[], check: QaReportCheck, indent = "") {
   const marker = check.status === "pass" ? "x" : " ";
   const outcome = check.status === "pass" ? "" : ` (${check.status})`;
-  return `${indent}- [${marker}] ${check.name}${outcome}`;
+  lines.push(`${indent}- [${marker}] ${check.name}${outcome}`);
+  if (check.details) {
+    pushQaReportDetailsBlock(lines, "Details", check.details, `${indent}  `);
+  }
 }
 
 export function renderQaMarkdownReport(params: {
@@ -35,15 +38,10 @@ export function renderQaMarkdownReport(params: {
 }) {
   const checks = params.checks ?? [];
   const scenarios = params.scenarios ?? [];
-  const passCount =
-    checks.filter((check) => check.status === "pass").length +
-    scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failCount =
-    checks.filter((check) => check.status === "fail").length +
-    scenarios.filter((scenario) => scenario.status === "fail").length;
-  const skipCount =
-    checks.filter((check) => check.status === "skip").length +
-    scenarios.filter((scenario) => scenario.status === "skip").length;
+  const outcomes = [...checks, ...scenarios];
+  const passCount = outcomes.filter((check) => check.status === "pass").length;
+  const failCount = outcomes.filter((check) => check.status === "fail").length;
+  const skipCount = outcomes.filter((check) => check.status === "skip").length;
 
   const lines = [
     `# ${params.title}${params.inProgress ? " (In Progress)" : ""}`,
@@ -61,10 +59,7 @@ export function renderQaMarkdownReport(params: {
   if (checks.length > 0) {
     lines.push("## Checks", "");
     for (const check of checks) {
-      lines.push(formatQaReportCheck(check));
-      if (check.details) {
-        pushQaReportDetailsBlock(lines, "Details", check.details, "  ");
-      }
+      pushQaReportCheck(lines, check);
     }
   }
 
@@ -80,10 +75,7 @@ export function renderQaMarkdownReport(params: {
       if (scenario.steps?.length) {
         lines.push("- Steps:");
         for (const step of scenario.steps) {
-          lines.push(formatQaReportCheck(step, "  "));
-          if (step.details) {
-            pushQaReportDetailsBlock(lines, "Details", step.details, "    ");
-          }
+          pushQaReportCheck(lines, step, "  ");
         }
       }
       lines.push("");
@@ -110,4 +102,12 @@ export function renderQaMarkdownReport(params: {
 
 export function escapeTableCell(value: string): string {
   return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
+}
+
+export function pushQaReportListSection(lines: string[], title: string, items: readonly string[]) {
+  lines.push(`## ${title}`, "");
+  for (const item of items) {
+    lines.push(`- ${item}`);
+  }
+  lines.push("");
 }

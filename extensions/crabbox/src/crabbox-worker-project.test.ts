@@ -8,12 +8,14 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import {
   createNodeBootstrapFixture,
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { CrabboxCheckpointCreateError } from "./crabbox-worker-warm-image-checkpoint.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   CHECKPOINT_ID,
@@ -22,11 +24,10 @@ import {
   createProjectOptions as projectOptions,
   CLASSLESS_PROFILE,
   PROFILE,
-  commandResult,
   checkpointResult,
   createWarmProvider,
-  openWarmImageStore,
   tempDirs,
+  unsupportedCaptureReceipt,
   type CommandCall,
 } from "./crabbox-worker-warm-image.test-support.js";
 
@@ -44,6 +45,63 @@ function notSubmittedReceipt(leaseId: string) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
+  it("continues cold after unsupported native capture and captures again on the next provision", async () => {
+    const now = 1_800_000_000_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const events: string[] = [];
+    let current = projectOptions(events);
+    let unsupported = true;
+    const profile = { ...CLASSLESS_PROFILE, provider: "hetzner", class: "standard" };
+    const { provider, calls, warn } = createWarmProvider((call) => {
+      current.observe(call);
+      if (unsupported && call.argv[2] === "create") {
+        return commandResult({
+          code: 2,
+          stdout: JSON.stringify(
+            unsupportedCaptureReceipt(call.argv[call.argv.indexOf("--id") + 1]!, "hetzner"),
+          ),
+          stderr: "checkpoint mode must be auto, native, or archive",
+        });
+      }
+      return undefined;
+    });
+    const source = await provider.provision(profile, "unsupported-project", current.options);
+    expect(events).toEqual([
+      "project-prepared",
+      "runtime-granted",
+      "runtime-install",
+      "capture",
+      "enrollment-begun",
+      "enrollment-install",
+    ]);
+    expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(1);
+    expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+    expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+      captureUnsupported: {
+        atMs: now,
+        provider: "hetzner",
+        message: unsupportedCaptureReceipt("unused").message,
+      },
+      allocations: { [source.leaseId]: { phase: "enrolled", choice: { kind: "cold" } } },
+    });
+    expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      `Crabbox warm image capture unsupported: ${unsupportedCaptureReceipt("unused").message}. Workers for this profile use an existing compatible snapshot when one is available and otherwise provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
+    );
+    await provider.destroy({ ...source, profile });
+    // The retained refusal must not suppress the next attempt once Crabbox can capture.
+    expect((await listCrabboxWarmImages(crabboxState))[0]?.captureUnsupported?.atMs).toBe(now);
+    calls.length = 0;
+    clock.mockReturnValue(now + 60_000);
+    unsupported = false;
+    current = projectOptions([]);
+    await provider.provision(profile, "supported-next", current.options);
+    expect(current.options.prepareNodeRuntime).toHaveBeenCalledOnce();
+    expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+    expect((await listCrabboxWarmImages(crabboxState))[0]?.checkpointId).toBe(CHECKPOINT_ID);
+    expect((await listCrabboxWarmImages(crabboxState))[0]?.captureUnsupported).toBeUndefined();
+  });
+
   it.skipIf(process.platform === "win32").each(["none", "runtime", "scrub"] as const)(
     "prepares and scrubs in one settled command before capture (failure=%s)",
     async (failure) => {
@@ -213,9 +271,13 @@ exec "$CRABBOX_TEST_NODE" "$@"
     },
   );
 
-  it.each([false, true])(
-    "clears only its own rejected capture and still stops the source (replaced=%s)",
-    async (replaced) => {
+  it.each([
+    { replaced: false, unsupported: false },
+    { replaced: true, unsupported: false },
+    { replaced: true, unsupported: true },
+  ])(
+    "clears only its own rejected capture and still stops the source (replaced=$replaced, unsupported=$unsupported)",
+    async ({ replaced, unsupported }) => {
       const events: string[] = [];
       const { options, observe } = projectOptions(events);
       const leaseId = operationLeaseId("not-submitted");
@@ -241,7 +303,9 @@ exec "$CRABBOX_TEST_NODE" "$@"
         }
         return commandResult({
           code: 2,
-          stdout: JSON.stringify(notSubmittedReceipt(leaseId)),
+          stdout: JSON.stringify(
+            unsupported ? unsupportedCaptureReceipt(leaseId) : notSubmittedReceipt(leaseId),
+          ),
           stderr: "image submission rejected; source rollback failed",
         });
       });
@@ -253,6 +317,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
       expect(calls.find(({ argv }) => argv[1] === "stop")?.argv).toContain(leaseId);
       if (replaced) {
+        expect((await listCrabboxWarmImages(crabboxState))[0]?.captureUnsupported).toBeUndefined();
         expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toMatchObject({
           selector: "replacement-capture",
           leaseId: "cbx_replacement",
@@ -780,6 +845,93 @@ exec "$CRABBOX_TEST_NODE" "$@"
       expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(failure !== "aborted");
     },
   );
+
+  it.each<{
+    failure: string;
+    result?: Partial<SpawnResult>;
+    receipt?: Record<string, unknown>;
+  }>([
+    { failure: "extra key", receipt: { extra: true } },
+    { failure: "wrong reason", receipt: { reason: "quota" } },
+    { failure: "wrong reservation", receipt: { localReservation: "removed" } },
+    { failure: "wrong provider", receipt: { provider: "hetzner" } },
+    { failure: "wrong lease", receipt: { leaseId: "cbx_other" } },
+    { failure: "empty message", receipt: { message: "" } },
+    { failure: "oversized message", receipt: { message: "x".repeat(1025) } },
+    { failure: "non-string message", receipt: { message: 42 } },
+    { failure: "unknown schema", receipt: { schema: "unknown" } },
+    { failure: "wrong outcome", receipt: { outcome: "submitted" } },
+    { failure: "timeout", result: { termination: "timeout" } },
+    { failure: "null exit", result: { code: null } },
+    { failure: "killed", result: { killed: true } },
+    { failure: "signal", result: { signal: "SIGTERM" } },
+    { failure: "stdout truncation", result: { stdoutTruncatedBytes: 1 } },
+    { failure: "stderr truncation", result: { stderrTruncatedBytes: 1 } },
+    { failure: "output limit", result: { outputLimitExceeded: true } },
+    { failure: "error stream", result: { outputErrorStream: "stdout" } },
+    { failure: "cleanup", result: { cleanup: "uncertain" } },
+    { failure: "old CLI", result: { stdout: "" } },
+    { failure: "multiple JSON objects", result: { stdout: "{}\n{}" } },
+    {
+      failure: "oversized stdout",
+      result: {
+        stdout:
+          JSON.stringify(
+            unsupportedCaptureReceipt(operationLeaseId("unsupported-oversized stdout")),
+          ) + " ".repeat(4097),
+      },
+    },
+  ])("rejects an unsupported capture receipt for $failure", ({ failure, result, receipt }) => {
+    const context = { provider: "aws", id: operationLeaseId(`unsupported-${failure}`) };
+    const error = new CrabboxCheckpointCreateError(
+      commandResult({
+        code: 2,
+        stdout: JSON.stringify({ ...unsupportedCaptureReceipt(context.id), ...receipt }),
+        stderr: "checkpoint mode must be auto, native, or archive",
+        ...result,
+      }),
+    );
+    expect(CrabboxCheckpointCreateError.unsupportedCapture(error, context)).toBeUndefined();
+  });
+
+  it.each(["unsupported", "removed"] as const)(
+    "recognizes the %s not-submitted receipt",
+    (kind) => {
+      const context = { provider: "aws", id: "cbx_receipt" };
+      const unsupported = unsupportedCaptureReceipt(context.id);
+      const error = new CrabboxCheckpointCreateError(
+        commandResult({
+          code: 2,
+          stdout: JSON.stringify(
+            kind === "unsupported" ? unsupported : notSubmittedReceipt(context.id),
+          ),
+        }),
+      );
+      expect(CrabboxCheckpointCreateError.wasNotSubmitted(error, context)).toBe(true);
+      expect(CrabboxCheckpointCreateError.unsupportedCapture(error, context)).toEqual(
+        kind === "unsupported" ? { message: unsupported.message } : undefined,
+      );
+    },
+  );
+
+  it("keeps an unsupported refusal for a different lease uncertain before enrollment", async () => {
+    const { options } = projectOptions([]);
+    const { provider } = createWarmProvider(({ argv }) =>
+      argv[2] === "create"
+        ? commandResult({
+            code: 2,
+            stdout: JSON.stringify(unsupportedCaptureReceipt("cbx_other")),
+          })
+        : undefined,
+    );
+    await expect(
+      provider.provision(PROFILE, "unsupported-different-lease", options),
+    ).rejects.toThrow("capture is unresolved");
+    expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+    const image = (await listCrabboxWarmImages(crabboxState))[0];
+    expect(image?.capture?.phase).toBe("uncertain");
+    expect(image?.captureUnsupported).toBeUndefined();
+  });
 
   it.each([false, true])(
     "preserves capture uncertainty but reports the source cleanup result after cancellation (stopFails=%s)",

@@ -1,17 +1,16 @@
 import { html, nothing, type TemplateResult } from "lit";
 import "../../components/tooltip.ts";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  WorkerMachineOption,
+  WorkerOperatingSystem,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { compareCloudProfiles, resolveCloudProfileIcon } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import type {
-  DraftCloudProfile,
-  DraftEnvironment,
-  DraftMachineOption,
-  DraftOperatingSystem,
-} from "./discovery.ts";
+import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import {
   cloudMachinesForOs,
   defaultCloudMachine,
@@ -362,7 +361,7 @@ export function renderCloudProfileMenuItems(params: {
 }
 
 /** Machine shape as a picker sub-line; providers may report neither, one, or both numbers. */
-function machineShapeText(machine: DraftMachineOption): string | undefined {
+function machineShapeText(machine: WorkerMachineOption): string | undefined {
   const cpu = machine.cpu === undefined ? undefined : String(machine.cpu);
   const memory = machine.memoryGb === undefined ? undefined : String(machine.memoryGb);
   if (cpu && memory) {
@@ -377,8 +376,8 @@ function machineShapeText(machine: DraftMachineOption): string | undefined {
 function renderCloudConfiguration(params: {
   profile: DraftCloudProfile;
   suggested?: boolean;
-  operatingSystems: readonly DraftOperatingSystem[];
-  machines: readonly DraftMachineOption[];
+  operatingSystems: readonly WorkerOperatingSystem[];
+  machines: readonly WorkerMachineOption[];
   selectedOs: string;
   selectedMachine: string;
   submitting: boolean;
@@ -388,64 +387,56 @@ function renderCloudConfiguration(params: {
   const operatingSystems = params.operatingSystems.filter((os) => !os.disabledReason);
   const fixedOs = operatingSystems.length === 1 ? operatingSystems[0] : undefined;
   const fixedMachine = params.machines.length === 1 ? params.machines[0] : undefined;
+  const groups = [
+    [
+      operatingSystems.length,
+      t("newSession.operatingSystem"),
+      () =>
+        fixedOs
+          ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
+              >${fixedOs.label}</span
+            >`
+          : renderCloudOsMenuItems({
+              operatingSystems,
+              selectedId: params.selectedOs,
+              suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
+              submitting: params.submitting,
+              onSelect: params.onSelectOs,
+            }),
+    ],
+    [
+      params.machines.length,
+      t("newSession.machine"),
+      () =>
+        fixedMachine
+          ? renderFixedMachine(fixedMachine)
+          : renderCloudMachineMenuItems({
+              machines: params.machines,
+              selectedId: params.selectedMachine,
+              suggestedId: params.suggested
+                ? defaultCloudMachine(params.profile, params.selectedOs)?.id
+                : undefined,
+              submitting: params.submitting,
+              onSelect: params.onSelectMachine,
+            }),
+    ],
+  ] as const;
   return html`<section
     class="new-session-page__cloud-configuration"
     aria-label=${params.profile.id}
   >
-    ${
-      operatingSystems.length
-        ? html`<div class="new-session-page__environment-heading">
-              ${t("newSession.operatingSystem")}
-            </div>
-            <div
-              class="new-session-page__cloud-choice-list"
-              role="group"
-              aria-label=${t("newSession.operatingSystem")}
-            >
-              ${
-                fixedOs
-                  ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
-                      >${fixedOs.label}</span
-                    >`
-                  : renderCloudOsMenuItems({
-                      operatingSystems,
-                      selectedId: params.selectedOs,
-                      suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
-                      submitting: params.submitting,
-                      onSelect: params.onSelectOs,
-                    })
-              }
+    ${groups.map(([count, label, renderChoices]) =>
+      count
+        ? html`<div class="new-session-page__environment-heading">${label}</div>
+            <div class="new-session-page__cloud-choice-list" role="group" aria-label=${label}>
+              ${renderChoices()}
             </div>`
-        : nothing
-    }
-    ${
-      params.machines.length
-        ? html`<div class="new-session-page__environment-heading">${t("newSession.machine")}</div>
-            <div
-              class="new-session-page__cloud-choice-list"
-              role="group"
-              aria-label=${t("newSession.machine")}
-            >
-              ${
-                fixedMachine
-                  ? renderFixedMachine(fixedMachine)
-                  : renderCloudMachineMenuItems({
-                      machines: params.machines,
-                      selectedId: params.selectedMachine,
-                      suggestedId: params.suggested
-                        ? defaultCloudMachine(params.profile, params.selectedOs)?.id
-                        : undefined,
-                      submitting: params.submitting,
-                      onSelect: params.onSelectMachine,
-                    })
-              }
-            </div>`
-        : nothing
-    }
+        : nothing,
+    )}
   </section>`;
 }
 
-function renderFixedMachine(machine: DraftMachineOption) {
+function renderFixedMachine(machine: WorkerMachineOption) {
   const shape = machineShapeText(machine);
   return html`<span class="new-session-page__fixed-machine" data-value=${`machine:${machine.id}`}>
     <span>${machine.label}</span>${shape ? html`<span>${shape}</span>` : nothing}
@@ -454,7 +445,7 @@ function renderFixedMachine(machine: DraftMachineOption) {
 
 // The move-session dialog retains its existing menu-based choices.
 export function renderCloudMachineMenuItems(params: {
-  machines: readonly DraftMachineOption[];
+  machines: readonly WorkerMachineOption[];
   selectedId: string;
   suggestedId?: string;
   submitting: boolean;
@@ -479,7 +470,7 @@ export function renderCloudMachineMenuItems(params: {
 }
 
 export function renderCloudOsMenuItems(params: {
-  operatingSystems: readonly DraftOperatingSystem[];
+  operatingSystems: readonly WorkerOperatingSystem[];
   selectedId: string;
   suggestedId?: string;
   submitting: boolean;

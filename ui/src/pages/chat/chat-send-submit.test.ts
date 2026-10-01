@@ -1,15 +1,23 @@
 // @vitest-environment node
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
   readStoredOutboxStore,
   storageTargetForGateway,
 } from "../../lib/chat/outbox-store.ts";
+import * as toast from "../../lib/toast.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
-import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
+import {
+  createDeliveryAttachmentBatch,
+  createStagedAttachment,
+  reloadChatDocumentStorage,
+} from "./chat-delivery-attachments.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -25,11 +33,109 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
+import { prepareOutboxPayload } from "./outbox-payloads.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
 useChatSendBrowserFixture();
+
+describe("attachment frame admission", () => {
+  const frameLimitedHello = (maxPayload: number) => ({
+    ...sessionMutationGatewayHello(),
+    policy: { maxPayload, attachments: { maxBytes: 100, maxImageBytes: 100 } },
+  });
+  const queuedAttachmentBatch = (host: ChatHost) =>
+    expectDefined(listStoredChatOutboxes(host)[0]?.queue[0], "stored attachment batch");
+
+  it.each([
+    { message: "@Alex review these", chatRunId: null },
+    { message: "/approve approval-1 allow-once", chatRunId: "active-run" },
+  ])(
+    "retains the complete oversized $message draft before transmission",
+    async ({ message, chatRunId }) => {
+      const { attachments, dataUrls } = createDeliveryAttachmentBatch();
+      const mentions = message.startsWith("@")
+        ? [{ profileId: "profile-alex", start: 0, end: 5 }]
+        : [];
+      const replyTarget = { messageId: "reply-source", text: "Earlier question" };
+      const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+      const host = makeChatHost({
+        hello: frameLimitedHello(256 * 1024 + 92),
+        chatMessage: message,
+        chatRunId,
+        chatMentions: mentions,
+        chatReplyTarget: replyTarget,
+        chatAttachments: attachments,
+        requestHandlers: { "chat.send": { status: "started" } },
+      });
+
+      expect(await handleSendChat(host)).toBeUndefined();
+
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.chatMessage).toBe(message);
+      expect(host.chatMentions).toEqual(mentions);
+      expect(host.chatReplyTarget).toEqual(replyTarget);
+      expect(host.chatAttachments).toEqual(attachments);
+      expect(host.chatAttachments.map(getChatAttachmentDataUrl)).toEqual(dataUrls);
+      expect(host.chatQueue).toEqual([]);
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(showToast).toHaveBeenCalledExactlyOnceWith({
+        message: "Too large to send: brief.pdf",
+      });
+    },
+  );
+
+  it("fails a restored batch under the current frame limit without consuming its payload or retrying", async () => {
+    const { attachments, dataUrls } = createDeliveryAttachmentBatch();
+    const source = makeChatHost({
+      connected: false,
+      hello: frameLimitedHello(25 * 1024 * 1024),
+      chatMessage: "Review these after reconnect",
+      chatAttachments: attachments,
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { key: "agent:main", hasActiveRun: false, status: "done" },
+        },
+        "chat.send": { status: "started" },
+      },
+    });
+    await handleSendChat(source);
+    const original = queuedAttachmentBatch(source);
+    expect(original.attachmentPayload).toBeDefined();
+    reloadChatDocumentStorage(attachments);
+    const restored = makeChatHost({
+      client: source.client,
+      chatMessage: "Keep this newer draft",
+      hello: frameLimitedHello(256 * 1024 + 92),
+    });
+    const expectedRow = {
+      id: original.id,
+      sendState: "failed",
+      sendError: "Too large to send: brief.pdf",
+      sendAttempts: 0,
+      attachmentPayload: original.attachmentPayload,
+    };
+
+    await resumeStoredChatOutboxes(restored);
+
+    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(listStoredChatOutboxes(restored)[0]?.queue[0]).toMatchObject(expectedRow);
+    expect(restored.chatError).toBe("Too large to send: brief.pdf");
+
+    await retryQueuedChatMessage(restored, original.id);
+
+    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    const failed = queuedAttachmentBatch(restored);
+    expect(failed).toMatchObject(expectedRow);
+    const hydrated = await prepareOutboxPayload(restored, failed);
+    expect(
+      hydrated.status === "ready" ? hydrated.update.attachments?.map(getChatAttachmentDataUrl) : [],
+    ).toEqual(dataUrls);
+    expect(restored.chatMessage).toBe("Keep this newer draft");
+  });
+});
 
 describe("structured Goal admission", () => {
   const intent = { kind: "session-goal-start", version: 1, issuedAtMs: 1_788_000_000_000 } as const;

@@ -1,3 +1,4 @@
+import { Routes } from "discord-api-types/v10";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelModelOverride } from "openclaw/plugin-sdk/model-session-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -6,13 +7,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  ChannelType,
-  createThread,
-  editChannel,
-  getChannelMessage,
-  type Client,
-} from "../internal/discord.js";
+import { ChannelType, createThread, getChannelMessage, type Client } from "../internal/discord.js";
 import { resolveDiscordMessageChannelId } from "./message-channel-info.js";
 import { generateThreadTitle } from "./thread-title.js";
 import { resolveDiscordReplyDeliveryPlan, sanitizeDiscordThreadName } from "./threading.starter.js";
@@ -90,20 +85,8 @@ export async function resolveDiscordAutoThreadReplyPlan(
   const targetChannelId = params.threadChannel?.id ?? (messageChannelId || "unknown");
   const originalReplyTarget = `channel:${targetChannelId}`;
   const createdThreadId = await maybeCreateDiscordAutoThread({
-    client: params.client,
-    message: params.message,
+    ...params,
     messageChannelId: messageChannelId || undefined,
-    channel: params.channel,
-    isGuildMessage: params.isGuildMessage,
-    channelConfig: params.channelConfig,
-    threadChannel: params.threadChannel,
-    channelType: params.channelType,
-    channelName: params.channelName,
-    channelDescription: params.channelDescription,
-    baseText: params.baseText,
-    combinedBody: params.combinedBody,
-    cfg: params.cfg,
-    agentId: params.agentId,
   });
   const deliveryPlan = resolveDiscordReplyDeliveryPlan({
     replyTarget: originalReplyTarget,
@@ -295,7 +278,7 @@ async function maybeRenameDiscordAutoThread(params: {
     if (!nextName || nextName === params.currentName || nextName === fallbackName) {
       return;
     }
-    await editChannel(params.client.rest, params.threadId, {
+    await params.client.rest.patch(Routes.channel(params.threadId), {
       body: { name: nextName },
     });
   } catch (err) {

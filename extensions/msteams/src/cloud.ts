@@ -1,6 +1,4 @@
-import type { MSTeamsConfig } from "../runtime-api.js";
-
-export type MSTeamsCloudName = "Public" | "USGov" | "USGovDoD" | "China";
+import type { MSTeamsCloudName, MSTeamsConfig } from "../runtime-api.js";
 
 const DEFAULT_MSTEAMS_CLOUD: MSTeamsCloudName = "Public";
 
@@ -56,11 +54,6 @@ function isChinaBotFrameworkServiceHost(host: string): boolean {
     host === CHINA_BOT_FRAMEWORK_SERVICE_HOST ||
     host.endsWith(`.${CHINA_BOT_FRAMEWORK_SERVICE_HOST}`)
   );
-}
-
-function isChinaBotFrameworkServiceUrl(value: string): boolean {
-  const parsed = normalizeOptionalServiceUrl(value);
-  return Boolean(parsed && isChinaBotFrameworkServiceHost(parsed.host));
 }
 
 export function validateMSTeamsProactiveServiceUrlBoundary(params: {
@@ -120,7 +113,7 @@ export function validateMSTeamsProactiveServiceUrlBoundary(params: {
     return;
   }
 
-  if (isChinaBotFrameworkServiceUrl(stored.value)) {
+  if (isChinaBotFrameworkServiceHost(stored.host)) {
     throw new Error(
       `msteams proactive send blocked for ${params.conversationId}: stored conversation serviceUrl (${stored.value}) ` +
         "requires channels.msteams.cloud=China.",

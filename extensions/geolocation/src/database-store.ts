@@ -8,6 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gunzip } from "node:zlib";
 import { type CityResponse, Reader } from "maxmind";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { tempFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { expandDatabaseUrls, type GeolocationSettings } from "./config.js";
@@ -22,11 +23,8 @@ const MAX_COMPRESSED_BYTES = 256 * 1024 * 1024;
 const MAX_DATABASE_BYTES = 512 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
-/** The database's own record contract; re-exported so callers need one import. */
-export type GeolocationCityRecord = CityResponse;
-
 export type GeolocationDatabase = {
-  lookup: (ip: string) => GeolocationCityRecord | null;
+  lookup: (ip: string) => CityResponse | null;
 };
 
 type StoreDeps = {
@@ -95,13 +93,13 @@ async function downloadDatabase(deps: StoreDeps, target: string): Promise<Reader
         await fs.rename(staged.path, path.join(directory, path.basename(target)));
       } catch (err) {
         deps.logger?.warn(
-          `geolocation: could not cache the downloaded database, serving it from memory: ${err instanceof Error ? err.message : String(err)}`,
+          `geolocation: could not cache the downloaded database, serving it from memory: ${coerceErrorMessage(err)}`,
         );
       }
       deps.logger?.info(`geolocation: downloaded ${body.byteLength} bytes from ${url}`);
       return reader;
     } catch (err) {
-      failures.push(`${url} -> ${err instanceof Error ? err.message : String(err)}`);
+      failures.push(`${url} -> ${coerceErrorMessage(err)}`);
     }
   }
   throw new Error(`geolocation database download failed: ${failures.join("; ")}`);
@@ -128,7 +126,7 @@ export function createGeolocationDatabaseStore(deps: StoreDeps) {
         // A refresh failure must not take lookups down; the cached copy is old
         // but still answers.
         deps.logger?.warn(
-          `geolocation: refresh failed, serving the cached database: ${err instanceof Error ? err.message : String(err)}`,
+          `geolocation: refresh failed, serving the cached database: ${coerceErrorMessage(err)}`,
         );
       }
     }

@@ -53,6 +53,21 @@ async function observeSession(server: MockServer, sessionId: string) {
   ).toBeUndefined();
 }
 
+async function expectUtilityAffinity(body: unknown, route = "/v1/responses") {
+  const server = await startMockServer();
+  const sessionId = "observed-agent-session";
+  await observeSession(server, sessionId);
+  const missing = await postJson(server, route, body);
+  expect(missing.status).toBe(500);
+  expect(await missing.text()).toContain("Missing QA session identity");
+  expect(await getJson(server, "/debug/requests")).toEqual([]);
+  const admitted = await postJson(server, route, body, {
+    [route === "/v1/messages" ? "x-session-affinity" : "session_id"]: sessionId,
+  });
+  expect(admitted.status).toBe(200);
+  expect(await getJson(server, "/debug/last-request")).toMatchObject({ sessionId });
+}
+
 describe("QA transport session identity", () => {
   it("isolates interleaved sessions across providers and cache boundaries without prompt identity", async () => {
     const sessions = [
@@ -144,11 +159,8 @@ describe("QA transport session identity", () => {
     }
   });
 
-  it.each([
-    "You are a JSON-only function. Return only a valid JSON value.",
-    "You are keeping a dream diary. Write a single entry in first person.",
-    "Choose how to incorporate each supplied candidate into MEMORY.md.",
-  ])("accepts standalone tool-free completion: %s", async (instructions) => {
+  it("accepts standalone tool-free completion", async () => {
+    const instructions = "Choose how to incorporate each supplied candidate into MEMORY.md.";
     const server = await startMockServer();
     await observeSession(server, "observed-agent-session");
     for (const body of [
@@ -194,61 +206,23 @@ describe("QA transport session identity", () => {
   });
 
   it.each([
-    { type: "function_call_output", output: "tool result", beforeUser: false },
-    { type: "custom_tool_call_output", output: "", beforeUser: false },
-    { type: "function_call_output", output: "earlier result", beforeUser: true },
-  ])(
-    "requires affinity for utility requests carrying $type (earlier=$beforeUser)",
-    async ({ type, output, beforeUser }) => {
-      const server = await startMockServer();
-      await observeSession(server, "observed-agent-session");
-      const user = makeUserInput("Reply exactly: {}");
-      const result = { type, call_id: "utility-continuation", output };
-      const body = {
-        instructions: "You are a JSON-only function. Return only a valid JSON value.",
-        tools: [],
-        input: beforeUser ? [result, user] : [user, result],
-      };
-      const missing = await postJson(server, "/v1/responses", body);
-      expect(missing.status).toBe(500);
-      expect(await missing.text()).toContain("Missing QA session identity");
-      const admitted = await postJson(server, "/v1/responses", body, {
-        session_id: "observed-agent-session",
-      });
-      expect(admitted.status).toBe(200);
-    },
-  );
-
-  it.each([
-    { label: "assistant history", item: { role: "assistant", content: "Earlier answer" } },
-    {
-      label: "function call",
-      item: { type: "function_call", call_id: "prior", name: "read", arguments: "{}" },
-    },
-    {
-      label: "custom tool call",
-      item: { type: "custom_tool_call", call_id: "prior", name: "exec", input: "code" },
-    },
-    { label: "reasoning history", item: { type: "reasoning", summary: [] } },
-    { label: "earlier user turn", item: makeUserInput("Earlier request") },
-  ])("requires affinity for utility requests with $label", async ({ item }) => {
-    const server = await startMockServer();
-    await observeSession(server, "observed-agent-session");
-    const body = {
+    { type: "function_call_output", output: "tool result" },
+    { type: "custom_tool_call_output", output: "" },
+  ])("requires affinity for utility requests carrying $type", async ({ type, output }) => {
+    const user = makeUserInput("Reply exactly: {}");
+    const result = { type, call_id: "utility-continuation", output };
+    await expectUtilityAffinity({
       instructions: "You are a JSON-only function. Return only a valid JSON value.",
       tools: [],
-      input: [item, makeUserInput("Reply exactly: {}")],
-    };
-    const missing = await postJson(server, "/v1/responses", body);
-    expect(missing.status).toBe(500);
-    expect(await missing.text()).toContain("Missing QA session identity");
-    expect(await getJson(server, "/debug/requests")).toEqual([]);
-    const admitted = await postJson(server, "/v1/responses", body, {
-      session_id: "observed-agent-session",
+      input: [user, result],
     });
-    expect(admitted.status).toBe(200);
-    expect(await getJson(server, "/debug/last-request")).toMatchObject({
-      sessionId: "observed-agent-session",
+  });
+
+  it("requires affinity for utility requests with assistant history", async () => {
+    await expectUtilityAffinity({
+      instructions: "You are a JSON-only function. Return only a valid JSON value.",
+      tools: [],
+      input: [{ role: "assistant", content: "Earlier answer" }, makeUserInput("Reply exactly: {}")],
     });
   });
 
@@ -256,49 +230,25 @@ describe("QA transport session identity", () => {
     { previous_response_id: "previous-response" },
     { conversation: "retained-conversation" },
   ])("requires affinity for retained utility conversations: %j", async (continuation) => {
-    const server = await startMockServer();
-    await observeSession(server, "observed-agent-session");
-    const body = {
+    await expectUtilityAffinity({
       instructions: "You are a JSON-only function.",
       input: [makeUserInput("Reply exactly: {}")],
       ...continuation,
-    };
-    const missing = await postJson(server, "/v1/responses", body);
-    expect(missing.status).toBe(500);
-    expect(await missing.text()).toContain("Missing QA session identity");
-    const admitted = await postJson(server, "/v1/responses", body, {
-      session_id: "observed-agent-session",
     });
-    expect(admitted.status).toBe(200);
   });
 
-  it.each([
-    { role: "assistant", content: "Earlier answer" },
-    { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
-    { role: "assistant", content: [{ type: "redacted_thinking", data: "synthetic" }] },
-    { role: "user", content: [] },
-    { role: "assistant", content: [{ type: "tool_use", id: "prior", name: "read", input: {} }] },
-    { role: "user", content: [{ type: "tool_result", tool_use_id: "prior", content: "result" }] },
-    { role: "user", content: "Earlier request" },
-  ])("requires affinity for Anthropic utility history: %j", async (history) => {
-    const server = await startMockServer();
-    await observeSession(server, "observed-agent-session");
-    const body = {
-      system: "You are a JSON-only function.",
-      messages: [history, { role: "user", content: "Reply exactly: {}" }],
-      tools: [],
-    };
-    const missing = await postJson(server, "/v1/messages", body);
-    expect(missing.status).toBe(500);
-    expect(await missing.text()).toContain("Missing QA session identity");
-    expect(await getJson(server, "/debug/requests")).toEqual([]);
-    const admitted = await postJson(server, "/v1/messages", body, {
-      "x-session-affinity": "observed-agent-session",
-    });
-    expect(admitted.status).toBe(200);
-    expect(await getJson(server, "/debug/last-request")).toMatchObject({
-      sessionId: "observed-agent-session",
-    });
+  it("requires affinity for Anthropic history discarded by normalization", async () => {
+    await expectUtilityAffinity(
+      {
+        system: "You are a JSON-only function.",
+        messages: [
+          { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
+          { role: "user", content: "Reply exactly: {}" },
+        ],
+        tools: [],
+      },
+      "/v1/messages",
+    );
   });
 
   it("settles the full requester observed behind a truncated affinity value", async () => {

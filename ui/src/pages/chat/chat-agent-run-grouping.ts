@@ -35,7 +35,10 @@ export type AgentRunFrameRenderItem = {
 
 type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;
 
-function itemGroups(item: AgentRunFramePart): MessageGroup[] {
+export function chatItemGroups(item: AgentRunFrameInput | AgentRunFrameRenderItem): MessageGroup[] {
+  if (item.kind === "agent-run-frame") {
+    return item.parts.flatMap(chatItemGroups);
+  }
   if (item.kind === "group") {
     return [item];
   }
@@ -49,13 +52,13 @@ function itemRunId(item: AgentRunFramePart): string | undefined {
   if (item.kind === "stream-run") {
     return item.runId;
   }
-  const groups = itemGroups(item);
+  const groups = chatItemGroups(item);
   const runId = groups[0]?.runId;
   return runId && groups.every((group) => group.runId === runId) ? runId : undefined;
 }
 
 function itemFailsFrame(item: AgentRunFramePart): boolean {
-  return itemGroups(item).some((group) =>
+  return chatItemGroups(item).some((group) =>
     group.messages.some(
       ({ message }) =>
         assistantMessageIsInterrupted(message) || asRecord(message)?.stopReason === "error",
@@ -69,7 +72,7 @@ function itemIsActive(item: AgentRunFramePart): boolean {
       (part) => part.kind === "reading-indicator" || (part.kind === "stream" && part.isStreaming),
     );
   }
-  return itemGroups(item).some((group) => group.isStreaming);
+  return chatItemGroups(item).some((group) => group.isStreaming);
 }
 
 function groupBoundaryId(group: MessageGroup): string | undefined {
@@ -98,10 +101,6 @@ function frameSegmentId(
   );
 }
 
-export function agentRunFrameGroups(frame: AgentRunFrameRenderItem): MessageGroup[] {
-  return frame.parts.flatMap(itemGroups);
-}
-
 function messageCanOwnCompletedFrame(message: unknown, explicitOnly: boolean): boolean {
   const record = asRecord(message);
   const phase = resolveAssistantReplyPhase(message);
@@ -124,7 +123,7 @@ function completedFrameActionOwner(
   parts: AgentRunFramePart[],
 ): MessageGroup["messages"][number] | null {
   const messages = parts
-    .flatMap(itemGroups)
+    .flatMap(chatItemGroups)
     .flatMap((group) => (group.role === "assistant" ? group.messages : []));
   const explicit = messages.findLast(({ message }) => messageCanOwnCompletedFrame(message, true));
   if (explicit) {
@@ -213,7 +212,7 @@ export function coalesceAgentRunFrames(
       segmentId = boundaryId ? undefined : item.key;
       continue;
     }
-    const boundaryGroup = itemGroups(item)[0];
+    const boundaryGroup = chatItemGroups(item)[0];
     if (boundaryGroup && chatItemStartsUserTurn(boundaryGroup)) {
       flush();
       presentationBoundaryKey = boundaryGroup.key;
@@ -236,6 +235,22 @@ export function coalesceAgentRunFrames(
       boundaryId = candidateBoundaryId;
     }
     const candidateRunId = itemRunId(item);
+    if (item.kind === "activity-run" && !candidateRunId) {
+      flush();
+      result.push(item);
+      // A mixed-run log owns no frame, but does not end its surrounding turn.
+      // Retain the latest projected boundary for subsequent replies and status.
+      const lastBoundary = item.groups.findLast(chatItemStartsUserTurn);
+      if (lastBoundary) {
+        boundaryId = groupBoundaryId(lastBoundary);
+        presentationBoundaryKey = lastBoundary.key;
+        segmentId = undefined;
+      } else if (item.groups.some((group) => group.runId === undefined)) {
+        boundaryId = undefined;
+        segmentId = item.key;
+      }
+      continue;
+    }
     if (!boundaryId || !candidateRunId) {
       flush();
       result.push(item);

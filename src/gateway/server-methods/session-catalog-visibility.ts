@@ -114,11 +114,9 @@ export function filterSessionCatalogHost(
   }
   return {
     ...host,
-    sessions: host.sessions.filter((session) => {
-      // No sessionKey means the provider cannot link this host-owned CLI row to an adopted
-      // OpenClaw session. Keep it private from non-admin callers on multi-identity Gateways.
-      return visibleCatalogSessionEntry({ ...params, session, visibility }) !== undefined;
-    }),
+    sessions: host.sessions.filter(
+      (session) => visibleCatalogSessionEntry({ ...params, session, visibility }) !== undefined,
+    ),
   };
 }
 

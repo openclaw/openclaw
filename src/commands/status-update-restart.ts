@@ -1,5 +1,5 @@
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
-import { getUpdateRun } from "../infra/update-run-ledger.js";
+import { getUpdateRun, getUpdateRunAsync } from "../infra/update-run-ledger.js";
 import { isAcknowledgedAbandonedUpdateRun } from "../infra/update-run-record.js";
 import {
   renderUpdateRunReport,
@@ -38,7 +38,14 @@ export function formatUpdateRestartStatusValue(
   if (!payload || payload.kind !== "update") {
     return null;
   }
-  const { headline, reconciled } = readReport(payload);
+  return formatUpdateRestartReport(payload, readReport(payload), opts);
+}
+
+function formatUpdateRestartReport(
+  payload: RestartSentinelPayload,
+  { headline, reconciled }: ReturnType<typeof renderStatusReport>,
+  opts: { ok?: Formatter; warn?: Formatter; muted?: Formatter },
+): string {
   const format = reconciled
     ? opts.muted
     : payload.status === "error"
@@ -50,11 +57,11 @@ export function formatUpdateRestartStatusValue(
 }
 
 /** Keep recorded progress and history separate from the current installation's update check. */
-export function buildStatusUpdateRows(
+export async function buildStatusUpdateRows(
   payload: RestartSentinelPayload | null | undefined,
   opts: Parameters<typeof formatUpdateRestartStatusValue>[1] = {},
 ) {
-  const history = readUpdateRunStatus();
+  const history = await readUpdateRunStatus();
   if ("runStatusError" in history) {
     return [
       { Item: "Update run", Value: `Update run status unavailable: ${history.runStatusError}` },
@@ -72,11 +79,20 @@ export function buildStatusUpdateRows(
     rows.push({ Item: "Update advisory", Value: advisory.message });
   }
   // Legacy sentinels lack run IDs; matching prose cannot establish the same occurrence.
-  const restart =
-    !run || payload?.stats?.runId !== run.runId
-      ? formatUpdateRestartStatusValue(payload, opts)
-      : null;
-  return restart ? [...rows, { Item: "Update restart", Value: restart }] : rows;
+  if (payload?.kind === "update" && (!run || payload.stats?.runId !== run.runId)) {
+    const restartRun = payload.stats?.runId
+      ? await getUpdateRunAsync(payload.stats.runId)
+      : undefined;
+    const restart = formatUpdateRestartReport(
+      payload,
+      renderStatusReport(restartRun ?? updateRunReportInputFromSentinel(payload)),
+      opts,
+    );
+    if (restart) {
+      rows.push({ Item: "Update restart", Value: restart });
+    }
+  }
+  return rows;
 }
 
 export function formatUpdateRestartActionLines(

@@ -84,9 +84,8 @@ class SearchPage extends OpenClawLightDomElement {
   });
 
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.runtimeConfig,
-      (runtime, notify) => runtime.subscribe(notify),
       (runtime) => {
         if (!isSearchConfigSettled(runtime.state)) {
           this.invalidateTest();
@@ -98,15 +97,11 @@ class SearchPage extends OpenClawLightDomElement {
         }
       },
     )
-    .watch(
+    .watchStore(
       () => this.context?.settingsAgentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => this.syncAgent(),
     )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    );
+    .watchStore(() => this.context?.agents);
 
   override disconnectedCallback() {
     this.invalidate();
@@ -301,6 +296,37 @@ class SearchPage extends OpenClawLightDomElement {
     }
   }
 
+  private renderConfigField(
+    schema: JsonSchema,
+    path: Array<string | number>,
+    value: unknown,
+    unsupported: Set<string>,
+    patch: (path: Array<string | number>, value: unknown) => Promise<boolean>,
+  ) {
+    const hints = this.context.runtimeConfig.state.configUiHints;
+    const meta = resolveConfigFieldMeta(path, schema, hints);
+    return renderSettingsRow({
+      title: meta.label,
+      description: meta.help,
+      stackedOnNarrow: true,
+      control: renderNode({
+        schema,
+        value,
+        path,
+        hints,
+        unsupported,
+        disabled: !this.canEdit || this.busy,
+        compact: true,
+        commitOnBlur: true,
+        showLabel: false,
+        rawAvailable: false,
+        maskSensitive: true,
+        onPatch: (changedPath, nextValue) => void patch(changedPath, nextValue),
+        onRemove: (changedPath) => void patch(changedPath, undefined),
+      }),
+    });
+  }
+
   private renderSetup(provider: SearchProvider) {
     const scope = this.gateway.capture();
     const runtime = this.context.runtimeConfig;
@@ -308,6 +334,7 @@ class SearchPage extends OpenClawLightDomElement {
       this.setupProvider === provider.id ? this.patch(scope, path, value) : Promise.resolve(false);
     const config = currentConfigObject(runtime.state);
     const analysis = analyzeConfigSchema(runtime.state.configSchema);
+    const unsupported = new Set(analysis.unsupportedPaths);
     const schema = provider.configPath.length
       ? provider.configPath
           .slice(4)
@@ -376,36 +403,13 @@ class SearchPage extends OpenClawLightDomElement {
                   credential.path.at(-1) !== key,
               )
               .map(([key, field]) =>
-                renderSettingsRow({
-                  ...(() => {
-                    const meta = resolveConfigFieldMeta(
-                      [...provider.configPath, key],
-                      field,
-                      runtime.state.configUiHints,
-                    );
-                    return { title: meta.label, description: meta.help };
-                  })(),
-                  stackedOnNarrow: true,
-                  control: renderNode({
-                    schema: field,
-                    value: values?.[key],
-                    path: [...provider.configPath, key],
-                    hints: runtime.state.configUiHints,
-                    unsupported: new Set(analysis.unsupportedPaths),
-                    disabled: !this.canEdit || this.busy,
-                    compact: true,
-                    commitOnBlur: true,
-                    showLabel: false,
-                    rawAvailable: false,
-                    maskSensitive: true,
-                    onPatch: (path, value) => {
-                      void patch(path, value);
-                    },
-                    onRemove: (path) => {
-                      void patch(path, undefined);
-                    },
-                  }),
-                }),
+                this.renderConfigField(
+                  field,
+                  [...provider.configPath, key],
+                  values?.[key],
+                  unsupported,
+                  patch,
+                ),
               )
           : nothing
       }
@@ -426,6 +430,7 @@ class SearchPage extends OpenClawLightDomElement {
     const runtime = this.context.runtimeConfig;
     const scope = this.gateway.capture();
     const analysis = analyzeConfigSchema(runtime.state.configSchema);
+    const unsupported = new Set(analysis.unsupportedPaths);
     const schema = analysis.schema?.properties?.tools?.properties?.web?.properties?.search;
     const config = currentConfigObject(runtime.state);
     const value = asNullableRecord(asNullableRecord(asNullableRecord(config?.tools)?.web)?.search);
@@ -440,34 +445,15 @@ class SearchPage extends OpenClawLightDomElement {
         ${t("searchPage.advanced")}
       </summary>
       ${renderSettingsGroup(
-        fields.map(([key, field]) => {
-          const path = ["tools", "web", "search", key];
-          const meta = resolveConfigFieldMeta(path, field, runtime.state.configUiHints);
-          return renderSettingsRow({
-            title: meta.label,
-            description: meta.help,
-            stackedOnNarrow: true,
-            control: renderNode({
-              schema: field,
-              value: value?.[key],
-              path,
-              hints: runtime.state.configUiHints,
-              unsupported: new Set(analysis.unsupportedPaths),
-              disabled: !this.canEdit || this.busy,
-              compact: true,
-              commitOnBlur: true,
-              showLabel: false,
-              rawAvailable: false,
-              maskSensitive: true,
-              onPatch: (changedPath, nextValue) => {
-                void this.patch(scope, changedPath, nextValue);
-              },
-              onRemove: (changedPath) => {
-                void this.patch(scope, changedPath, undefined);
-              },
-            }),
-          });
-        }),
+        fields.map(([key, field]) =>
+          this.renderConfigField(
+            field,
+            ["tools", "web", "search", key],
+            value?.[key],
+            unsupported,
+            (path, nextValue) => this.patch(scope, path, nextValue),
+          ),
+        ),
       )}
     </details>`;
   }
@@ -622,7 +608,7 @@ class SearchPage extends OpenClawLightDomElement {
                                 }}
                               />`,
                             })}
-                            ${renderSettingsRow({ title: t("searchPage.test"), description: !result.testProvider && !result.route.testable ? result.route.reason : undefined, control: html`<button class="btn" ?disabled=${!this.canEdit || !(result.testProvider || result.route.testable) || !this.query.trim() || this.query.trim().length > 500 || this.testing || this.loading || !isSearchConfigSettled(configState) || !this.gateway.connected} @click=${() => this.test(scope, statusGeneration)}>${this.testing ? t("searchPage.testing") : result.testProvider ? t("searchPage.testProvider", { provider: result.testProvider.label }) : t("searchPage.test")}</button>` })}
+                            ${renderSettingsRow({ title: t("searchPage.test"), control: html`<button class="btn" ?disabled=${!this.canEdit || !this.query.trim() || this.query.trim().length > 500 || this.testing || this.loading || !isSearchConfigSettled(configState) || !this.gateway.connected} @click=${() => this.test(scope, statusGeneration)}>${this.testing ? t("searchPage.testing") : result.testProvider ? t("searchPage.testProvider", { provider: result.testProvider.label }) : t("searchPage.test")}</button>` })}
                           `
                         : nothing
                     }

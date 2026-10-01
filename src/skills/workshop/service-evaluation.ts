@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   PluginHookSkillEvaluationFinding,
   PluginHookSkillProposalEvaluateResult,
@@ -63,18 +62,15 @@ export async function evaluateSkillProposal(
   const request = { ...input, env: store.env, eventActor: structuredClone(input.eventActor) };
   const correlationId = normalizeSkillProposalCorrelationId(request.correlationId);
   const shouldRunEvaluators = hasSkillProposalEvaluators();
-  const initial = await readRequiredProposal(request.proposalId, request.env, request.agentId, {
-    config: request.config,
-    store,
-  });
+  const initial = await readRequiredProposal(request.proposalId, store);
   const snapshot = await withSkillProposalTargetLock(
     initial.record,
     async (lockedStore) => {
-      const read = await readRequiredProposal(request.proposalId, request.env, request.agentId, {
-        config: request.config,
-        reconcile: false,
-        store: lockedStore,
-      });
+      const read = await readRequiredProposal(
+        request.proposalId,
+        { ...lockedStore, config: request.config },
+        { reconcile: false },
+      );
       if (read.record.status !== "pending") {
         throw new Error(
           `Only pending proposals can be evaluated. Current status: ${read.record.status}.`,
@@ -166,11 +162,11 @@ export async function evaluateSkillProposal(
   const stored = await withSkillProposalTargetLock(
     read.record,
     async (lockedStore) => {
-      const current = await readRequiredProposal(request.proposalId, request.env, request.agentId, {
-        config: request.config,
-        reconcile: false,
-        store: lockedStore,
-      });
+      const current = await readRequiredProposal(
+        request.proposalId,
+        { ...lockedStore, config: request.config },
+        { reconcile: false },
+      );
       if (
         current.record.status !== "pending" ||
         current.record.proposedVersion !== read.record.proposedVersion ||
@@ -216,7 +212,11 @@ export async function evaluateSkillProposal(
 export async function listSkillProposalEvents(
   input: SkillProposalEventsListInput,
 ): Promise<SkillProposalEventsListResult> {
-  return await readSkillProposalEvents(input, storeOptions(input.env, input.agentId, input.config));
+  return await readSkillProposalEvents(input, {
+    env: input.env,
+    agentId: input.agentId,
+    config: input.config,
+  });
 }
 
 export function assertExpectedRevisionHash(actual: string, expected?: string): void {
@@ -366,16 +366,4 @@ function boundedRequired(value: string, maxLength: number, fallback: string): st
 function boundedOptional(value: string | undefined, maxLength: number): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized === undefined ? undefined : truncateUtf16Safe(normalized, maxLength);
-}
-
-function storeOptions(
-  env: NodeJS.ProcessEnv | undefined,
-  agentId: string | undefined,
-  config: OpenClawConfig,
-) {
-  return {
-    ...(env ? { env } : {}),
-    ...(agentId ? { agentId } : {}),
-    config,
-  };
 }

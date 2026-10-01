@@ -18,16 +18,16 @@ const message = { role: "user", content: "hello", timestamp: 1 } as AgentMessage
 const runtimeSettings = {} as ContextEngineRuntimeSettings;
 let engineCounter = 0;
 
-function registerProbeEngine(params: {
+async function registerProbeEngine(params: {
   acceptedHostParams?: string[];
   assembleCalls: Array<Record<string, unknown>>;
   compactCalls: Array<Record<string, unknown>>;
   commitTurnCalls?: Array<Record<string, unknown>>;
   maintainCalls?: Array<Record<string, unknown>>;
   rejectAssemble?: boolean;
-}): string {
+}): Promise<string> {
   const engineId = `host-param-probe-${++engineCounter}`;
-  registerContextEngineForOwner(
+  await registerContextEngineForOwner(
     engineId,
     () =>
       ({
@@ -93,15 +93,15 @@ async function invokeHostParamMethods(engine: ContextEngine) {
 }
 
 describe("context-engine host parameter projection", () => {
-  let restoreRegistry = () => {};
+  let restoreRegistry: () => Promise<void> = async () => {};
 
   beforeAll(() => {
     restoreRegistry = captureContextEngineRegistryStateForTests();
   });
 
-  beforeEach(() => {
-    registerLegacyContextEngine();
-    resetContextEngineRuntimeQuarantineForTests();
+  beforeEach(async () => {
+    await registerLegacyContextEngine();
+    await resetContextEngineRuntimeQuarantineForTests();
   });
 
   afterEach(() => {
@@ -109,15 +109,15 @@ describe("context-engine host parameter projection", () => {
     vi.restoreAllMocks();
   });
 
-  afterAll(() => {
-    restoreRegistry();
+  afterAll(async () => {
+    await restoreRegistry();
   });
 
   it("passes declared current host parameters", async () => {
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
     const maintainCalls: Array<Record<string, unknown>> = [];
-    const engineId = registerProbeEngine({
+    const engineId = await registerProbeEngine({
       acceptedHostParams: [
         "sessionKey",
         "prompt",
@@ -166,7 +166,7 @@ describe("context-engine host parameter projection", () => {
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
     const maintainCalls: Array<Record<string, unknown>> = [];
-    const engineId = registerProbeEngine({
+    const engineId = await registerProbeEngine({
       acceptedHostParams: ["runtimeSettings"],
       assembleCalls,
       compactCalls,
@@ -196,7 +196,7 @@ describe("context-engine host parameter projection", () => {
 
   it("projects declared host parameters for commitTurn", async () => {
     const commitTurnCalls: Array<Record<string, unknown>> = [];
-    const engineId = registerProbeEngine({
+    const engineId = await registerProbeEngine({
       acceptedHostParams: ["runtimeSettings"],
       assembleCalls: [],
       compactCalls: [],
@@ -257,7 +257,7 @@ describe("context-engine host parameter projection", () => {
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
     const maintainCalls: Array<Record<string, unknown>> = [];
-    const engineId = registerProbeEngine({ assembleCalls, compactCalls, maintainCalls });
+    const engineId = await registerProbeEngine({ assembleCalls, compactCalls, maintainCalls });
     const resolution = await resolveLogicalTurnContextEngines({
       plugins: { slots: { contextEngine: engineId } },
     });
@@ -295,7 +295,7 @@ describe("context-engine host parameter projection", () => {
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
     const maintainCalls: Array<Record<string, unknown>> = [];
-    const engineId = registerProbeEngine({ assembleCalls, compactCalls, maintainCalls });
+    const engineId = await registerProbeEngine({ assembleCalls, compactCalls, maintainCalls });
     const engine = await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
 
     const abortSignal = await invokeHostParamMethods(engine);
@@ -326,7 +326,7 @@ describe("context-engine host parameter projection", () => {
   it("does not retry validator-shaped engine failures", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const assembleCalls: Array<Record<string, unknown>> = [];
-    const engineId = registerProbeEngine({
+    const engineId = await registerProbeEngine({
       acceptedHostParams: ["runtimeSettings"],
       assembleCalls,
       compactCalls: [],
@@ -343,7 +343,7 @@ describe("context-engine host parameter projection", () => {
     });
 
     expect(assembleCalls).toHaveLength(1);
-    expect(listContextEngineQuarantines()).toEqual([
+    expect(await listContextEngineQuarantines()).toEqual([
       expect.objectContaining({ engineId, operation: "assemble" }),
     ]);
   });
@@ -374,7 +374,7 @@ describe("context-engine host parameter projection", () => {
         }
       }
       const sharedEngine = Object.freeze(new FrozenProbeEngine());
-      registerContextEngineForOwner(engineId, () => sharedEngine, `test:${engineId}`);
+      await registerContextEngineForOwner(engineId, () => sharedEngine, `test:${engineId}`);
 
       const config = { plugins: { slots: { contextEngine: engineId } } };
       const firstTurn =
@@ -421,7 +421,7 @@ describe("context-engine host parameter projection", () => {
         throw syncFailure;
       });
     const info = { id: engineId, name: "Quarantined Probe", acceptedHostParams: [] };
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       engineId,
       () => ({
         info,
@@ -438,7 +438,7 @@ describe("context-engine host parameter projection", () => {
     await expect(
       processEngine.compact({ sessionId: "session-1", sessionKey: "agent:main:session-1" }),
     ).rejects.toBe(processFailure);
-    const quarantine = listContextEngineQuarantines();
+    const quarantine = await listContextEngineQuarantines();
     expect(quarantine).toEqual([expect.objectContaining({ engineId, operation: "compact" })]);
 
     const resolution = await resolveLogicalTurnContextEngines(config);
@@ -461,7 +461,7 @@ describe("context-engine host parameter projection", () => {
       await returned?.catch(() => {});
       expect(thrown).toBe(syncFailure);
       expect(assemble).toHaveBeenCalledTimes(2);
-      expect(listContextEngineQuarantines()).toEqual(quarantine);
+      expect(await listContextEngineQuarantines()).toEqual(quarantine);
     } finally {
       await Promise.allSettled([
         processEngine.dispose?.(),

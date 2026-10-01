@@ -4,13 +4,17 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -43,9 +47,10 @@ import type {
   WorkerWorkspaceCommand,
   WorkerWorkspaceReconcileRequest,
 } from "../worker-environments/tunnel-contract.js";
+import { captureWorkspaceManifest } from "../worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../worker-environments/workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "../worker-environments/workspace-operation-coordinator.js";
-import { readActualWorkspaceManifest } from "../worker-environments/workspace-reconcile-core.js";
+import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { loadSessionDiff } from "./sessions-diff.js";
 import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
 import {
@@ -56,7 +61,6 @@ import {
   hashContent,
   removeWorkspaceFixture,
 } from "./sessions-files.test-support.js";
-import { WORKSPACE_PREVIEW_MAX_BYTES } from "./workspace-fs.js";
 
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
@@ -115,14 +119,14 @@ let gatewayRoot: string;
 let nodeRoot: string;
 let workspace: string;
 let store: ReturnType<typeof createSessionRepositoryWorkspaceStore>;
-let source: ReturnType<typeof store.create>;
+let source: Awaited<ReturnType<typeof store.create>>;
 let runtime: NodeWorkerWorkspaceRuntime;
 let generation: number;
 let active: boolean;
 let onTunnel: (() => void) | undefined;
 let onResult: (() => void) | undefined;
 let sessionId: string;
-let lifecycleRevision: number;
+let lifecycleRevision: string;
 let archivedAt: number | undefined;
 let run: ReturnType<
   typeof vi.fn<(command: WorkerWorkspaceCommand) => ReturnType<NodeWorkerWorkspaceRuntime["exec"]>>
@@ -174,11 +178,12 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mocks.beforeWrite.mockReset();
   gatewayRoot = createWorkspaceFixture("repository-files-gateway-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", gatewayRoot);
   nodeRoot = createWorkspaceFixture("repository-files-node-");
   generation = 1;
   active = true;
   sessionId = identity.sessionId;
-  lifecycleRevision = 0;
+  lifecycleRevision = "original";
   archivedAt = undefined;
   onTunnel = undefined;
   onResult = undefined;
@@ -196,19 +201,19 @@ beforeEach(async () => {
   git("add", ".");
   git("commit", "-qm", "base");
   store = createSessionRepositoryWorkspaceStore({
-    database: openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") }),
+    path: path.join(gatewayRoot, "state.sqlite"),
   });
-  source = store.create({
+  source = await store.create({
     agentId: "main",
     sessionKey,
     url: "https://example.test/repository.git",
     assertCurrent: () => {},
   });
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: git("rev-parse", "HEAD"),
   });
-  source = store.bindBase({
+  source = await store.bindBase({
     workspaceId: source.workspaceId,
     expectedRevision: source.revision,
     baseCommit: base.manifest.baseCommit!,
@@ -250,13 +255,25 @@ beforeEach(async () => {
   context = requestContext();
 });
 
-afterEach(() => {
-  closeOpenClawStateDatabaseByPath(path.join(gatewayRoot, "state.sqlite"));
+afterEach(async () => {
+  await closeOpenClawStateDatabaseByPathAsync(path.join(gatewayRoot, "state.sqlite"));
+  await closeOpenClawAgentDatabasesAsync(gatewayRoot);
+  vi.unstubAllEnvs();
   removeWorkspaceFixture(nodeRoot);
   removeWorkspaceFixture(gatewayRoot);
 });
 
 async function withCheckpointAcceptance(failCapture = false) {
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    {
+      sessionId,
+      updatedAt: Date.now(),
+      repositoryWorkspaceId: source.workspaceId,
+      lifecycleRevision,
+      archivedAt,
+    },
+  );
   const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
   const placements = createWorkerSessionPlacementStore({ database });
   seedAttachedPlacementEnvironment(database, {
@@ -264,7 +281,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     sessionId: identity.sessionId,
     ownerEpoch: identity.generation,
   });
-  let placement = placements.startDispatch({
+  let placement = await placements.startDispatch({
     sessionId: identity.sessionId,
     sessionKey,
     agentId: "main",
@@ -289,7 +306,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     });
   }
   generation = placement.generation;
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -315,7 +332,7 @@ async function withCheckpointAcceptance(failCapture = false) {
         if (request.source.kind !== "repository") {
           throw new Error("expected repository capture");
         }
-        const current = await readActualWorkspaceManifest({
+        const current = await captureWorkspaceManifest({
           root: workspace,
           baseCommit: source.baseCommit,
         });
@@ -346,7 +363,7 @@ async function withCheckpointAcceptance(failCapture = false) {
           verifyStable: async () => {
             expect(
               (
-                await readActualWorkspaceManifest({
+                await captureWorkspaceManifest({
                   root: workspace,
                   baseCommit: source.baseCommit,
                 })
@@ -368,7 +385,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     resolveWorkspace: async () => ({
       kind: "repository",
-      repository: store.get(source.workspaceId)!,
+      repository: (await store.get(source.workspaceId))!,
     }),
   });
   return { placements, context: { ...context, workerRepositoryWorkspaceMutationService: service } };
@@ -430,7 +447,7 @@ it("reports failed editor checkpoint capture and retains the durable recovery ow
     ),
   ).rejects.toThrow("checkpoint capture failed");
   expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("saved\n");
-  expect(store.get(source.workspaceId)).toMatchObject({
+  expect(await store.get(source.workspaceId)).toMatchObject({
     checkpointRef: source.checkpointRef,
     manifestHash: source.manifestHash,
   });
@@ -521,7 +538,7 @@ it.each(["reset", "archive", "lifecycle revision"])(
       } else if (change === "archive") {
         archivedAt = Date.now();
       } else {
-        lifecycleRevision++;
+        lifecycleRevision = `${lifecycleRevision}-next`;
       }
     };
     await expect(
@@ -593,7 +610,7 @@ it.each(["stop", "reset"])(
 );
 
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -603,7 +620,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     path.join(workspace, "oversized.txt"),
     Buffer.alloc(WORKSPACE_PREVIEW_MAX_BYTES + 1, 97),
   );
-  const current = await readActualWorkspaceManifest({
+  const current = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -681,7 +698,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   hostReads.mockImplementation(async (...args) => {
     const result = await originalGitRead(...args);
     if (args[1][1] === "blob") {
-      lifecycleRevision++;
+      lifecycleRevision = `${lifecycleRevision}-next`;
     }
     return result;
   });

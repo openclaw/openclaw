@@ -42,10 +42,7 @@ export function assertAutonomousSkillSize(
     date: new Date().toISOString(),
     maxSkillBytes,
   });
-  if (!draft.ok) {
-    throw draft.error.cause;
-  }
-  const resultChars = stripProposalFrontmatterForSkill(draft.value.content).length;
+  const resultChars = stripProposalFrontmatterForSkill(draft.content).length;
   const sizeError = autonomousSkillSizeError(name, currentContent?.length ?? 0, resultChars);
   if (sizeError) {
     throw new ToolInputError(sizeError);
@@ -138,10 +135,11 @@ export function readProposalStatusParam(
   if (!status) {
     return undefined;
   }
-  if (!(statuses as readonly string[]).includes(status)) {
+  const matchedStatus = statuses.find((candidate) => candidate === status);
+  if (!matchedStatus) {
     throw new ToolInputError(`status must be one of ${statuses.join(", ")}`);
   }
-  return status as SkillProposalStatus;
+  return matchedStatus;
 }
 
 export function readSupportFilesParam(

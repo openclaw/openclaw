@@ -107,6 +107,7 @@ export function assertControlUiE2eOwnership(
 
   expect(privateServerFiles).toEqual(uiE2ePrivateServerTestFiles);
   expect(helperPrivateServerFiles.toSorted()).toEqual([
+    "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
     "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
     "ui/src/e2e/agent-switch-roster.e2e.test.ts",
     "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
@@ -133,10 +134,8 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-management.delete.e2e.test.ts",
-    "ui/src/e2e/session-mention-involvement.e2e.test.ts",
     "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
     "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
-    "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
   ]);
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
   expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);

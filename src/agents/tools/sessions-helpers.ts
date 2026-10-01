@@ -10,11 +10,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { stringEnum } from "../schema/typebox.js";
-/**
- * Shared session-tool data shapes and classification helpers.
- *
- * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
- */
 import {
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
@@ -171,13 +166,10 @@ export function deriveChannel(params: {
   if (params.kind === "cron" || params.kind === "hook" || params.kind === "node") {
     return "internal";
   }
-  const channel = normalizeOptionalString(params.channel ?? undefined);
-  if (channel) {
-    return channel;
-  }
-  const lastChannel = normalizeOptionalString(params.lastChannel ?? undefined);
-  if (lastChannel) {
-    return lastChannel;
-  }
-  return parseRawSessionConversationRef(params.key)?.channel ?? "unknown";
+  return (
+    normalizeOptionalString(params.channel) ??
+    normalizeOptionalString(params.lastChannel) ??
+    parseRawSessionConversationRef(params.key)?.channel ??
+    "unknown"
+  );
 }

@@ -195,6 +195,7 @@ async function runDoctorConfigPreflightOperation(
     const refreshed = await prepareDoctorMigrationPlugins({
       cfg: automaticConfigRepair?.config ?? baseConfig,
       env: process.env,
+      retainedPluginIds: pluginMigrations.retainedPluginIds(),
       measure: options.measure,
       snapshotRead: { ...configSnapshotRead, snapshot },
       readRefreshedSnapshot: () => readConfigSnapshotForPreflight(false),
@@ -313,7 +314,7 @@ async function runDoctorConfigPreflightOperation(
     );
   }
   // Import retired locators before removing them from the authored config.
-  if (pluginMigrations.complete()) {
+  if (await pluginMigrations.complete()) {
     configSnapshotRead = await readConfigSnapshotForPreflight(false);
     snapshot = configSnapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};

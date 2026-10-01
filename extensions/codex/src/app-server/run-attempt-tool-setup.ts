@@ -4,7 +4,9 @@ import {
   materializeRequesterScopedMcpToolsForHarnessRun,
   resolveAgentDir,
   runAgentCleanupStep,
+  supportsModelTools,
   type EmbeddedRunAttemptParams,
+  type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   captureFinalCodexCronCreatorToolAllowlist,
@@ -26,13 +28,14 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import {
+  resolveInactiveCodexHeartbeatResponseDescriptor,
+  selectInactiveCodexHeartbeatResponseTool,
+} from "./heartbeat-tool-fallback.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
-import {
-  requestPluginApprovalOutcome,
-  type ExecApprovalDecision,
-} from "./plugin-approval-roundtrip.js";
+import { requestPluginApprovalOutcome } from "./plugin-approval-roundtrip.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
@@ -44,10 +47,6 @@ import {
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
 import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
-
-function isAuthorityResolutionOperationAbort(error: unknown, signal: AbortSignal | undefined) {
-  return signal?.aborted === true && error === signal.reason;
-}
 
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
@@ -106,7 +105,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   } = {
     yieldDetected: false,
     yieldAcknowledgment: undefined,
-    persistentWebSearchAllowed: undefined as boolean | undefined,
+    persistentWebSearchAllowed: undefined,
     webSearchAllowed: false,
   };
   const toolOutcomeOrdinals = new Map<string, number>();
@@ -255,7 +254,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
               // same live turn. Substantive discovery/auth/policy failures stay cached.
               if (
                 creatorAuthorityPromise === pending &&
-                isAuthorityResolutionOperationAbort(error, options?.signal)
+                options?.signal?.aborted === true &&
+                error === options.signal.reason
               ) {
                 creatorAuthorityPromise = undefined;
               }
@@ -429,21 +429,26 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         );
       }
     };
+    const mcpOptions = {
+      workspaceDir: effectiveWorkspace,
+      agentDir: policyContext.agentDir,
+      cfg: params.config,
+      manifestRegistry: bundleManifestRegistry,
+      toolsAllow: params.toolsAllow,
+      toolOverrides: codexMcpToolOverrides,
+      autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
+        connection.appServer,
+      ),
+      policyContext,
+      warn: (message: string) => embeddedAgentLog.warn(message),
+    };
     configuredMcp = configuredMcpSurface
       ? await materializeStaticMcpToolsForHarnessRun({
+          ...mcpOptions,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           agentId: sessionAgentId,
-          workspaceDir: effectiveWorkspace,
-          agentDir: policyContext.agentDir,
-          cfg: params.config,
-          manifestRegistry: bundleManifestRegistry,
           reservedToolNames,
-          toolsAllow: params.toolsAllow,
-          toolOverrides: codexMcpToolOverrides,
-          autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
-            connection.appServer,
-          ),
           projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
           ...(configuredMcpSurface === "transient"
             ? {
@@ -456,8 +461,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
                   ),
               }
             : {}),
-          policyContext,
-          warn: (message) => embeddedAgentLog.warn(message),
         })
       : undefined;
     // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
@@ -465,16 +468,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     scopedMcpTools = authenticatedScheduledMode
       ? undefined
       : await materializeRequesterScopedMcpToolsForHarnessRun({
+          ...mcpOptions,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
-          workspaceDir: effectiveWorkspace,
-          agentDir: policyContext.agentDir,
-          cfg: params.config,
-          manifestRegistry: bundleManifestRegistry,
-          toolOverrides: codexMcpToolOverrides,
-          autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
-            connection.appServer,
-          ),
           // Requester servers cannot consume stored grants; Allow Always would re-prompt.
           requestInteractiveCodexApproval: (approval) =>
             requestInteractiveMcpApproval(approval, ["allow-once", "deny"]),
@@ -485,9 +481,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
             ...reservedToolNames,
             ...(configuredMcp?.tools.map((tool) => tool.name) ?? []),
           ],
-          toolsAllow: params.toolsAllow,
-          policyContext,
-          warn: (message) => embeddedAgentLog.warn(message),
         });
     // Restricted dynamic-tool profiles (private QA, exclusion lists) gate scoped
     // MCP tools exactly like every other dynamic tool. Filter both lists with the
@@ -535,9 +528,32 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? { turnSourceThreadId: params.currentThreadTs }
         : {}),
     };
+    const heartbeatFallbackDescriptor = resolveInactiveCodexHeartbeatResponseDescriptor({
+      registeredTools: registeredWithScopedMcp,
+      ...(nativeSpecs ? { registeredSpecs: nativeSpecs } : {}),
+    });
+    const heartbeatFallbackTool =
+      heartbeatFallbackDescriptor && supportsModelTools(params.model)
+        ? selectInactiveCodexHeartbeatResponseTool({
+            descriptor: heartbeatFallbackDescriptor,
+            disableTools: params.disableTools,
+            toolsAllow: params.toolsAllow,
+            pluginConfig,
+          })
+        : undefined;
+    const registeredFallbackTools =
+      params.trigger === "heartbeat" ||
+      params.enableHeartbeatTool === true ||
+      params.forceHeartbeatTool === true ||
+      !heartbeatFallbackTool
+        ? undefined
+        : params.hostCapabilities.bindToolSurface([heartbeatFallbackTool], {
+            cwd: effectiveCwd ?? effectiveWorkspace,
+          });
     const toolBridge = createCodexDynamicToolBridge({
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      registeredFallbackTools,
       registeredSpecs: nativeSpecs,
       signal: runAbortController.signal,
       computerContextEpoch,
@@ -604,23 +620,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           if (canResolveScheduledConfiguredMcpCreatorAuthority) {
             try {
               materialized = await materializeStaticMcpToolsForHarnessRun({
+                ...mcpOptions,
                 sessionId: `cron-authority:${params.runId}`,
                 agentId: sessionAgentId,
-                workspaceDir: effectiveWorkspace,
-                agentDir: policyContext.agentDir,
-                cfg: params.config,
-                manifestRegistry: bundleManifestRegistry,
                 reservedToolNames: configuredMcp
                   ? reservedToolNames
                   : toolBridge.availableTools.map((tool) => tool.name),
-                toolsAllow: params.toolsAllow,
-                toolOverrides: codexMcpToolOverrides,
-                autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
-                  connection.appServer,
-                ),
                 projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
-                policyContext,
-                warn: (message) => embeddedAgentLog.warn(message),
                 retireSessionRuntimeAfterDispose: true,
               });
             } catch (error) {
@@ -668,9 +674,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     }
     return {
       tools: toolsWithScopedMcp,
-      registeredTools: registeredWithScopedMcp,
       requireExplicitMessageTarget,
-      scopedMcpTools,
       configuredMcp,
       disposeTools,
       configuredMcpOwnershipVersion:
@@ -684,7 +688,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolState,
       toolOutcomeOrdinals,
       suppressedDynamicToolOutcomeOrdinals,
-      onCodexToolOutcome,
       allocateCodexToolOutcomeOrdinal,
       runtimeYieldCompletionClaim,
     };

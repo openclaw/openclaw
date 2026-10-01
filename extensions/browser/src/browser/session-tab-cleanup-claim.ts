@@ -3,7 +3,12 @@
  * A concurrent touch or competing sweep cannot delete another generation's row.
  */
 import { randomUUID } from "node:crypto";
+import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  getBrowserStateRuntime,
+  type BrowserSessionTabAuthority,
+} from "../browser-runtime-state.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
@@ -11,7 +16,7 @@ import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 import {
   type BrowserSessionTabRecord,
   deleteBrowserSessionTabIf,
-  getBrowserSessionTabStore,
+  dispatchBrowserSessionTabIfCurrent,
   parseBrowserSessionTabRecord,
   sameBrowserSessionTabRecord,
   updateBrowserSessionTab,
@@ -31,13 +36,14 @@ type CloseTab = (tab: {
   route?: BrowserSessionTabRoute;
   profile?: string;
 }) => Promise<void>;
-export type CloseParams = {
+export type CloseParams = SessionEntryCurrentPreparation & {
+  authority?: BrowserSessionTabAuthority;
   /** Gates new cleanup claims, without revoking an already admitted close. */
   isCurrent?: () => boolean;
   closeTab?: CloseTab;
   closeDurableTab?: (
     tab: DurableTab,
-    options: { shouldClose: () => boolean },
+    options: { closeIfCurrent: CloseIfCurrent },
   ) => Promise<CloseTrackedCdpTargetResult>;
   getResolvedBrowserConfig?: () =>
     | ResolvedBrowserConfig
@@ -45,6 +51,10 @@ export type CloseParams = {
     | Promise<ResolvedBrowserConfig | null>;
   onWarn?: (message: string) => void;
 };
+
+type CloseIfCurrent = (
+  dispatch: () => Promise<CloseTrackedCdpTargetResult>,
+) => Promise<CloseTrackedCdpTargetResult>;
 
 export function isIgnorableTabCloseError(error: unknown): boolean {
   const message = normalizeLowercaseStringOrEmpty(String(error));
@@ -57,23 +67,32 @@ export function isIgnorableTabCloseError(error: unknown): boolean {
   );
 }
 
-function claimCleanup(tab: DurableTab, now: number, kind: CleanupKind): DurableTab | undefined {
+async function claimCleanup(
+  tab: DurableTab,
+  now: number,
+  kind: CleanupKind,
+  authority: BrowserSessionTabAuthority,
+): Promise<DurableTab | undefined> {
   const cleanupAttemptToken = randomUUID();
   // Lifecycle intent survives periodic retries; a touch may revoke only an
   // idle/cap sweep claim, never cleanup for a session that already ended.
   const cleanupKind = kind === "lifecycle" ? "lifecycle" : (tab.cleanupKind ?? kind);
-  const claimed = updateBrowserSessionTab(tab.storageKey, (current) => {
-    const record = parseBrowserSessionTabRecord(current);
-    if (!record || !sameBrowserSessionTabRecord(record, tab)) {
-      return undefined;
-    }
-    return {
-      ...record,
-      cleanupRequestedAt: now,
-      cleanupAttemptToken,
-      cleanupKind,
-    };
-  });
+  const claimed = await updateBrowserSessionTab(
+    tab.storageKey,
+    (current) => {
+      const record = parseBrowserSessionTabRecord(current);
+      if (!record || !sameBrowserSessionTabRecord(record, tab)) {
+        return undefined;
+      }
+      return {
+        ...record,
+        cleanupRequestedAt: now,
+        cleanupAttemptToken,
+        cleanupKind,
+      };
+    },
+    authority,
+  );
   return claimed
     ? { ...tab, cleanupRequestedAt: now, cleanupAttemptToken, cleanupKind }
     : undefined;
@@ -85,39 +104,43 @@ function matchesCleanupAttempt(
 ): current is BrowserSessionTabRecord {
   return Boolean(
     current &&
-    current.cleanupAttemptToken === tab.cleanupAttemptToken &&
-    current.cleanupRequestedAt === tab.cleanupRequestedAt &&
-    current.cleanupKind === tab.cleanupKind &&
     // Lifecycle activity may advance lastUsedAt without revoking mandatory
     // cleanup. Every other field, especially the generation, must still match.
     sameBrowserSessionTabRecord({ ...current, lastUsedAt: tab.lastUsedAt }, tab),
   );
 }
 
-function ownsCleanupAttempt(tab: DurableTab): boolean {
-  const current = parseBrowserSessionTabRecord(getBrowserSessionTabStore().lookup(tab.storageKey));
-  return matchesCleanupAttempt(current, tab);
-}
-
-function deleteClaimedTab(tab: DurableTab, onWarn?: (message: string) => void): void {
+async function deleteClaimedTab(
+  tab: DurableTab,
+  authority: BrowserSessionTabAuthority,
+  onWarn?: (message: string) => void,
+): Promise<void> {
   try {
     if (tab.dashboard?.state === "stopping") {
-      updateBrowserSessionTab(tab.storageKey, (current) => {
-        const record = parseBrowserSessionTabRecord(current);
-        if (!matchesCleanupAttempt(record, tab) || !record.dashboard) {
-          return undefined;
-        }
-        return {
-          ...withoutBrowserSessionTabCleanup(record),
-          dashboard: { ...record.dashboard, state: "stopped" },
-        };
-      });
+      await updateBrowserSessionTab(
+        tab.storageKey,
+        (current) => {
+          const record = parseBrowserSessionTabRecord(current);
+          if (!matchesCleanupAttempt(record, tab) || !record.dashboard) {
+            return undefined;
+          }
+          return {
+            ...withoutBrowserSessionTabCleanup(record),
+            dashboard: { ...record.dashboard, state: "stopped" },
+          };
+        },
+        authority,
+      );
       return;
     }
-    deleteBrowserSessionTabIf(tab.storageKey, (current) => {
-      const record = parseBrowserSessionTabRecord(current);
-      return matchesCleanupAttempt(record, tab);
-    });
+    await deleteBrowserSessionTabIf(
+      tab.storageKey,
+      (current) => {
+        const record = parseBrowserSessionTabRecord(current);
+        return matchesCleanupAttempt(record, tab);
+      },
+      authority,
+    );
   } catch (error) {
     onWarn?.(`failed to delete tracked browser tab ${tab.nativeTargetId}: ${String(error)}`);
   }
@@ -125,7 +148,7 @@ function deleteClaimedTab(tab: DurableTab, onWarn?: (message: string) => void): 
 
 async function closeCurrentDurableTab(
   tab: DurableTab,
-  shouldClose: () => boolean,
+  closeIfCurrent: CloseIfCurrent,
   getResolvedBrowserConfig?: CloseParams["getResolvedBrowserConfig"],
 ): Promise<DurableCleanupResult> {
   // Empty session cleanup must not initialize Browser control or its CDP graph.
@@ -137,9 +160,6 @@ async function closeCurrentDurableTab(
       import("./config.js"),
     ]);
   let resolved = await getResolvedBrowserConfig?.();
-  if (!shouldClose()) {
-    return { status: "cancelled" };
-  }
   if (!resolved) {
     const cfg = getRuntimeConfig();
     resolved = config.resolveBrowserConfig(cfg.browser, cfg);
@@ -163,7 +183,7 @@ async function closeCurrentDurableTab(
     ssrfPolicy: cdpControlPolicy,
     expectedProfileFingerprint: tab.profileFingerprint,
     expectedBrowserInstanceFingerprint: tab.browserInstanceFingerprint,
-    shouldClose,
+    closeIfCurrent,
   });
 }
 
@@ -173,6 +193,9 @@ export async function closeDurableTab(
   now: number,
   cleanupKind: CleanupKind,
 ): Promise<number> {
+  if (params.prepareCurrent && !(await params.prepareCurrent())) {
+    return 0;
+  }
   if (
     params.isCurrent?.() === false ||
     candidate.dashboard?.state === "active" ||
@@ -180,31 +203,50 @@ export async function closeDurableTab(
   ) {
     return 0;
   }
-  const tab = claimCleanup(candidate, now, cleanupKind);
+  const authority = {
+    ...params.authority,
+    runtime: params.authority?.runtime ?? getBrowserStateRuntime(),
+  };
+  const tab = await claimCleanup(candidate, now, cleanupKind, {
+    ...authority,
+    sessionEntryCurrent: params.sessionEntryCurrent,
+    assertCurrent: () => {
+      authority.assertCurrent?.();
+      if (params.isCurrent?.() === false) {
+        throw new Error("Browser tab cleanup caller changed");
+      }
+    },
+  });
   if (!tab) {
     return 0;
   }
-  const shouldClose = () => ownsCleanupAttempt(tab);
+  const closeIfCurrent: CloseIfCurrent = async (dispatch) =>
+    (await dispatchBrowserSessionTabIfCurrent(
+      tab.storageKey,
+      (current) => matchesCleanupAttempt(parseBrowserSessionTabRecord(current), tab),
+      dispatch,
+      authority,
+    )) ?? { status: "cancelled" };
   let outcome: DurableCleanupResult;
   try {
     if (params.closeDurableTab) {
-      outcome = await params.closeDurableTab(tab, { shouldClose });
+      outcome = await params.closeDurableTab(tab, { closeIfCurrent });
     } else if (params.closeTab) {
-      if (!shouldClose()) {
-        return 0;
-      }
-      await params.closeTab({
-        targetId: tab.nativeTargetId,
-        nativeTargetId: tab.nativeTargetId,
-        profile: tab.profile,
+      const closeTab = params.closeTab;
+      outcome = await closeIfCurrent(async () => {
+        await closeTab({
+          targetId: tab.nativeTargetId,
+          nativeTargetId: tab.nativeTargetId,
+          profile: tab.profile,
+        });
+        return { status: "closed" };
       });
-      outcome = { status: "closed" };
     } else {
-      outcome = await closeCurrentDurableTab(tab, shouldClose, params.getResolvedBrowserConfig);
+      outcome = await closeCurrentDurableTab(tab, closeIfCurrent, params.getResolvedBrowserConfig);
     }
   } catch (error) {
     if (isIgnorableTabCloseError(error)) {
-      deleteClaimedTab(tab, params.onWarn);
+      await deleteClaimedTab(tab, authority, params.onWarn);
       return 0;
     }
     params.onWarn?.(`failed to close tracked browser tab ${tab.nativeTargetId}: ${String(error)}`);
@@ -226,7 +268,7 @@ export async function closeDurableTab(
       params.onWarn?.(
         `retired unreachable tracked browser tab ${tab.nativeTargetId}: ${outcome.reason}`,
       );
-      deleteClaimedTab(tab, params.onWarn);
+      await deleteClaimedTab(tab, authority, params.onWarn);
       return 0;
     }
     params.onWarn?.(`deferred tracked browser tab ${tab.nativeTargetId}: ${outcome.reason}`);
@@ -234,9 +276,9 @@ export async function closeDurableTab(
   }
   if (outcome.status === "ownership-mismatch") {
     params.onWarn?.(`retired tracked browser tab ${tab.nativeTargetId}: ownership mismatch`);
-    deleteClaimedTab(tab, params.onWarn);
+    await deleteClaimedTab(tab, authority, params.onWarn);
     return 0;
   }
-  deleteClaimedTab(tab, params.onWarn);
+  await deleteClaimedTab(tab, authority, params.onWarn);
   return outcome.status === "closed" ? 1 : 0;
 }

@@ -395,24 +395,6 @@ describe("authenticated relay debugger lifetime", () => {
     }
   });
 
-  it("keeps independent live commands concurrent", async () => {
-    const f = await fixture();
-    await f.attach(f.old);
-    const gate = createDeferred<Record<string, unknown>>();
-    f.h.debuggerSendCommand.mockImplementationOnce(async () => await gate.promise);
-    try {
-      f.old.receive({ type: "cdp", seq: 2, tabId, method: "Runtime.evaluate" });
-      await vi.waitFor(() => expect(f.h.debuggerSendCommand).toHaveBeenCalled());
-      expect(
-        await reply(f.old, 3, { type: "cdp", tabId, method: "Page.getFrameTree" }),
-      ).toMatchObject({ type: "result" });
-      expect(frames(f.old).some((frame) => frame.seq === 2)).toBe(false);
-    } finally {
-      gate.resolve({});
-      await flush();
-    }
-  });
-
   it("fails closed when physical retirement cannot prove detach", async () => {
     const f = await fixture();
     await f.attach(f.old);
@@ -459,46 +441,6 @@ describe("authenticated relay debugger lifetime", () => {
     expect(
       frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
     ).toHaveLength(1);
-  });
-
-  it("keeps renewed navigation authority after reconnect without forwarding retired-owner events", async () => {
-    const f = await fixture();
-    await f.attach(f.old);
-    f.old.finishClose();
-    f.h.debuggerEventListener?.({ tabId }, "Runtime.executionContextCreated", {
-      context: { id: 8 },
-    });
-    const next = await f.replacement();
-    await f.attach(next);
-    const gate = createDeferred<void>();
-    const getTab = f.h.tabsGet.getMockImplementation()!;
-    f.h.tabsGet.mockImplementationOnce(async (id) => {
-      await gate.promise;
-      return getTab(id);
-    });
-    try {
-      f.h.tabsUpdatedListener(
-        tabId,
-        { url: "https://example.com/next" },
-        { id: tabId, url: "https://example.com/next", groupId: -1, incognito: false },
-      );
-      f.h.debuggerEventListener?.({ tabId }, "Runtime.executionContextCreated", {
-        context: { id: 9 },
-      });
-      expect(
-        frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
-      ).toEqual([
-        {
-          type: "cdpEvent",
-          tabId,
-          method: "Runtime.executionContextCreated",
-          params: { context: { id: 9 } },
-        },
-      ]);
-    } finally {
-      gate.resolve();
-      await flush();
-    }
   });
 });
 

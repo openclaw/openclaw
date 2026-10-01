@@ -9,45 +9,47 @@ import {
   ToolAuthorizationError,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import {
+  deleteMatrixMessage,
+  editMatrixMessage,
+  readMatrixMessage,
+  readMatrixMessages,
+  sendMatrixMessage,
+} from "./matrix/actions/messages.js";
+import { pinMatrixMessage, unpinMatrixMessage, listMatrixPins } from "./matrix/actions/pins.js";
+import { voteMatrixPoll } from "./matrix/actions/polls.js";
+import {
+  listMatrixEmojis,
+  listMatrixReactions,
+  removeMatrixReactions,
+} from "./matrix/actions/reactions.js";
+import { getMatrixMemberInfo, getMatrixRoomInfo } from "./matrix/actions/room.js";
+import type { MatrixMessageSummary } from "./matrix/actions/types.js";
+import {
   bootstrapMatrixVerification,
   acceptMatrixVerification,
   cancelMatrixVerification,
   confirmMatrixVerificationReciprocateQr,
   confirmMatrixVerificationSas,
-  deleteMatrixMessage,
-  editMatrixMessage,
   generateMatrixVerificationQr,
   getMatrixEncryptionStatus,
   getMatrixRoomKeyBackupStatus,
   getMatrixVerificationStatus,
-  getMatrixMemberInfo,
-  getMatrixRoomInfo,
   getMatrixVerificationSas,
-  listMatrixEmojis,
-  listMatrixPins,
-  listMatrixReactions,
   listMatrixVerifications,
   mismatchMatrixVerificationSas,
-  pinMatrixMessage,
-  readMatrixMessage,
-  readMatrixMessages,
   requestMatrixVerification,
   restoreMatrixRoomKeyBackup,
-  removeMatrixReactions,
   scanMatrixVerificationQr,
-  sendMatrixMessage,
   startMatrixVerification,
-  unpinMatrixMessage,
-  voteMatrixPoll,
   verifyMatrixRecoveryKey,
-} from "./matrix/actions.js";
-import type { MatrixMessageSummary } from "./matrix/actions/types.js";
+} from "./matrix/actions/verification.js";
 import { withAuthorizedMatrixReadTarget } from "./matrix/read-policy.js";
 import type { MatrixClient } from "./matrix/sdk.js";
 import { reactMatrixMessage } from "./matrix/send.js";
@@ -65,67 +67,31 @@ const MATRIX_ACTION_DISABLED_MESSAGES = {
 } satisfies Record<keyof NonNullable<MatrixAccountConfig["actions"]>, string>;
 
 function projectMatrixMessagesForDisplay(messages: readonly MatrixMessageSummary[]) {
-  return messages.map((message) => ({
-    ...message,
-    ...(message.eventId ? { id: message.eventId } : {}),
-    ...(message.sender ? { authorTag: message.sender } : {}),
-    ...(message.body !== undefined ? { content: message.body } : {}),
-    ...(typeof message.timestamp === "number" &&
-    Number.isFinite(message.timestamp) &&
-    Math.abs(message.timestamp) <= 8_640_000_000_000_000
-      ? { ts: new Date(message.timestamp).toISOString() }
-      : {}),
-  }));
+  return messages.map((message) => {
+    const ts = timestampMsToIsoString(message.timestamp);
+    return {
+      ...message,
+      ...(message.eventId ? { id: message.eventId } : {}),
+      ...(message.sender ? { authorTag: message.sender } : {}),
+      ...(message.body !== undefined ? { content: message.body } : {}),
+      ...(ts ? { ts } : {}),
+    };
+  });
 }
 
 function readRoomId(params: Record<string, unknown>): string {
-  const direct = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
-  if (direct) {
-    return direct;
-  }
-  return readStringParam(params, "to", { required: true });
+  return (
+    readStringParam(params, "roomId") ??
+    readStringParam(params, "channelId") ??
+    readStringParam(params, "to", { required: true })
+  );
 }
 
-function toSnakeCaseKey(key: string): string {
-  return normalizeOptionalLowercaseString(
-    key.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z0-9])([A-Z])/g, "$1_$2"),
-  )!;
-}
-
-function readRawParam(params: Record<string, unknown>, key: string): unknown {
-  if (Object.hasOwn(params, key)) {
-    return params[key];
-  }
-  const snakeKey = toSnakeCaseKey(key);
-  if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
-    return params[snakeKey];
-  }
-  return undefined;
-}
-
-function readStringAliasParam(
-  params: Record<string, unknown>,
-  keys: string[],
-  options: { required?: boolean } = {},
-): string | undefined {
-  for (const key of keys) {
-    const raw = readRawParam(params, key);
-    if (typeof raw !== "string") {
-      continue;
-    }
-    const trimmed = raw.trim();
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-  if (options.required) {
-    throw new Error(`${keys[0]} required`);
-  }
-  return undefined;
-}
-
-function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: string): number[] {
-  const raw = readRawParam(params, key);
+function readPollOptionIndexes(params: Record<string, unknown>): number[] {
+  const key = Object.hasOwn(params, "pollOptionIndexes")
+    ? "pollOptionIndexes"
+    : "poll_option_indexes";
+  const raw = Object.hasOwn(params, key) ? params[key] : undefined;
   if (raw == null) {
     return [];
   }
@@ -142,8 +108,8 @@ function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: str
         return [];
       }
     }
-    const index = readPositiveIntegerParam({ [key]: value }, key, {
-      message: `${key} must contain positive integers.`,
+    const index = readPositiveIntegerParam({ pollOptionIndexes: value }, "pollOptionIndexes", {
+      message: "pollOptionIndexes must contain positive integers.",
     });
     return index === undefined ? [] : [index];
   });
@@ -172,7 +138,7 @@ export async function handleMatrixAction(
     const clientOpts = { cfg, ...(accountId ? { accountId } : {}) };
     const withReadTarget = async <T>(
       roomId: string,
-      run: (target: { roomId: string; client: MatrixClient }) => Promise<T>,
+      run: (roomId: string, opts: typeof clientOpts & { client: MatrixClient }) => Promise<T>,
     ) =>
       await withAuthorizedMatrixReadTarget({
         cfg,
@@ -187,7 +153,7 @@ export async function handleMatrixAction(
           conversationReadOrigin: ctx.conversationReadOrigin,
         },
         opts: clientOpts,
-        run,
+        run: ({ roomId: resolvedRoomId, client }) => run(resolvedRoomId, { ...clientOpts, client }),
       });
     return { accountId, clientOpts, withReadTarget };
   };
@@ -230,7 +196,7 @@ export async function handleMatrixAction(
     const emojiValue = readStringParam(params, "emoji", { allowEmpty: true });
     const removeValue = typeof params.remove === "boolean" ? params.remove : undefined;
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction("reactions");
+    const { withReadTarget } = prepareAction("reactions");
     // Emoji-required and empty-remove errors follow the action gate; only the
     // public message/room selectors were validated before it.
     const { emoji, remove, isEmpty } = readReactionParams(
@@ -238,20 +204,16 @@ export async function handleMatrixAction(
       { removeErrorMessage: "Emoji is required to remove a Matrix reaction." },
     );
     if (remove || isEmpty) {
-      const result = await withReadTarget(roomId, async (target) =>
-        removeMatrixReactions(target.roomId, messageId, {
-          ...clientOpts,
-          client: target.client,
+      const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+        removeMatrixReactions(resolvedRoom, messageId, {
+          ...actionOpts,
           emoji: remove ? emoji : undefined,
         }),
       );
       return jsonResult({ ok: true, removed: result.removed });
     }
-    await withReadTarget(roomId, async (target) =>
-      reactMatrixMessage(target.roomId, messageId, emoji, {
-        ...clientOpts,
-        client: target.client,
-      }),
+    await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+      reactMatrixMessage(resolvedRoom, messageId, emoji, actionOpts),
     );
     return jsonResult({ ok: true, added: emoji });
   }
@@ -262,11 +224,10 @@ export async function handleMatrixAction(
       message: "limit must be a positive integer.",
     });
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction("reactions");
-    const reactions = await withReadTarget(roomId, async (target) =>
-      listMatrixReactions(target.roomId, messageId, {
-        ...clientOpts,
-        client: target.client,
+    const { withReadTarget } = prepareAction("reactions");
+    const reactions = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+      listMatrixReactions(resolvedRoom, messageId, {
+        ...actionOpts,
         limit: limit ?? undefined,
       }),
     );
@@ -287,14 +248,13 @@ export async function handleMatrixAction(
     const limit = readPositiveIntegerParam(params, "limit", {
       message: "limit must be a positive integer.",
     });
-    const { clientOpts, withReadTarget } = prepareAction("reactions");
+    const { withReadTarget } = prepareAction("reactions");
     // The bound conversation bypasses the parameter reader above. Preserve
     // its late normalization and missing-room error after the action gate.
     const resolvedRoomId = readRoomId({ roomId });
-    const emojis = await withReadTarget(resolvedRoomId, async (target) =>
-      listMatrixEmojis(target.roomId, {
-        ...clientOpts,
-        client: target.client,
+    const emojis = await withReadTarget(resolvedRoomId, async (resolvedRoom, actionOpts) =>
+      listMatrixEmojis(resolvedRoom, {
+        ...actionOpts,
         limit,
       }),
     );
@@ -310,30 +270,26 @@ export async function handleMatrixAction(
     const after = readStringParam(params, "after");
     const threadId = readStringParam(params, "threadId");
     const messageId = readStringParam(params, "messageId");
-    const { clientOpts, withReadTarget } = prepareAction("messages");
-    const result = await withReadTarget(roomId, async (target) => {
+    const { withReadTarget } = prepareAction("messages");
+    const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) => {
       if (messageId) {
-        const message = await readMatrixMessage(target.roomId, messageId, {
-          ...clientOpts,
-          client: target.client,
-        });
+        const message = await readMatrixMessage(resolvedRoom, messageId, actionOpts);
         return {
           messages: projectMatrixMessagesForDisplay([message]),
-          roomId: target.roomId,
+          roomId: resolvedRoom,
         };
       }
-      const messages = await readMatrixMessages(target.roomId, {
+      const messages = await readMatrixMessages(resolvedRoom, {
         limit: limit ?? undefined,
         before: before ?? undefined,
         after: after ?? undefined,
         threadId: threadId ?? undefined,
-        ...clientOpts,
-        client: target.client,
+        ...actionOpts,
       });
       return {
         ...messages,
         messages: projectMatrixMessagesForDisplay(messages.messages),
-        roomId: target.roomId,
+        roomId: resolvedRoom,
         ...(threadId ? { threadId } : {}),
       };
     });
@@ -344,12 +300,9 @@ export async function handleMatrixAction(
     const messageId = readStringParam(params, "messageId", { required: true });
     const content = readStringParam(params, "message", { required: true, trim: false });
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction("messages");
-    const result = await withReadTarget(roomId, async (target) =>
-      editMatrixMessage(target.roomId, messageId, content, {
-        ...clientOpts,
-        client: target.client,
-      }),
+    const { withReadTarget } = prepareAction("messages");
+    const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+      editMatrixMessage(resolvedRoom, messageId, content, actionOpts),
     );
     return jsonResult({ ok: true, result });
   }
@@ -357,12 +310,11 @@ export async function handleMatrixAction(
   if (action === "delete") {
     const messageId = readStringParam(params, "messageId", { required: true });
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction("messages");
-    await withReadTarget(roomId, async (target) =>
-      deleteMatrixMessage(target.roomId, messageId, {
+    const { withReadTarget } = prepareAction("messages");
+    await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+      deleteMatrixMessage(resolvedRoom, messageId, {
         reason: undefined,
-        ...clientOpts,
-        client: target.client,
+        ...actionOpts,
       }),
     );
     return jsonResult({ ok: true, deleted: true });
@@ -374,18 +326,14 @@ export async function handleMatrixAction(
         ? { kind: "list" as const }
         : { kind: action, messageId: readStringParam(params, "messageId", { required: true }) };
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction("pins");
-    return await withReadTarget(roomId, async (target) => {
-      const actionOpts = { ...clientOpts, client: target.client };
-      if (request.kind === "pin") {
-        const result = await pinMatrixMessage(target.roomId, request.messageId, actionOpts);
+    const { withReadTarget } = prepareAction("pins");
+    return await withReadTarget(roomId, async (resolvedRoom, actionOpts) => {
+      if (request.kind !== "list") {
+        const updatePin = request.kind === "pin" ? pinMatrixMessage : unpinMatrixMessage;
+        const result = await updatePin(resolvedRoom, request.messageId, actionOpts);
         return jsonResult({ ok: true, pinned: result.pinned });
       }
-      if (request.kind === "unpin") {
-        const result = await unpinMatrixMessage(target.roomId, request.messageId, actionOpts);
-        return jsonResult({ ok: true, pinned: result.pinned });
-      }
-      const result = await listMatrixPins(target.roomId, actionOpts);
+      const result = await listMatrixPins(resolvedRoom, actionOpts);
       return jsonResult({
         ok: true,
         pinned: result.pinned,
@@ -420,26 +368,26 @@ export async function handleMatrixAction(
   if (action === "member-info") {
     const userId = readStringParam(params, "userId", { required: true });
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction("memberInfo");
-    const result = await withReadTarget(roomId, async (target) =>
-      getMatrixMemberInfo(userId, { roomId: target.roomId, ...clientOpts, client: target.client }),
+    const { withReadTarget } = prepareAction("memberInfo");
+    const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+      getMatrixMemberInfo(userId, { roomId: resolvedRoom, ...actionOpts }),
     );
     return jsonResult({ ok: true, member: result });
   }
 
   if (action === "channel-info") {
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction("channelInfo");
-    const result = await withReadTarget(roomId, async (target) =>
-      getMatrixRoomInfo(target.roomId, { ...clientOpts, client: target.client }),
+    const { withReadTarget } = prepareAction("channelInfo");
+    const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+      getMatrixRoomInfo(resolvedRoom, actionOpts),
     );
     return jsonResult({ ok: true, room: result });
   }
 
   if (action === "poll-vote") {
-    const { clientOpts, withReadTarget } = prepareAction();
+    const { withReadTarget } = prepareAction();
     const roomId = readRoomId(params);
-    const pollId = readStringAliasParam(params, ["pollId", "messageId"], { required: true });
+    const pollId = readStringParam(params, "pollId") ?? readStringParam(params, "messageId");
     if (!pollId) {
       throw new Error("pollId required");
     }
@@ -452,17 +400,16 @@ export async function handleMatrixAction(
       ...(optionId ? [optionId] : []),
     ];
     const optionIndexes = [
-      ...readPositiveIntegerArrayParam(params, "pollOptionIndexes"),
+      ...readPollOptionIndexes(params),
       ...(optionIndex !== undefined ? [optionIndex] : []),
     ];
-    const result = await withReadTarget(roomId, async (target) => {
-      return await voteMatrixPoll(target.roomId, pollId, {
-        ...clientOpts,
-        client: target.client,
+    const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+      voteMatrixPoll(resolvedRoom, pollId, {
+        ...actionOpts,
         optionIds,
         optionIndexes,
-      });
-    });
+      }),
+    );
     return jsonResult({ ok: true, result });
   }
 

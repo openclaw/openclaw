@@ -1,5 +1,6 @@
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import { Pointer } from "typebox/schema";
 import type { Tool, ToolCall } from "./types.js";
 
 const validatorCache = new WeakMap<object, WeakMap<object, ReturnType<typeof Compile>>>();
@@ -107,11 +108,6 @@ function parseJsonNumberString(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function parseJsonIntegerString(value: string): number | undefined {
-  const parsed = parseJsonNumberString(value);
-  return parsed !== undefined && Number.isSafeInteger(parsed) ? parsed : undefined;
-}
-
 function getSubSchemaValidator(
   schema: JsonSchemaObject,
   root?: JsonSchemaObject,
@@ -128,28 +124,14 @@ function getSubSchemaValidator(
 
 function coercePrimitiveByType(value: unknown, type: string): unknown {
   switch (type) {
-    case "number": {
-      if (value === null) {
-        return 0;
-      }
-      if (typeof value === "string" && value.trim() !== "") {
-        const parsed = parseJsonNumberString(value);
-        if (parsed !== undefined) {
-          return parsed;
-        }
-      }
-      if (typeof value === "boolean") {
-        return value ? 1 : 0;
-      }
-      return value;
-    }
+    case "number":
     case "integer": {
       if (value === null) {
         return 0;
       }
-      if (typeof value === "string" && value.trim() !== "") {
-        const parsed = parseJsonIntegerString(value);
-        if (parsed !== undefined) {
+      if (typeof value === "string") {
+        const parsed = parseJsonNumberString(value);
+        if (parsed !== undefined && (type === "number" || Number.isSafeInteger(parsed))) {
           return parsed;
         }
       }
@@ -159,24 +141,11 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
       return value;
     }
     case "boolean": {
-      if (value === null) {
+      if (value === null || value === "false" || value === 0) {
         return false;
       }
-      if (typeof value === "string") {
-        if (value === "true") {
-          return true;
-        }
-        if (value === "false") {
-          return false;
-        }
-      }
-      if (typeof value === "number") {
-        if (value === 1) {
-          return true;
-        }
-        if (value === 0) {
-          return false;
-        }
+      if (value === "true" || value === 1) {
+        return true;
       }
       return value;
     }
@@ -189,23 +158,7 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
       }
       return value;
     }
-    case "array": {
-      if (
-        typeof value === "string" &&
-        value.trim() !== "" &&
-        value.length <= MAX_JSON_COERCE_LENGTH
-      ) {
-        try {
-          const parsed: unknown = JSON.parse(value);
-          if (Array.isArray(parsed)) {
-            return parsed;
-          }
-        } catch {
-          // Not valid JSON; leave as-is for the validator to reject.
-        }
-      }
-      return value;
-    }
+    case "array":
     case "object": {
       if (
         typeof value === "string" &&
@@ -214,7 +167,7 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
       ) {
         try {
           const parsed: unknown = JSON.parse(value);
-          if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          if (matchesJsonType(parsed, type)) {
             return parsed;
           }
         } catch {
@@ -265,19 +218,14 @@ function applySchemaArrayCoercion(
   schema: JsonSchemaObject,
   root: JsonSchemaObject | undefined,
 ): void {
-  if (Array.isArray(schema.items)) {
-    for (let index = 0; index < value.length; index++) {
-      const itemSchema = schema.items[index];
-      if (itemSchema) {
-        value[index] = coerceWithJsonSchema(value[index], itemSchema, root);
-      }
-    }
+  const items = schema.items;
+  if (!isJsonSchemaObject(items)) {
     return;
   }
-
-  if (isJsonSchemaObject(schema.items)) {
-    for (let index = 0; index < value.length; index++) {
-      value[index] = coerceWithJsonSchema(value[index], schema.items, root);
+  for (let index = 0; index < value.length; index++) {
+    const itemSchema = Array.isArray(items) ? items[index] : items;
+    if (itemSchema) {
+      value[index] = coerceWithJsonSchema(value[index], itemSchema, root);
     }
   }
 }
@@ -393,10 +341,9 @@ function getValidator(
   schema: Tool["parameters"],
   root?: JsonSchemaObject,
 ): ReturnType<typeof Compile> {
-  const key = schema as object;
-  const scope = root ?? key;
+  const scope = root ?? schema;
   let validators = validatorCache.get(scope);
-  const cached = validators?.get(key);
+  const cached = validators?.get(schema);
   if (cached) {
     return cached;
   }
@@ -410,20 +357,19 @@ function getValidator(
     validators = new WeakMap();
     validatorCache.set(scope, validators);
   }
-  validators.set(key, validator);
+  validators.set(schema, validator);
   return validator;
 }
 
 function formatValidationPath(error: TLocalizedValidationError): string {
+  const path = Pointer.Indices(error.instancePath).join(".").replace(/\//g, ".");
   if (error.keyword === "required") {
     const requiredProperty = (error.params as { requiredProperties?: string[] })
       .requiredProperties?.[0];
     if (requiredProperty) {
-      const basePath = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
-      return basePath ? `${basePath}.${requiredProperty}` : requiredProperty;
+      return path ? `${path}.${requiredProperty}` : requiredProperty;
     }
   }
-  const path = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
   return path || "root";
 }
 

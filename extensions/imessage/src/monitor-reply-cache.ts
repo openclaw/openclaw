@@ -1,11 +1,7 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  isPositiveIMessageChatMatch,
-  resolveIMessageChatMatch,
-  type IMessageChatContext,
-} from "./chat-context.js";
+import { resolveIMessageChatMatch, type IMessageChatContext } from "./chat-context.js";
 import { getIMessageRuntime } from "./runtime.js";
 import {
   IMESSAGE_REPLY_CACHE_NAMESPACE,
@@ -203,11 +199,6 @@ function buildReplyCacheEntry(
   };
 }
 
-function generateShortId(): string {
-  imessageShortIdCounter += 1;
-  return String(imessageShortIdCounter);
-}
-
 export async function rememberIMessageReplyCache(
   entry: Omit<IMessageReplyCacheEntry, "shortId">,
 ): Promise<IMessageReplyCacheEntry> {
@@ -220,7 +211,7 @@ export async function rememberIMessageReplyCache(
   let shortId = imessageReplyCacheByMessageId.get(messageId)?.shortId;
   const isNewMessage = !shortId;
   if (!shortId) {
-    shortId = generateShortId();
+    shortId = String(++imessageShortIdCounter);
     imessageShortIdToUuid.set(shortId, messageId);
   }
 
@@ -408,10 +399,31 @@ export async function isKnownFromMeIMessageMessageId(
   }
   await hydrateFromStoreOnce();
   const cached = imessageReplyCacheByMessageId.get(trimmed);
-  if (!cached || cached.isFromMe !== true || cached.accountId !== ctx.accountId) {
+  if (!cached || cached.isFromMe !== true) {
     return false;
   }
-  return isPositiveIMessageChatMatch(cached, ctx);
+  return resolveCachedResourceBinding(trimmed, { ...ctx, accountId: ctx.accountId }) === "match";
+}
+
+export async function isKnownFromMeIMessageTarget(params: {
+  messageIds: string[];
+  accountId: string;
+  chatId?: number;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  isKnownFromMeMessageId?: (
+    ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
+  ) => boolean | Promise<boolean>;
+}): Promise<boolean> {
+  const { accountId, chatId, chatGuid, chatIdentifier } = params;
+  const ctx = { accountId, chatId, chatGuid, chatIdentifier };
+  const isKnownFromMe = params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId;
+  for (const messageId of params.messageIds) {
+    if (await isKnownFromMe(messageId, ctx)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function buildFromMeError(inputId: string, inputKind: "short" | "uuid"): Error {
@@ -458,7 +470,7 @@ export function findLatestIMessageEntryForChat(
     if (entry.timestamp < cutoff) {
       continue;
     }
-    if (!isPositiveIMessageChatMatch(entry, ctx)) {
+    if (resolveIMessageChatMatch(entry, ctx) !== "match") {
       continue;
     }
     if (!best || entry.timestamp > best.timestamp) {

@@ -251,10 +251,6 @@ type WorkerSshCommandResult = {
   code: number | null;
 };
 
-function isWorkerSshTransportFailure(result: WorkerSshCommandResult): boolean {
-  return result.termination === "exit" && result.code === 255;
-}
-
 /** Retries SSH's transport-level exit 255 under one deadline and records proven exits. */
 export async function runWorkerSshCandidates<T extends WorkerSshCommandResult>(
   prepared: PreparedWorkerSsh,
@@ -274,7 +270,7 @@ export async function runWorkerSshCandidates<T extends WorkerSshCommandResult>(
       prepared.selectPort(port);
       return result;
     }
-    if (!isWorkerSshTransportFailure(result)) {
+    if (result.termination !== "exit" || result.code !== 255) {
       return result;
     }
   }
@@ -289,34 +285,22 @@ export function workerSshOptions(
   return [
     "-F",
     "none",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ConnectTimeout=10",
-    "-o",
-    "NumberOfPasswordPrompts=0",
-    "-o",
-    "PreferredAuthentications=publickey",
-    "-o",
-    "StrictHostKeyChecking=yes",
-    "-o",
-    `UserKnownHostsFile=${prepared.knownHostsPath}`,
-    "-o",
-    "GlobalKnownHostsFile=none",
-    "-o",
-    "UpdateHostKeys=no",
-    "-o",
-    "ForwardAgent=no",
-    "-o",
-    "ForwardX11=no",
-    "-o",
-    "ForwardX11Trusted=no",
-    "-o",
-    `ClearAllForwardings=${params.forwarding === "disabled" ? "yes" : "no"}`,
-    "-o",
-    "ExitOnForwardFailure=yes",
-    "-o",
-    "IdentityAgent=none",
+    ...[
+      "BatchMode=yes",
+      "ConnectTimeout=10",
+      "NumberOfPasswordPrompts=0",
+      "PreferredAuthentications=publickey",
+      "StrictHostKeyChecking=yes",
+      `UserKnownHostsFile=${prepared.knownHostsPath}`,
+      "GlobalKnownHostsFile=none",
+      "UpdateHostKeys=no",
+      "ForwardAgent=no",
+      "ForwardX11=no",
+      "ForwardX11Trusted=no",
+      `ClearAllForwardings=${params.forwarding === "disabled" ? "yes" : "no"}`,
+      "ExitOnForwardFailure=yes",
+      "IdentityAgent=none",
+    ].flatMap((option) => ["-o", option]),
     "-i",
     prepared.identityPath,
     "-o",

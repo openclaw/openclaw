@@ -5,12 +5,9 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DiscordApiError, requestDiscord } from "@openclaw/discord/api.js";
 import type { QaChannelE2eDriver, QaChannelE2eMessage } from "../shared/channel-e2e.types.js";
-import {
-  inspectDiscordE2eReadiness,
-  type DiscordE2eChannel,
-  type DiscordE2eRuntimeEnv,
-} from "./channel-e2e-doctor.js";
+import { inspectDiscordE2eReadiness, type DiscordE2eChannel } from "./channel-e2e-doctor.js";
 import { createDiscordE2eRecorder, type DiscordE2eNativeMessage } from "./channel-e2e-recorder.js";
+import type { DiscordQaRuntimeEnv } from "./discord-live.runtime.js";
 
 type OwnedMessage = { id: string; channelId: string; actor: "driver" | "sut" };
 export type DiscordChannelE2eSession = {
@@ -21,7 +18,7 @@ export type DiscordChannelE2eSession = {
 };
 
 export function createDiscordChannelE2eSession(params: {
-  runtimeEnv: DiscordE2eRuntimeEnv;
+  runtimeEnv: DiscordQaRuntimeEnv;
   driverId: string;
   sutId: string;
   outputDir: string;

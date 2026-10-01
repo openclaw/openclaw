@@ -18,7 +18,6 @@ import {
 import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
-  resolveCodexContextEngineProjectionReserveTokens,
   resolveCodexContinuityProjectionMaxChars,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
@@ -38,9 +37,6 @@ export async function prepareCodexAttemptContext(
   const {
     connection,
     runtimeParams,
-    activeSessionId,
-    activeSessionFile,
-    buildActiveRunAttemptParams,
     effectiveContextWindowInfo,
     effectiveContextTokenBudget,
     effectiveRuntimeProviderId,
@@ -64,8 +60,8 @@ export async function prepareCodexAttemptContext(
   const { toolBridge } = attemptTools;
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
-    sessionFile: activeSessionFile,
-    sessionId: activeSessionId,
+    sessionFile: runtimeParams.sessionFile,
+    sessionId: runtimeParams.sessionId,
     sessionKey: contextSessionKey,
     sessionTarget: params.sessionTarget,
   };
@@ -130,7 +126,7 @@ export async function prepareCodexAttemptContext(
   const hookRunner = getAgentHarnessHookRunner();
   const buildActiveContextEngineRuntimeContext = () =>
     buildHarnessContextEngineRuntimeContext({
-      attempt: buildActiveRunAttemptParams(),
+      attempt: { ...runtimeParams },
       workspaceDir: effectiveWorkspace,
       cwd: effectiveCwd,
       agentDir,
@@ -142,9 +138,9 @@ export async function prepareCodexAttemptContext(
     await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
-      sessionId: activeSessionId,
+      sessionId: runtimeParams.sessionId,
       sessionKey: contextSessionKey,
-      sessionFile: activeSessionFile,
+      sessionFile: runtimeParams.sessionFile,
       sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
@@ -182,6 +178,14 @@ export async function prepareCodexAttemptContext(
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
   });
+  // This section uses the existing native thread carrier only when there is no
+  // managed parent-local inference route; it is separate from immutable policy.
+  const refreshableInstructions =
+    joinPresentSections(
+      skillsInstructions,
+      workspaceBootstrapContext.sharedPersonaInstructions,
+      workspaceBootstrapContext.memoryInstructions,
+    ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
@@ -206,7 +210,6 @@ export async function prepareCodexAttemptContext(
     promptText: params.prompt,
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
     developerInstructions: baseDeveloperInstructions,
-    prePromptMessageCount: historyState.messages.length,
     contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
     precomputedStaleBindingContinuityProjectionApplied: false,
     staleBindingContinuityForcedFreshStart: false,
@@ -219,7 +222,6 @@ export async function prepareCodexAttemptContext(
   };
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,
-    reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
   });
   const codexContinuityProjectionMaxChars = resolveCodexContinuityProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,
@@ -239,6 +241,7 @@ export async function prepareCodexAttemptContext(
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
+    refreshableInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,

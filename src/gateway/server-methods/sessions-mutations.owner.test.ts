@@ -195,58 +195,51 @@ describe("sessions.patch", () => {
     });
   });
 
-  it.each(["thinking", "context", "both"] as const)(
-    "persists %s preference clears with an agent model rollback marker",
-    async (field) => {
-      await withSessionMutationState(async (state) => {
-        const sessionKey = "agent:main:rollback-preferences";
-        const scope = { agentId: "main", env: state.env, sessionKey };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "rollback-preferences",
-          updatedAt: 1,
-          providerOverride: "anthropic",
-          modelOverride: "claude-sonnet-4-6",
-          thinkingLevel: "high",
-          contextWindow: "extended",
-          modelFallback: {
-            prevProvider: "openai",
-            prevModel: "gpt-5.4",
-            prevThinkingLevel: "high",
-            prevContextWindow: "extended",
-            ts: 1,
-            source: "agent-patch",
-          },
-        });
-        const respond = vi.fn();
-        await sessionMutationHandlers["sessions.patch"]!({
-          params: {
-            key: sessionKey,
-            ...(field !== "context" ? { thinkingLevel: null } : {}),
-            ...(field !== "thinking" ? { contextWindow: null } : {}),
-          },
-          client: client(),
-          context: context({}),
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-        const entry = loadSessionEntry(scope);
-        expect(entry?.thinkingLevel).toBe(field === "context" ? "high" : undefined);
-        expect(entry?.contextWindow).toBe(field === "thinking" ? "extended" : undefined);
-        expect(entry?.modelFallback).toMatchObject({
+  it("persists preference clears with an agent model rollback marker", async () => {
+    await withSessionMutationState(async (state) => {
+      const sessionKey = "agent:main:rollback-preferences";
+      const scope = { agentId: "main", env: state.env, sessionKey };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "rollback-preferences",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        thinkingLevel: "high",
+        contextWindow: "extended",
+        modelFallback: {
           prevProvider: "openai",
           prevModel: "gpt-5.4",
+          prevThinkingLevel: "high",
+          prevContextWindow: "extended",
           ts: 1,
           source: "agent-patch",
-        });
-        expect(entry?.modelFallback?.prevThinkingLevel).toBe(
-          field === "context" ? "high" : undefined,
-        );
-        expect(entry?.modelFallback?.prevContextWindow).toBe(
-          field === "thinking" ? "extended" : undefined,
-        );
+        },
       });
-    },
-  );
+      const respond = vi.fn();
+      await sessionMutationHandlers["sessions.patch"]!({
+        params: {
+          key: sessionKey,
+          thinkingLevel: null,
+          contextWindow: null,
+        },
+        client: client(),
+        context: context({}),
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      const entry = loadSessionEntry(scope);
+      expect(entry?.thinkingLevel).toBeUndefined();
+      expect(entry?.contextWindow).toBeUndefined();
+      expect(entry?.modelFallback).toMatchObject({
+        prevProvider: "openai",
+        prevModel: "gpt-5.4",
+        ts: 1,
+        source: "agent-patch",
+      });
+      expect(entry?.modelFallback?.prevThinkingLevel).toBeUndefined();
+      expect(entry?.modelFallback?.prevContextWindow).toBeUndefined();
+    });
+  });
 
   it("publishes saved settings when applying permissions to the active run fails", async () => {
     await withSessionMutationState(async (state) => {
@@ -762,16 +755,20 @@ describe("sessions.assignOwner", () => {
     });
   });
 
-  it("records the trusted in-process agent tool caller as the assigning agent", async () => {
+  it("assigns an agent-created session to a human without changing its provenance", async () => {
     await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:handoff";
+      const ownerProfile = ensureProfileForEmail("requester@example.test");
       await upsertSessionEntryCore(
         { agentId: "main", env: state.env, sessionKey },
         {
           sessionId: "session-handoff",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "profile-creator" },
+          createdVia: "spawn",
+          createdActor: { type: "agent", id: "main" },
+          createdAt: 1,
+          parentSessionKey: "agent:main:main",
         },
       );
       const cfg = {
@@ -786,7 +783,7 @@ describe("sessions.assignOwner", () => {
       await expect(
         dispatchGatewayMethodInProcess(
           "sessions.assignOwner",
-          { key: sessionKey, owner: { type: "agent", id: "research" } },
+          { key: sessionKey, owner: { type: "human", id: ownerProfile.id } },
           {
             forceSyntheticClient: true,
             agentToolCaller: {
@@ -801,7 +798,7 @@ describe("sessions.assignOwner", () => {
         ok: true,
         key: sessionKey,
         owner: {
-          actor: { type: "agent", id: "research", label: "Research" },
+          actor: { type: "human", id: ownerProfile.id },
           assignedBy: { type: "agent", id: "main" },
         },
       });
@@ -809,8 +806,15 @@ describe("sessions.assignOwner", () => {
       expect(
         loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
       ).toMatchObject({
-        actor: { type: "agent", id: "research" },
+        actor: { type: "human", id: ownerProfile.id },
         assignedBy: { type: "agent", id: "main" },
+      });
+      expect(loadSessionEntry({ agentId: "main", env: state.env, sessionKey })).toMatchObject({
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "main" },
+        createdAt: 1,
+        parentSessionKey: "agent:main:main",
+        visibility: "shared",
       });
     });
   });

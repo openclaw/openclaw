@@ -1,9 +1,3 @@
-/**
- * Browser action request normalization.
- *
- * Converts loosely typed route bodies into the closed BrowserActRequest union
- * used by Playwright and Chrome MCP action executors.
- */
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACT_MAX_BATCH_ACTIONS,
@@ -16,7 +10,7 @@ import {
 import type { BrowserActRequest } from "../client-actions.types.js";
 import { normalizeBrowserFormFields } from "../form-fields.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
-import { isActKind, parseClickButton, parseClickModifiers } from "./agent.act.shared.js";
+import { isActKind } from "./agent.act.shared.js";
 import {
   readRouteFiniteNumber,
   readRouteInteger,
@@ -33,6 +27,16 @@ const KEY_ALIASES = new Map([
   ["cmd", "Meta"],
   ["space", "Space"],
 ]);
+
+const ALLOWED_CLICK_MODIFIERS = new Set(["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]);
+
+function readClickButton(value: unknown, kind: "click" | "clickCoords") {
+  const button = toStringOrEmpty(value);
+  if (button && button !== "left" && button !== "right" && button !== "middle") {
+    throw new Error(`${kind} button must be left|right|middle`);
+  }
+  return button || undefined;
+}
 
 /**
  * KeyboardEvent.key for Space is the literal " ". Map that exact whole value
@@ -129,7 +133,6 @@ function definedAction<T extends BrowserActRequest>(action: T): T {
   return action;
 }
 
-/** Normalize one model/client action payload into a BrowserActRequest. */
 export function normalizeActRequest(
   body: Record<string, unknown>,
   options?: { source?: "request" | "batch"; depth?: number },
@@ -149,15 +152,10 @@ export function normalizeActRequest(
       if (!ref && !selector) {
         throw new Error("click requires ref or selector");
       }
-      const buttonRaw = toStringOrEmpty(body.button);
-      const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
-      if (buttonRaw && !button) {
-        throw new Error("click button must be left|right|middle");
-      }
-      const modifiersRaw = toStringArray(body.modifiers) ?? [];
-      const parsedModifiers = parseClickModifiers(modifiersRaw);
-      if (parsedModifiers.error) {
-        throw new Error(parsedModifiers.error);
+      const button = readClickButton(body.button, kind);
+      const modifiers = toStringArray(body.modifiers);
+      if (modifiers?.some((modifier) => !ALLOWED_CLICK_MODIFIERS.has(modifier))) {
+        throw new Error("modifiers must be Alt|Control|ControlOrMeta|Meta|Shift");
       }
       const doubleClick = toBoolean(body.doubleClick);
       const delayMs = readBoundedActionDurationMs(
@@ -174,7 +172,7 @@ export function normalizeActRequest(
         targetId,
         doubleClick,
         button,
-        modifiers: parsedModifiers.modifiers,
+        modifiers,
         delayMs,
         timeoutMs,
       });
@@ -185,11 +183,7 @@ export function normalizeActRequest(
       if (x === undefined || y === undefined || x < 0 || y < 0) {
         throw new Error("clickCoords requires non-negative x and y");
       }
-      const buttonRaw = toStringOrEmpty(body.button);
-      const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
-      if (buttonRaw && !button) {
-        throw new Error("clickCoords button must be left|right|middle");
-      }
+      const button = readClickButton(body.button, kind);
       const doubleClick = toBoolean(body.doubleClick);
       const delayMs = readBoundedActionDurationMs(
         body,

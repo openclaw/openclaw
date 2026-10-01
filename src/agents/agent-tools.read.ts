@@ -37,6 +37,7 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
 import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import {
@@ -156,24 +157,8 @@ function malformedXmlArgValuePathError(key: string): Error {
 }
 
 function getToolResultText(result: AgentToolResult<unknown>): string | undefined {
-  const content = Array.isArray(result.content) ? result.content : [];
-  const textBlocks = content
-    .map((block) => {
-      if (
-        block &&
-        typeof block === "object" &&
-        (block as { type?: unknown }).type === "text" &&
-        typeof (block as { text?: unknown }).text === "string"
-      ) {
-        return (block as { text: string }).text;
-      }
-      return undefined;
-    })
-    .filter((value): value is string => typeof value === "string");
-  if (textBlocks.length === 0) {
-    return undefined;
-  }
-  return textBlocks.join("\n");
+  const textBlocks = collectTextContentBlocks(result.content);
+  return textBlocks.length > 0 ? textBlocks.join("\n") : undefined;
 }
 
 function getReadResultContent(result: AgentToolResult<unknown>): string | undefined {
@@ -196,14 +181,9 @@ function withToolResultText(
   const content = Array.isArray(result.content) ? result.content : [];
   let replaced = false;
   const nextContent: ToolContentBlock[] = content.map((block) => {
-    if (
-      !replaced &&
-      block &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "text"
-    ) {
+    if (!replaced && block && typeof block === "object" && block.type === "text") {
       replaced = true;
-      return Object.assign({}, block as TextContentBlock, { text });
+      return Object.assign({}, block, { text });
     }
     return block;
   });
@@ -220,11 +200,11 @@ function withToolResultText(
 function extractReadTruncationDetails(
   result: AgentToolResult<unknown>,
 ): ReadTruncationDetails | null {
-  const details = (result as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
+  const details = result.details;
+  if (!details || typeof details !== "object" || !("truncation" in details)) {
     return null;
   }
-  const truncation = (details as { truncation?: unknown }).truncation;
+  const truncation = details.truncation;
   if (!truncation || typeof truncation !== "object") {
     return null;
   }
@@ -291,13 +271,12 @@ function stripReadContinuationNotice(text: string): string {
 function stripReadTruncationContentDetails(
   result: AgentToolResult<unknown>,
 ): AgentToolResult<unknown> {
-  const details = (result as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
+  const details = result.details;
+  if (!details || typeof details !== "object" || !("truncation" in details)) {
     return result;
   }
 
-  const detailsRecord = details as Record<string, unknown>;
-  const truncationRaw = detailsRecord.truncation;
+  const truncationRaw = details.truncation;
   if (!truncationRaw || typeof truncationRaw !== "object") {
     return result;
   }
@@ -311,7 +290,7 @@ function stripReadTruncationContentDetails(
   return {
     ...result,
     details: {
-      ...detailsRecord,
+      ...details,
       truncation: restTruncation,
     },
   };
@@ -480,9 +459,9 @@ async function normalizeReadImageResult(
     (b): b is ImageContentBlock =>
       Boolean(b) &&
       typeof b === "object" &&
-      (b as { type?: unknown }).type === "image" &&
-      typeof (b as { data?: unknown }).data === "string" &&
-      typeof (b as { mimeType?: unknown }).mimeType === "string",
+      b.type === "image" &&
+      typeof b.data === "string" &&
+      typeof b.mimeType === "string",
   );
   if (!image) {
     return result;
@@ -508,20 +487,16 @@ async function normalizeReadImageResult(
   }
 
   const nextContent = content.map((block) => {
-    if (block && typeof block === "object" && (block as { type?: unknown }).type === "image") {
-      const b = block as ImageContentBlock & { mimeType: string };
-      return Object.assign({}, b, { mimeType: sniffed }) satisfies ImageContentBlock;
+    if (block && typeof block === "object" && block.type === "image") {
+      return Object.assign({}, block, { mimeType: sniffed });
     }
     if (
       block &&
       typeof block === "object" &&
-      (block as { type?: unknown }).type === "text" &&
-      typeof (block as { text?: unknown }).text === "string"
+      block.type === "text" &&
+      typeof block.text === "string"
     ) {
-      const b = block as TextContentBlock & { text: string };
-      return Object.assign({}, b, {
-        text: rewriteReadImageHeader(b.text, sniffed),
-      }) satisfies TextContentBlock;
+      return Object.assign({}, block, { text: rewriteReadImageHeader(block.text, sniffed) });
     }
     return block;
   });
@@ -558,8 +533,8 @@ function normalizeReadResultDetails(
     (block): block is ImageContentBlock =>
       Boolean(block) &&
       typeof block === "object" &&
-      (block as { type?: unknown }).type === "image" &&
-      typeof (block as { mimeType?: unknown }).mimeType === "string",
+      block.type === "image" &&
+      typeof block.mimeType === "string",
   );
   if (image) {
     return {

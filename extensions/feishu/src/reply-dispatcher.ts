@@ -203,6 +203,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId !== undefined &&
     sendReplyToMessageId !== undefined &&
     sendReplyToMessageId !== rootId;
+  const replyTarget = {
+    cfg,
+    to: sendTarget,
+    replyToMessageId: sendReplyToMessageId,
+    replyInThread: effectiveReplyInThread,
+    allowTopLevelReplyFallback,
+    accountId,
+  };
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   let typingState: TypingIndicatorState | null = null;
   // Reply text and card attribution share the same selected-model context.
@@ -351,10 +359,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const pendingStreamingDeliveries: PendingStreamingDelivery[] = [];
   type StreamTextUpdateMode = "snapshot" | "delta";
 
-  const markVisibleReplySent = () => {
-    visibleReplySent = true;
-  };
-
   const formatReasoningPrefix = (thinking: string): string => {
     if (!thinking) {
       return "";
@@ -366,20 +370,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const buildCombinedStreamText = (thinking: string, answer: string): string => {
-    const parts: string[] = [];
-    if (thinking) {
-      parts.push(formatReasoningPrefix(thinking));
-    }
-    if (thinking && answer) {
-      parts.push("\n\n---\n\n");
-    }
-    if (answer) {
-      parts.push(answer);
-    }
-    if (statusLine) {
-      parts.push(parts.length > 0 ? `\n\n${statusLine}` : statusLine);
-    }
-    return parts.join("");
+    const content = [thinking ? formatReasoningPrefix(thinking) : "", answer]
+      .filter(Boolean)
+      .join("\n\n---\n\n");
+    return [content, statusLine].filter(Boolean).join("\n\n");
   };
 
   const flushStreamingCardUpdate = (combined: string) => {
@@ -586,7 +580,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           kind: "card",
         });
         if (result.visibleReplySent) {
-          markVisibleReplySent();
+          visibleReplySent = true;
         }
         // Only a retained final can satisfy a duplicate text payload. Requested removal
         // and actual accepted content are separate facts when provider cleanup fails.
@@ -784,13 +778,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ];
       try {
         const sendParams = {
-          cfg,
-          to: sendTarget,
+          ...replyTarget,
           text: chunk,
-          replyToMessageId: sendReplyToMessageId,
-          replyInThread: effectiveReplyInThread,
-          allowTopLevelReplyFallback,
-          accountId,
           ...(mentions.length > 0 ? { mentions } : {}),
         };
         const result = paramsLocal.useCard
@@ -801,14 +790,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             });
         results.push(result);
         acceptedChunks.push(chunk);
-        markVisibleReplySent();
+        visibleReplySent = true;
       } catch (error: unknown) {
         const acceptedChunk = isChannelPartialDeliveryError(error)
           ? error.deliveryResult
           : undefined;
         if (acceptedChunk) {
           acceptedChunks.push(acceptedChunk.content ?? chunk);
-          markVisibleReplySent();
+          visibleReplySent = true;
         }
         throw createFeishuPartialReplyDeliveryError(error, {
           ...acceptedChunk,
@@ -854,13 +843,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         caption: "",
         send: async ({ mediaUrl }) => {
           const result = await sendMediaFeishu({
-            cfg,
-            to: sendTarget,
+            ...replyTarget,
             mediaUrl,
-            replyToMessageId: sendReplyToMessageId,
-            replyInThread: effectiveReplyInThread,
-            allowTopLevelReplyFallback,
-            accountId,
             ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
           results.push(
@@ -870,7 +854,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               kind: result?.voiceIntentDegradedToFile ? "media" : undefined,
             }),
           );
-          markVisibleReplySent();
+          visibleReplySent = true;
           if (result?.voiceIntentDegradedToFile && options?.fallbackText && !sentFallbackText) {
             degradedVoiceFallbackText = options.fallbackText;
           }
@@ -881,7 +865,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             : async ({ error, mediaUrl }) => {
                 if (isChannelPartialDeliveryError(error)) {
                   // The attachment is already visible; text recovery would duplicate delivery.
-                  markVisibleReplySent();
+                  visibleReplySent = true;
                   throw toFeishuError(error);
                 }
                 const fallbackText = await buildFeishuMediaFallbackText({
@@ -899,7 +883,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     } catch (error: unknown) {
       const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
       if (partial) {
-        markVisibleReplySent();
+        visibleReplySent = true;
       }
       throw createFeishuPartialReplyDeliveryError(
         error,
@@ -924,16 +908,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return false;
     }
     await sendMessageFeishu({
-      cfg,
-      to: sendTarget,
+      ...replyTarget,
       text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
-      replyToMessageId: sendReplyToMessageId,
-      replyInThread: effectiveReplyInThread,
-      allowTopLevelReplyFallback,
-      accountId,
       ...(requiredMentionTargets?.length ? { mentions: requiredMentionTargets } : {}),
     });
-    markVisibleReplySent();
+    visibleReplySent = true;
     params.runtime.error?.(
       `feishu[${account.accountId}]: sent no-visible-reply fallback (${reason})`,
     );
@@ -1283,7 +1262,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (isChannelPartialDeliveryError(error)) {
       // Core invokes this before no-visible recovery; keep accepted sends visible even
       // when their normal success bookkeeping could not run.
-      markVisibleReplySent();
+      visibleReplySent = true;
     }
     params.runtime.error?.(
       `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
@@ -1298,7 +1277,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     observeMessageSent: true,
     onDelivered: (_payload, info, result) => {
       if (result?.visibleReplySent) {
-        markVisibleReplySent();
+        visibleReplySent = true;
         if (info.kind === "final") {
           replyOutcome = undefined;
         }
@@ -1434,13 +1413,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
         await collectDelivery(
           sendCardFeishu({
-            cfg,
-            to: sendTarget,
+            ...replyTarget,
             card: presentationCard,
-            replyToMessageId: sendReplyToMessageId,
-            replyInThread: effectiveReplyInThread,
-            allowTopLevelReplyFallback,
-            accountId,
           }).then((result) =>
             createFeishuReplyDeliveryResult({
               results: [result],
@@ -1451,7 +1425,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           ),
           resolvedText,
         );
-        markVisibleReplySent();
+        visibleReplySent = true;
         return mergeFeishuReplyDeliveryResults(deliveredResults, resolvedText);
       }
 

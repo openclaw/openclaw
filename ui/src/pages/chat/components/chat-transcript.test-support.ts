@@ -94,16 +94,20 @@ export function threadProps(
   };
 }
 
+export function requireElement(container: ParentNode, selector: string): HTMLElement {
+  return expectDefined(container.querySelector<HTMLElement>(selector), selector);
+}
+
 export function transcriptRows(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(".chat-virtual-row")];
 }
 
 export function transcriptSize(container: ParentNode): number {
-  const sizer = expectDefined(
-    container.querySelector<HTMLElement>(".chat-virtual-sizer"),
+  const extent = expectDefined(
+    container.querySelector<HTMLElement>(".chat-thread-inner--virtual"),
     "transcript extent",
   );
-  return Number.parseFloat(sizer.style.height);
+  return Number.parseFloat(extent.style.height);
 }
 
 export async function flushDeferredRowPrune(): Promise<void> {

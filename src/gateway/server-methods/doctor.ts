@@ -1,4 +1,3 @@
-// Doctor gateway methods inspect and repair memory dreaming artifacts and managed cron state.
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -14,6 +13,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingConfig,
@@ -25,7 +25,7 @@ import {
 import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { formatError } from "../server-utils.js";
+import { sortAndLimitBy } from "../../shared/sort-and-limit.js";
 import {
   listWorkspaceDailyFiles,
   readDreamDiary,
@@ -268,32 +268,6 @@ function compareDreamingEntryByPromotion(
   return compareDreamingEntryBySignals(a, b);
 }
 
-function trimDreamingEntries(
-  entries: ShortTermDreamingStatsEntry[],
-  compare: (a: ShortTermDreamingStatsEntry, b: ShortTermDreamingStatsEntry) => number,
-): ShortTermDreamingStatsEntry[] {
-  const selected: ShortTermDreamingStatsEntry[] = [];
-  for (const entry of entries) {
-    // Keep the public status payload bounded while preserving the comparator's best entries.
-    let insertAt = selected.length;
-    for (let index = 0; index < selected.length; index += 1) {
-      if (compare(entry, expectDefined(selected[index], "selected entry at index")) < 0) {
-        insertAt = index;
-        break;
-      }
-    }
-    if (insertAt < DREAMING_ENTRY_LIST_LIMIT) {
-      selected.splice(insertAt, 0, entry);
-      if (selected.length > DREAMING_ENTRY_LIST_LIMIT) {
-        selected.pop();
-      }
-    } else if (selected.length < DREAMING_ENTRY_LIST_LIMIT) {
-      selected.push(entry);
-    }
-  }
-  return selected;
-}
-
 async function loadDreamingStoreStats(
   workspaceDir: string,
   nowMs: number,
@@ -375,9 +349,21 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
     remPhaseHitCount,
     promotedTotal,
     promotedToday,
-    shortTermEntries: trimDreamingEntries(shortTermEntries, compareDreamingEntryByRecency),
-    signalEntries: trimDreamingEntries(signalEntries, compareDreamingEntryBySignals),
-    promotedEntries: trimDreamingEntries(promotedEntries, compareDreamingEntryByPromotion),
+    shortTermEntries: sortAndLimitBy(
+      shortTermEntries,
+      DREAMING_ENTRY_LIST_LIMIT,
+      compareDreamingEntryByRecency,
+    ),
+    signalEntries: sortAndLimitBy(
+      signalEntries,
+      DREAMING_ENTRY_LIST_LIMIT,
+      compareDreamingEntryBySignals,
+    ),
+    promotedEntries: sortAndLimitBy(
+      promotedEntries,
+      DREAMING_ENTRY_LIST_LIMIT,
+      compareDreamingEntryByPromotion,
+    ),
     ...(storePaths.size === 1 ? { storePath: [...storePaths][0] } : {}),
     ...(phaseSignalPaths.size === 1 ? { phaseSignalPath: [...phaseSignalPaths][0] } : {}),
     ...(lastPromotedAt ? { lastPromotedAt } : {}),

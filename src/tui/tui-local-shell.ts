@@ -1,4 +1,3 @@
-// Launches and manages the local shell process used by TUI local mode.
 import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";

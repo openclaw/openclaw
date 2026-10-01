@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -7,12 +8,28 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
 import { findMarkdownImageSpans } from "../../packages/markdown-core/src/image-spans.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
+import type { CurrentTranscriptProjection } from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import {
+  iterateVisibleMessageRange,
+  resolveVisibleMessagePositions,
+} from "../config/sessions/session-accessor.sqlite-reset-window.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { hasSqlitePostCommitScope } from "../infra/sqlite-post-commit.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
   readAssistantDisplayContent,
 } from "../shared/assistant-display-content.js";
+import {
+  type ArtifactDownloadResponse,
+  type ArtifactDownloadResponseRequest,
+  type PreparedArtifactDownload,
+  prepareArtifactDownload,
+  prepareArtifactDownloadResponse,
+} from "./artifact-download-projection.js";
 import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import {
@@ -20,18 +37,24 @@ import {
   mediaUrlValue,
   resolveBlockDownload,
   resolveMessageRunId,
-  resolveMessageTaskId,
+  toArtifactSummary,
 } from "./server-methods/artifacts-content.js";
 import type { SessionTranscriptReader } from "./session-transcript-read-kernel.js";
 import {
   parseTranscriptImageArtifactId,
+  projectTranscriptImageArtifacts,
   resolveTranscriptImageArtifactBlock,
 } from "./transcript-image-artifacts.js";
 
 const IMAGE_PAGE_MESSAGES = 32;
-const IMAGE_PAGE_BYTES = 256 * 1024;
+const IMAGE_PAGE_BYTES = 1024 * 1024;
+const IMAGE_INLINE_PREVIEW_MAX_BYTES = 256 * 1024;
 
-type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "taskId" | "messageRole">;
+type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "messageRole">;
+type ArtifactReaders = Pick<
+  SessionTranscriptReader,
+  "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
+>;
 
 export type SessionArtifactReadQuery = SessionArtifactFilters &
   (
@@ -55,6 +78,17 @@ export type SessionArtifactReadQuery = SessionArtifactFilters &
         artifactId: string;
         includeData: boolean;
       }
+    | {
+        kind: "download-grant";
+        sessionKey: string;
+        artifactId: string;
+      }
+    | {
+        kind: "download-response";
+        sessionKey: string;
+        artifactId: string;
+        response: ArtifactDownloadResponseRequest;
+      }
   );
 
 export type SessionArtifactReadResult =
@@ -65,21 +99,27 @@ export type SessionArtifactReadResult =
       next?: { beforeSeq: number; imageOffset: number; readWindow: TranscriptReadWindow };
       omittedOversized?: boolean;
     }
-  | { kind: "image"; artifact?: ArtifactRecord };
+  | { kind: "image"; artifact?: ArtifactRecord }
+  | {
+      kind: "download-grant";
+      selection?:
+        | { kind: "prepared"; download: PreparedArtifactDownload }
+        | { kind: "raw"; artifact: ArtifactRecord };
+    }
+  | { kind: "download-response"; response?: ArtifactDownloadResponse };
 
-function normalizeArtifactType(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "image" || normalized === "input_image" || normalized === "image_url") {
-    return "image";
-  }
-  if (normalized === "audio" || normalized === "input_audio") {
-    return "audio";
-  }
-  if (normalized === "video" || normalized === "input_video") {
-    return "video";
-  }
-  return "file";
-}
+const artifactTypes = new Map([
+  ["image", "image"],
+  ["input_image", "image"],
+  ["image_url", "image"],
+  ["audio", "audio"],
+  ["input_audio", "audio"],
+  ["video", "video"],
+  ["input_video", "video"],
+  ["file", "file"],
+  ["attachment", "file"],
+  ["input_file", "file"],
+]);
 
 /** Generates a stable id from transcript position plus display metadata. */
 function artifactId(parts: {
@@ -106,49 +146,34 @@ function resolveMessageSeq(message: Record<string, unknown>, fallback: number): 
 
 function isArtifactBlock(block: Record<string, unknown>): boolean {
   const type = asNonEmptyString(block.type)?.toLowerCase();
-  if (
-    type === "image" ||
-    type === "audio" ||
-    type === "video" ||
-    type === "file" ||
-    type === "attachment" ||
-    type === "input_image" ||
-    type === "input_audio" ||
-    type === "input_video" ||
-    type === "input_file" ||
-    type === "image_url"
-  ) {
-    return true;
-  }
   return (
+    (type !== undefined && artifactTypes.has(type)) ||
     typeof block.data === "string" ||
     Boolean(block.url || block.openUrl || block.source || block.image_url || block.audio_url)
   );
 }
 
-function collectArtifactsFromMessage(params: {
-  message: unknown;
-  messageFallbackSeq: number;
-  collection: { artifacts: ArtifactRecord[]; count: number };
-  sessionKey: string;
-  runId?: string;
-  taskId?: string;
-  messageRole?: ArtifactsListParams["messageRole"];
-  includeDownloadData?: boolean;
-  downloadArtifactIds?: Set<string>;
-  imagesOnly?: boolean;
-}): void {
+function collectArtifactsFromMessage(
+  params: {
+    message: unknown;
+    messageFallbackSeq: number;
+    sessionKey: string;
+    runId?: string;
+    messageRole?: ArtifactsListParams["messageRole"];
+    includeDownloadData?: boolean;
+    downloadArtifactIds?: Set<string>;
+  } & (
+    | { imagesOnly: true; collection: { artifacts: (ArtifactRecord | undefined)[]; count: number } }
+    | { imagesOnly?: false; collection: { artifacts: ArtifactRecord[]; count: number } }
+  ),
+): void {
   const msg = asOptionalRecord(params.message);
   if (!msg) {
     return;
   }
   const messageSeq = resolveMessageSeq(msg, params.messageFallbackSeq);
   const messageRunId = resolveMessageRunId(msg);
-  const messageTaskId = resolveMessageTaskId(msg);
   if (params.runId && messageRunId !== params.runId) {
-    return;
-  }
-  if (params.taskId && messageTaskId !== params.taskId) {
     return;
   }
   const content = readAssistantDisplayContent(msg);
@@ -192,7 +217,7 @@ function collectArtifactsFromMessage(params: {
     const type =
       params.imagesOnly && attachment?.kind === "image"
         ? "image"
-        : normalizeArtifactType(asNonEmptyString(block.type) ?? "file");
+        : (artifactTypes.get(asNonEmptyString(block.type)?.toLowerCase() ?? "file") ?? "file");
     if (params.imagesOnly && type !== "image") {
       continue;
     }
@@ -205,8 +230,12 @@ function collectArtifactsFromMessage(params: {
       `${type} ${params.collection.count}`;
     const declaredArtifactId =
       asNonEmptyString(block.artifactId) ?? asNonEmptyString(attachment?.artifactId);
+    const transcriptImage =
+      params.imagesOnly && declaredArtifactId
+        ? parseTranscriptImageArtifactId(declaredArtifactId)
+        : undefined;
     const id =
-      declaredArtifactId && parseManagedOutgoingArtifactId(declaredArtifactId)
+      declaredArtifactId && (parseManagedOutgoingArtifactId(declaredArtifactId) || transcriptImage)
         ? declaredArtifactId
         : artifactId({
             sessionKey: params.sessionKey,
@@ -219,11 +248,29 @@ function collectArtifactsFromMessage(params: {
     if (params.downloadArtifactIds && !params.downloadArtifactIds.delete(id)) {
       continue;
     }
-    const includeData = params.includeDownloadData !== false;
-    const download = resolveBlockDownload(attachment ?? block, { includeData });
+    // Size inline payloads before materializing them so discovery never decodes large screenshots.
+    const sized = params.imagesOnly
+      ? resolveBlockDownload(attachment ?? block, { includeData: false })
+      : undefined;
+    const previewable =
+      !sized ||
+      sized.mode !== "bytes" ||
+      (sized.payloadSizeBytes ?? 0) <= IMAGE_INLINE_PREVIEW_MAX_BYTES;
+    if (params.imagesOnly && !previewable && !transcriptImage) {
+      // Preserve omitted slots so notices follow the cursor's actual scan window.
+      params.collection.artifacts.push(undefined);
+      continue;
+    }
+    const download =
+      sized && (!previewable || sized.mode !== "bytes")
+        ? sized
+        : resolveBlockDownload(attachment ?? block, {
+            includeData: params.imagesOnly || params.includeDownloadData !== false,
+          });
     const source = asOptionalRecord(block.source);
-    const previewOnly = params.imagesOnly && !parseManagedOutgoingArtifactId(id);
-    const imageUrl = params.imagesOnly
+    const previewOnly =
+      params.imagesOnly && !transcriptImage && !parseManagedOutgoingArtifactId(id);
+    let imageUrl = params.imagesOnly
       ? download.data !== undefined
         ? `data:${download.mimeType ?? "image/png"};base64,${download.data}`
         : (asNonEmptyString(attachment?.url) ??
@@ -231,6 +278,22 @@ function collectArtifactsFromMessage(params: {
           asNonEmptyString(source?.url) ??
           mediaUrlValue(block.image_url))
       : undefined;
+    if (params.imagesOnly && (transcriptImage ? download.mode !== "bytes" : !imageUrl)) {
+      continue;
+    }
+    if (
+      params.imagesOnly &&
+      imageUrl &&
+      /^data:/i.test(imageUrl) &&
+      Buffer.byteLength(imageUrl) > IMAGE_INLINE_PREVIEW_MAX_BYTES
+    ) {
+      if (transcriptImage) {
+        imageUrl = undefined;
+      } else {
+        params.collection.artifacts.push(undefined);
+        continue;
+      }
+    }
     const summary: ArtifactRecord = {
       id: previewOnly ? `preview_${id}` : id,
       type,
@@ -239,7 +302,6 @@ function collectArtifactsFromMessage(params: {
       ...(download.sizeBytes !== undefined ? { sizeBytes: download.sizeBytes } : {}),
       sessionKey: params.sessionKey,
       ...(messageRunId ? { runId: messageRunId } : {}),
-      ...(messageTaskId ? { taskId: messageTaskId } : {}),
       messageSeq,
       source: previewOnly ? "session-transcript-preview" : "session-transcript",
       download: { mode: previewOnly ? "unsupported" : download.mode },
@@ -251,40 +313,146 @@ function collectArtifactsFromMessage(params: {
   }
 }
 
-function toSummary(artifact: ArtifactRecord): ArtifactSummary {
-  const { data: _data, url: _url, ...summary } = artifact;
-  return summary;
+function createArtifactListCollector(query: Extract<SessionArtifactReadQuery, { kind: "list" }>) {
+  const artifacts: ArtifactRecord[] = [];
+  const collection = { artifacts, count: 0 };
+  const downloadArtifactIds = query.downloadArtifactIds
+    ? new Set(query.downloadArtifactIds)
+    : undefined;
+  const visit = (message: unknown, seq: number) => {
+    collectArtifactsFromMessage({
+      message,
+      messageFallbackSeq: seq,
+      collection,
+      sessionKey: query.sessionKey,
+      runId: query.runId,
+      messageRole: query.messageRole,
+      includeDownloadData: query.includeDownloadData,
+      downloadArtifactIds,
+    });
+  };
+  return { artifacts, visit };
+}
+
+const summaryLists = new WeakMap<
+  DatabaseSync,
+  Map<string, { revision: string; artifacts: ArtifactRecord[] }>
+>();
+
+/** Reuse metadata only after admission and revision selection in the worker's current snapshot. */
+export function readArtifactSummariesFromProjection(
+  projection: CurrentTranscriptProjection,
+  query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
+): ArtifactRecord[] {
+  const cacheable =
+    !hasSqlitePostCommitScope(projection.database.db) &&
+    !resolveSessionTranscriptReadFence(projection.resolved);
+  let cache = summaryLists.get(projection.database.db);
+  if (!cache && cacheable) {
+    cache = new Map();
+    summaryLists.set(projection.database.db, cache);
+  }
+  const key = JSON.stringify([
+    projection.resolved.sessionId,
+    query.sessionKey,
+    query.runId,
+    query.messageRole,
+  ]);
+  const revision = JSON.stringify([
+    projection.generation,
+    projection.state.indexedSeq,
+    projection.state.leafEventId,
+    projection.state.activeMessageCount,
+  ]);
+  const cached = cacheable ? cache?.get(key) : undefined;
+  if (cached?.revision === revision) {
+    return cached.artifacts;
+  }
+  const { artifacts, visit } = createArtifactListCollector({
+    ...query,
+    includeDownloadData: false,
+  });
+  const visible = resolveVisibleMessagePositions(projection);
+  for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
+    const message = asOptionalRecord(entry.event)?.message;
+    if (message !== undefined) {
+      visit(message, entry.seq);
+    }
+  }
+  if (cacheable && cache) {
+    cache.delete(key);
+    // Bound both metadata bytes and query variants; transcript payloads never enter this cache.
+    if (Buffer.byteLength(JSON.stringify(artifacts)) <= 256 * 1024) {
+      cache.set(key, { revision, artifacts });
+      pruneMapToMaxSize(cache, 32);
+    }
+  }
+  return artifacts;
+}
+
+async function readArtifactList(
+  scope: SessionTranscriptReadScope,
+  query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
+  readers: ArtifactReaders,
+): Promise<ArtifactRecord[]> {
+  const { artifacts, visit } = createArtifactListCollector(query);
+  await readers.visitSessionMessagesAsync(scope, visit);
+  return artifacts;
 }
 
 /** Select transcript artifacts inside the caller's admitted read owner. */
 export async function selectSessionArtifacts(
   scope: SessionTranscriptReadScope,
   query: SessionArtifactReadQuery,
-  readers: Pick<
-    SessionTranscriptReader,
-    "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
-  >,
+  readers: ArtifactReaders,
 ): Promise<SessionArtifactReadResult> {
+  if (query.kind === "download-grant" || query.kind === "download-response") {
+    const selection = {
+      sessionKey: query.sessionKey,
+      runId: query.runId,
+      messageRole: query.messageRole,
+    };
+    const artifact = parseTranscriptImageArtifactId(query.artifactId)
+      ? await readTranscriptImageArtifact(
+          scope,
+          { ...selection, kind: "image", artifactId: query.artifactId, includeData: true },
+          readers,
+        )
+      : (
+          await readArtifactList(
+            scope,
+            {
+              ...selection,
+              kind: "list",
+              includeDownloadData: true,
+              downloadArtifactIds: [query.artifactId],
+            },
+            readers,
+          )
+        )[0];
+    if (query.kind === "download-response") {
+      return {
+        kind: "download-response",
+        response: artifact ? prepareArtifactDownloadResponse(artifact, query.response) : undefined,
+      };
+    }
+    if (!artifact) {
+      return { kind: "download-grant" };
+    }
+    if (parseManagedOutgoingArtifactId(artifact.id)) {
+      return {
+        kind: "download-grant",
+        selection: { kind: "raw", artifact: toArtifactSummary(artifact) },
+      };
+    }
+    const download = prepareArtifactDownload(artifact);
+    return {
+      kind: "download-grant",
+      selection: download ? { kind: "prepared", download } : { kind: "raw", artifact },
+    };
+  }
   if (query.kind === "list") {
-    const artifacts: ArtifactRecord[] = [];
-    const collection = { artifacts, count: 0 };
-    const downloadArtifactIds = query.downloadArtifactIds
-      ? new Set(query.downloadArtifactIds)
-      : undefined;
-    await readers.visitSessionMessagesAsync(scope, (message, seq) => {
-      collectArtifactsFromMessage({
-        message,
-        messageFallbackSeq: seq,
-        collection,
-        sessionKey: query.sessionKey,
-        runId: query.runId,
-        taskId: query.taskId,
-        messageRole: query.messageRole,
-        includeDownloadData: query.includeDownloadData,
-        downloadArtifactIds,
-      });
-    });
-    return { kind: "list", artifacts };
+    return { kind: "list", artifacts: await readArtifactList(scope, query, readers) };
   }
   if (query.kind === "image-page") {
     const page = await readers.readSessionMessagesPageWithStatsAsync(scope, {
@@ -292,38 +460,44 @@ export async function selectSessionArtifacts(
       beforeSeq: query.beforeSeq,
       maxMessages: IMAGE_PAGE_MESSAGES,
       maxBytes: IMAGE_PAGE_BYTES,
+      allowOversizedFirst: true,
       readOnly: true,
       captureReadWindow: true,
       expectedReadWindow: query.readWindow,
     });
+    // Image cursors also address positions within a message; that contract requires restarting.
+    if (page.windowReset) {
+      throw new SessionTranscriptProjectionUnavailableError(scope.sessionId, "window-changed");
+    }
     const artifacts: ArtifactSummary[] = [];
+    let omittedOversized = false;
     let next: { beforeSeq: number; imageOffset: number } | undefined;
     for (const message of page.messages.toReversed()) {
       const seq = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.seq;
       if (typeof seq !== "number") {
         continue;
       }
-      const collected: ArtifactRecord[] = [];
+      const collected: (ArtifactRecord | undefined)[] = [];
       collectArtifactsFromMessage({
-        message,
+        message: projectTranscriptImageArtifacts(message),
         messageFallbackSeq: 1,
         collection: { artifacts: collected, count: 0 },
         sessionKey: query.sessionKey,
         runId: query.runId,
-        taskId: query.taskId,
         messageRole: query.messageRole,
         imagesOnly: true,
       });
       const images = collected
-        .filter((artifact) => artifact.image)
-        .map(toSummary)
+        .map((artifact) => artifact && toArtifactSummary(artifact))
         .toReversed();
       const start = query.beforeSeq === seq + 1 ? (query.imageOffset ?? 0) : 0;
       for (let index = start; index < images.length; index++) {
         const image = images[index];
-        if (image) {
-          artifacts.push(image);
+        if (!image) {
+          omittedOversized = true;
+          continue;
         }
+        artifacts.push(image);
         if (artifacts.length === query.limit) {
           next =
             index + 1 < images.length
@@ -345,21 +519,31 @@ export async function selectSessionArtifacts(
     return {
       kind: "image-page",
       artifacts,
+      ...(omittedOversized ? { omittedOversized: true } : {}),
       ...(next && next.beforeSeq > 1 && page.readWindow
         ? { next: { ...next, readWindow: page.readWindow } }
         : {}),
-      ...(page.omittedOversized ? { omittedOversized: true } : {}),
     };
   }
+  const artifact = await readTranscriptImageArtifact(scope, query, readers);
+  return artifact ? { kind: "image", artifact } : { kind: "image" };
+}
+
+async function readTranscriptImageArtifact(
+  scope: SessionTranscriptReadScope,
+  query: Extract<SessionArtifactReadQuery, { kind: "image" }>,
+  readers: ArtifactReaders,
+): Promise<ArtifactRecord | undefined> {
   const reference = parseTranscriptImageArtifactId(query.artifactId);
   if (!reference) {
-    return { kind: "image" };
+    return undefined;
   }
   const page = await readers.readSessionMessagesPageWithStatsAsync(scope, {
     offset: 0,
     beforeSeq: reference.messageSeq + 1,
     maxMessages: 1,
     maxBytes: MAX_PAYLOAD_BYTES - 4096,
+    allowOversizedFirst: true,
   });
   const message = asOptionalRecord(page.messages[0]);
   const block = resolveTranscriptImageArtifactBlock(message, query.artifactId);
@@ -367,32 +551,28 @@ export async function selectSessionArtifacts(
     !message ||
     !block ||
     (query.messageRole && message.role !== query.messageRole) ||
-    (query.runId && resolveMessageRunId(message) !== query.runId) ||
-    (query.taskId && resolveMessageTaskId(message) !== query.taskId)
+    (query.runId && resolveMessageRunId(message) !== query.runId)
   ) {
-    return { kind: "image" };
+    return undefined;
   }
   const download = resolveBlockDownload(block, { includeData: query.includeData });
   if (download.mode !== "bytes") {
-    return { kind: "image" };
+    return undefined;
   }
   return {
-    kind: "image",
-    artifact: {
-      id: query.artifactId,
-      type: "image",
-      title:
-        asNonEmptyString(block.title) ??
-        asNonEmptyString(block.fileName) ??
-        asNonEmptyString(block.alt) ??
-        "Image",
-      mimeType: download.mimeType ?? "image/png",
-      sizeBytes: download.sizeBytes,
-      sessionKey: query.sessionKey,
-      messageSeq: reference.messageSeq,
-      source: "session-transcript",
-      download: { mode: "bytes" },
-      ...(download.data !== undefined ? { data: download.data } : {}),
-    },
+    id: query.artifactId,
+    type: "image",
+    title:
+      asNonEmptyString(block.title) ??
+      asNonEmptyString(block.fileName) ??
+      asNonEmptyString(block.alt) ??
+      "Image",
+    mimeType: download.mimeType ?? "image/png",
+    sizeBytes: download.sizeBytes,
+    sessionKey: query.sessionKey,
+    messageSeq: reference.messageSeq,
+    source: "session-transcript",
+    download: { mode: "bytes" },
+    ...(download.data !== undefined ? { data: download.data } : {}),
   };
 }

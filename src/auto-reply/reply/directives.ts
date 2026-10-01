@@ -1,4 +1,3 @@
-// Defines reply directive parsing constants and text-matching helpers.
 import { escapeRegExp } from "../../shared/regexp.js";
 import {
   type ReasoningLevel,
@@ -15,11 +14,12 @@ import {
 } from "../thinking.shared.js";
 import { removeDirectiveSpan, skipDirectiveArgPrefix } from "./directive-parsing.js";
 
-type ExtractedLevel<T> = {
+type NamedLevelDirective<T, Field extends string> = {
   cleaned: string;
-  level?: T;
   rawLevel?: string;
   hasDirective: boolean;
+} & {
+  [Key in Field]?: T;
 };
 
 type LevelDirectiveParseOptions = {
@@ -65,31 +65,6 @@ const matchLevelDirective = (
   return { start, end: prefixEnd };
 };
 
-const extractLevelDirective = <T>(
-  body: string,
-  pattern: RegExp,
-  normalize: (raw?: string) => T | undefined,
-  options?: LevelDirectiveParseOptions,
-): ExtractedLevel<T> => {
-  const match = matchLevelDirective(body, pattern, normalize, options);
-  if (!match) {
-    return { cleaned: body, hasDirective: false };
-  }
-  const rawLevel = match.rawLevel;
-  const level = normalize(rawLevel);
-  const cleaned = removeDirectiveSpan(body, match.start, match.end);
-  return {
-    cleaned,
-    level,
-    rawLevel,
-    hasDirective: true,
-  };
-};
-
-type NamedLevelDirective<T, Field extends string> = Omit<ExtractedLevel<T>, "level"> & {
-  [Key in Field]?: T;
-};
-
 function createLevelDirectiveExtractor<T, Field extends string>(
   names: readonly string[],
   field: Field,
@@ -100,13 +75,13 @@ function createLevelDirectiveExtractor<T, Field extends string>(
     if (!body) {
       return { cleaned: "", hasDirective: false } as NamedLevelDirective<T, Field>;
     }
-    const { cleaned, level, rawLevel, hasDirective } = extractLevelDirective(
-      body,
-      pattern,
-      normalize,
-      options,
-    );
-    return { cleaned, [field]: level, rawLevel, hasDirective } as NamedLevelDirective<T, Field>;
+    const match = matchLevelDirective(body, pattern, normalize, options);
+    return {
+      cleaned: match ? removeDirectiveSpan(body, match.start, match.end) : body,
+      [field]: match ? normalize(match.rawLevel) : undefined,
+      rawLevel: match?.rawLevel,
+      hasDirective: match !== null,
+    } as NamedLevelDirective<T, Field>;
   };
 }
 

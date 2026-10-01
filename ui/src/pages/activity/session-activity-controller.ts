@@ -7,6 +7,7 @@ import { activityPersonFromPath, activityPersonLocation } from "../../app-route-
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { activityPulseBoundaries } from "./activity-pulse-window.ts";
 import {
   readCurrentWorkChange,
   reconcileCurrentWork,
@@ -61,6 +62,7 @@ export class SessionActivityController implements ReactiveController {
   private readonly summaryRetries = new Set<string>();
   private canEnsureSummaries = false;
   private filters: ActivityQuery | null = null;
+  private bucketRollover?: ReturnType<typeof setTimeout>;
   private readonly pendingChanges: CurrentWorkChange[] = [];
   private changesOverflowed = false;
   private normalizedLocation = "";
@@ -96,6 +98,8 @@ export class SessionActivityController implements ReactiveController {
   }
 
   private resetQuery(): void {
+    clearTimeout(this.bucketRollover);
+    this.bucketRollover = undefined;
     this.eventRefresh.reset();
     this.pending?.controller.abort();
     this.pending = undefined;
@@ -374,26 +378,33 @@ export class SessionActivityController implements ReactiveController {
       this.host.requestUpdate();
       return Promise.resolve();
     }
-    const request =
-      filters === "current"
-        ? {
-            activeOnly: true,
-            archived: "all",
-            includeGlobal: true,
-            includeUnknown: true,
-            includeDerivedTitles: true,
-            limit: 100,
-          }
+    const now = new Date();
+    const boundaries =
+      filters === "current" ? undefined : activityPulseBoundaries(filters.time, now.getTime());
+    clearTimeout(this.bucketRollover);
+    this.bucketRollover = undefined;
+    if (boundaries && typeof setTimeout === "function") {
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+      const rollover = Math.min(boundaries.at(-1)!, midnight);
+      this.bucketRollover = setTimeout(
+        () => this.eventRefresh.schedule(),
+        rollover - now.getTime() + 1_000,
+      );
+    }
+    const request = {
+      archived: "all",
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: true,
+      limit: 100,
+      ...(filters === "current"
+        ? { activeOnly: true }
         : {
-            archived: "all",
-            includeGlobal: true,
-            includeUnknown: true,
             includePeople: true,
+            activityPulseBoundaries: boundaries,
             excludeSubagents: true,
             includeActivitySummary: true,
-            includeDerivedTitles: true,
             sortBy: "activity",
-            limit: 100,
             ...(filters.personId ? { involvingProfileId: filters.personId } : {}),
             ...(filters.query ? { search: filters.query } : {}),
             ...(filters.time === "all"
@@ -402,7 +413,8 @@ export class SessionActivityController implements ReactiveController {
                   activeMinutes:
                     filters.time === "24h" ? 1440 : filters.time === "7d" ? 10080 : 43200,
                 }),
-          };
+          }),
+    };
     const queryKey = JSON.stringify(request);
     const sameQuery = this.client === client && this.queryKey === queryKey;
     if (sameQuery && this.pending && reason !== "retry") {

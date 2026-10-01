@@ -277,7 +277,7 @@ it.for(cases)(
         nodeDeviceId: "offline-device",
       });
       offlineDeviceSeeded = true;
-      const active = seedActivePlacement(placements, { environmentId, ownerEpoch: 1 });
+      const active = await seedActivePlacement(placements, { environmentId, ownerEpoch: 1 });
       const source = { generation: active.generation, environmentId, ownerEpoch: 1 };
       const claim = await placements.claimTurn({
         sessionId,
@@ -287,7 +287,7 @@ it.for(cases)(
         runId: "abandoned-run",
         owner: { kind: "worker", environmentId, ownerEpoch: 1 },
       });
-      placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       placements.markWorkspaceResultPending(claim);
       expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
       if (persisted) {

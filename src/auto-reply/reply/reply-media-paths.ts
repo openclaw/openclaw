@@ -1,4 +1,3 @@
-// Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
 import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
@@ -28,6 +27,7 @@ import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.j
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import {
@@ -63,11 +63,6 @@ function resolveReplyMediaFailureLabel(media: string, index: number): string {
   );
 }
 
-function resolveReplyMediaFailureKind(media: string): ReplyMediaFailure["kind"] {
-  const kind = mediaKindFromMime(mimeTypeFromFilePath(media));
-  return kind === "image" || kind === "audio" || kind === "video" ? kind : "document";
-}
-
 function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"] {
   let current: unknown = error;
   // Media loaders wrap filesystem/policy errors; bound cause traversal so malformed cycles fail safe.
@@ -91,9 +86,10 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
 
 function createReplyMediaFailure(media: string, index: number, error: unknown): ReplyMediaFailure {
   const mimeType = mimeTypeFromFilePath(media);
+  const kind = mediaKindFromMime(mimeType);
   return {
     code: resolveReplyMediaFailureCode(error),
-    kind: resolveReplyMediaFailureKind(media),
+    kind: kind === "image" || kind === "audio" || kind === "video" ? kind : "document",
     label: resolveReplyMediaFailureLabel(media, index),
     ...(mimeType ? { mimeType } : {}),
   };
@@ -298,7 +294,11 @@ export function createReplyMediaSourcePreparer(params: {
   };
 
   const normalizeMediaSource = async (raw: string): Promise<PreparedReplyMediaSource> => {
-    const source = raw.trim();
+    const trimmed = raw.trim();
+    // Canonical references from history must pass the same policy as their stored file.
+    const source = /^media:\/\//i.test(trimmed)
+      ? ((await resolveInboundMediaReference(trimmed))?.physicalPath ?? trimmed)
+      : trimmed;
     const mapping = params.workspaceMediaRoot
       ? resolveSandboxPathMapping(
           [{ hostRoot: params.workspaceDir, containerRoot: params.workspaceMediaRoot }],

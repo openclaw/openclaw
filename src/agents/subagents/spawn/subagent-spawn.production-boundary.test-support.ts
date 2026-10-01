@@ -1,7 +1,10 @@
 /** Admitted parent, worker, and registered spawn fixtures shared by recursive boundary proofs. */
-import { vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
+import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { placementTurnOwner } from "../../../gateway/worker-environments/placement-record.js";
@@ -17,7 +20,9 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
 import {
+  resolvePreparedRunAdmission,
   createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
@@ -25,6 +30,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../admitted-run-context.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
+import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -33,7 +39,7 @@ import {
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 
-export function createSpawnOperatorSource() {
+export function createSpawnOperatorSource(profileId = "spawn-operator") {
   const revocation = new AbortController();
   let requestOpen = true;
   let holds = 0;
@@ -44,8 +50,9 @@ export function createSpawnOperatorSource() {
     }
   };
   const authority = createAdmittedRunOperatorAuthority({
-    profileId: "spawn-operator",
+    profileId,
     scopes: ["operator.read", "operator.write"],
+    gatewayAccessGrant: null,
     source: {},
     signal: revocation.signal,
     assertCurrent,
@@ -140,7 +147,7 @@ export async function createBoundWorker(
   const database = openOpenClawStateDatabase();
   const store = createWorkerSessionPlacementStore({ database });
   const session = { sessionId: "parent-session", agentId: "main", sessionKey: parentSessionKey };
-  let placement = store.startDispatch({ ...session, executionMode: "worker-turn" });
+  let placement = await store.startDispatch({ ...session, executionMode: "worker-turn" });
   placement = store.transition({
     sessionId: session.sessionId,
     from: "requested",
@@ -207,7 +214,7 @@ export async function createBoundWorker(
 
 export function createBoundSpawnInvocation(
   bound: Awaited<ReturnType<typeof createSpawnBoundaryParent>>,
-  request?: { collect?: true; groupId?: string; context?: "isolated" | "fork" },
+  request?: { collect?: true; groupId?: string; context?: "isolated" | "fork"; user?: string },
   requesterModel?: { provider: string; model: string },
 ) {
   const { parentSessionKey, parentRunId } = bound;
@@ -258,4 +265,158 @@ export function createBoundSpawnInvocation(
           tool.execute!("spawn-production-boundary", { task: "bounded child", ...request }),
         ),
     );
+}
+
+type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
+type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
+
+export function registerYieldedRequesterBatchCase(options: {
+  createBoundParent: () => Promise<BoundParent>;
+  createBoundGateway: (bound: BoundParent) => Promise<{
+    context: GatewayRequestContext;
+    runtime: GatewayRuntime;
+  }>;
+  closeBoundGateway: (
+    bound: BoundParent,
+    runtime: GatewayRuntime,
+    childRunId?: string,
+  ) => Promise<unknown[]>;
+  waitForEmbeddedRun: (
+    bound: BoundParent,
+    runId: string,
+    started?: Promise<void>,
+    calls?: number,
+  ) => Promise<void>;
+  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
+  throwBoundFailures: (failures: unknown[]) => void;
+}) {
+  it("continues a yielded nested parent once through its accepted child batch", async () => {
+    const registry = await import("../registry/subagent-registry.js");
+    const { subagentRuns } = await import("../registry/subagent-registry-memory.js");
+    const { loadSubagentRegistryFromSqlite } =
+      await import("../registry/subagent-registry.store.sqlite.js");
+    const { settleSubagentRegistryPersistenceWork } =
+      await import("../registry/subagent-registry.persistence.test-support.js");
+    const announce = await import("../announce/subagent-announce.js");
+    const nativeAnnounce = await vi.importActual<typeof announce>(
+      "../announce/subagent-announce.js",
+    );
+    vi.mocked(announce.runSubagentAnnounceFlow).mockImplementation(
+      nativeAnnounce.runSubagentAnnounceFlow,
+    );
+    const bound = await options.createBoundParent();
+    const { context, runtime } = await options.createBoundGateway(bound);
+    const childStarted = createDeferred();
+    const childResult = createDeferred<EmbeddedAgentRunResult>();
+    const parentStarted = createDeferred();
+    const parentCalls: Array<{
+      runId: string;
+      childSessionKey: string | undefined;
+      hasAuthority: boolean;
+      prompt: string;
+    }> = [];
+    const admissionFailures: unknown[] = [];
+    options.runEmbeddedAgent.mockImplementation(async (params) => {
+      try {
+        const admitted = await resolvePreparedRunAdmission({
+          runId: params.runId,
+          runtimeKind: "embedded",
+          admittedRunContext: params.admittedRunContext,
+          preparedRunAdmission: params.preparedRunAdmission,
+        });
+        await params.onExecutionStarted?.();
+        if (params.sessionKey !== bound.parentSessionKey) {
+          childStarted.resolve();
+          return await childResult.promise;
+        }
+        const current = subagentRuns.get(params.runId);
+        parentCalls.push({
+          runId: params.runId,
+          childSessionKey: current?.childSessionKey,
+          hasAuthority: getAdmittedRunDelegatedAuthority(admitted) !== undefined,
+          prompt: params.prompt,
+        });
+        parentStarted.resolve();
+        return {
+          payloads: [{ text: "Nested parent is complete." }],
+          meta: { durationMs: 1, finalAssistantVisibleText: "Nested parent is complete." },
+        };
+      } catch (error) {
+        admissionFailures.push(error);
+        (params.sessionKey === bound.parentSessionKey ? parentStarted : childStarted).resolve();
+        throw error;
+      }
+    });
+    let childRunId: string | undefined;
+    const failures: unknown[] = [];
+    try {
+      await registry.registerSubagentRun({
+        runId: bound.parentRunId,
+        childSessionKey: bound.parentSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
+        requesterDisplayKey: "main",
+        task: "Continue after an accepted child completes",
+        cleanup: "keep",
+        expectsCompletionMessage: false,
+        gatewayContextResolver: () => context,
+      });
+      const spawned = await createBoundSpawnInvocation(bound, { context: "isolated" })();
+      const accepted = expectDefined(
+        normalizeAcceptedSessionSpawnResult(spawned),
+        "actual accepted spawn",
+      );
+      expect(accepted.expectsCompletionMessage).toBe(true);
+      childRunId = accepted.runId;
+      await options.waitForEmbeddedRun(bound, childRunId, childStarted.promise);
+      expect(
+        await registry.markRequesterTurnYielded({
+          requesterSessionKey: bound.parentSessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: bound.parentRunId,
+        }),
+      ).toBe(1);
+      expect(
+        await registry.settleRequesterAfterSessionSpawns({
+          requesterSessionKey: bound.parentSessionKey,
+          requesterTurnRunId: bound.parentRunId,
+          requesterYielded: true,
+          acceptedSessionSpawns: [accepted],
+        }),
+      ).toBe(true);
+      expect(subagentRuns.get(bound.parentRunId)?.pauseReason).toBe("sessions_yield");
+      expect(subagentRuns.get(childRunId)?.requesterSettleWake).toMatchObject({
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+        batchRunIds: [childRunId],
+      });
+      bound.admission.close();
+      bound.parent.cleanup();
+      childResult.resolve({
+        payloads: [{ text: "Nested child result." }],
+        meta: { durationMs: 1, finalAssistantVisibleText: "Nested child result." },
+      });
+      await options.waitForEmbeddedRun(bound, bound.parentRunId, parentStarted.promise, 2);
+      await settleSubagentRegistryPersistenceWork();
+      expect(admissionFailures).toEqual([]);
+      expect(parentCalls).toHaveLength(1);
+      expect(parentCalls[0]).toMatchObject({
+        childSessionKey: bound.parentSessionKey,
+        hasAuthority: true,
+      });
+      expect(parentCalls[0]?.prompt).toContain("Nested child result.");
+      const durable = loadSubagentRegistryFromSqlite().get(childRunId);
+      expect(durable?.delivery?.status).toBe("delivered");
+      expect(durable?.requesterSettleWake).toBeUndefined();
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      childResult.resolve({
+        payloads: [{ text: "Nested child result." }],
+        meta: { durationMs: 1 },
+      });
+      failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
+      options.throwBoundFailures(failures);
+    }
+  });
 }

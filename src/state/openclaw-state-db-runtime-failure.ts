@@ -1,14 +1,19 @@
 import path from "node:path";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  runSqliteReadOperationSync,
+} from "../infra/sqlite-schema-facts.js";
 import type { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import type { CachedOpenClawStateDatabase } from "./openclaw-state-db-cache.types.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { markOpenClawStateDatabaseFailure } from "./openclaw-state-db-failure.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 
 type FailureOwner = {
-  cachedDatabases: Map<string, OpenClawStateDatabase>;
+  cachedDatabases: Map<string, CachedOpenClawStateDatabase>;
   latch: ReturnType<typeof createSqliteTerminalOpenLatch>;
   evict(database: OpenClawStateDatabase): boolean;
   recordSchemaFailure(pathname: string, error: Error): void;
@@ -49,8 +54,15 @@ export function createOpenClawStateDatabaseRuntimeFailureOwner(owner: FailureOwn
         return undefined;
       }
       try {
-        // Admission retains schema facts but checks foreign commits before reusing them.
-        assertSupportedStateSchemaVersion(cached.db, resolvedPath);
+        runSqliteReadOperationSync(cached.db, () => {
+          const schema = getAdmittedSqliteSchemaFacts(cached.db);
+          // The schema owner observes foreign commits and local DDL. Revalidate only
+          // changed facts; dynamic authorizers deliberately cannot retain admission.
+          if (!schema || schema !== cached.schemaFacts) {
+            assertSupportedStateSchemaVersion(cached.db, resolvedPath);
+            cached.schemaFacts = schema;
+          }
+        });
         return undefined;
       } catch (error) {
         const failure = error instanceof Error ? error : new Error(String(error));

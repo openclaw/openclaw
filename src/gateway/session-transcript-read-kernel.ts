@@ -23,6 +23,7 @@ import {
   resolveVisibleMessagePositions,
 } from "../config/sessions/session-accessor.sqlite-reset-window.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import type {
   TranscriptRecentReadLimits,
   TranscriptAnchorPageOptions,
@@ -57,6 +58,7 @@ export type ReadRecentSessionMessagesResult = {
   deltaCursor?: string;
   displaySource?: string;
   readWindow?: TranscriptReadWindow;
+  windowReset?: boolean;
   messages: unknown[];
   transcriptEvents?: TranscriptEvent[];
   transcriptPath?: string;
@@ -101,6 +103,28 @@ function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEv
   return messages;
 }
 
+function capAnchorEventsByBytes(
+  events: SessionTranscriptMessageEvent[],
+  maxBytes: number | undefined,
+): SessionTranscriptMessageEvent[] {
+  if (maxBytes === undefined) {
+    return events;
+  }
+  const limit = Math.max(1_024, Math.floor(maxBytes));
+  let bytes = 2;
+  let start = events.length;
+  while (start > 0) {
+    const eventBytes = jsonUtf8Bytes(events[start - 1]);
+    const separatorBytes = start === events.length ? 0 : 1;
+    if (bytes + separatorBytes + eventBytes > limit) {
+      break;
+    }
+    bytes += separatorBytes + eventBytes;
+    start -= 1;
+  }
+  return events.slice(start);
+}
+
 function normalizeRecentSqliteReadOptions(
   opts?: Partial<ReadRecentSessionMessagesOptions> &
     TranscriptReadWindowOptions & { readOnly?: boolean },
@@ -125,6 +149,7 @@ function readRecentSqliteMessageRecords(
   deltaCursor?: string;
   displaySource?: string;
   readWindow?: TranscriptReadWindow;
+  windowReset?: boolean;
   messages: unknown[];
   totalMessages: number;
 } {
@@ -135,6 +160,7 @@ function readRecentSqliteMessageRecords(
     ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),
     displaySource: page.displaySource,
     ...(page.readWindow ? { readWindow: page.readWindow } : {}),
+    ...(page.windowReset ? { windowReset: true } : {}),
     messages: projectSqliteHistoryEvents(page.events),
     totalMessages: page.totalMessages,
   };
@@ -281,6 +307,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       opts,
     )) ?? { messages: [], totalMessages: 0 };
     if (
+      !page.windowReset &&
       page.totalMessages === 0 &&
       page.messages.length === 0 &&
       opts.allowResetArchiveFallback === true
@@ -303,6 +330,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
         beforeSeq?: number;
         recentAtHead?: TranscriptRecentReadLimits;
         maxBytes?: number;
+        allowOversizedFirst?: boolean;
       },
   ): Promise<ReadRecentSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
@@ -311,7 +339,10 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       (projection) => readSessionTranscriptHistoryEventPageFromProjection(projection, opts),
       opts,
     );
-    if ((!page || page.totalMessages === 0) && opts.allowResetArchiveFallback === true) {
+    if (
+      (!page || (page.totalMessages === 0 && !page.windowReset)) &&
+      opts.allowResetArchiveFallback === true
+    ) {
       return await archivedTranscriptReader(target).readPage(opts);
     }
     if (!page) {
@@ -332,6 +363,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       messages: projectSqliteHistoryEvents(page.events),
       displaySource: page.displaySource,
       ...(page.readWindow ? { readWindow: page.readWindow } : {}),
+      ...(page.windowReset ? { windowReset: true } : {}),
       totalMessages: page.totalMessages,
       transcriptPath: target.sessionFile,
       transcriptSource: "active",
@@ -374,9 +406,11 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     }
     return {
       found: true,
+      ...(page.windowReset ? { windowReset: true } : {}),
+      ...(page.readWindow ? { readWindow: page.readWindow } : {}),
       displaySource: page.displaySource,
       hasOverreadContext: page.hasOverreadContext,
-      messages: page.events
+      messages: capAnchorEventsByBytes(page.events, opts.maxBytes)
         .map(sqliteMessageEventWithSeq)
         .filter((message) => message !== undefined),
       offset: page.offset,

@@ -1,5 +1,4 @@
 /** Built-in blocking user-question tool and its active-session answer bridge. */
-import { createHash } from "node:crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   QuestionAnswers,
@@ -7,6 +6,7 @@ import type {
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
@@ -73,7 +73,7 @@ function buildAskUserQuestionId(
 ): string {
   const owner = runId?.trim() || askUserSessionKey(sessionKey, agentId);
   const identity = `${owner}\0${toolCallId}`;
-  return `ask_${createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
+  return `ask_${sha256Hex(identity).slice(0, 32)}`;
 }
 
 function askUserSessionKey(sessionKey: string | undefined, agentId?: string): string {
@@ -437,17 +437,15 @@ export function beginAskUserPromptDelivery(params: {
     questionId,
     hasSubscriber: reserved !== undefined || params.deliverPrompt !== undefined,
     markReady() {
-      if (reserved) {
+      if (reserved || params.deliverPrompt) {
         markAskUserPromptReady(questionId, params.questions);
-        return;
+      } else {
+        transitionAskUserQuestion(state, { kind: "answerable" });
       }
-      if (params.deliverPrompt) {
+      if (!reserved && params.deliverPrompt) {
         // Nothing reserved this prompt, so this run publishes it and settles its own wait.
-        markAskUserPromptReady(questionId, params.questions);
         settleAfterOwnPromptDelivery(questionId, params.deliverPrompt(questionId));
-        return;
       }
-      transitionAskUserQuestion(state, { kind: "answerable" });
     },
     waitForDelivery(signal?: AbortSignal) {
       return waitForPromptDelivery(state, signal);
@@ -541,13 +539,11 @@ export function createAskUserTool(params: {
         }
         void cancelPendingQuestion("run-abort");
       };
-      const finishWait = async (result: QuestionWaitAnswerResult) => {
-        if (result.status === "pending") {
-          const answered = await cancelPendingQuestion("wait-timeout");
-          if (answered) {
-            return answeredResult(normalized.questions, answered.answers);
-          }
-        }
+      const finishWait = async (waitResult: QuestionWaitAnswerResult) => {
+        const result =
+          waitResult.status === "pending"
+            ? ((await cancelPendingQuestion("wait-timeout")) ?? waitResult)
+            : waitResult;
         if (result.status === "answered") {
           return answeredResult(normalized.questions, result.answers);
         }

@@ -36,12 +36,6 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
   return agentEnabled ?? globalEnabled ?? true;
 }
 
-function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {
-  // Equal persisted timestamps intentionally prefer the later row source,
-  // while Map replacement preserves each key's first insertion position.
-  return (candidate.updatedAt ?? 0) >= (current.updatedAt ?? 0);
-}
-
 export function mergeSwarmSessionRows(
   ...rowSources: readonly (readonly GatewaySessionRow[])[]
 ): GatewaySessionRow[] {
@@ -49,7 +43,8 @@ export function mergeSwarmSessionRows(
   for (const rows of rowSources) {
     for (const row of rows) {
       const current = merged.get(row.key);
-      if (!current || isNewerSessionRow(row, current)) {
+      // Ties prefer the later source without changing the first insertion position.
+      if (!current || (row.updatedAt ?? 0) >= (current.updatedAt ?? 0)) {
         merged.set(row.key, row);
       }
     }
@@ -63,7 +58,7 @@ export async function hydrateSwarmSessionRows(params: {
   isCurrent: () => boolean;
   initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
-  const childRows = await fetchPagedSessionRows({
+  return fetchPagedSessionRows({
     list: (offset) =>
       params.sessions.list({
         ...childSessionListQuery(params.parentKey, SWARM_SESSION_PAGE_SIZE),
@@ -77,13 +72,12 @@ export async function hydrateSwarmSessionRows(params: {
       return rows.map((row) => params.sessions.inheritRow({ ...row, runtimeSampledAt }, row));
     },
   });
-  return childRows;
 }
 
 type SwarmHydrationParams = {
   sessions: Pick<SessionCapability, "list" | "inheritRow" | "observeRow" | "observeList">;
   agentId?: string;
-  readParent: () => Promise<GatewaySessionRow | null>;
+  readParent: (refresh?: boolean) => Promise<GatewaySessionRow | null>;
   parentKey: string;
   sourceEpoch: number;
   currentRows: () => readonly GatewaySessionRow[];
@@ -113,6 +107,7 @@ export class SwarmRosterHydrator {
   private childRows: GatewaySessionRow[] = [];
   private parentRequest: Promise<void> | null = null;
   private parentRefreshQueued = false;
+  private parentRefreshForced = false;
   private publishingParentRead = false;
 
   update(params: SwarmHydrationParams): void {
@@ -252,9 +247,10 @@ export class SwarmRosterHydrator {
     }, delay);
   }
 
-  private readParent(): Promise<void> {
+  private readParent(refresh = false): Promise<void> {
     if (this.parentRequest) {
       this.parentRefreshQueued = true;
+      this.parentRefreshForced ||= refresh;
       return this.parentRequest;
     }
     const params = this.params;
@@ -282,7 +278,7 @@ export class SwarmRosterHydrator {
       }
     };
     const request = Promise.resolve()
-      .then(() => params.readParent())
+      .then(() => params.readParent(refresh))
       .then((row) => {
         if (!isCurrent()) {
           return;
@@ -305,8 +301,10 @@ export class SwarmRosterHydrator {
         }
         this.parentRequest = null;
         if (this.parentRefreshQueued) {
+          const queuedRefresh = this.parentRefreshForced;
           this.parentRefreshQueued = false;
-          void this.readParent();
+          this.parentRefreshForced = false;
+          void this.readParent(queuedRefresh);
         }
       });
     this.parentRequest = request;
@@ -350,7 +348,8 @@ export class SwarmRosterHydrator {
       );
     });
     if (this.parentRow && (removedMember || missingDetail)) {
-      void this.readParent();
+      // Child membership can change without invalidating the parent's descriptor revision.
+      void this.readParent(true);
     }
     const generation = this.generation;
     const isCurrent = () => generation === this.generation && this.childResult === result;
@@ -392,6 +391,7 @@ export class SwarmRosterHydrator {
     this.childRows = [];
     this.parentRequest = null;
     this.parentRefreshQueued = false;
+    this.parentRefreshForced = false;
     this.rows = [];
     this.key = key;
     this.generation += 1;

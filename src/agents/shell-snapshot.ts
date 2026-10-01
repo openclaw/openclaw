@@ -61,10 +61,6 @@ const SECRET_SHELL_STATE_PATTERNS = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
 ] as const;
 
-type ShellSnapshot = {
-  path: string;
-};
-
 type ShellSnapshotWrapOptions = {
   enabled?: boolean;
   command: string;
@@ -74,10 +70,7 @@ type ShellSnapshotWrapOptions = {
   env: Record<string, string | undefined>;
 };
 
-const snapshotCache = new Map<
-  string,
-  { createdAtMs: number; promise: Promise<ShellSnapshot | null> }
->();
+const snapshotCache = new Map<string, { createdAtMs: number; promise: Promise<string | null> }>();
 let cleanupPromise: Promise<void> | null = null;
 
 export async function maybeWrapCommandWithShellSnapshot(
@@ -93,11 +86,11 @@ export async function maybeWrapCommandWithShellSnapshot(
   }
 
   try {
-    const snapshot = await getOrCreateShellSnapshot(opts);
-    return snapshot
+    const snapshotPath = await getOrCreateShellSnapshot(opts);
+    return snapshotPath
       ? buildSnapshotWrappedCommand(
           opts.command,
-          snapshot.path,
+          snapshotPath,
           buildRuntimeEnvRestoreScript(opts.env),
         )
       : opts.command;
@@ -119,9 +112,7 @@ function isExecShellSnapshotDisabled(env: Record<string, string | undefined>): b
   return Boolean(value && SNAPSHOT_DISABLE_VALUES.has(value));
 }
 
-async function getOrCreateShellSnapshot(
-  opts: ShellSnapshotWrapOptions,
-): Promise<ShellSnapshot | null> {
+async function getOrCreateShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<string | null> {
   const key = buildSnapshotKey(opts);
   const cached = snapshotCache.get(key);
   const now = Date.now();
@@ -201,7 +192,7 @@ async function createShellSnapshot(
   opts: ShellSnapshotWrapOptions,
   key: string,
   options?: { forceRefresh?: boolean },
-): Promise<ShellSnapshot | null> {
+): Promise<string | null> {
   const snapshotDir = resolveShellSnapshotDir(process.env);
   await fs.mkdir(snapshotDir, { recursive: true, mode: 0o700 });
   cleanupPromise ??= cleanupStaleSnapshots(snapshotDir);
@@ -213,7 +204,7 @@ async function createShellSnapshot(
     (await isFreshSnapshot(snapshotPath)) &&
     (await validateSnapshot(opts, snapshotPath))
   ) {
-    return { path: snapshotPath };
+    return snapshotPath;
   }
 
   const capture = await captureShellSnapshot(opts);
@@ -230,7 +221,7 @@ async function createShellSnapshot(
   }
   await fs.rename(tmpPath, snapshotPath);
   await fs.chmod(snapshotPath, 0o600);
-  return { path: snapshotPath };
+  return snapshotPath;
 }
 
 async function isFreshSnapshot(snapshotPath: string): Promise<boolean> {
@@ -251,7 +242,7 @@ async function validateSnapshot(
   } catch {
     return false;
   }
-  const result = await runShell({
+  const exitCode = await runShell({
     shell: opts.shell,
     shellArgs: opts.shellArgs,
     cwd: opts.cwd,
@@ -259,7 +250,7 @@ async function validateSnapshot(
     command: `. ${shQuote(snapshotPath)} >/dev/null 2>&1`,
     timeoutMs: 2_000,
   });
-  return result.status === 0;
+  return exitCode === 0;
 }
 
 async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<string | null> {
@@ -284,7 +275,7 @@ async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<str
         `} > ${shQuote(captureOutputPath)}`,
       ].join("\n");
 
-      const result = await runShell({
+      const exitCode = await runShell({
         shell: opts.shell,
         shellArgs: buildCaptureShellArgs(shellName, opts.shellArgs),
         cwd: opts.cwd,
@@ -292,7 +283,7 @@ async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<str
         command: captureCommand,
         timeoutMs: 5_000,
       });
-      if (result.status !== 0) {
+      if (exitCode !== 0) {
         return null;
       }
       const stdout = await fs.readFile(captureOutputPath, "utf8");
@@ -337,9 +328,6 @@ function buildTrustedSnapshotCaptureEnv(
 function buildStartupSourceScript(shellName: string): string {
   if (shellName === "zsh") {
     return `if [ -r "\${ZDOTDIR:-$HOME}/.zshrc" ]; then . "\${ZDOTDIR:-$HOME}/.zshrc"; fi`;
-  }
-  if (shellName === "bash") {
-    return ":";
   }
   return ":";
 }
@@ -453,7 +441,7 @@ async function runShell(opts: {
   cwd: string;
   env: Record<string, string | undefined>;
   timeoutMs: number;
-}): Promise<{ status: number | null }> {
+}): Promise<number | null> {
   return await new Promise((resolve) => {
     const child = spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
       cwd: opts.cwd,
@@ -475,7 +463,7 @@ async function runShell(opts: {
         // Broker admission can outlive the capture deadline; cancel the pending child too.
         child.kill("SIGKILL");
       }
-      resolve({ status });
+      resolve(status);
     };
     child.once("spawn", () => {
       if (settled && child.pid) {

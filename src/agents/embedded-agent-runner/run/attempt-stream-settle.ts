@@ -1,7 +1,3 @@
-/**
- * Prepares transport before streaming and settles the completed stream afterward.
- * It may assume session runtime ownership and provider inputs are established.
- */
 import {
   isAnthropicServerToolClearingEnabled,
   resolveCompactionReplayEligibility,
@@ -58,15 +54,8 @@ import {
   findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
 } from "./attempt-context-engine-helpers.js";
-import {
-  resolveAttemptStreamAuthProfileId,
-  resolveAttemptToolPolicyMessageProvider,
-} from "./attempt-run-decisions.js";
 import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
-import {
-  flushSessionManagerTranscript,
-  normalizeCompactionRecoveryTranscriptTail,
-} from "./attempt-transcript-helpers.js";
+import { normalizeCompactionRecoveryTranscriptTail } from "./attempt-transcript-helpers.js";
 import {
   hasActiveCompactionRetryWork,
   waitForCompactionRetryWithAggregateTimeout,
@@ -77,9 +66,6 @@ import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wra
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
-/**
- * Settles async tools and compaction, then snapshots the completed stream.
- */
 type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSession>;
 type PromptCacheRetention = Parameters<typeof buildContextEnginePromptCacheInfo>[0]["retention"];
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
@@ -140,39 +126,23 @@ export async function settleEmbeddedAttemptStream(input: {
 
   try {
     if (
-      await shouldWaitForCompletionRequiredAsyncTasks({
+      shouldWaitForCompletionRequiredAsyncTasks({
         sessionKey: attempt.sessionKey,
         toolMetas: subscription.toolMetas,
         yieldDetected: state.yieldAborted,
         abortSignal: input.runAbortSignal,
       })
     ) {
-      const getAsyncStartedToolMetas = () =>
-        subscription.toolMetas
-          .filter(
-            (
-              entry,
-            ): entry is {
-              toolName: string;
-              asyncStarted?: boolean;
-              asyncTaskRunId?: string;
-              asyncTaskId?: string;
-            } => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
-          )
-          .map((entry) => ({
-            toolName: entry.toolName,
-            asyncStarted: entry.asyncStarted,
-            asyncTaskRunId: entry.asyncTaskRunId,
-            asyncTaskId: entry.asyncTaskId,
-          }));
-      const getAsyncTaskDeadlineAtMs = () => {
-        const deadlineAtMs = input.getRunAbortDeadlineAtMs();
-        return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
-      };
       const asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
-        getToolMetas: getAsyncStartedToolMetas,
+        getToolMetas: () =>
+          subscription.toolMetas.filter(
+            (entry) => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
+          ),
         sessionKey: attempt.sessionKey,
-        getDeadlineAtMs: getAsyncTaskDeadlineAtMs,
+        getDeadlineAtMs: () => {
+          const deadlineAtMs = input.getRunAbortDeadlineAtMs();
+          return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
+        },
         abortSignal: input.runAbortSignal,
       });
       // An aborted run legitimately leaves async tasks unfinished; stamping a
@@ -393,7 +363,7 @@ export async function settleEmbeddedAttemptStream(input: {
         }
 
         if (input.shouldFlushForContextEngine) {
-          flushSessionManagerTranscript(sessionManager);
+          sessionManager.flushPendingPersistence();
         }
       }),
     );
@@ -430,10 +400,8 @@ export async function settleEmbeddedAttemptStream(input: {
   };
 }
 
-/**
- * Selects and configures the provider transport for one embedded attempt.
- */
 export async function prepareEmbeddedAttemptTransport(input: {
+  assertCronRootCurrent?: () => void;
   attempt: EmbeddedRunAttemptParams;
   session: AgentSession;
   settingsManager: SettingsManager;
@@ -456,10 +424,16 @@ export async function prepareEmbeddedAttemptTransport(input: {
 }) {
   const attempt = input.attempt;
   const session = input.session;
-  const assertRunCurrent = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedCurrent = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
     input.abortSignal,
   );
+  const assertRunCurrent = input.assertCronRootCurrent
+    ? () => {
+        assertAdmittedCurrent?.();
+        input.assertCronRootCurrent?.();
+      }
+    : assertAdmittedCurrent;
   // Rebuild each turn from the session's original stream base so prior-turn
   // wrappers do not pin us to stale provider/API transport behavior.
   const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
@@ -552,7 +526,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedApiKey: attempt.resolvedApiKey,
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
-    authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+    authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
   });
@@ -596,7 +570,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,
-    messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
+    messageProvider: attempt.messageProvider ?? attempt.messageChannel,
     agentAccountId: attempt.agentAccountId,
     groupId: attempt.groupId,
     groupChannel: attempt.groupChannel,

@@ -1,13 +1,8 @@
 import type { SerializedDurableMessagePayloadOutcome } from "../../channels/message/runtime.js";
 import type { projectOutboundPayloadPlanForJson } from "../../infra/outbound/payloads.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
-import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
-import type {
-  EmbeddedAgentRunMeta,
-  EmbeddedAgentRunResult,
-} from "../embedded-agent-runner/types.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
 
-/** Aggregate delivery status for an agent command result. */
 export type AgentCommandDeliveryStatus = {
   requested: true;
   attempted: boolean;
@@ -23,24 +18,23 @@ export type AgentCommandDeliveryStatus = {
   payloadOutcomes?: SerializedDurableMessagePayloadOutcome[];
 };
 
-/** Agent command result after payload normalization and optional delivery. */
 export type AgentCommandDeliveryResult = Pick<
   EmbeddedAgentRunResult,
   | "didDeliverSourceReplyViaMessageTool"
   | "sourceReplyDelivered"
   | "sourceReplyDeliveryState"
   | "messagingToolSourceReplyPayloads"
+  | "meta"
+  | "didSendViaMessagingTool"
+  | "messagingToolSentTexts"
+  | "messagingToolSentMediaUrls"
+  | "messagingToolSentTargets"
+  | "acceptedSessionSpawns"
+  | "requesterContinuationSettled"
+  | "successfulCronAdds"
 > & {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
-  meta: EmbeddedAgentRunMeta;
-  didSendViaMessagingTool?: boolean;
-  messagingToolSentTexts?: string[];
-  messagingToolSentMediaUrls?: string[];
-  messagingToolSentTargets?: MessagingToolSend[];
   didSendDeterministicApprovalPrompt?: true;
-  acceptedSessionSpawns?: NonNullable<EmbeddedAgentRunResult["acceptedSessionSpawns"]>;
-  requesterContinuationSettled?: true;
-  successfulCronAdds?: number;
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
 };

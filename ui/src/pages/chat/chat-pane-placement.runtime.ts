@@ -75,12 +75,11 @@ async function selectChatPanePlacementTarget(params: {
 
 export async function changeChatPanePlacement(params: {
   client: GatewayBrowserClient | null;
-  connectionGeneration: number;
   gatewaySnapshot: ApplicationGatewaySnapshot;
   mode: "move" | "recover";
   pendingKey: string | null;
   row: GatewaySessionRow;
-  isCurrent: (client: GatewayBrowserClient, generation: number) => boolean;
+  isCurrent: () => boolean;
   currentRow: () => GatewaySessionRow | undefined;
   onPendingChange: (key: string | null) => void;
   publishError: (error: unknown) => void;
@@ -139,7 +138,7 @@ export async function changeChatPanePlacement(params: {
   if (!target) {
     return;
   }
-  if (!params.isCurrent(client, params.connectionGeneration)) {
+  if (!params.isCurrent()) {
     params.publishError(t("sessionsView.actionUnavailable"));
     return;
   }
@@ -199,16 +198,16 @@ export async function changeChatPanePlacement(params: {
           : { deviceId: target.deviceId }),
       });
     }
-    if (params.isCurrent(client, params.connectionGeneration)) {
+    if (params.isCurrent()) {
       const outcome = await params.reconcileMutation(agentId);
-      if (outcome.status === "failed" && params.isCurrent(client, params.connectionGeneration)) {
+      if (outcome.status === "failed" && params.isCurrent()) {
         params.publishError(outcome.error);
       }
     }
   } catch (error) {
-    if (params.isCurrent(client, params.connectionGeneration)) {
+    if (params.isCurrent()) {
       await params.reconcileMutation(agentId).catch(() => undefined);
-      if (params.isCurrent(client, params.connectionGeneration)) {
+      if (params.isCurrent()) {
         params.publishError(error);
       }
     }
@@ -220,19 +219,17 @@ export async function changeChatPanePlacement(params: {
 
 export async function reclaimChatPanePlacement(params: {
   client: GatewayBrowserClient | null;
-  connectionGeneration: number;
   gatewaySnapshot: ApplicationGatewaySnapshot;
   reclaimingKey: string | null;
   placementStartup: ApplicationPlacementStartup;
   row: GatewaySessionRow;
-  isCurrent: (client: GatewayBrowserClient, generation: number) => boolean;
+  isCurrent: () => boolean;
   onReclaimingChange: (reclaimingKey: string | null) => void;
   publishError: (error: unknown) => void;
   reconcileMutation: SessionCapability["reconcileMutation"];
   requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
-  const connectionGeneration = params.connectionGeneration;
   const action = resolveCloudWorkerStopAction(params.row.placement);
   const reclaiming = params.reclaimingKey === params.row.key;
   const placement = params.row.placement;
@@ -266,7 +263,7 @@ export async function reclaimChatPanePlacement(params: {
   if (!confirmed) {
     return;
   }
-  if (!params.isCurrent(client, connectionGeneration)) {
+  if (!params.isCurrent()) {
     params.publishError(t("sessionsView.actionUnavailable"));
     return;
   }
@@ -281,14 +278,14 @@ export async function reclaimChatPanePlacement(params: {
       },
       params.placementStartup,
     );
-    if (params.isCurrent(client, connectionGeneration)) {
+    if (params.isCurrent()) {
       const outcome = await params.reconcileMutation(agentId);
-      if (outcome.status === "failed" && params.isCurrent(client, params.connectionGeneration)) {
+      if (outcome.status === "failed" && params.isCurrent()) {
         params.publishError(outcome.error);
       }
     }
   } catch (error) {
-    if (params.isCurrent(client, connectionGeneration)) {
+    if (params.isCurrent()) {
       params.publishError(error);
     }
   } finally {

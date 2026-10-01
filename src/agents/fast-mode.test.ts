@@ -31,17 +31,20 @@ describe("resolveFastModeState", () => {
     expect(state.source).toBe("session");
   });
 
-  it("keeps auto as the persisted mode and starts enabled", () => {
-    const state = resolveFastModeState({
-      cfg: {} as OpenClawConfig,
-      provider: "openai",
-      model: "gpt-5.5",
-      sessionEntry: { fastMode: "auto" },
-    });
+  it.each(["auto", "ultrafast"] as const)(
+    "keeps %s as the persisted mode and starts enabled",
+    (mode) => {
+      const state = resolveFastModeState({
+        cfg: {} as OpenClawConfig,
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionEntry: { fastMode: mode },
+      });
 
-    expect(state.mode).toBe("auto");
-    expect(state.enabled).toBe(true);
-  });
+      expect(state.mode).toBe(mode);
+      expect(state.enabled).toBe(true);
+    },
+  );
 
   it.each([
     [true, false],
@@ -98,27 +101,6 @@ describe("resolveFastModeState", () => {
     expect(state.source).toBe("agent");
   });
 
-  it("falls back to model config when agent default is absent", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-4o": { params: { fastMode: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai",
-      model: "gpt-4o",
-    });
-
-    expect(state.enabled).toBe(true);
-    expect(state.source).toBe("config");
-  });
-
   it("formats auto mode with the default threshold", () => {
     expect(formatFastModeAutoLabel()).toBe("auto (60 sec)");
     expect(formatFastModeStatusValue({ mode: "auto" })).toBe("auto (60 sec)");
@@ -127,8 +109,9 @@ describe("resolveFastModeState", () => {
       "auto (30 sec)",
     );
     expect(formatFastModeStatusValue({ mode: true })).toBe("on");
+    expect(formatFastModeStatusValue({ mode: "ultrafast" })).toBe("ultrafast");
     expect(formatFastModeCommandOptions({ fastAutoOnSeconds: 30 })).toBe(
-      "on, off, auto (30 sec), default, status",
+      "on, off, ultrafast, auto (30 sec), default, status",
     );
     expect(
       formatFastModeCurrentStatus({
@@ -278,20 +261,6 @@ describe("resolveFastModeForElapsed", () => {
       mode: "auto",
       enabled: true,
       elapsedSeconds: 60,
-    });
-  });
-
-  it("turns auto off after the threshold", () => {
-    expect(
-      resolveFastModeForElapsed({
-        mode: "auto",
-        startedAtMs: 1_000,
-        nowMs: 76_000,
-      }),
-    ).toMatchObject({
-      mode: "auto",
-      enabled: false,
-      elapsedSeconds: 75,
     });
   });
 

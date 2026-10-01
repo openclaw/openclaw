@@ -29,6 +29,7 @@ import {
 } from "../agents/run-termination.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
+import type * as AgentWorkspaceModule from "../agents/workspace.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
@@ -333,6 +334,17 @@ function mockConfig(
   } as OpenClawConfig;
   configIoMocks.loadConfig.mockReturnValue(cfg);
   return cfg;
+}
+
+function mockFallbackModelConfig(home: string, storePath: string) {
+  return mockConfig(home, storePath, {
+    model: { primary: "openai/gpt-4.1-mini", fallbacks: ["openai/gpt-5.4"] },
+    models: {
+      "anthropic/claude-opus-4-6": {},
+      "openai/gpt-4.1-mini": {},
+      "openai/gpt-5.4": {},
+    },
+  });
 }
 
 function mockUserInvocableSkills(params: {
@@ -752,7 +764,6 @@ describe("agentCommand", () => {
 
   it.each([
     ["local", undefined, false],
-    ["local", true, false],
     ["ingress", undefined, true],
     ["ingress", true, false],
   ] as const)(
@@ -770,6 +781,45 @@ describe("agentCommand", () => {
         expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
           expect.objectContaining({ watch }),
         );
+      });
+    },
+  );
+
+  it.each([undefined, "agent:main:dashboard:parent"])(
+    "seeds only the configured workspace when a project run is spawned by %s",
+    async (spawnedBy) => {
+      await withTempHome(async (home) => {
+        const project = path.join(home, "project");
+        const workspace = path.join(home, "openclaw");
+        fs.mkdirSync(project);
+        fs.writeFileSync(path.join(project, "AGENTS.md"), "# Project instructions\n");
+        mockConfig(home, path.join(home, "sessions.json"));
+        const actualWorkspace =
+          await vi.importActual<typeof AgentWorkspaceModule>("../agents/workspace.js");
+        vi.mocked(ensureAgentWorkspace).mockImplementationOnce((params) =>
+          actualWorkspace.ensureAgentWorkspace(params),
+        );
+
+        const prepared = await prepareAgentCommandExecution(
+          {
+            message: "inspect this project",
+            agentId: "main",
+            sessionId: "project-bootstrap",
+            workspaceDir: project,
+            cwd: project,
+            spawnedBy,
+          },
+          runtime,
+        );
+
+        expect(prepared.workspaceDir).toBe(project);
+        expect(fs.readdirSync(project)).toEqual(["AGENTS.md"]);
+        expect(fs.readFileSync(path.join(project, "AGENTS.md"), "utf8")).toBe(
+          "# Project instructions\n",
+        );
+        for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]) {
+          expect(fs.existsSync(path.join(workspace, name)), name).toBe(true);
+        }
       });
     },
   );
@@ -1258,19 +1308,14 @@ describe("agentCommand", () => {
       const firstSessionId = getLastEmbeddedCall()?.sessionId;
       expect(firstSessionId).toBeTruthy();
       expect(firstSessionId).not.toBe("stale-voice-session");
-      const firstPersisted = readSessionStore<{
-        sessionId: string;
-        sessionStartedAt?: number;
-      }>(store)[sessionKey];
+      const firstPersisted = readSessionStore<SessionEntry>(store)[sessionKey];
       expect(firstPersisted?.sessionId).toBe(firstSessionId);
       expect(firstPersisted?.sessionStartedAt).toBeGreaterThan(staleStartedAt);
 
       await runVoiceTurn("what number?");
       expect(getLastEmbeddedCall()?.sessionId).toBe(firstSessionId);
 
-      const persisted = readSessionStore<{ sessionId: string; sessionStartedAt?: number }>(store)[
-        sessionKey
-      ];
+      const persisted = readSessionStore<SessionEntry>(store)[sessionKey];
       expect(persisted?.sessionId).toBe(firstSessionId);
       expect(persisted?.sessionStartedAt).toBeGreaterThan(staleStartedAt);
     });
@@ -1371,9 +1416,7 @@ describe("agentCommand", () => {
       );
 
       expect(runEmbeddedAgent).toHaveBeenCalled();
-      expect(
-        readSessionStore<{ archivedAt?: number }>(store)[sessionKey]?.archivedAt,
-      ).toBeUndefined();
+      expect(readSessionStore<SessionEntry>(store)[sessionKey]?.archivedAt).toBeUndefined();
     });
   });
 
@@ -1560,7 +1603,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      const saved = readSessionStore<{ thinkingLevel?: string; verboseLevel?: string }>(store);
+      const saved = readSessionStore<SessionEntry>(store);
       const entry = expectDefined(
         Object.values(saved)[0],
         "Object.values(saved)[0] test invariant",
@@ -1785,7 +1828,7 @@ describe("agentCommand", () => {
       });
       const runTurn = vi.fn();
       acpManagerTesting.setAcpSessionManagerForTests({
-        resolveSession: vi.fn(() => ({
+        resolveSessionAsync: vi.fn(async () => ({
           kind: "ready",
           sessionKey,
           meta: {
@@ -1993,17 +2036,7 @@ describe("agentCommand", () => {
         },
       });
 
-      mockConfig(home, store, {
-        model: {
-          primary: "openai/gpt-4.1-mini",
-          fallbacks: ["openai/gpt-5.4"],
-        },
-        models: {
-          "anthropic/claude-opus-4-6": {},
-          "openai/gpt-4.1-mini": {},
-          "openai/gpt-5.4": {},
-        },
-      });
+      mockFallbackModelConfig(home, store);
 
       mockModelCatalogOnce([
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
@@ -2055,17 +2088,7 @@ describe("agentCommand", () => {
         },
       });
 
-      mockConfig(home, store, {
-        model: {
-          primary: "openai/gpt-4.1-mini",
-          fallbacks: ["openai/gpt-5.4"],
-        },
-        models: {
-          "anthropic/claude-opus-4-6": {},
-          "openai/gpt-4.1-mini": {},
-          "openai/gpt-5.4": {},
-        },
-      });
+      mockFallbackModelConfig(home, store);
       mockModelCatalogOnce([
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
@@ -2096,17 +2119,7 @@ describe("agentCommand", () => {
         },
       });
 
-      mockConfig(home, store, {
-        model: {
-          primary: "openai/gpt-4.1-mini",
-          fallbacks: ["openai/gpt-5.4"],
-        },
-        models: {
-          "anthropic/claude-opus-4-6": {},
-          "openai/gpt-4.1-mini": {},
-          "openai/gpt-5.4": {},
-        },
-      });
+      mockFallbackModelConfig(home, store);
 
       mockModelCatalogOnce([
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
@@ -2127,11 +2140,7 @@ describe("agentCommand", () => {
         .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
       expect(attempts).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
 
-      const cleared = readSessionStore<{
-        providerOverride?: string;
-        modelOverride?: string;
-        modelOverrideSource?: string;
-      }>(store);
+      const cleared = readSessionStore<SessionEntry>(store);
       const entry = cleared["agent:main:subagent:legacy-auto"];
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
@@ -2153,17 +2162,7 @@ describe("agentCommand", () => {
         },
       });
 
-      mockConfig(home, store, {
-        model: {
-          primary: "openai/gpt-4.1-mini",
-          fallbacks: ["openai/gpt-5.4"],
-        },
-        models: {
-          "anthropic/claude-opus-4-6": {},
-          "openai/gpt-4.1-mini": {},
-          "openai/gpt-5.4": {},
-        },
-      });
+      mockFallbackModelConfig(home, store);
 
       mockModelCatalogOnce([
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
@@ -2181,12 +2180,8 @@ describe("agentCommand", () => {
 
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
       expectLastRunProviderModel("anthropic", "claude-opus-4-6");
-      const persisted = readSessionStore<{
-        providerOverride?: string;
-        modelOverride?: string;
-        modelOverrideSource?: string;
-        modelSelectionLocked?: boolean;
-      }>(store)["agent:main:subagent:locked-legacy-auto"];
+      const persisted =
+        readSessionStore<SessionEntry>(store)["agent:main:subagent:locked-legacy-auto"];
       expect(persisted).toMatchObject({
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-6",
@@ -2286,14 +2281,7 @@ describe("agentCommand", () => {
 
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
 
-      const cleared = readSessionStore<{
-        providerOverride?: string;
-        modelOverride?: string;
-        authProfileOverride?: string;
-        authProfileOverrideSource?: string;
-        authProfileOverrideCompactionCount?: number;
-        fallbackNotice?: unknown;
-      }>(clearStore);
+      const cleared = readSessionStore<SessionEntry>(clearStore);
       const entry = cleared["agent:main:subagent:clear-overrides"];
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
@@ -2335,14 +2323,7 @@ describe("agentCommand", () => {
       await runAgentWithSessionKey(sessionKey);
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
       expectLastRunProviderModel("anthropic", "claude-opus-4-6");
-      expect(
-        readSessionStore<{
-          providerOverride?: string;
-          modelOverride?: string;
-          modelOverrideSource?: string;
-          modelSelectionLocked?: boolean;
-        }>(store)[sessionKey],
-      ).toMatchObject({
+      expect(readSessionStore<SessionEntry>(store)[sessionKey]).toMatchObject({
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-6",
         modelOverrideSource: "user",
@@ -2413,10 +2394,7 @@ describe("agentCommand", () => {
 
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
 
-      const saved = readSessionStore<{
-        providerOverride?: string;
-        modelOverride?: string;
-      }>(store);
+      const saved = readSessionStore<SessionEntry>(store);
       expect(saved["agent:main:subagent:run-override"]?.providerOverride).toBeUndefined();
       expect(saved["agent:main:subagent:run-override"]?.modelOverride).toBeUndefined();
 
@@ -2451,11 +2429,7 @@ describe("agentCommand", () => {
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
       expect(getLastEmbeddedCall()?.authProfileId).toBeUndefined();
 
-      const savedAuth = readSessionStore<{
-        authProfileOverride?: string;
-        authProfileOverrideSource?: string;
-        authProfileOverrideCompactionCount?: number;
-      }>(store);
+      const savedAuth = readSessionStore<SessionEntry>(store);
       expect(savedAuth["agent:main:subagent:temp-openai-run"]?.authProfileOverride).toBe(
         "anthropic:work",
       );

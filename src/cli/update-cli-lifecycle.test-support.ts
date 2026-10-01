@@ -146,11 +146,17 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
   } = fixture;
   let tempHome: TempHomeEnv | undefined;
 
+  const invocationCwd = process.cwd();
   beforeEach(async () => {
+    // Default install roots use cwd; artifact admission must own the fixture, not the checkout.
+    process.chdir(path.join(fixtureRoot, "checkout"));
     fixtureStateDatabases.clear();
     process.exitCode = undefined;
     const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
     tempHome = await createTempHomeEnv("openclaw-update-cli-home-");
+    // Original-state capture must discover this simulated install's plugins.
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(fixtureRoot, "checkout", "extensions");
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     commandTransport.npmPrefix = tempDirs.make("openclaw-cli-npm-prefix-");
     process.env.NPM_CONFIG_GLOBALCONFIG = globalNpmConfig;
     process.env.npm_config_globalconfig = globalNpmConfig;
@@ -386,7 +392,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
         ? { status: "running", pid: gatewayFixturePid, state: "running" }
         : { status: "stopped", state: "stopped", missingUnit: true },
     );
-    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 1]));
     inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "busy",
@@ -435,6 +441,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    process.chdir(invocationCwd);
     process.exitCode = undefined;
     // Relocated stores can retain workers whose coordinator lives in this temporary home.
     await closeOpenClawStateDatabaseAsync();

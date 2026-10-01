@@ -29,7 +29,7 @@ function discoveryDetail(
   return {
     plugin: {
       id: plugin.catalogId,
-      catalog: { name: plugin.name, official: true, categories: [] },
+      catalog: { name: plugin.name, official: true, categories: ["productivity"] },
       local: {
         present: plugin.installed,
         installed: plugin.installed,
@@ -113,7 +113,17 @@ describe("PluginsPage routing", () => {
         method === "plugins.catalog.get"
           ? detail
           : method === "plugins.inspect"
-            ? createInspectResult()
+            ? createInspectResult({
+                mcpAuth: [{ serverName: "account", state: "unauthenticated" }],
+                credentials: [
+                  {
+                    path: ["plugins", "entries", "whatsapp", "config", "apiKey"],
+                    label: "API key",
+                    envVars: ["SERVICE_KEY"],
+                    status: "missing",
+                  },
+                ],
+              })
             : inventory,
       );
       const harness = createGateway(client);
@@ -130,6 +140,17 @@ describe("PluginsPage routing", () => {
           search: "",
         }),
       );
+      await vi.waitFor(() => expect(page.querySelector("h1")).not.toBeNull());
+      if (installed) {
+        await vi.waitFor(() =>
+          expect(page.querySelector('[aria-label="Connect account"]')).not.toBeNull(),
+        );
+        expect(page.textContent).toContain("Credentials");
+      } else {
+        expect(page.textContent).not.toContain("Accounts");
+        expect(page.textContent).not.toContain("Credentials");
+        expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);
+      }
       expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
     },
@@ -542,7 +563,18 @@ describe("PluginsPage routing", () => {
       };
       const { client, request } = createClient(async (method, params) => {
         if (method === "plugins.catalog.browse") {
-          return { items: asNullableRecord(params)?.intent === "all" ? [offered.plugin] : [] };
+          return {
+            items: asNullableRecord(params)?.intent === "all" ? [offered.plugin] : [],
+            categories: [
+              {
+                slug: "productivity",
+                label: "Productivity",
+                description: "Work tools",
+                icon: "checkSquare",
+                order: 1,
+              },
+            ],
+          };
         }
         if (method === "plugins.catalog.categories") {
           return { categories: [] };
@@ -596,6 +628,15 @@ describe("PluginsPage routing", () => {
             asNullableRecord(params)?.intent === "all"
               ? details.map((detail) => detail.plugin)
               : [],
+          categories: [
+            {
+              slug: "productivity",
+              label: "Productivity",
+              description: "Work tools",
+              icon: "checkSquare",
+              order: 1,
+            },
+          ],
         };
       }
       if (method === "plugins.catalog.categories") {

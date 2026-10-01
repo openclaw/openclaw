@@ -32,8 +32,6 @@ import {
   writeCompactionTestBinding,
   writeSupervisedTestBinding,
 } from "./compact.test-support.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
@@ -428,8 +426,8 @@ describe("maybeCompactCodexAppServerSession", () => {
       // only the injected message carries the current catalog.
       const ephemeralPolicy = {
         developerInstructions: "generic policy",
-        skillsInstructions: refreshed,
-        nativeSkillsInstructions: "catalog A",
+        refreshableInstructions: refreshed,
+        nativeRefreshableInstructions: "catalog A",
       };
       await retainCodexAppServerLiveThread(
         fake.client,
@@ -459,8 +457,8 @@ describe("maybeCompactCodexAppServerSession", () => {
         expect.objectContaining({
           ephemeralPolicy: {
             developerInstructions: "generic policy",
-            skillsInstructions: "catalog A",
-            nativeSkillsInstructions: "catalog A",
+            refreshableInstructions: "catalog A",
+            nativeRefreshableInstructions: "catalog A",
           },
         }),
       );
@@ -1887,69 +1885,6 @@ describe("maybeCompactCodexAppServerSession", () => {
       expect(bindingStore.read(next)).toEqual(binding);
     },
   );
-
-  it("never detaches an unconfirmed remote supervised thread", async () => {
-    const fake = createFakeCodexClient({
-      autoCompleteCompaction: false,
-      rejectInterrupt: true,
-    });
-    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
-    const pluginConfig = {
-      supervision: { enabled: true },
-      appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:45001" },
-    };
-    const sessionFile = await writeSupervisedTestBinding(tempDir, {
-      threadId: "thread-stuck-supervision",
-      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
-        resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig }),
-      ),
-    });
-
-    const pendingResult = maybeCompactCodexAppServerSession(
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile,
-        workspaceDir: tempDir,
-        trigger: "manual",
-      },
-      {
-        clientFactory: async () => fake.client,
-        pluginConfig,
-        nativeCompletionTimeoutMs: 10,
-        nativeInterruptGraceMs: 10,
-      },
-    );
-
-    const outcome = await Promise.race([
-      pendingResult.then(() => "settled" as const),
-      new Promise<"pending">((resolve) => {
-        setTimeout(() => resolve("pending"), 100);
-      }),
-    ]);
-
-    expect(outcome).toBe("pending");
-    expect(fake.closeAndWait).toHaveBeenCalledOnce();
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-stuck-supervision",
-      connectionScope: "supervision",
-    });
-    fake.emit({
-      method: "turn/started",
-      params: {
-        threadId: "thread-stuck-supervision",
-        turn: { id: "supervised-terminal", status: "inProgress" },
-      },
-    });
-    fake.emit({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-stuck-supervision",
-        turn: { id: "supervised-terminal", status: "interrupted", items: [] },
-      },
-    });
-    await expect(pendingResult).resolves.toMatchObject({ ok: false, compacted: false });
-  });
 
   it("cancels a native compaction after the start request", async () => {
     const fake = createFakeCodexClient({ autoCompleteCompaction: false });

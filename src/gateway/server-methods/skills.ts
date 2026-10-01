@@ -1,14 +1,9 @@
-// Gateway RPC handlers for skill discovery, install/update, and proposal workflows.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
-  buildClawHubTrustErrorDetails,
   ErrorCodes,
   errorShape,
-  type SkillsInstallParams,
-  type SkillsUpdateParams,
   validateSkillsBinsParams,
   validateSkillsDetailParams,
-  validateSkillsInstallParams,
   validateSkillsProposalActionParams,
   validateSkillsProposalCreateParams,
   validateSkillsProposalDecisionParams,
@@ -31,17 +26,13 @@ import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
 import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
-  installSkillFromClawHub,
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
 } from "../../skills/lifecycle/clawhub.js";
-import { installSkill } from "../../skills/lifecycle/install.js";
-import { installUploadedSkillArchive } from "../../skills/lifecycle/upload-install.js";
 import { prepareWorkspaceSkillEntries } from "../../skills/loading/workspace-skill-loader.js";
 import {
   collectClawHubVerdictTargets,
@@ -67,7 +58,9 @@ import {
   listWritableWorkshopSkillSummaries,
   readWritableWorkshopSkill,
 } from "../../skills/workshop/workspace-skill-read.js";
+import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { skillsCuratorHandlers } from "./skills-curator.js";
+import { handleSkillsInstall } from "./skills-install.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
 import { skillProposalHistoryHandlers } from "./skills-proposal-history.js";
 import { buildRemoteAwareWorkspaceSkillStatus, handleSkillsStatus } from "./skills-status.js";
@@ -78,13 +71,8 @@ import {
   SKILL_PROPOSAL_RESPONSE_HANDLED,
   type ResolvedSkillsWorkspace,
 } from "./skills-workspace-handler.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-type ClawHubInstallResult = Awaited<ReturnType<typeof installSkillFromClawHub>>;
-type ClawHubInstallParams = Parameters<typeof installSkillFromClawHub>[0];
-
-const clawHubInstallsInFlight = new Map<string, Promise<ClawHubInstallResult>>();
 
 function proposalWorkspaceOptions(resolved: ResolvedSkillsWorkspace) {
   return {
@@ -116,26 +104,6 @@ function projectGatewaySkillProposalReadResult(proposal: SkillProposalReadResult
   };
 }
 
-function installClawHubSkillDeduped(params: ClawHubInstallParams): Promise<ClawHubInstallResult> {
-  // A WebSocket can disappear after the request reached the Gateway. Keep one
-  // exact install per workspace in flight so a reconnect can safely reattach.
-  const key = JSON.stringify([
-    params.workspaceDir,
-    params.slug,
-    params.version ?? null,
-    params.force ?? false,
-  ]);
-  return getOrCreatePromise(clawHubInstallsInFlight, key, () => installSkillFromClawHub(params), {
-    evictOnSettled: true,
-  });
-}
-
-function collectClawHubTrustWarnings(results: Array<{ warning?: string }>): string[] {
-  return results
-    .map((result) => normalizeOptionalString(result.warning))
-    .filter((warning): warning is string => Boolean(warning));
-}
-
 function buildRevisionAgentInstruction(proposal: SkillProposalReadResult) {
   return [
     `Revise Skill Workshop proposal \`${proposal.record.id}\` (${resolveSkillProposalName(proposal.record.kind, proposal.record.target)}).`,
@@ -148,49 +116,6 @@ function buildRevisionAgentInstruction(proposal: SkillProposalReadResult) {
   ].join("\n");
 }
 
-async function forwardSkillWorkshopRevisionToChatSend(
-  opts: GatewayRequestHandlerOptions,
-  params: {
-    agentId: string;
-    idempotencyKey: string;
-    instructions: string;
-    proposal: NonNullable<Awaited<ReturnType<typeof inspectSkillProposal>>>;
-    expectedRevisionHash: string;
-    workspaceDir: string;
-    sessionId?: string;
-    sessionKey: string;
-    targetAgentId?: string;
-  },
-): Promise<void> {
-  const { handleChatSendWithSkillWorkshopProposalRevision } =
-    await import("./chat-send-handler.js");
-  const chatParams = {
-    sessionKey: params.sessionKey,
-    agentId: params.targetAgentId ?? params.agentId,
-    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-    message: params.instructions,
-    deliver: false,
-    queueMode: "followup" as const,
-    systemProvenanceReceipt: buildRevisionAgentInstruction(params.proposal),
-    suppressCommandInterpretation: true,
-    idempotencyKey: params.idempotencyKey,
-  };
-  await handleChatSendWithSkillWorkshopProposalRevision(
-    {
-      ...opts,
-      req: { ...opts.req, method: "chat.send", params: chatParams },
-      params: chatParams,
-    },
-    {
-      agentId: params.agentId,
-      workspaceDir: params.workspaceDir,
-      proposalId: params.proposal.record.id,
-      expectedRevisionHash: params.expectedRevisionHash,
-    },
-  );
-}
-
-/** Gateway request handlers for skill status, catalogs, installs, updates, and workshop proposals. */
 export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsCuratorHandlers,
   ...skillsLibraryHandlers,
@@ -300,8 +225,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     try {
       const results = await searchSkillsFromClawHub({
-        query: (params as { query?: string }).query,
-        limit: (params as { limit?: number }).limit,
+        query: params.query,
+        limit: params.limit,
       });
       registerClawHubCatalogIconUrls(results.map((result) => result.icon ?? undefined));
       respond(true, { results }, undefined);
@@ -316,7 +241,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     try {
       // Same reference grammar as skills.install, so a client cannot review one publisher's
       // card and then install another's.
-      const requested = parseRequestedClawHubSkillRef((params as { slug: string }).slug);
+      const requested = parseRequestedClawHubSkillRef(params.slug);
       if (requested.requestedReference) {
         // ClawHub has no source-qualified read endpoint, so reading this by bare slug would
         // show a same-slug registry skill while install resolves the external artifact.
@@ -415,9 +340,15 @@ export const skillsHandlers: GatewayRequestHandlers = {
   "skills.proposals.create": defineSkillsProposalWorkspaceHandler(
     "skills.proposals.create",
     validateSkillsProposalCreateParams,
-    (parsedParams, resolved) =>
+    (parsedParams, resolved, options) =>
       proposeCreateSkill({
         ...proposalWorkspaceOptions(resolved),
+        assertCommitAllowed: captureGatewayClientUploadCommitGuard({
+          method: "skills.proposals.create",
+          requestParams: parsedParams,
+          client: options.client,
+          context: options.context,
+        }),
         name: parsedParams.name,
         description: parsedParams.description,
         content: parsedParams.content,
@@ -430,9 +361,15 @@ export const skillsHandlers: GatewayRequestHandlers = {
   "skills.proposals.update": defineSkillsProposalWorkspaceHandler(
     "skills.proposals.update",
     validateSkillsProposalUpdateParams,
-    (parsedParams, resolved) =>
+    (parsedParams, resolved, options) =>
       proposeUpdateSkill({
         ...proposalWorkspaceOptions(resolved),
+        assertCommitAllowed: captureGatewayClientUploadCommitGuard({
+          method: "skills.proposals.update",
+          requestParams: parsedParams,
+          client: options.client,
+          context: options.context,
+        }),
         skillName: parsedParams.skillName,
         description: parsedParams.description,
         content: parsedParams.content,
@@ -445,9 +382,15 @@ export const skillsHandlers: GatewayRequestHandlers = {
   "skills.proposals.revise": defineSkillsProposalWorkspaceHandler(
     "skills.proposals.revise",
     validateSkillsProposalReviseParams,
-    (parsedParams, resolved) =>
+    (parsedParams, resolved, options) =>
       reviseSkillProposal({
         ...proposalWorkspaceOptions(resolved),
+        assertCommitAllowed: captureGatewayClientUploadCommitGuard({
+          method: "skills.proposals.revise",
+          requestParams: parsedParams,
+          client: options.client,
+          context: options.context,
+        }),
         proposalId: parsedParams.proposalId,
         expectedRevisionHash: parsedParams.expectedRevisionHash,
         correlationId: parsedParams.correlationId,
@@ -474,19 +417,37 @@ export const skillsHandlers: GatewayRequestHandlers = {
         throw new Error(`Skill proposal is not pending: ${parsedParams.proposalId}`);
       }
       assertExpectedRevisionHash(proposal.revisionHash, expectedRevisionHash);
-      await forwardSkillWorkshopRevisionToChatSend(opts, {
-        agentId: resolved.agentId,
-        expectedRevisionHash,
-        idempotencyKey: parsedParams.idempotencyKey,
-        instructions: parsedParams.instructions,
-        proposal,
-        workspaceDir: resolved.workspaceDir,
-        sessionId: parsedParams.sessionId,
-        sessionKey: parsedParams.sessionKey,
-        targetAgentId: parsedParams.targetAgentId
-          ? normalizeAgentId(parsedParams.targetAgentId)
-          : undefined,
-      });
+      const { sessionKey, sessionId, instructions, idempotencyKey } = parsedParams;
+      const { agentId, workspaceDir } = resolved;
+      const targetAgentId = parsedParams.targetAgentId
+        ? normalizeAgentId(parsedParams.targetAgentId)
+        : agentId;
+      const { handleChatSendWithSkillWorkshopProposalRevision } =
+        await import("./chat-send-handler.js");
+      const chatParams = {
+        sessionKey,
+        agentId: targetAgentId,
+        ...(sessionId ? { sessionId } : {}),
+        message: instructions,
+        deliver: false,
+        queueMode: "followup" as const,
+        systemProvenanceReceipt: buildRevisionAgentInstruction(proposal),
+        suppressCommandInterpretation: true,
+        idempotencyKey,
+      };
+      await handleChatSendWithSkillWorkshopProposalRevision(
+        {
+          ...opts,
+          req: { ...opts.req, method: "chat.send", params: chatParams },
+          params: chatParams,
+        },
+        {
+          agentId,
+          workspaceDir,
+          proposalId: proposal.record.id,
+          expectedRevisionHash,
+        },
+      );
       return SKILL_PROPOSAL_RESPONSE_HANDLED;
     },
   ),
@@ -526,103 +487,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
         reason: parsedParams.reason,
       }).then(projectGatewaySkillProposalRecord),
   ),
-  "skills.install": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateSkillsInstallParams, "skills.install", respond)) {
-      return;
-    }
-    const p: SkillsInstallParams = params;
-    const resolved = resolveSkillsAgentWorkspace(params, context);
-    if (!resolved.ok) {
-      respond(false, undefined, resolved.error);
-      return;
-    }
-    const cfg = resolved.cfg;
-    const workspaceDirRaw = resolved.workspaceDir;
-    // Skill installs are intentionally routed by source; each source owns its
-    // validation, provenance checks, and result payload shape.
-    if ("source" in p && p.source === "clawhub") {
-      const result = await installClawHubSkillDeduped({
-        workspaceDir: workspaceDirRaw,
-        slug: p.slug,
-        version: p.version,
-        force: Boolean(p.force),
-        logger: context.logGateway,
-        config: cfg,
-      });
-      const errorDetails = result.ok ? undefined : buildClawHubTrustErrorDetails(result);
-      respond(
-        result.ok,
-        result.ok
-          ? {
-              ok: true,
-              message: `Installed ${result.slug}@${result.version}`,
-              stdout: "",
-              stderr: "",
-              code: 0,
-              slug: result.slug,
-              version: result.version,
-              targetDir: result.targetDir,
-              ...(result.warning ? { warning: result.warning } : {}),
-            }
-          : result,
-        result.ok
-          ? undefined
-          : errorShape(
-              ErrorCodes.UNAVAILABLE,
-              result.error,
-              errorDetails ? { details: errorDetails } : undefined,
-            ),
-      );
-      return;
-    }
-    if ("source" in p && p.source === "upload") {
-      const result = await installUploadedSkillArchive({
-        uploadId: p.uploadId,
-        slug: p.slug,
-        force: Boolean(p.force),
-        sha256: p.sha256,
-        timeoutMs: p.timeoutMs,
-        workspaceDir: workspaceDirRaw,
-        config: cfg,
-        log: context.logGateway,
-      });
-      const errorCode =
-        !result.ok && result.errorKind === "invalid-request"
-          ? ErrorCodes.INVALID_REQUEST
-          : ErrorCodes.UNAVAILABLE;
-      const responseResult = result.ok
-        ? result
-        : {
-            ok: false,
-            error: result.error,
-            errorCode,
-          };
-      respond(
-        result.ok,
-        responseResult,
-        result.ok ? undefined : errorShape(errorCode, result.error),
-      );
-      return;
-    }
-    const result = await installSkill({
-      workspaceDir: workspaceDirRaw,
-      agentId: resolved.agentId,
-      skillName: p.name,
-      installId: p.installId,
-      timeoutMs: p.timeoutMs,
-      config: cfg,
-    });
-    respond(
-      result.ok,
-      result,
-      result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.message),
-    );
-  },
+  "skills.install": handleSkillsInstall,
   "skills.update": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSkillsUpdateParams, "skills.update", respond)) {
       return;
     }
-    const p: SkillsUpdateParams = params;
+    const p = params;
     if ("source" in p) {
       if (!p.slug && !p.all) {
         respond(
@@ -643,7 +513,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const resolved = resolveSkillsAgentWorkspace(params, context);
+      const resolved = resolveSkillsAgentWorkspace(p, context);
       if (!resolved.ok) {
         respond(false, undefined, resolved.error);
         return;
@@ -656,7 +526,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         config: resolved.cfg,
       });
       const errors = results.filter((result) => !result.ok);
-      const warnings = collectClawHubTrustWarnings(results);
+      const warnings = normalizeTrimmedStringList(results.map((result) => result.warning));
       respond(
         errors.length === 0,
         {

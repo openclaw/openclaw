@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -143,11 +144,8 @@ function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined
     return undefined;
   }
   const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
-  const tokens = estimateMessagesTokens([message]);
-  if (!Number.isFinite(tokens) || tokens <= 0) {
-    return undefined;
-  }
-  return Math.ceil(tokens);
+  const tokens = asPositiveFiniteNumber(estimateMessagesTokens([message]));
+  return tokens === undefined ? undefined : Math.ceil(tokens);
 }
 
 function resolveMemoryFlushModelFallbackOptions(
@@ -298,11 +296,7 @@ function deriveTranscriptUsageSnapshot(
   trailingMessages: AgentMessage[],
 ): SessionTranscriptUsageSnapshot | undefined {
   const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage });
-  const outputRaw = usage.output;
-  const outputTokens =
-    typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
-      ? outputRaw
-      : undefined;
+  const outputTokens = asPositiveFiniteNumber(usage.output);
   if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
     return undefined;
   }
@@ -631,7 +625,7 @@ export async function runSessionCompactionIfNeeded(params: {
 
   let entry = params.sessionEntry ?? params.sessionStore?.[params.sessionKey];
   if (!entry?.sessionId) {
-    return entry ?? params.sessionEntry;
+    return entry;
   }
 
   const runtimeParams = {
@@ -646,14 +640,11 @@ export async function runSessionCompactionIfNeeded(params: {
   const isCli = followupUsesCliRuntime(runtimeParams, runtimeId);
   const ownsNativeCompaction = followupOwnsNativeCompaction(runtimeParams, runtimeId);
   if (isCli || ownsNativeCompaction) {
-    return entry ?? params.sessionEntry;
+    return entry;
   }
   const isCodexRuntime = normalizeLowercaseStringOrEmpty(runtimeId) === "codex";
 
-  const compactionSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
-  if (!compactionSessionKey) {
-    return entry ?? params.sessionEntry;
-  }
+  const compactionSessionKey = params.sessionKey;
   const configuredAgentId = params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg);
   const compactionAgentId = isUnscopedSessionKeySentinel(compactionSessionKey)
     ? configuredAgentId
@@ -779,7 +770,7 @@ export async function runSessionCompactionIfNeeded(params: {
         `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
         `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
     );
-    return entry ?? params.sessionEntry;
+    return entry;
   }
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
   const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
@@ -836,7 +827,7 @@ export async function runSessionCompactionIfNeeded(params: {
     });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
-    return entry ?? params.sessionEntry;
+    return entry;
   }
 
   if (params.beforeCompaction) {
@@ -872,12 +863,7 @@ export async function runSessionCompactionIfNeeded(params: {
       logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
     }
   };
-  let startedCompactionNotice = false;
   let terminalCompactionNoticeSent = false;
-  const notifyStartCompaction = async () => {
-    startedCompactionNotice = true;
-    await notifyCompaction("start");
-  };
   const notifyTerminalCompaction = async (
     phase: "end" | "incomplete" | "skipped",
     text?: string,
@@ -931,7 +917,7 @@ export async function runSessionCompactionIfNeeded(params: {
     params.abortSignal,
   );
   try {
-    await notifyStartCompaction();
+    await notifyCompaction("start");
     assertActive();
     const result = await compactEmbeddedAgentSession(
       {
@@ -1055,7 +1041,7 @@ export async function runSessionCompactionIfNeeded(params: {
       if (result && isBenignCompactionSkipResult(result)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
-        return entry ?? params.sessionEntry;
+        return entry;
       }
       await notifyTerminalCompaction("incomplete");
       logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
@@ -1096,24 +1082,22 @@ export async function runSessionCompactionIfNeeded(params: {
     await notifyTerminalCompaction("end", serverNotice);
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
-    if (entry) {
-      const previousSessionId = params.followupRun.run.sessionId;
-      params.followupRun.run.sessionId = entry.sessionId;
-      params.onSessionIdChanged?.(entry.sessionId);
-      const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
-      if (queueKey) {
-        params.followupRun.run.sessionFile = queueKey;
-        refreshQueuedFollowupSession({
-          key: queueKey,
-          previousSessionId,
-          nextSessionId: entry.sessionId,
-          nextSessionFile: queueKey,
-        });
-      }
+    const previousSessionId = params.followupRun.run.sessionId;
+    params.followupRun.run.sessionId = entry.sessionId;
+    params.onSessionIdChanged?.(entry.sessionId);
+    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+    if (queueKey) {
+      params.followupRun.run.sessionFile = queueKey;
+      refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId,
+        nextSessionId: entry.sessionId,
+        nextSessionFile: queueKey,
+      });
     }
-    return entry ?? params.sessionEntry;
+    return entry;
   } catch (err) {
-    if (startedCompactionNotice && !terminalCompactionNoticeSent && !params.abortSignal?.aborted) {
+    if (!terminalCompactionNoticeSent && !params.abortSignal?.aborted) {
       await notifyCompaction("incomplete");
     }
     throw err;
@@ -1189,12 +1173,12 @@ export async function runMemoryFlushIfNeeded(params: {
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
   const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
   if (!canAttemptFlush) {
-    return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
+    return { sessionEntry: entry, outcome: "skipped" };
   }
 
   const flushRunId = crypto.randomUUID();
   let flushRunRegistered = false;
-  let activeSessionEntry = entry ?? params.sessionEntry;
+  let activeSessionEntry = entry;
   const recordFailure = (error: unknown) =>
     recordMemoryFlushFailure(error, params, activeSessionEntry);
   const contextWindowTokens = resolveFollowupContextTokens(params, runtimeId);
@@ -1245,17 +1229,14 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldCheckTranscriptSizeForForcedFlush = Boolean(
     entry && Number.isFinite(forceFlushTranscriptBytes) && forceFlushTranscriptBytes > 0,
   );
-  const shouldReadTurnTaint = Boolean(entry);
-  const shouldReadSessionLog =
-    shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush || shouldReadTurnTaint;
-  const sessionLogSnapshot = shouldReadSessionLog
+  const sessionLogSnapshot = entry
     ? readSessionLogSnapshot({
         agentId: params.followupRun.run.agentId,
         sessionId: params.followupRun.run.sessionId,
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
         storePath: params.storePath,
         includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
-        includeTurnTaint: shouldReadTurnTaint,
+        includeTurnTaint: true,
         includeUsage: shouldReadTranscript,
       })
     : undefined;
@@ -1326,14 +1307,8 @@ export async function runMemoryFlushIfNeeded(params: {
           promptTokenEstimate,
         )
       : undefined;
-  const tokenCountForFlush =
-    typeof projectedTokenCount === "number" &&
-    Number.isFinite(projectedTokenCount) &&
-    projectedTokenCount > 0
-      ? projectedTokenCount
-      : undefined;
+  const tokenCountForFlush = asPositiveFiniteNumber(projectedTokenCount);
 
-  // Diagnostic logging to understand why memory flush may not trigger.
   logVerbose(
     `memoryFlush check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForFlush ?? "undefined"} ` +
@@ -1357,14 +1332,14 @@ export async function runMemoryFlushIfNeeded(params: {
       !hasAlreadyFlushedForCurrentCompaction(entry));
 
   if (!shouldFlushMemory) {
-    return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
+    return { sessionEntry: entry, outcome: "skipped" };
   }
 
   logVerbose(
     `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold}`,
   );
 
-  activeSessionEntry = entry ?? params.sessionEntry;
+  activeSessionEntry = entry;
   params.replyOperation?.setPhase("memory_flushing");
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     activeSessionEntry?.systemPromptReport ??

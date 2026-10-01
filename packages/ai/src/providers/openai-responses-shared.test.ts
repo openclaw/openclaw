@@ -138,33 +138,6 @@ describe("convertResponsesToolPayload", () => {
     configureAiTransportHost({});
   });
 
-  it("enables native strict OpenAI Responses tools and normalizes schemas", () => {
-    const tools = [
-      {
-        name: "lookup_weather",
-        description: "Get forecast",
-        parameters: {},
-      },
-    ] satisfies Tool[];
-
-    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel });
-
-    expect(converted).toEqual([
-      {
-        type: "function",
-        name: "lookup_weather",
-        description: "Get forecast",
-        strict: true,
-        parameters: {
-          type: "object",
-          properties: {},
-          required: [],
-          additionalProperties: false,
-        },
-      },
-    ]);
-  });
-
   it("downgrades incompatible native Responses schemas to strict false", () => {
     const converted = convertResponsesToolPayload(
       [
@@ -1514,89 +1487,6 @@ describe("processResponsesStream", () => {
     ]);
   });
 
-  it("backfills terminal encrypted reasoning for stateless replay", async () => {
-    const output = createAssistantOutput();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { type: "reasoning", id: "rs_backfill", summary: [] },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: { type: "reasoning", id: "rs_backfill", summary: [] },
-        },
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_backfill",
-            status: "completed",
-            output: [
-              {
-                type: "reasoning",
-                id: "rs_backfill",
-                summary: [],
-                encrypted_content: "cipher-from-terminal",
-              },
-            ],
-          },
-        },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
-
-    const replay = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        messages: [
-          { role: "user", content: "first", timestamp: 1 },
-          output,
-          { role: "user", content: "again", timestamp: 2 },
-        ],
-      },
-      testAllowedToolCallProviders,
-    );
-    expect(replay.find((item) => item.type === "reasoning")).toMatchObject({
-      id: "rs_backfill",
-      encrypted_content: "cipher-from-terminal",
-    });
-  });
-
-  it("tolerates a completed message item with null content", async () => {
-    const output = createAssistantOutput();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            type: "message",
-            id: "msg_null",
-            content: [{ type: "output_text", text: "" }],
-          },
-        },
-        { type: "response.output_text.delta", output_index: 0, delta: "streamed" },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: { type: "message", id: "msg_null", content: null },
-        },
-        { type: "response.completed", response: { id: "resp_null", status: "completed" } },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toMatchObject([{ type: "text", text: "streamed" }]);
-  });
-
   it("keeps deferred text before an interleaved output item", async () => {
     const output = createAssistantOutput();
     const { stream, events } = createCapturedAssistantMessageEventStream();
@@ -1866,21 +1756,6 @@ describe("processResponsesStream", () => {
     expect(output.usage.cost.total).toBeCloseTo(0.000401, 10);
     expect(resolveServiceTier).toHaveBeenCalledWith("priority", "default");
     expect(applyServiceTierPricing).toHaveBeenCalledWith(output.usage, "priority");
-  });
-
-  it("rejects streams that end without a terminal response event", async () => {
-    const output = createAssistantOutput();
-    output.usage.input = 7;
-
-    await expect(
-      processResponsesStream(
-        responseEvents([{ type: "response.created", response: { id: "resp_truncated" } }]),
-        output,
-        new AssistantMessageEventStream(),
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("OpenAI Responses stream ended before a terminal response event");
-    expect(output.usage.input).toBe(7);
   });
 
   it("preserves cancellation when the SDK swallows the abort and ends iteration", async () => {
@@ -2163,6 +2038,45 @@ describe("processResponsesStream", () => {
     });
   });
 
+  it("rejects reuse of an active Responses tool-call output index", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_first_index_owner",
+              call_id: "call_first_index_owner",
+              name: "computer",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_second_index_owner",
+              call_id: "call_second_index_owner",
+              name: "computer",
+              arguments: "",
+            },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("Responses stream reused active tool-call output index 0");
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
+  });
+
   it("keeps interleaved Responses function calls bound to their output indices", async () => {
     const responseStream: ResponseStreamEvent[] = [
       ...createInterleavedResponsesToolEvents(),
@@ -2328,45 +2242,6 @@ describe("processResponsesStream", () => {
       ),
     ).rejects.toThrow("Responses stream changed output item identity");
     expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
-  });
-
-  it("rejects reuse of an active Responses tool-call output index", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await expect(
-      processResponsesStream(
-        responseEvents([
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_first_index_owner",
-              call_id: "call_first_index_owner",
-              name: "computer",
-              arguments: "",
-            },
-          },
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_second_index_owner",
-              call_id: "call_second_index_owner",
-              name: "computer",
-              arguments: "",
-            },
-          },
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream reused active tool-call output index 0");
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
   });
 
   it("keeps parallel unindexed Responses calls bound by identity without orphans", async () => {

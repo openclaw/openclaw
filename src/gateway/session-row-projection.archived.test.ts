@@ -44,7 +44,7 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
     const archived = 8;
     const placements = createWorkerSessionPlacementStore();
     for (let index = 0; index < live + archived; index++) {
-      placements.startDispatch({
+      await placements.startDispatch({
         agentId: "main",
         sessionKey: `agent:main:row-${index}`,
         sessionId: `row-${index}`,
@@ -203,6 +203,32 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
       expect(listed.sessions).toEqual([
         expect.objectContaining({ key: child, model: "qwen3:14b" }),
       ]);
+      const scopedChildren = await listProjectedSessions({
+        projection,
+        opts: { agentId: "alpha", archived: true, spawnedBy: "global" },
+      });
+      expect(scopedChildren.sessions.map((row) => row.key)).toEqual([child]);
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath: projection.capture({ agentId: "main", key: "global" })!.storeTarget.storePath,
+        archiveTranscript: false,
+        target: { canonicalKey: "global", storeKeys: ["global"] },
+      });
+      for (const sentinel of [parent, "global", "unknown"]) {
+        replaceSessionEntrySync(
+          { agentId: "alpha", sessionKey: child },
+          { sessionId: "cold-child", updatedAt: 1, archivedAt: 1, parentSessionKey: sentinel },
+        );
+        const children = await listProjectedSessions({
+          projection,
+          opts: {
+            agentId: "alpha",
+            archived: true,
+            spawnedBy: sentinel === parent ? "global" : sentinel,
+          },
+        });
+        expect(children.sessions.map((row) => row.key)).toEqual([child]);
+      }
     } finally {
       boardReads?.restore();
       projection?.dispose();

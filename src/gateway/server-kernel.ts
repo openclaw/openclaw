@@ -127,7 +127,7 @@ export async function createGatewayKernel(
 ) {
   const scheduler = new GatewayScheduler();
   const sdkResourceHost = options.sdkResourceHost ?? new LegacyPluginSdkResourceHost();
-  sdkResourceHost.assertOpen();
+  sdkResourceHost.bindScheduler(scheduler);
   return await sdkResourceHost.run(() =>
     createGatewayKernelWithSdkHost(port, opts, options, sdkResourceHost, scheduler),
   );
@@ -154,7 +154,7 @@ async function createGatewayKernelWithSdkHost(
   // Retain cancellation before bootstrap owns resources or an update replaces its chunk.
   const { cancelPreparedModelRuntimeRefresh } = await import("../agents/prepared-model-runtime.js");
   ensureOpenClawCliOnPath();
-  const pluginMetadata = retainGatewayPluginMetadata(async () => {
+  const pluginMetadata = retainGatewayPluginMetadata(scheduler, async () => {
     cancelPreparedModelRuntimeRefresh();
   });
   let pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;

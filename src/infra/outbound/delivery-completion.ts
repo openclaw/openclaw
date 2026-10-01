@@ -1,3 +1,4 @@
+import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
 import type { CommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
 import type { SessionWriterDeliveryAuthority } from "../../auto-reply/reply-payload.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
@@ -16,7 +17,6 @@ import {
   type PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { mergeRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
-import type { HarnessCompletionRecovery } from "../../config/sessions/restart-recovery-types.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
@@ -31,7 +31,6 @@ import {
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
@@ -168,7 +167,6 @@ export async function settlePendingFinalDelivery(
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
   let wakeRecovery = false;
-  let deliveredHarnessClaim: HarnessCompletionRecovery | undefined;
   await patchSessionEntryCore(
     {
       agentId: completion.agentId,
@@ -251,9 +249,8 @@ export async function settlePendingFinalDelivery(
       const result = options.identifiedResult;
       const platformMessageId = result ? readPlatformMessageId(result) : undefined;
       const context = pending.context;
-      // Persist the receipt in the same transaction as pending-final completion,
-      // before queue acknowledgement. A crash before the separate task-store
-      // commit leaves this exact claim replayable by startup reconciliation.
+      // Commit the receipt with pending-final completion before queue acknowledgement
+      // so recovery can recognize this exact claim without another announcement.
       const terminalEvidence =
         claim &&
         result &&
@@ -282,7 +279,6 @@ export async function settlePendingFinalDelivery(
               ],
             )
           : undefined;
-      deliveredHarnessClaim = terminalEvidence ? claim : undefined;
       const clearsNotice =
         existingNotice?.state !== "acknowledged" &&
         !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
@@ -317,18 +313,6 @@ export async function settlePendingFinalDelivery(
     },
     { skipMaintenance: true, takeCacheOwnership: true, preserveActivity: options.preserveActivity },
   );
-  if (deliveredHarnessClaim) {
-    const claim = deliveredHarnessClaim;
-    const { reconcileHarnessCompletionDelivery } =
-      await import("../../agents/agent-harness-completion-delivery.js");
-    reconcileHarnessCompletionDelivery({
-      agentId: claim.requesterAgentId,
-      sessionKey: completion.sessionKey,
-      storePath: completion.storePath,
-      sourceRunId: claim.sourceRunId,
-      taskRunId: claim.taskRunId,
-    });
-  }
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");

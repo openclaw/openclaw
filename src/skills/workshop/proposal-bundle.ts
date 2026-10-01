@@ -39,32 +39,26 @@ export async function buildSkillProposalEvaluationBundles(params: {
   const proposedFiles = params.supportFiles.map((file) =>
     fileFromBuffer(file.path, Buffer.from(file.content, "utf8")),
   );
-  const candidateFiles = new Map(targetFiles.map((file) => [file.path, file]));
+  let baseline: PluginHookSkillBundleSnapshot | undefined;
   if (params.proposal.record.kind === "create") {
     if (await pathExists(params.proposal.record.target.skillFile)) {
       throw new Error(`Target skill already exists: ${params.proposal.record.target.skillFile}`);
     }
-    candidateFiles.set(candidateSkillMd.path, candidateSkillMd);
     for (const file of proposedFiles) {
       const targetFile = path.join(params.proposal.record.target.skillDir, file.path);
       if (await pathExists(targetFile)) {
         throw new Error(`Target support file already exists: ${targetFile}`);
       }
-      candidateFiles.set(file.path, file);
     }
-    return {
-      candidate: snapshotFromFiles([...candidateFiles.values()], skillMdPath),
-      targetTreeSha256,
-    };
+  } else {
+    baseline = snapshotFromFiles(targetFiles, skillMdPath);
   }
 
-  const baseline = snapshotFromFiles(targetFiles, skillMdPath);
-  candidateFiles.set(candidateSkillMd.path, candidateSkillMd);
-  for (const file of proposedFiles) {
-    candidateFiles.set(file.path, file);
-  }
+  const candidateFiles = new Map(
+    [...targetFiles, candidateSkillMd, ...proposedFiles].map((file) => [file.path, file]),
+  );
   return {
-    baseline,
+    ...(baseline ? { baseline } : {}),
     candidate: snapshotFromFiles([...candidateFiles.values()], skillMdPath),
     targetTreeSha256,
   };

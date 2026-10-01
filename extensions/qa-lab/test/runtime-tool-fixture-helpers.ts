@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { vi } from "vitest";
 import { createQaBusState } from "../src/bus-state.js";
 import { createQaChannelTransport } from "../src/qa-channel-transport.js";
@@ -36,6 +38,59 @@ async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSu
 
 type RuntimeToolFixtureConfig = Parameters<typeof runRuntimeToolFixture>[1];
 type RuntimeToolFixtureDeps = Parameters<typeof runRuntimeToolFixture>[2];
+
+function transcriptToolCall(
+  toolName: string,
+  phase: "happy" | "failure",
+  input: Record<string, unknown>,
+) {
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "tool_use",
+        id: `call-${toolName}-${phase}`,
+        name: toolName,
+        input,
+      },
+    ],
+  };
+}
+
+function transcriptToolResult(
+  toolName: string,
+  phase: "happy" | "failure",
+  content: string,
+  isError?: boolean,
+) {
+  return {
+    role: "tool",
+    toolName,
+    tool_call_id: `call-${toolName}-${phase}`,
+    ...(isError === undefined ? {} : { isError }),
+    content,
+  };
+}
+
+function runLiveRuntimeToolFixture(
+  env: QaSuiteRuntimeEnv,
+  params: {
+    toolName?: string;
+    config?: RuntimeToolFixtureConfig;
+    tools?: Iterable<string>;
+    runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
+  } = {},
+) {
+  const toolName = params.toolName ?? "read";
+  return runRuntimeToolFixture(
+    env,
+    params.config ?? runtimeToolFixtureConfig(toolName),
+    runtimeToolFixtureDeps({
+      tools: params.tools ?? [toolName],
+      runAgentPrompt: params.runAgentPrompt,
+    }),
+  );
+}
 
 const MOCK_BASE_URL = "http://127.0.0.1:9999";
 
@@ -152,6 +207,69 @@ async function runMockRuntimeToolFixture(params: {
   );
 }
 
+async function simulateRuntimePatchHappyTurn(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: { sessionKey: string },
+  contents: string | null = "runtime patch\n",
+) {
+  if (params.sessionKey.endsWith(":happy") && contents !== null) {
+    await fs.writeFile(
+      path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt"),
+      contents,
+      "utf8",
+    );
+  }
+  return {};
+}
+
+function runtimePatchAddInput(file = "runtime-tool-fixture-patch.txt") {
+  return `*** Begin Patch\n*** Add File: ${file}\n+runtime patch\n*** End Patch\n`;
+}
+
+function runtimePatchUpdateInput(
+  file = "../runtime-tool-fixture-denied.txt",
+  context = "runtime-tool-fixture-denied-original",
+) {
+  return `*** Begin Patch\n*** Update File: ${file}\n@@\n-${context}\n+runtime patch outside the workspace\n*** End Patch\n`;
+}
+
+export async function writeQaSessionTranscript(
+  env: QaSuiteRuntimeEnv,
+  sessionKey: string,
+  messages: Array<Record<string, unknown>>,
+) {
+  const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
+  const sessionEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+  };
+  await upsertSessionEntry({
+    agentId: "qa",
+    env: sessionEnv,
+    sessionKey,
+    entry: { sessionId, updatedAt: Date.now() },
+  });
+  for (const message of messages) {
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "qa",
+      env: sessionEnv,
+      sessionId,
+      sessionKey,
+      message,
+    });
+  }
+}
+
+export async function writeRuntimeToolTranscripts(
+  env: QaSuiteRuntimeEnv,
+  toolName: string,
+  happyMessages: Array<Record<string, unknown>>,
+  failureMessages: Array<Record<string, unknown>>,
+) {
+  await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:happy`, happyMessages);
+  await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:failure`, failureMessages);
+}
+
 export async function cleanupRuntimeToolFixtureTempRoots() {
   await Promise.all(
     tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
@@ -162,8 +280,14 @@ export {
   makeEnv,
   MOCK_BASE_URL,
   mockToolRequests,
+  runLiveRuntimeToolFixture,
   runMockRuntimeToolFixture,
+  runtimePatchAddInput,
+  runtimePatchUpdateInput,
   runtimeToolFixtureConfig,
   runtimeToolFixtureDeps,
+  simulateRuntimePatchHappyTurn,
+  transcriptToolCall,
+  transcriptToolResult,
 };
 export type { RuntimeToolFixtureConfig, RuntimeToolFixtureDeps };

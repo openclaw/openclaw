@@ -40,13 +40,14 @@ import {
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 const warn = vi.hoisted(() => vi.fn());
+const info = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
   return {
     ...actual,
     createSubsystemLogger: (name: string) => {
       const logger = actual.createSubsystemLogger(name);
-      return name === "sessions/history-eviction" ? { ...logger, warn } : logger;
+      return name === "sessions/history-eviction" ? { ...logger, warn, info } : logger;
     },
   };
 });
@@ -121,6 +122,134 @@ it("admits a queued foreground write before draining all vacuum batches", async 
     await foreground;
   }
 });
+
+it.each(["checkpointed", "newer-frames", "deleted-rows", "recovery-during-handoff"] as const)(
+  "prunes archives after checkpoint recovery: %s",
+  async (kind) => {
+    const newerFrames = kind !== "checkpointed";
+    const canonical = kind === "deleted-rows";
+    state = await createOpenClawTestState({
+      prefix: "wal-budget-checkpointed-",
+      layout: "state-only",
+      scenario: "minimal",
+    });
+    const options = { agentId: "main", env: state.env };
+    const database = openOpenClawAgentDatabase(options);
+    ensureSessionTranscriptArchiveSchema(database.db);
+    database.db.exec("PRAGMA wal_autocheckpoint=0");
+    fs.mkdirSync(state.sessionsDir(), { recursive: true });
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+    const write = database.db.prepare(
+      "INSERT OR REPLACE INTO cache_entries(scope,key,blob,updated_at) VALUES ('wal-proof','traffic',?,?)",
+    );
+    let pendingRecovery: (() => void) | undefined;
+    const observePruning = archivePruningDiagnostics.observeSessionArchivePruning;
+    vi.spyOn(archivePruningDiagnostics, "observeSessionArchivePruning").mockImplementation(
+      async <T>(...args: Parameters<typeof observePruning<T>>) => {
+        const result = await observePruning(...args);
+        if (args[0].checkpointIncomplete && pendingRecovery) {
+          const recover = pendingRecovery;
+          pendingRecovery = undefined;
+          recover();
+        }
+        return result;
+      },
+    );
+    // Settle schema and initial allocation before measuring steady-state traffic.
+    write.run(Buffer.from("committed-init"), -1);
+    expect(database.walMaintenance.checkpoint()).toBe(true);
+    warn.mockClear();
+    info.mockClear();
+    try {
+      for (let tick = 0; tick < 3; tick++) {
+        if (reader.isTransaction) {
+          reader.exec("ROLLBACK");
+        }
+        write.run(Buffer.from(`committed-${tick}`), tick);
+        reader.exec("BEGIN");
+        reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get();
+        const file = path.join(
+          state.sessionsDir(),
+          `traffic-${tick}.jsonl.deleted.2020-01-01T00-00-00.000Z`,
+        );
+        fs.writeFileSync(file, Buffer.alloc(256 * 1024, tick));
+        if (canonical) {
+          database.db
+            .prepare(`INSERT INTO session_transcript_archives
+            (session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,archive_name,created_at,published_at)
+            VALUES (?, 'generation', ?, 'deleted', 'identity', X'00', ?, ?, 1, 1)`)
+            .run(
+              `archive-${tick}`,
+              `agent:main:archive-${tick}`,
+              "0".repeat(64),
+              path.basename(file),
+            );
+        }
+        const before = await measureSessionPhysicalDiskUsage(storePath);
+        const enforce = () =>
+          enforceSqliteSessionHistoryDiskBudget({
+            ...options,
+            storePath,
+            mode: "enforce",
+            maintenance: {
+              maxDiskBytes: before.totalBytes - 128 * 1024,
+              highWaterBytes: before.totalBytes - 128 * 1024,
+            },
+          });
+        if (newerFrames) {
+          write.run(Buffer.from(`pending-${tick}`), tick);
+          const recover = () => {
+            reader.exec("ROLLBACK");
+            expect(database.walMaintenance.checkpoint()).toBe(true);
+            reader.exec("BEGIN");
+            reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get();
+            write.run(Buffer.from(`newer-${tick}`), tick);
+          };
+          if (kind === "recovery-during-handoff") {
+            pendingRecovery = recover;
+          }
+          await expect(enforce()).resolves.toMatchObject({
+            deferredReason: "checkpoint-incomplete",
+            removedFiles: 0,
+            freedBytes: 0,
+          });
+          expect(fs.existsSync(file)).toBe(true);
+          if (kind === "recovery-during-handoff") {
+            expect(pendingRecovery).toBeUndefined();
+          } else {
+            recover();
+          }
+        }
+        const result = await enforce();
+        expect(result?.deferredReason).toBe(canonical ? "checkpoint-incomplete" : undefined);
+        expect(result?.removedFiles).toBe(1);
+        if (canonical) {
+          await expect(enforce()).resolves.toMatchObject({
+            deferredReason: "checkpoint-incomplete",
+            removedFiles: 0,
+          });
+        } else {
+          expect(result?.freedBytes).toBeGreaterThanOrEqual(256 * 1024);
+        }
+        expect(fs.existsSync(file)).toBe(false);
+        expect(
+          reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get()?.blob,
+        ).toEqual(new Uint8Array(Buffer.from(`${newerFrames ? "pending" : "committed"}-${tick}`)));
+      }
+      if (!canonical) {
+        expect(warn).toHaveBeenCalledTimes(newerFrames ? 3 : 0);
+        expect(info).toHaveBeenCalledTimes(3);
+        expect(info).toHaveBeenLastCalledWith(
+          "session history disk budget cleanup completed",
+          expect.objectContaining({ removedFiles: 1, removedEntries: 0 }),
+        );
+      }
+    } finally {
+      reader.close();
+    }
+  },
+);
 
 it.each(["transaction", "iterator"] as const)(
   "defers WAL-only pressure without deleting archives, names the %s, and resumes after checkpoint recovery",
@@ -254,7 +383,7 @@ it.each(["transaction", "iterator"] as const)(
       expect(diagnostics).toEqual([
         expect.objectContaining({
           completed: false,
-          checkpointCalls: 1,
+          checkpointCalls: 2,
           checkpointIncomplete: 1,
           walBytesBefore: before.databaseWalBytes,
           walBytesAfter: before.databaseWalBytes,

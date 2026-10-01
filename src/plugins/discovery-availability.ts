@@ -1,10 +1,14 @@
 import type fs from "node:fs";
+import path from "node:path";
 import {
   extractErrorCode,
   formatErrorMessageWithCode,
   isMissingPathError,
 } from "../infra/errors.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import type { OpenClawPackageManifest } from "./manifest.js";
+import { resolvePackagePluginApiRange, satisfiesPluginApiRange } from "./package-compat.js";
 import {
   pluginCacheExistsSync,
   pluginCacheStatSync,
@@ -15,6 +19,46 @@ import { PLUGIN_AVAILABILITY_POLICY } from "./runtime-degraded-state.js";
 
 const CONFIGURED_PLUGIN_PATH_UNAVAILABLE = "configured-plugin-path-unavailable";
 const CONFIGURED_PLUGIN_PATH_INSPECTION_FAILED = "configured-plugin-path-inspection-failed";
+
+export function shouldSkipIncompatiblePackagePluginApi(params: {
+  origin: PluginOrigin;
+  packageManifest: OpenClawPackageManifest | undefined;
+  pluginId: string;
+  packageDir: string;
+  env: NodeJS.ProcessEnv;
+  diagnostics: PluginDiagnostic[];
+}): boolean {
+  if (params.origin === "bundled") {
+    return false;
+  }
+  const packagePluginApiRangeCheck = resolvePackagePluginApiRange(params.packageManifest);
+  if (!packagePluginApiRangeCheck.ok) {
+    params.diagnostics.push({
+      level: "warn",
+      configDisposition: "preserve",
+      source: path.join(params.packageDir, "package.json"),
+      message: `invalid package plugin API metadata: ${packagePluginApiRangeCheck.error}; skipping discovery (check package.json openclaw.compat.pluginApi)`,
+      pluginId: params.pluginId,
+    });
+    return true;
+  }
+  const packagePluginApiRange = packagePluginApiRangeCheck.range;
+  if (!packagePluginApiRange) {
+    return false;
+  }
+  const compatibilityHostVersion = resolveCompatibilityHostVersion(params.env);
+  if (satisfiesPluginApiRange(compatibilityHostVersion, packagePluginApiRange)) {
+    return false;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    configDisposition: "preserve",
+    source: path.join(params.packageDir, "package.json"),
+    message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${compatibilityHostVersion}; skipping discovery (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
+    pluginId: params.pluginId,
+  });
+  return true;
+}
 
 export function isConfiguredPluginPathDiagnosticCode(code: unknown) {
   return (
@@ -90,9 +134,9 @@ export function findUninspectedPluginDiagnostic(diagnostics: readonly PluginDiag
 }
 
 /** Project the recorded fact onto a config surface whose owner could not be inspected. */
-export function pluginDiagnosticToConfigWarning(diagnostic: PluginDiagnostic, path: string) {
+export function pluginDiagnosticToConfigWarning(diagnostic: PluginDiagnostic, configPath: string) {
   return {
-    path,
+    path: configPath,
     message: diagnostic.message,
     code: diagnostic.code,
     source: diagnostic.source,

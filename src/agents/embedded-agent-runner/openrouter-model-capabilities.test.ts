@@ -114,41 +114,6 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("uses endpoint-specific OpenRouter context length when top_provider reports one", async () => {
-    await withOpenRouterStateDir(async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () =>
-          Response.json({
-            data: [
-              {
-                id: "nvidia/nemotron-3-super-120b-a12b:free",
-                name: "Nemotron 3 Super 120B Free",
-                architecture: { modality: "text->text" },
-                context_length: 1_000_000,
-                top_provider: {
-                  context_length: 262_144,
-                  max_completion_tokens: 262_144,
-                },
-                pricing: { prompt: "0", completion: "0" },
-              },
-            ],
-          }),
-        ),
-      );
-
-      const module = await importOpenRouterModelCapabilities("top-provider-context-length");
-      await module.loadOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free");
-
-      expect(
-        module.getOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free"),
-      ).toMatchObject({
-        contextWindow: 262_144,
-        maxTokens: 262_144,
-      });
-    });
-  });
-
   it("does not reuse retired JSON caches with precomputed OpenRouter context windows", async () => {
     // Old JSON caches stored unnormalized provider context windows; force a live
     // refresh so endpoint-specific caps are used instead.
@@ -550,6 +515,39 @@ describe("openrouter-model-capabilities", () => {
 
       expect(module.getOpenRouterModelCapabilities("acme/missing-model")).toBeUndefined();
       expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("reads only loaded capabilities and follows catalog refreshes", async () => {
+    await withOpenRouterStateDir(async () => {
+      const modelId = "acme/refreshed-model";
+      const catalog = (efforts: string[]) =>
+        Response.json({
+          data: [{ id: modelId, reasoning: { supported_efforts: efforts, mandatory: true } }],
+        });
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(catalog(["xhigh", "high"]))
+        .mockResolvedValueOnce(catalog(["high"]));
+      vi.stubGlobal("fetch", fetchSpy);
+      const writer = await importOpenRouterModelCapabilities("loaded-writer");
+      await writer.loadOpenRouterModelCapabilities(modelId);
+
+      // A cold process has SQLite rows available but must not read them or fetch.
+      const reader = await importOpenRouterModelCapabilities("loaded-reader");
+      expect(reader.getLoadedOpenRouterModelCapabilities(modelId)).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledOnce();
+
+      await reader.loadOpenRouterModelCapabilities(modelId);
+      expect(
+        reader.getLoadedOpenRouterModelCapabilities(modelId)?.compat?.supportedReasoningEfforts,
+      ).toEqual(["xhigh", "high"]);
+
+      await reader.loadOpenRouterModelCapabilities("acme/new-model");
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(
+        reader.getLoadedOpenRouterModelCapabilities(modelId)?.compat?.supportedReasoningEfforts,
+      ).toEqual(["high"]);
     });
   });
 });

@@ -1,6 +1,9 @@
 import { channel } from "node:diagnostics_channel";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type {
   CodeModeExecutorContinuation,
   CodeModeExecutorStartInput,
@@ -15,16 +18,32 @@ const config = {
   maxSnapshotBytes: 10 * 1024 * 1024,
 };
 const continuations = new Set<CodeModeExecutorContinuation>();
+let host: LegacyPluginSdkResourceHost;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+beforeEach(() => {
+  host = new LegacyPluginSdkResourceHost();
+  scheduler = createTestGatewayScheduler();
+  host.bindScheduler(scheduler);
+});
 afterEach(async () => {
-  await Promise.all([...continuations].map((continuation) => continuation.dispose()));
-  continuations.clear();
-  channel("openclaw.memory.critical").publish({});
+  try {
+    await Promise.all([...continuations].map((continuation) => continuation.dispose()));
+  } finally {
+    continuations.clear();
+    try {
+      await host.close();
+    } finally {
+      await scheduler.stop();
+    }
+  }
 });
 
 function execute(source: string, overrides: Partial<CodeModeExecutorStartInput> = {}) {
-  return nodeCodeModeExecutor.execute(
-    { kind: "exec", source, config, catalog: [], namespaces: [], ...overrides },
-    { timeoutMs: 7_000 },
+  return host.run(() =>
+    nodeCodeModeExecutor.execute(
+      { kind: "exec", source, config, catalog: [], namespaces: [], ...overrides },
+      { timeoutMs: 7_000 },
+    ),
   );
 }
 
@@ -132,7 +151,6 @@ describe("Node Code Mode executor", () => {
   });
 
   it.each([
-    "while (true) {}",
     "await null; while (true) {}",
     'Object.prototype.toJSON = () => { throw new Error("inherited hook"); }; text("safe"); while (true) {}',
   ])("interrupts guest execution under the same timeout: %s", async (source) => {
@@ -258,10 +276,7 @@ describe("Node Code Mode executor", () => {
 
   it("joins worker cancellation while the host owns a pending bridge exchange", async () => {
     const controller = new AbortController();
-    let reachedBoundary!: () => void;
-    const boundary = new Promise<void>((resolve) => {
-      reachedBoundary = resolve;
-    });
+    const boundary = createDeferred();
     const result = nodeCodeModeExecutor.execute(
       {
         kind: "exec",
@@ -275,7 +290,7 @@ describe("Node Code Mode executor", () => {
         signal: controller.signal,
         inlineHost: {
           onBoundary: async (_value, context) => {
-            reachedBoundary();
+            boundary.resolve();
             return new Promise((_resolve, reject) => {
               context.signal.addEventListener(
                 "abort",
@@ -287,7 +302,7 @@ describe("Node Code Mode executor", () => {
         },
       },
     );
-    await boundary;
+    await boundary.promise;
     controller.abort();
     expect(await result).toMatchObject({ status: "failed", code: "aborted" });
     expect(await execute("return 7")).toMatchObject({

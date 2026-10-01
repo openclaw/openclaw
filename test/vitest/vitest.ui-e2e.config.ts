@@ -20,6 +20,7 @@ const uiE2eIncludePatterns = [
 // These files own their server instead of leasing the global production bundle.
 // Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
+  "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-switch-roster.e2e.test.ts",
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
@@ -33,7 +34,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-json-tree.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-queue-update-reload.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
@@ -65,11 +65,9 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
-  "ui/src/e2e/session-mention-involvement.e2e.test.ts",
   "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
-  "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
 ];
 

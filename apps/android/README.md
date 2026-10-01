@@ -5,7 +5,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 ### App features
 
 - Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
-- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The draft has its own full-width row above one control row: **+**, model, and reasoning on the left; context, microphone, and Talk/send on the right. Session permissions are inside the **+** menu, with the current access mode shown. The model name opens a compact searchable provider menu above the composer; the configured default is marked on its model row, without settings buttons in the picker. The context ring stays directly available, including on narrow screens, and opens context usage, latest tokens, and the cost breakdown. Tap the microphone for dictation. While listening, a Stop icon replaces the microphone; tap it to finish listening. While starting or transcribing, a Close icon cancels that attempt. Long-press for voice messages or Talk, or use the Talk button beside the microphone when the draft is empty. The effort dial opens the live-preview slider and Fast mode.
+- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The draft has its own full-width row above one control row: **+**, model, and reasoning on the left; microphone and Talk/send on the right. Session permissions are inside the **+** menu, with the current access mode shown. The model name opens a compact searchable provider menu above the composer; the configured default is marked on its model row, without settings buttons in the picker. The top-right **Chat actions** menu includes **Context** with its live usage ring, which opens context usage, latest tokens, and the cost breakdown. Tap the microphone for dictation. While listening, a Stop icon replaces the microphone; tap it to finish listening. While starting or transcribing, a Close icon cancels that attempt. Long-press for voice messages or Talk, or use the Talk button beside the microphone when the draft is empty. The effort dial opens the live-preview slider and Fast mode.
 - Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. New session starts independently of the current native thread. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
 - Search from Overview or Settings to find settings by their displayed name or category, alongside quick actions and recent threads. Local destinations such as Appearance, Profile, and Licenses work without connecting a Gateway. Back from a settings detail returns to the screen that opened search; Desktop appears only when the connected Gateway supports it.
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
@@ -13,7 +13,8 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
 - Talk setup and startup failures stay visible in a dismissible Chat dialog. If the message reports a missing provider or invalid credentials, configure the Talk provider on the Gateway before trying again.
 - Use **Settings → OpenClaw** for guided Gateway setup and repair. New replies stay visible at the end of the conversation; scrolling back preserves your reading position until you return or tap **Jump to latest**.
-- Setup offers optional notifications, microphone, camera, and location access; other permissions are under **Additional features**. Continue without granting access, or enable phone capabilities later in Settings. Blocked setup requests offer Android Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
+- Setup offers optional notifications, microphone, camera, and location access; other permissions are under **Additional features**. **Request all** asks for the available runtime permissions without enabling the camera or location features; Android handles consent through its system prompts. Notification access stays separate under **Special access**. Continue without granting access, or enable phone capabilities individually or later in Settings. Blocked individual setup requests offer Android Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
+- SMS is available only in third-party builds on supported telephony devices. Setup distinguishes partial read/send access. Android Settings can recover user denial, but installer or device-policy restrictions may leave SMS unavailable; OpenClaw cannot override them. Returning from Settings rereads the actual grants without restarting Gateway setup.
 - View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
 - Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
@@ -237,13 +238,36 @@ build timestamp shared by every debug variant in that invocation. Release
 tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
-Prepare and finalize Android release metadata through the shared mobile cutter:
+Android release archives use the pinned version in `apps/android/version.json`.
+Run **Android Store Release** from `main` with the default `release` operation, or run
+`pnpm android:release:upload` from a clean local `main` matching `origin/main`.
+The pipeline selects unused phone and Wear build numbers from Google Play and
+generates OpenAI release notes from changes since each form factor's public
+release. It saves the plan and notes as release artifacts and uploads the selected
+clean source commit. Tracked version defaults and notes stay unchanged; the flow
+creates no preparation commits or follow-up PRs.
+
+For daily Google Play Internal testing builds, the same workflow runs at
+**7:00 AM Pacific** using the `America/Los_Angeles` time zone, including daylight
+saving changes. Scheduled runs require the repository variable
+`ANDROID_INTERNAL_ENABLED=true` and use the `android-internal` environment.
+They upload the phone and Wear builds and generated notes to `internal` and
+`wear:internal`, without capturing screenshots or changing the store listing.
+Production promotion remains manual.
+
+To run this distribution manually, choose `operation=internal` from `main`, or
+run `pnpm android:release:upload -- --destination internal` from a clean local
+`main` matching `origin/main`. Manual runs work while the schedule is disabled.
+See [daily Internal testing setup](VERSIONING.md#daily-internal-testing) for the
+environment, credentials, and enablement steps.
+
+For local preparation or inspection:
 
 ```bash
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
+pnpm android:version
 pnpm android:version:check
+pnpm android:version:pin -- --from-gateway
+pnpm android:version:sync
 ```
 
 Release-owner signing sync:
@@ -295,7 +319,7 @@ Start a fresh app process between scenes.
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
 
-Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. `.github/workflows/android-release.yml` is the only automated GitHub Release upload path. When the tagged Android pin matches the stable release train, `OpenClaw Release Publish` qualifies Android independently and dispatches it after core npm succeeds. A mismatched pin records an explicit skip. Android does not hold npm or GitHub release finalization, so verified APK assets may attach after the release is public.
+Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. The **Android APK Artifact Publish** workflow at `.github/workflows/android-release.yml` is the only automated GitHub Release upload path. When the tagged Android pin matches the stable release train, `OpenClaw Release Publish` qualifies Android independently and dispatches it after core npm succeeds. A mismatched pin records an explicit skip. Android does not hold npm or GitHub release finalization, so verified APK assets may attach after the release is public.
 
 The protected `android-release` environment supplies `MATCH_PASSWORD`; the repository's read-only GitHub App token checks out encrypted material from `openclaw/apps-signing`. The workflow builds the exact release tag, refuses to replace different existing bytes, and re-downloads the APK for checksum, certificate, and provenance verification.
 
@@ -304,8 +328,10 @@ fallback upload path after `pnpm android:release:upload` fails.
 
 Agent-driven Google Play uploads must use `pnpm android:release:upload` as the
 only release path. If that command fails, stop and fix the failing screenshot,
-metadata, signing, validation, archive, or upload step before trying again. Do
-not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
+metadata, signing, validation, archive, or upload step and inspect the store
+outcome before trying again. Keep the saved plan and generated notes for
+investigation or [local archive replay](VERSIONING.md#archive-a-saved-store-release).
+Do not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
 Google Play API commands, or Play Console mutation commands.
 
 The release lane uploads the phone and Wear bundles in one atomic Google Play

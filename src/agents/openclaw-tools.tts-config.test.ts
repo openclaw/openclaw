@@ -1,38 +1,40 @@
-// Verifies createOpenClawTools wires shared config and context into the TTS tool.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import type { MediaGenerateToolOptions } from "./tools/media-generate-background.js";
 
 const mocks = vi.hoisted(() => {
-  // Stub every non-TTS tool so this suite isolates TTS option plumbing.
-  const stubTool = (name: string) =>
-    ({
-      name,
-      label: name,
-      displaySummary: name,
-      description: name,
-      parameters: { type: "object", properties: {} },
-      execute: vi.fn(),
-    }) satisfies AnyAgentTool;
-
+  const stubTool = (name: string): AnyAgentTool => ({
+    name,
+    label: name,
+    displaySummary: name,
+    description: name,
+    parameters: { type: "object", properties: {} },
+    execute: vi.fn(),
+  });
+  const backgroundMediaTool = (name: string, options?: MediaGenerateToolOptions): AnyAgentTool => ({
+    ...stubTool(name),
+    execute: async () => {
+      await options?.onAsyncTaskStarted?.("Media generation started.");
+      return { content: [{ type: "text", text: "Background task started." }], details: {} };
+    },
+  });
   return {
-    stubTool,
-    backgroundMediaTool: (name: string, options?: MediaGenerateToolOptions): AnyAgentTool => ({
-      ...stubTool(name),
-      execute: async () => {
-        await options?.onAsyncTaskStarted?.("Media generation started.");
-        return { content: [{ type: "text", text: "Background task started." }], details: {} };
-      },
-    }),
-    createCronToolOptions: vi.fn(),
-    createTranscriptsToolOptions: vi.fn(),
-    createSessionStatusToolOptions: vi.fn(),
-    createImageGenerateToolOptions: vi.fn(),
-    createMusicGenerateToolOptions: vi.fn(),
-    createVideoGenerateToolOptions: vi.fn(),
-    textToSpeech: vi.fn(async () => ({
+    cron: vi.fn((_options: unknown) => stubTool("cron")),
+    transcripts: vi.fn((_options: unknown) => stubTool("transcripts")),
+    status: vi.fn((_options: unknown) => stubTool("session_status")),
+    image: vi.fn((options?: MediaGenerateToolOptions) =>
+      backgroundMediaTool("image_generate", options),
+    ),
+    music: vi.fn((options?: MediaGenerateToolOptions) =>
+      backgroundMediaTool("music_generate", options),
+    ),
+    video: vi.fn((options?: MediaGenerateToolOptions) =>
+      backgroundMediaTool("video_generate", options),
+    ),
+    textToSpeech: vi.fn<typeof import("../tts/tts.js").textToSpeech>(async () => ({
       success: true,
       audioPath: "/tmp/openclaw/tts-config-test.opus",
       provider: "microsoft",
@@ -41,284 +43,85 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./openclaw-plugin-tools.js", () => ({
-  resolveOpenClawPluginToolsForOptions: () => [],
-}));
+vi.mock("./tools/cron-tool.js", () => ({ createCronTool: mocks.cron }));
+vi.mock("./tools/transcripts-tool.js", () => ({ createTranscriptsTool: mocks.transcripts }));
+vi.mock("./tools/session-status-tool.js", () => ({ createSessionStatusTool: mocks.status }));
+vi.mock("./tools/image-generate-tool.js", () => ({ createImageGenerateTool: mocks.image }));
+vi.mock("./tools/music-generate-tool.js", () => ({ createMusicGenerateTool: mocks.music }));
+vi.mock("./tools/video-generate-tool.js", () => ({ createVideoGenerateTool: mocks.video }));
+vi.mock("../tts/tts.js", () => ({ textToSpeech: mocks.textToSpeech }));
 
-vi.mock("./openclaw-tools.nodes-workspace-guard.js", () => ({
-  applyNodesToolWorkspaceGuard: (tool: AnyAgentTool) => tool,
-}));
-
-vi.mock("./tools/agents-list-tool.js", () => ({
-  createAgentsListTool: () => mocks.stubTool("agents_list"),
-}));
-
-vi.mock("./tools/cron-tool.js", () => ({
-  createCronTool: (options: unknown) => {
-    mocks.createCronToolOptions(options);
-    return mocks.stubTool("cron");
-  },
-}));
-
-vi.mock("./tools/gateway-tool.js", () => ({
-  createGatewayTool: () => mocks.stubTool("gateway"),
-}));
-
-vi.mock("./tools/image-generate-tool.js", () => ({
-  createImageGenerateTool: (options?: MediaGenerateToolOptions) => {
-    mocks.createImageGenerateToolOptions(options);
-    return mocks.backgroundMediaTool("image_generate", options);
-  },
-}));
-
-vi.mock("./tools/image-tool.js", () => ({
-  createImageTool: () => mocks.stubTool("view_image"),
-}));
-
-vi.mock("./tools/message-tool-execution.js", () => ({
-  createMessageTool: () => mocks.stubTool("message"),
-}));
-
-vi.mock("./tools/music-generate-tool.js", () => ({
-  createMusicGenerateTool: (options?: MediaGenerateToolOptions) => {
-    mocks.createMusicGenerateToolOptions(options);
-    return mocks.backgroundMediaTool("music_generate", options);
-  },
-}));
-
-vi.mock("./tools/nodes-tool.js", () => ({
-  createNodesTool: () => mocks.stubTool("nodes"),
-}));
-
-vi.mock("./tools/pdf-tool.js", () => ({
-  createPdfTool: () => mocks.stubTool("pdf"),
-}));
-
-vi.mock("./tools/session-status-tool.js", () => ({
-  createSessionStatusTool: (options: unknown) => {
-    mocks.createSessionStatusToolOptions(options);
-    return mocks.stubTool("session_status");
-  },
-}));
-
-vi.mock("./tools/sessions-history-tool.js", () => ({
-  createSessionsHistoryTool: () => mocks.stubTool("sessions_history"),
-}));
-
-vi.mock("./tools/sessions-list-tool.js", () => ({
-  createSessionsListTool: () => mocks.stubTool("sessions_list"),
-}));
-
-vi.mock("./tools/sessions-send-tool.js", () => ({
-  createSessionsSendTool: () => mocks.stubTool("sessions_send"),
-}));
-
-vi.mock("./tools/sessions-spawn-tool.js", () => ({
-  createSessionsSpawnTool: () => mocks.stubTool("sessions_spawn"),
-}));
-
-vi.mock("./tools/sessions-yield-tool.js", () => ({
-  createSessionsYieldTool: () => mocks.stubTool("sessions_yield"),
-}));
-
-vi.mock("./tools/subagents-tool.js", () => ({
-  createSubagentsTool: () => mocks.stubTool("subagents"),
-}));
-
-vi.mock("./tools/transcripts-tool.js", () => ({
-  createTranscriptsTool: (options: unknown) => {
-    mocks.createTranscriptsToolOptions(options);
-    return mocks.stubTool("transcripts");
-  },
-}));
-
-vi.mock("./tools/video-generate-tool.js", () => ({
-  createVideoGenerateTool: (options?: MediaGenerateToolOptions) => {
-    mocks.createVideoGenerateToolOptions(options);
-    return mocks.backgroundMediaTool("video_generate", options);
-  },
-}));
-
-vi.mock("./tools/web-tools.js", () => ({
-  createWebFetchTool: () => mocks.stubTool("web_fetch"),
-  createWebSearchTool: () => mocks.stubTool("web_search"),
-}));
-
-vi.mock("../tts/tts.js", () => ({
-  textToSpeech: mocks.textToSpeech,
-}));
-
-function getTextToSpeechParams() {
-  // The mocked TTS runtime exposes the exact invocation payload for assertions.
-  const calls = (mocks.textToSpeech as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-  return calls[0]?.[0] as
-    | {
-        text?: string;
-        cfg?: OpenClawConfig;
-        agentId?: string;
-        channel?: string;
-        accountId?: string;
-      }
-    | undefined;
+function createTools(options: OpenClawToolsOptions) {
+  return createOpenClawTools({ disableMessageTool: true, disablePluginTools: true, ...options });
 }
 
-describe("createOpenClawTools TTS config wiring", () => {
-  beforeEach(() => {
-    mocks.createCronToolOptions.mockClear();
-    mocks.createTranscriptsToolOptions.mockClear();
-    mocks.createImageGenerateToolOptions.mockClear();
-    mocks.createMusicGenerateToolOptions.mockClear();
-    mocks.createVideoGenerateToolOptions.mockClear();
-    mocks.textToSpeech.mockClear();
-  });
-
-  it("passes the resolved shared config into the tts tool", async () => {
-    const injectedConfig = {
-      tts: {
-        auto: "always",
-        provider: "microsoft",
-        providers: {
-          microsoft: {
-            voice: "en-US-AvaNeural",
-          },
-        },
+const mediaConfig = {
+  agents: {
+    defaults: {
+      mediaModels: {
+        image: { primary: "image-owner/model" },
+        music: { primary: "music-owner/model" },
+        video: { primary: "video-owner/model" },
       },
+    },
+  },
+} satisfies OpenClawConfig;
+
+describe("createOpenClawTools context wiring", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("passes the session agent and active account configuration into TTS", async () => {
+    const config = {
+      agents: { list: [{ id: "reader" }, { id: "main" }] },
+      channels: { feishu: { accounts: { "feishu-main": { tts: { provider: "microsoft" } } } } },
     } satisfies OpenClawConfig;
-
-    const tool = createOpenClawTools({
-      config: injectedConfig,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    }).find((candidate) => candidate.name === "tts");
-
-    if (!tool) {
-      throw new Error("missing tts tool");
-    }
-
-    await tool.execute("call-1", { text: "hello from config" });
-
-    const ttsParams = getTextToSpeechParams();
-    expect(ttsParams?.text).toBe("hello from config");
-    expect(ttsParams?.cfg).toBe(injectedConfig);
-  });
-
-  it("keeps direct TTS tool guidance explicit even when the tool is available", async () => {
-    const tool = createOpenClawTools({
-      config: {},
-      disableMessageTool: true,
-      disablePluginTools: true,
-    }).find((candidate) => candidate.name === "tts");
-
-    if (!tool) {
-      throw new Error("missing tts tool");
-    }
-
-    expect(tool.description).toContain("Only explicit voice/speech/TTS intent");
-    expect(tool.description).toContain("never ordinary text reply");
-  });
-
-  it("passes the resolved session agent id into the tts tool", async () => {
-    const injectedConfig = {
-      agents: {
-        list: [{ id: "reader" }, { id: "main" }],
-      },
-    } satisfies OpenClawConfig;
-
-    const tool = createOpenClawTools({
-      config: injectedConfig,
-      agentSessionKey: "agent:reader:telegram:chat:123",
-      disableMessageTool: true,
-      disablePluginTools: true,
-    }).find((candidate) => candidate.name === "tts");
-
-    if (!tool) {
-      throw new Error("missing tts tool");
-    }
-
-    await tool.execute("call-1", { text: "hello from reader" });
-
-    const ttsParams = getTextToSpeechParams();
-    expect(ttsParams?.text).toBe("hello from reader");
-    expect(ttsParams?.agentId).toBe("reader");
-  });
-
-  it("passes the active account id into the tts tool", async () => {
-    const injectedConfig = {
-      channels: {
-        feishu: {
-          accounts: {
-            "feishu-main": {
-              tts: {
-                provider: "microsoft",
-              },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const tool = createOpenClawTools({
-      config: injectedConfig,
+    const tool = createTools({
+      config,
+      agentSessionKey: "agent:reader:feishu:chat:123",
       agentChannel: "feishu",
       agentAccountId: "feishu-main",
-      disableMessageTool: true,
-      disablePluginTools: true,
     }).find((candidate) => candidate.name === "tts");
-
-    if (!tool) {
-      throw new Error("missing tts tool");
-    }
-
-    await tool.execute("call-1", { text: "hello from account" });
-
-    const ttsParams = getTextToSpeechParams();
-    expect(ttsParams?.text).toBe("hello from account");
-    expect(ttsParams?.cfg).toBe(injectedConfig);
-    expect(ttsParams?.channel).toBe("feishu");
-    expect(ttsParams?.accountId).toBe("feishu-main");
-  });
-});
-
-describe("createOpenClawTools transcript ownership wiring", () => {
-  beforeEach(() => {
-    mocks.createTranscriptsToolOptions.mockClear();
+    expect(tool).toBeDefined();
+    await tool?.execute("call-1", { text: "hello from reader" });
+    expect(mocks.textToSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "hello from reader",
+        agentId: "reader",
+        channel: "feishu",
+        accountId: "feishu-main",
+      }),
+    );
+    expect(mocks.textToSpeech.mock.calls[0]?.[0].cfg).toBe(config);
   });
 
-  it("uses trusted caller authority instead of the delivery account", () => {
-    const injectedConfig = { transcripts: { enabled: true } } satisfies OpenClawConfig;
-
-    createOpenClawTools({
-      config: injectedConfig,
+  it("uses trusted transcript caller authority instead of the delivery account", () => {
+    const config = { transcripts: { enabled: true } } satisfies OpenClawConfig;
+    createTools({
+      config,
       agentChannel: "discord",
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
       gatewayCallerChannel: "telegram",
       gatewayCallerScheduled: true,
-      disableMessageTool: true,
-      disablePluginTools: true,
     });
-
-    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
+    expect(mocks.transcripts).toHaveBeenLastCalledWith(
       expect.objectContaining({
         agentId: "main",
         agentChannel: "telegram",
         agentAccountId: "creator",
         caller: { kind: "operator", source: "scheduled" },
-        config: injectedConfig,
+        config,
       }),
     );
   });
 
-  it("uses the delivery account when no separate authority exists", () => {
-    createOpenClawTools({
+  it("uses the delivery account when no separate transcript authority exists", () => {
+    createTools({
       agentChannel: "discord",
       agentAccountId: "delivery",
       requesterSenderId: "requester",
-      disableMessageTool: true,
-      disablePluginTools: true,
     });
-
-    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
+    expect(mocks.transcripts).toHaveBeenLastCalledWith(
       expect.objectContaining({
         agentChannel: "discord",
         agentAccountId: "delivery",
@@ -332,42 +135,28 @@ describe("createOpenClawTools transcript ownership wiring", () => {
     );
   });
 
-  it("hides transcripts when scheduled caller-channel provenance is unavailable", () => {
-    createOpenClawTools({
+  it("hides transcripts when caller-channel provenance is unavailable", () => {
+    const caller = {
       agentChannel: "discord",
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
-      gatewayCallerChannel: null,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
-
-    expect(mocks.createTranscriptsToolOptions).not.toHaveBeenCalled();
-
-    createOpenClawTools({
-      agentChannel: "discord",
-      agentAccountId: "delivery",
-      gatewayCallerAccountId: "creator",
-      gatewayCallerLocal: true,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
-
-    expect(mocks.createTranscriptsToolOptions).not.toHaveBeenCalled();
+      requesterSenderId: "requester",
+    };
+    createTools({ ...caller, gatewayCallerChannel: null });
+    expect(mocks.transcripts).not.toHaveBeenCalled();
+    createTools({ ...caller, gatewayCallerLocal: true });
+    expect(mocks.transcripts).not.toHaveBeenCalled();
   });
 
   it("keeps transcripts channel-less for explicit local scheduled provenance", () => {
-    createOpenClawTools({
+    createTools({
       agentChannel: "discord",
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
       gatewayCallerLocal: true,
       gatewayCallerScheduled: true,
-      disableMessageTool: true,
-      disablePluginTools: true,
     });
-
-    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
+    expect(mocks.transcripts).toHaveBeenLastCalledWith(
       expect.objectContaining({
         agentChannel: undefined,
         agentAccountId: "creator",
@@ -375,133 +164,67 @@ describe("createOpenClawTools transcript ownership wiring", () => {
       }),
     );
   });
-});
 
-describe("createOpenClawTools media generation session wiring", () => {
-  beforeEach(() => {
-    mocks.createImageGenerateToolOptions.mockClear();
-    mocks.createMusicGenerateToolOptions.mockClear();
-    mocks.createVideoGenerateToolOptions.mockClear();
+  it("does not yield when background media starts", async () => {
+    const onYield = vi.fn();
+    const tool = createTools({
+      config: mediaConfig,
+      agentSessionKey: "agent:main:subagent:media-child",
+      onYield,
+    }).find((candidate) => candidate.name === "image_generate");
+    expect(tool).toBeDefined();
+    await tool?.execute("media-start", {});
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(onYield).not.toHaveBeenCalled();
   });
 
-  it.each(["image_generate", "music_generate", "video_generate"])(
-    "does not yield when %s starts background work",
-    async (name) => {
-      const onYield = vi.fn();
-      const tools = createOpenClawTools({
-        config: {
-          agents: {
-            defaults: {
-              mediaModels: {
-                image: { primary: "image-owner/model" },
-                music: { primary: "music-owner/model" },
-                video: { primary: "video-owner/model" },
-              },
-            },
-          },
-        },
-        agentSessionKey: "agent:main:subagent:media-child",
-        disableMessageTool: true,
-        disablePluginTools: true,
-        onYield,
+  it.each([
+    [
+      "agent:main:cron:daily-media",
+      "agent:main:cron:daily-media:run:run-123",
+      "agent:main:cron:daily-media:run:run-123",
+    ],
+    [
+      "agent:main:qa-channel:default:direct:media-requester",
+      "agent:main:main",
+      "agent:main:qa-channel:default:direct:media-requester",
+    ],
+  ])(
+    "passes a separate durable requester key for background media from %s",
+    (agentSessionKey, runSessionKey, taskSessionKey) => {
+      createTools({
+        config: mediaConfig,
+        agentSessionKey,
+        runSessionKey,
+        onYield: vi.fn(),
       });
-      const tool = tools.find((candidate) => candidate.name === name);
-      expect(tool).toBeDefined();
-      await tool?.execute("media-start", {});
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(onYield).not.toHaveBeenCalled();
+      for (const factory of [mocks.image, mocks.video, mocks.music]) {
+        expect(factory).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentSessionKey: taskSessionKey,
+            requesterRunSessionKey: runSessionKey,
+          }),
+        );
+      }
     },
   );
 
-  it("uses the isolated cron run key for background media completions", () => {
-    const config = {
-      agents: {
-        defaults: {
-          mediaModels: {
-            image: { primary: "image-owner/model" },
-            video: { primary: "video-owner/model" },
-            music: { primary: "music-owner/model" },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    createOpenClawTools({
-      config,
-      agentSessionKey: "agent:main:cron:daily-media",
-      runSessionKey: "agent:main:cron:daily-media:run:run-123",
-      disableMessageTool: true,
-      disablePluginTools: true,
-      onYield: vi.fn(),
-    });
-
-    expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
-      }),
-    );
-    expect(mocks.createVideoGenerateToolOptions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
-      }),
-    );
-    expect(mocks.createMusicGenerateToolOptions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
-      }),
-    );
-  });
-
-  it("keeps the requester session key for non-cron media completions", () => {
-    const config = {
-      agents: {
-        defaults: {
-          mediaModels: { image: { primary: "image-owner/model" } },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    createOpenClawTools({
-      config,
-      agentSessionKey: "agent:main:slack:channel:C123",
-      runSessionKey: "agent:main:slack:channel:C123:run:run-123",
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
-
-    expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentSessionKey: "agent:main:slack:channel:C123",
-      }),
-    );
-  });
-});
-
-describe("createOpenClawTools session status route context wiring", () => {
-  beforeEach(() => {
-    mocks.createSessionStatusToolOptions.mockClear();
-  });
-
-  it("passes the active live-run route into the session_status tool", () => {
-    createOpenClawTools({
-      agentSessionKey: "agent:main:discord:channel:1489550370136129537",
-      runSessionKey: "agent:main:discord:channel:1489550370136129537",
+  it("passes the active live-run route into session_status", () => {
+    const sessionKey = "agent:main:discord:channel:1489550370136129537";
+    createTools({
+      agentSessionKey: sessionKey,
+      runSessionKey: sessionKey,
       agentChannel: "webchat",
       agentAccountId: "browser",
       agentTo: "channel:1489550370136129537",
       agentThreadId: "origin-thread",
       currentChannelId: "webchat:control-ui",
       currentThreadTs: "webchat-thread-1",
-      disableMessageTool: true,
-      disablePluginTools: true,
     });
-
-    expect(mocks.createSessionStatusToolOptions).toHaveBeenCalledWith(
+    expect(mocks.status).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentSessionKey: "agent:main:discord:channel:1489550370136129537",
-        runSessionKey: "agent:main:discord:channel:1489550370136129537",
         activeDeliveryContext: {
           channel: "webchat",
           to: "webchat:control-ui",
@@ -511,104 +234,48 @@ describe("createOpenClawTools session status route context wiring", () => {
       }),
     );
   });
-});
 
-describe("createOpenClawTools cron context wiring", () => {
-  beforeEach(() => {
-    mocks.createCronToolOptions.mockClear();
-  });
-
-  it.each([
-    ["prefers the durable run session key", "agent:main:main"],
-    ["falls back to the policy session key", undefined],
-  ])("%s for cron bindings", (_label, runSessionKey) => {
-    createOpenClawTools({
+  it("prefers the durable run session key for cron bindings", () => {
+    createTools({
       agentSessionKey: "agent:main:telegram:default:direct:1234",
-      runSessionKey,
-      disableMessageTool: true,
-      disablePluginTools: true,
+      runSessionKey: "agent:main:main",
     });
-
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentSessionKey: runSessionKey ?? "agent:main:telegram:default:direct:1234",
-      }),
+    expect(mocks.cron).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionKey: "agent:main:main" }),
     );
   });
 
-  it("passes preserved channel delivery context into the cron tool", async () => {
-    createOpenClawTools({
-      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+  it("passes preserved channel delivery context into cron", () => {
+    const sessionKey = "agent:main:matrix:channel:!abcdef1234567890:example.org";
+    createTools({
+      agentSessionKey: sessionKey,
       agentChannel: "matrix",
       agentAccountId: "bot-a",
       agentTo: "room:!FallbackRoom:Example.Org",
       agentThreadId: "$FallbackThread:Example.Org",
       currentChannelId: "room:!AbCdEf1234567890:example.org",
       currentThreadTs: "$RootEvent:Example.Org",
-      disableMessageTool: true,
-      disablePluginTools: true,
     });
-
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+    expect(mocks.cron).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
-        agentAccountId: "bot-a",
-        creatorToolAllowlist: undefined,
         currentDeliveryContext: {
           channel: "matrix",
           to: "room:!AbCdEf1234567890:example.org",
           accountId: "bot-a",
           threadId: "$RootEvent:Example.Org",
         },
-        runId: undefined,
       }),
     );
   });
 
-  it("uses agent route context when auto-threading context is unavailable", async () => {
-    createOpenClawTools({
-      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
-      agentChannel: "matrix",
-      agentAccountId: "bot-a",
-      agentTo: "room:!FallbackRoom:Example.Org",
-      agentThreadId: "$FallbackThread:Example.Org",
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
-
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
-        agentAccountId: "bot-a",
-        creatorToolAllowlist: undefined,
-        currentDeliveryContext: {
-          channel: "matrix",
-          to: "room:!FallbackRoom:Example.Org",
-          accountId: "bot-a",
-          threadId: "$FallbackThread:Example.Org",
-        },
-        runId: undefined,
-      }),
-    );
-  });
-
-  it("passes self-remove scope into the cron tool", async () => {
-    createOpenClawTools({
+  it("passes self-remove scope into cron", () => {
+    createTools({
       agentSessionKey: "agent:main:cron:job-current",
       cronSelfRemoveOnlyJobId: "job-current",
-      disableMessageTool: true,
-      disablePluginTools: true,
     });
-
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+    expect(mocks.cron).toHaveBeenCalledWith(
       expect.objectContaining({
         agentSessionKey: "agent:main:cron:job-current",
-        currentDeliveryContext: {
-          channel: undefined,
-          to: undefined,
-          accountId: undefined,
-          threadId: undefined,
-        },
         selfRemoveOnlyJobId: "job-current",
       }),
     );

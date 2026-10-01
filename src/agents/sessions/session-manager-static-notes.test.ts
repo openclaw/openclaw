@@ -261,7 +261,7 @@ describe("appendSessionTranscriptNote", () => {
     },
   );
 
-  it.each(["canonical", "shared", "custom-family"] as const)(
+  it.each(["canonical", "custom-family"] as const)(
     "keeps invocation order while the first %s target preparation waits",
     async (layout) => {
       await withOpenClawTestState({ label: "static-note-preparation-order" }, async (state) => {
@@ -273,7 +273,7 @@ describe("appendSessionTranscriptNote", () => {
           storePath:
             layout === "canonical"
               ? path.join(state.agentDir("main"), "openclaw-agent.sqlite")
-              : state.path(layout === "custom-family" ? "shared.json" : "shared.sqlite"),
+              : state.path("shared.json"),
         };
         if (layout === "custom-family") {
           const external = state.path("external.sqlite");
@@ -305,7 +305,7 @@ describe("appendSessionTranscriptNote", () => {
           .mockImplementation(
             <T>(
               options: Parameters<typeof admit>[0],
-              run: () => T | Promise<T>,
+              run: Parameters<typeof admit<T>>[1],
               reentrant?: boolean,
               timing?: Parameters<typeof admit>[3],
             ) => {
@@ -456,7 +456,7 @@ describe("appendSessionTranscriptNote", () => {
         .mockImplementation(
           <T>(
             options: Parameters<typeof runWrite>[0],
-            run: () => T | Promise<T>,
+            run: Parameters<typeof runWrite<T>>[1],
             reentrant?: boolean,
             timing?: Parameters<typeof runWrite>[3],
           ) => {
@@ -477,7 +477,6 @@ describe("appendSessionTranscriptNote", () => {
             stateContext?: Parameters<typeof runOperation>[2],
             assertCurrent?: Parameters<typeof runOperation>[3],
             admission?: Parameters<typeof runOperation>[4],
-            requireStateLifecycle?: Parameters<typeof runOperation>[5],
           ) =>
             runOperation(
               store,
@@ -501,7 +500,6 @@ describe("appendSessionTranscriptNote", () => {
               stateContext,
               assertCurrent,
               admission,
-              requireStateLifecycle,
             ),
         );
       const first = appendSessionTranscriptNote(target, note, { config });

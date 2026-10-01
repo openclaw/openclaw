@@ -34,7 +34,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     connection,
     runtimeParams,
     preparedAuthBinding,
-    buildActiveRunAttemptParams,
     startupAuthAccountCacheKey,
     startupEnvApiKeyCacheKey,
     bundleMcpThreadConfig,
@@ -102,7 +101,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       shellEnvironment: connection.shellEnvironment,
       shellPathPrepend: connection.shellPathPrepend,
       disableLoginShell: connection.disableLoginShell,
-      buildAttemptParams: buildActiveRunAttemptParams,
+      buildAttemptParams: () => ({ ...runtimeParams }),
       ...(effectiveRuntimeModelId !== runtimeParams.modelId
         ? { runtimeModelId: effectiveRuntimeModelId }
         : {}),
@@ -113,14 +112,14 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
-      skillsInstructions: context.skillsInstructions,
+      refreshableInstructions: context.refreshableInstructions,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeModelAdmission: resources.nativeModelAdmission,
       nativeHookRelayRequired:
         (nativeToolSurfaceEnabled &&
           params.pluginHarnessToolPolicyRestricted !== true &&
-          (resources.nativeProcessAuthority !== undefined ||
+          (resources.nativeProcessAuthority?.requiresProcessAdmission ||
             resources.nativeModelAdmission === "required")) ||
         (connection.options.nativeHookRelay?.enabled !== false &&
           params.pluginHarnessToolPolicyRestricted !== true &&
@@ -160,16 +159,11 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     // preflight succeeds; startup retries may have replaced the initial client.
     await attemptTools.captureCronCreatorToolAllowlist();
     pluginAppServer = startupResult.pluginAppServer;
-    toolBridge.setRemoteWorkspaceFileReader?.(
-      ({ path, maxBytes, workspaceRoot, signal, timeoutMs }) =>
-        readBoundedCodexRemoteWorkspaceFile({
-          client: startupResult.client,
-          path,
-          maxBytes,
-          workspaceRoot,
-          signal,
-          timeoutMs,
-        }),
+    toolBridge.setRemoteWorkspaceFileReader?.((request) =>
+      readBoundedCodexRemoteWorkspaceFile({
+        ...request,
+        client: startupResult.client,
+      }),
     );
     if (
       usesSupervisionConnection &&

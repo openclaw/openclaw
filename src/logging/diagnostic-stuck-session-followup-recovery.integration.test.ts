@@ -27,6 +27,7 @@ import {
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   beginDiagnosticBackendActivity,
   closeDiagnosticEmbeddedRunOwner,
@@ -36,7 +37,7 @@ import {
 } from "./diagnostic-run-activity.js";
 import type { StuckSessionRecoveryOutcome } from "./diagnostic-session-recovery.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
-import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "./diagnostic.js";
+import { startGatewayDiagnosticHeartbeat, stopGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 describe("stuck session follow-up recovery", () => {
@@ -140,7 +141,8 @@ describe("stuck session follow-up recovery", () => {
           return outcome;
         },
       );
-      startDiagnosticHeartbeat(
+      startGatewayDiagnosticHeartbeat(
+        createTestGatewayScheduler("fake-timers"),
         { diagnostics: { enabled: true } },
         { sampleLiveness: () => null, recoverStuckSession: recover },
       );
@@ -187,7 +189,7 @@ describe("stuck session follow-up recovery", () => {
         expect(waits).toEqual([30_000]);
       }
     } finally {
-      stopDiagnosticHeartbeat();
+      stopGatewayDiagnosticHeartbeat();
       dispatchRecovery.resolve();
       releaseActive.resolve();
       backend.close();

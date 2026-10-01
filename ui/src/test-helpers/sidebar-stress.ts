@@ -241,9 +241,11 @@ export async function mount(width: number) {
   const { sidebar } = mounted;
   sidebar.style.cssText = `display:block;width:${width}px;height:1000px`;
   sidebar.connected = true;
-  sidebar.hasSessionDraft = (k) => k === key("unsent-draft") || k === key("crowded");
-  sidebar.outboxAttentionCountForSession = (k) =>
-    k === key("outbox") || k === key("crowded") ? 9 : 0;
+  sidebar.storedOutboxes = {
+    total: 18,
+    attentionCountForSession: (k) => (k === key("outbox") || k === key("crowded") ? 9 : 0),
+    hasSessionDraft: (k) => k === key("unsent-draft") || k === key("crowded"),
+  };
   gateway.publishEvent("question.requested", {
     id: "stress-question",
     agentId: "main",

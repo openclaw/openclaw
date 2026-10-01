@@ -1,4 +1,3 @@
-// JSON schema default helpers fill object values from TypeBox schema defaults.
 import {
   normalizeJsonSchemaForTypeBox,
   type JsonSchemaValue,
@@ -109,9 +108,10 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
     return jsonSchemaTypes.has(type) ? undefined : `${path}.type: unsupported JSON Schema type`;
   }
   if (Array.isArray(type) && type.length > 0) {
-    const invalid = type.find((entry) => typeof entry !== "string" || !jsonSchemaTypes.has(entry));
-    if (invalid !== undefined) {
-      return `${path}.type: unsupported JSON Schema type`;
+    for (const entry of type) {
+      if (typeof entry !== "string" || !jsonSchemaTypes.has(entry)) {
+        return `${path}.type: unsupported JSON Schema type`;
+      }
     }
     return new Set(type).size === type.length
       ? undefined
@@ -121,13 +121,7 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
 }
 
 function decodePointerSegment(segment: string): string {
-  let decodedSegment;
-  try {
-    decodedSegment = decodeURIComponent(segment);
-  } catch {
-    decodedSegment = segment;
-  }
-  return decodedSegment.replace(/~1/g, "/").replace(/~0/g, "~");
+  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
 function parseJsonPointerArrayIndex(segment: string): number | undefined {
@@ -168,14 +162,25 @@ function resolveLocalRef(
       return resolveLocalRef(resourceRoot, ref.slice(resourceRoot.$id.length), resourceBaseId);
     }
   }
-  if (ref === "#") {
+  if (!ref.startsWith("#")) {
+    return { found: false };
+  }
+  // Decode the URI fragment before recognizing or splitting its JSON Pointer;
+  // encoded slashes are separators, while ~1 belongs to a single token.
+  let fragment: string;
+  try {
+    fragment = decodeURIComponent(ref.slice(1));
+  } catch {
+    return { found: false };
+  }
+  if (fragment === "") {
     return { found: true, schema: resourceRoot, resourceRoot, resourceBaseId };
   }
-  if (ref.startsWith("#/")) {
+  if (fragment.startsWith("/")) {
     let current: unknown = resourceRoot;
     let currentResourceRoot = resourceRoot;
     let currentResourceBaseId = resourceBaseId;
-    for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
+    for (const segment of fragment.slice(1).split("/").map(decodePointerSegment)) {
       if (Array.isArray(current)) {
         const index = parseJsonPointerArrayIndex(segment);
         if (index === undefined) {
@@ -201,22 +206,10 @@ function resolveLocalRef(
         }
       : { found: false };
   }
-  if (ref.startsWith("#")) {
-    // The pointer branch decodes through decodePointerSegment's try/catch;
-    // anchor fragments deserve the same tolerance so a malformed escape
-    // resolves to "not found" instead of throwing a raw URIError.
-    let anchor: string;
-    try {
-      anchor = decodeURIComponent(ref.slice(1));
-    } catch {
-      return { found: false };
-    }
-    const resolved = resolveLocalAnchor(resourceRoot, anchor);
-    return resolved === undefined
-      ? { found: false }
-      : { found: true, schema: resolved, resourceRoot, resourceBaseId };
-  }
-  return { found: false };
+  const resolved = resolveLocalAnchor(resourceRoot, fragment);
+  return resolved === undefined
+    ? { found: false }
+    : { found: true, schema: resolved, resourceRoot, resourceBaseId };
 }
 
 function splitResourceRef(ref: string): { resource: string; fragment: string } {
@@ -566,20 +559,6 @@ export function findJsonSchemaShapeError(schema: JsonSchemaValue): string | unde
   return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined);
 }
 
-function cloneDefault<T>(value: T): T {
-  if (value === undefined || value === null) {
-    return value;
-  }
-  return structuredClone(value);
-}
-
-function getDefault(schema: JsonSchemaValue): unknown {
-  if (!isRecord(schema) || !Object.hasOwn(schema, "default")) {
-    return undefined;
-  }
-  return cloneDefault(schema.default);
-}
-
 function schemaWithResourceContext(
   schema: JsonSchemaValue,
   resourceRoot: JsonSchemaValue,
@@ -927,21 +906,17 @@ function applySchemaDefaults(
   resourceRoot = root,
   resourceBaseId?: string,
 ): unknown {
-  let value = valueInput;
-  if (value === undefined) {
-    const defaultValue = getDefault(schema);
-    if (defaultValue !== undefined) {
-      value = defaultValue;
-    }
-  }
+  let nextValue = valueInput;
   if (!isRecord(schema)) {
-    return value;
+    return nextValue;
+  }
+  if (nextValue === undefined && Object.hasOwn(schema, "default")) {
+    nextValue = structuredClone(schema.default);
   }
 
   const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
   const currentResourceBaseId =
     typeof schema.$id === "string" ? resolveSchemaId(schema.$id, resourceBaseId) : resourceBaseId;
-  let nextValue = value;
   const refKey =
     typeof schema.$ref === "string"
       ? schemaResourceRefKey(currentResourceRoot, schema.$ref, currentResourceBaseId)

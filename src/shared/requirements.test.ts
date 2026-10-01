@@ -61,33 +61,13 @@ describe("requirements evaluation", () => {
     expect(evaluate({ metadata: { os: ["darwin"] } }).missing.os).toEqual(["darwin"]);
   });
 
-  it("reports missing environment and config requirements with config status", () => {
-    const result = evaluate({
-      metadata: {
-        requires: {
-          env: ["A", "B"],
-          config: ["a.b", "c.d"],
-        },
-      },
-      isEnvSatisfied: (name) => name === "B",
-      isConfigSatisfied: (path) => path === "a.b",
-    });
-
-    expect(result.missing.env).toEqual(["A"]);
-    expect(result.missing.config).toEqual(["c.d"]);
-    expect(result.configChecks).toEqual([
-      { path: "a.b", satisfied: true },
-      { path: "c.d", satisfied: false },
-    ]);
-  });
-
   it("reports every missing category through the public wrapper", () => {
     const result = evaluate({
       metadata: {
         requires: {
           bins: ["node"],
           anyBins: ["bun", "deno"],
-          env: ["OPENAI_API_KEY"],
+          env: ["OPENAI_API_KEY", "PRESENT"],
           config: ["browser.enabled", "gateway.enabled"],
         },
         os: ["darwin"],
@@ -97,13 +77,14 @@ describe("requirements evaluation", () => {
         hasAnyBin: () => false,
         platforms: ["windows"],
       },
+      isEnvSatisfied: (name) => name === "PRESENT",
       isConfigSatisfied: (path) => path === "gateway.enabled",
     });
 
     expect(result.required).toEqual({
       bins: ["node"],
       anyBins: ["bun", "deno"],
-      env: ["OPENAI_API_KEY"],
+      env: ["OPENAI_API_KEY", "PRESENT"],
       config: ["browser.enabled", "gateway.enabled"],
       os: ["darwin"],
     });

@@ -4,7 +4,10 @@ import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  reconnectMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -119,6 +122,75 @@ async function capturePeopleCard(page: Page, filename: string) {
 }
 
 suite.define(() => {
+  it("reports native browser interaction but not automatic reconnection", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, scenario());
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+      await gateway.waitForRequest("presence.activity");
+      const initial = await gateway.getRequests("presence.activity");
+      expect(initial).toHaveLength(1);
+      expect(initial[0]?.params).toEqual({});
+      await page.clock.install();
+      await page.clock.fastForward(31_000);
+      await page.keyboard.press("Shift");
+      await expect
+        .poll(async () => (await gateway.getRequests("presence.activity")).length)
+        .toBe(2);
+      await page.keyboard.press("Shift");
+      expect(await gateway.getRequests("presence.activity")).toHaveLength(2);
+      await page.clock.resume();
+      await reconnectMockGateway(page, gateway);
+      expect(await gateway.getRequests("presence.activity")).toHaveLength(2);
+    });
+  });
+  it("separates connection duration from active, idle, and unavailable activity", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "dark", locale: "en-US" },
+      async ({ page }) => {
+        const now = Date.now();
+        const data = scenario();
+        const gateway = await installMockGateway(page, {
+          ...data,
+          presenceUsers: [
+            { ...data.presenceUsers[0]!, lastActivityAt: now - 600_000 },
+            { id: "bob", name: "Bob", lastActivityAt: now, onlineSince: now - 900_000 },
+            { id: "charlie", name: "Charlie", onlineSince: now - 300_000 },
+          ],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        const person = page.locator('[data-online-user-id="alice"]');
+        await person.hover();
+        const card = page.getByRole("dialog", { name: "Activity for Alice" });
+        await card.waitFor({ state: "visible" });
+        await capturePeopleCard(page, "online-idle-desktop.png");
+        expect(await card.locator(".person-activity-card__status").textContent()).toContain("Idle");
+        expect(await card.textContent()).toContain("Online for");
+        expect(await card.textContent()).toContain("Last interaction");
+        expect(await person.getAttribute("data-presence-activity")).toBe("idle");
+        expect(
+          await page.locator('[data-online-user-id="bob"]').getAttribute("data-presence-activity"),
+        ).toBe("active");
+        expect(
+          await page
+            .locator('[data-online-user-id="charlie"]')
+            .getAttribute("data-presence-activity"),
+        ).toBe("unknown");
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            {
+              ...data.presenceUsers[0]!,
+              user: { id: "alice", identity: { type: "profile", id: "alice" }, name: "Alice" },
+              lastActivityAt: Date.now(),
+            },
+          ],
+        });
+        await expect.poll(() => person.getAttribute("data-presence-activity")).toBe("active");
+        expect(await card.locator(".person-activity-card__status").textContent()).toContain(
+          "Active",
+        );
+      },
+    );
+  });
   it("labels shared owner presence separately from a personal sign-in", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, colorScheme: "light", locale: "en-US" },
@@ -163,7 +235,7 @@ suite.define(() => {
           "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
         );
         expect(await card.textContent()).toContain("Mac · macOS 27.0.0 · App");
-        expect(await card.textContent()).toContain("Not observed yet");
+        expect(await card.textContent()).toContain("Activity unavailable");
         expect(await card.getByRole("link", { name: "View activity" }).getAttribute("href")).toBe(
           "/activity/gateway-owner",
         );
@@ -338,11 +410,10 @@ suite.define(() => {
             {
               ...current,
               user: { id: "alice", identity: { type: "profile", id: "alice" }, name: "Alice" },
-              lastInputSeconds: 600,
               ts: Date.now(),
-              lastActivityAt: Date.now(),
+              lastActivityAt: Date.now() - 600_000,
             },
-            { user: { id: "bob", name: "Bob" }, ts: Date.now(), lastInputSeconds: 0 },
+            { user: { id: "bob", name: "Bob" }, ts: Date.now(), lastActivityAt: Date.now() },
           ],
         });
         await expect
@@ -428,16 +499,21 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, scenario());
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        // A mouse click parks a hover pointer where the sliding drawer's header
+        // buttons pass; their tooltips then consume the card's Escape.
         await page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()
-          .click();
+          .tap();
         const person = page.getByRole("link", { name: "Activity for Alice" });
         await page.keyboard.press("Tab");
         await person.focus();
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await card.waitFor({ state: "visible" });
         await page.keyboard.press("Tab");
+        await expect
+          .poll(() => card.evaluate((element) => element.contains(document.activeElement)))
+          .toBe(true);
         await page.keyboard.press("Escape");
         await expect.poll(() => card.count()).toBe(0);
         expect(await person.isVisible()).toBe(true);
@@ -521,7 +597,7 @@ suite.define(() => {
             animations: "disabled",
           });
         }
-        expect(await page.locator(".sidebar-online__person").count()).toBe(2);
+        expect(await page.locator(".sidebar-online__person").count()).toBe(3);
         const rawButton = page.getByRole("button", {
           name: "Details for Unqualified sender",
           exact: true,
@@ -549,8 +625,16 @@ suite.define(() => {
         await rawLink.focus();
         await gateway.emitGatewayEvent("presence", {
           presence: [
-            { user: raw, watchedSessions: [rawSession, selected], lastInputSeconds: 600 },
-            { user: profile, watchedSessions: [profileSession, selected], lastInputSeconds: 0 },
+            {
+              user: raw,
+              watchedSessions: [rawSession, selected],
+              lastActivityAt: Date.now() - 600000,
+            },
+            {
+              user: profile,
+              watchedSessions: [profileSession, selected],
+              lastActivityAt: Date.now(),
+            },
           ],
         });
         await expect
@@ -624,7 +708,7 @@ suite.define(() => {
               exact: true,
             })
             .waitFor({ state: "visible" });
-          expect(await page.locator(".sidebar-online__person").count()).toBe(1);
+          expect(await page.locator(".sidebar-online__person").count()).toBe(2);
           await expect
             .poll(() =>
               page.locator(".chat-pane__presence [data-viewer-id]").getAttribute("aria-label"),

@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionBrowserAuthority } from "./browser-dashboard.types.js";
 import { getBrowserStateRuntime, setBrowserStateRuntime } from "./browser-runtime-state.js";
@@ -113,7 +114,7 @@ beforeEach(() => {
   setBrowserStateRuntime({
     dashboardOperations: new Map(),
     sessionTabs: {} as never,
-    sessionTabDiscovery: {} as never,
+    sessionTabOperations: new Map(),
   });
 });
 afterEach(async () => {
@@ -131,29 +132,23 @@ describe("isolated session browser owner", () => {
   ])(
     "rejects a delayed old $change read without replacing the newer collaborator's context",
     async ({ replacement }) => {
-      let releaseOldRead!: (value: typeof definition) => void;
-      let markOldReadStarted!: () => void;
-      const oldReadStarted = new Promise<void>((resolve) => {
-        markOldReadStarted = resolve;
-      });
-      const oldRead = new Promise<typeof definition>((resolve) => {
-        releaseOldRead = resolve;
-      });
+      const oldReadStarted = createDeferred<void>();
+      const oldRead = createDeferred<typeof definition>();
       mocked.definition.mockImplementationOnce(() => {
-        markOldReadStarted();
-        return oldRead;
+        oldReadStarted.resolve();
+        return oldRead.promise;
       });
       const stale = accessSessionBrowserDashboard(request, authority().value, {
         operation: "open",
       });
-      await oldReadStarted;
+      await oldReadStarted.promise;
       mocked.definition.mockResolvedValue(replacement);
       const current = await accessSessionBrowserDashboard(
         { ...request, instanceId: replacement.instanceId },
         authority().value,
         { operation: "open" },
       );
-      releaseOldRead(definition);
+      oldRead.resolve(definition);
       await expect(stale).rejects.toThrow("dashboard changed before this operation");
       expect(mocked.create).toHaveBeenCalledOnce();
       expect(mocked.create).toHaveBeenCalledWith(expect.objectContaining({ url: replacement.url }));

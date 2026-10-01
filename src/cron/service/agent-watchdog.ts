@@ -46,25 +46,12 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
   model_call_started: "execution",
 } as const satisfies Record<CronAgentExecutionPhase, CronAgentPhaseWatchdogStage>;
 
-/** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
-type CronAgentWatchdog = {
-  start: () => void;
-  replaceTimeout: (timeoutMs: number | undefined) => void;
-  noteLaneWait: () => void;
-  noteLaneAdmitted: () => void;
-  noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
-  notePhase: (info: CronAgentExecutionPhaseUpdate) => void;
-  activeExecution: () => CronAgentExecutionStarted | undefined;
-  observedLaneWait: () => boolean;
-  dispose: () => void;
-};
-
 /** Tracks isolated-agent setup/execution progress and fires the correct cron timeout reason. */
 export function createCronAgentWatchdog(params: {
   deferUntilRunner: boolean;
   jobTimeoutMs: number;
   triggerTimeout: (reason: string) => void;
-}): CronAgentWatchdog {
+}) {
   let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
   let timeoutId: NodeJS.Timeout | undefined;
   let setupTimeoutId: NodeJS.Timeout | undefined;
@@ -151,7 +138,7 @@ export function createCronAgentWatchdog(params: {
       }
       startTimeout();
     },
-    replaceTimeout: (timeoutMs) => {
+    replaceTimeout: (timeoutMs: number | undefined) => {
       // A heartbeat handoff starts a distinct configured deadline. Keeping the
       // original timer would still abort long heartbeat turns at the cron default.
       if (timeoutId) {

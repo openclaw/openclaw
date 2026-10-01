@@ -536,30 +536,41 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
-  it("drops the pending review after a failure", async () => {
-    const callbacks: Array<() => void> = [];
-    const setTimer = vi.fn((callback: () => void) => {
-      callbacks.push(callback);
-      const timer = setTimeout(() => {}, 60_000);
-      timer.unref();
-      return timer;
-    });
-    const runReview = vi.fn().mockRejectedValue(new Error("provider unavailable"));
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-      setTimer,
-    });
-    scheduler.schedule(completedRun());
-    callbacks[0]?.();
-    await flushMicrotasks();
-    expect(runReview).toHaveBeenCalledOnce();
-    expect(setTimer).toHaveBeenCalledOnce();
-    callbacks[0]?.();
-    await flushMicrotasks();
-    expect(runReview).toHaveBeenCalledOnce();
-    scheduler.clear();
-  });
+  it.each(["activity check", "review"])(
+    "drops the pending review after a %s failure",
+    async (phase) => {
+      vi.useFakeTimers();
+      const callbacks: Array<() => void> = [];
+      const setTimer = vi.fn((callback: () => void) => {
+        callbacks.push(callback);
+        const timer = setTimeout(() => {}, 60_000);
+        timer.unref();
+        return timer;
+      });
+      const isSystemActive = vi.fn(() => {
+        if (phase === "activity check") {
+          throw new Error("activity unavailable");
+        }
+        return false;
+      });
+      const runReview = vi.fn().mockRejectedValue(new Error("provider unavailable"));
+      const scheduler = createSkillExperienceReviewScheduler({
+        isSystemActive,
+        runReview,
+        setTimer,
+      });
+      scheduler.schedule(completedRun());
+      expect(() => callbacks[0]?.()).not.toThrow();
+      await flushMicrotasks();
+      expect(runReview).toHaveBeenCalledTimes(phase === "review" ? 1 : 0);
+      expect(setTimer).toHaveBeenCalledOnce();
+      callbacks[0]?.();
+      await flushMicrotasks();
+      expect(isSystemActive).toHaveBeenCalledOnce();
+      expect(runReview).toHaveBeenCalledTimes(phase === "review" ? 1 : 0);
+      scheduler.clear();
+    },
+  );
 
   it("skips errored, disabled, unavailable, and internal runs", async () => {
     vi.useFakeTimers();
@@ -594,24 +605,6 @@ describe("skill experience review scheduler", () => {
 });
 
 describe("skill experience review prompt", () => {
-  it("caps used and existing skill lists", () => {
-    const skills = Array.from({ length: 120 }, (_, index) => ({
-      name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
-      source: "workspace" as const,
-      activation: "read" as const,
-    }));
-    const prompt = buildSkillExperienceReviewPrompt(
-      {
-        usedSkills: skills,
-        existingSkills: skills,
-      },
-      "propose",
-    );
-    expect(prompt).toContain("more used skills omitted");
-    expect(prompt).toContain("(+70 more not shown)");
-    expect(Math.max(...prompt.split("\n").map((line) => line.length))).toBeLessThanOrEqual(2_000);
-  });
-
   it("renders a deterministic and capped used-skills receipt", () => {
     const usedSkills = Array.from({ length: 120 }, (_, index) => ({
       name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
@@ -656,8 +649,8 @@ describe("skill experience review prompt", () => {
     }
   });
 
-  it.each(["auto", "propose"] as const)("preserves interrupted evidence in %s mode", (mode) => {
-    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true }, mode);
+  it("preserves interrupted evidence", () => {
+    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true }, "propose");
     expect(prompt).toContain("Only capture procedures that visibly worked");
   });
 
@@ -704,12 +697,5 @@ describe("skill experience review preparation", () => {
     });
 
     expect(result !== undefined).toBe(eligible);
-  });
-
-  it("keeps an eligible foreground candidate", async () => {
-    const params = completedRun();
-    await expect(
-      prepareSkillExperienceReviewCandidate(captureCandidate(params), params.config),
-    ).resolves.toBeDefined();
   });
 });

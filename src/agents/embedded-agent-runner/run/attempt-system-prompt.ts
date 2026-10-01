@@ -1,6 +1,3 @@
-/**
- * Builds the system prompt inputs for a single embedded-agent attempt.
- */
 import {
   splitSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
@@ -29,13 +26,6 @@ type BuildAttemptSystemPromptParams = {
   };
 };
 
-/** System prompt pair used by an attempt: untransformed base plus provider-ready prompt. */
-type AttemptSystemPrompt = {
-  baseSystemPrompt: string;
-  systemPrompt: string;
-  refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice?: string) => string;
-};
-
 const ATTEMPT_PROMPT_SECTION =
   /<!-- openclaw:attempt:(STABLE|DYNAMIC|PERMISSION) -->[\s\S]*?<!-- \/openclaw:attempt:\1 -->/g;
 
@@ -48,9 +38,7 @@ function renderAttemptPromptSection(section: "STABLE" | "DYNAMIC" | "PERMISSION"
  * unless this is a raw model run. Raw runs still keep `baseSystemPrompt` for
  * diagnostics/cache boundaries, but submit an empty provider prompt.
  */
-export function buildAttemptSystemPrompt(
-  params: BuildAttemptSystemPromptParams,
-): AttemptSystemPrompt {
+export function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptParams) {
   const baseSystemPrompt = buildEmbeddedSystemPrompt(params.embeddedSystemPrompt);
   const transformedSystemPrompt = params.isRawModelRun
     ? ""
@@ -82,7 +70,7 @@ export function buildAttemptSystemPrompt(
   return {
     baseSystemPrompt,
     systemPrompt,
-    refreshSystemPrompt: (currentSystemPrompt, permissionNotice) => {
+    refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice?: string) => {
       if (params.isRawModelRun) {
         return currentSystemPrompt;
       }

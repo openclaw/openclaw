@@ -1,5 +1,6 @@
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import * as support from "./service.test-support.js";
 
 export async function claimWorkerPlacement(params: {
@@ -20,37 +21,13 @@ export async function claimWorkerPlacement(params: {
     agentId: "main",
     sessionKey: `agent:main:${params.sessionId}`,
   };
-  let placement = store.startDispatch(identity);
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: params.environmentId },
-  });
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { workerBundleHash: support.BUNDLE_HASH },
-  });
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
-      workspaceBaseManifestRef: `manifest-${params.sessionId}`,
-      remoteWorkspaceDir: `/workspace/${params.sessionId}`,
-    },
-  });
-  store.transition({
-    sessionId: params.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: params.ownerEpoch },
+  await advancePlacementFixtureToActive(store, support.testState.stateDb, identity, {
+    environmentId: params.environmentId,
+    ownerEpoch: params.ownerEpoch,
+    workerBundleHash: support.BUNDLE_HASH,
+    workspaceBaseManifestRef: `manifest-${params.sessionId}`,
+    remoteWorkspaceDir: `/workspace/${params.sessionId}`,
+    seedEnvironment: false,
   });
   const claim = await store.claimTurn({
     ...identity,

@@ -81,6 +81,7 @@ type PackageOptions = RunOptions & {
   allowUnreleasedChangelog?: unknown;
   extractAiRuntime?: (tarballPath: string, destination: string) => Promise<unknown>;
   normalizeTarballModes?: (tarballPath: string) => Promise<unknown>;
+  onCleanupFailure?: (error: unknown) => void;
   outputName?: string;
   packJsonPath?: string;
   pnpmPack?: boolean;
@@ -670,6 +671,7 @@ export async function prepareBundledAiRuntimePackage(
     originalAiRuntimeMoved = false;
     packedAiTarballs = [];
     if (cleanupError) {
+      packageOptions.onCleanupFailure?.(cleanupError);
       throw toErrorObject(cleanupError, "Package cleanup failed.");
     }
   };
@@ -703,6 +705,7 @@ export async function prepareBundledAiRuntimePackage(
     try {
       await restoreManifest(aiRuntimeSourceDir);
     } catch (restoreError) {
+      packageOptions.onCleanupFailure?.(restoreError);
       throw packError ? packagePreparationRestoreError(packError, restoreError) : restoreError;
     }
     if (packError) {
@@ -939,6 +942,8 @@ export async function packOpenClawPackageForDocker(
   try {
     let cleanupBundledAiRuntime = async () => {};
     let cleanupBundledPlugins = async () => {};
+    const cleanupFailures = new Set<unknown>();
+    const onCleanupFailure = (error: unknown) => void cleanupFailures.add(error);
     try {
       await cleanPackedOpenClawTarballs(outputPath);
       if (packageOptions.bundlePlugins?.length) {
@@ -946,6 +951,7 @@ export async function packOpenClawPackageForDocker(
         cleanupBundledPlugins = await preparePackageBundledPlugins(
           sourcePath,
           packageOptions.bundlePlugins,
+          onCleanupFailure,
         );
       }
       cleanupBundledAiRuntime = await prepareBundledAiRuntime(
@@ -955,6 +961,7 @@ export async function packOpenClawPackageForDocker(
         {
           prepareManifest,
           restoreManifest,
+          onCleanupFailure,
         },
       );
       // AI staging materializes the bundled tree; pack must not inherit the
@@ -975,21 +982,34 @@ export async function packOpenClawPackageForDocker(
           DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
         ),
       });
+    } catch (error) {
+      packageError = error;
+      throw error;
     } finally {
-      try {
-        await cleanupBundledAiRuntime();
-      } finally {
+      // Restore shared manifests in reverse preparation order. A helper can
+      // fail restoring during preparation, before its cleanup handle returns.
+      for (const cleanup of [cleanupBundledAiRuntime, cleanupBundledPlugins]) {
         try {
-          await cleanupBundledPlugins();
-        } finally {
-          await restorePackageSourceArtifacts(
-            sourcePath,
-            restoreDocsMap,
-            restoreManifest,
-            restoreChangelog,
-          );
+          await cleanup();
+        } catch (error) {
+          onCleanupFailure(error);
         }
       }
+      await restorePackageSourceArtifacts(
+        sourcePath,
+        async (cwd) => {
+          if (cleanupFailures.size) {
+            throw new AggregateError(
+              new Set([...(packageError === undefined ? [] : [packageError]), ...cleanupFailures]),
+              "Package source cleanup failed; packaging receipt retained.",
+              { cause: packageError },
+            );
+          }
+          await restoreDocsMap(cwd);
+        },
+        restoreManifest,
+        restoreChangelog,
+      );
     }
     // Scan the emptied pnpm destination instead of trusting its absolute-path output.
     let tarball = await newestOpenClawTarball(
@@ -1008,11 +1028,24 @@ export async function packOpenClawPackageForDocker(
     if (packageOptions.packJsonPath) {
       // npm's original receipt predates normalization. Inspect the finished bytes;
       // dry-run preserves the archive while npm owns hashes, modes, and inventory.
+      // npm streams a file spec through its cache while extracting it, so give this
+      // inspection a private cache that leaves with the receipt instead of copying
+      // the artifact into, and waiting on, the caller's shared npm cache.
       packReceiptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-receipt-"));
       const packReceiptPath = path.join(packReceiptDir, "pack.json");
       await runCaptureImpl(
         "npm",
-        ["pack", tarball, "--dry-run", "--json", "--ignore-scripts", "--offline", "--silent"],
+        [
+          "pack",
+          tarball,
+          "--dry-run",
+          "--json",
+          "--ignore-scripts",
+          "--offline",
+          "--silent",
+          "--cache",
+          path.join(packReceiptDir, "npm-cache"),
+        ],
         sourcePath,
         {
           stdoutFilePath: packReceiptPath,

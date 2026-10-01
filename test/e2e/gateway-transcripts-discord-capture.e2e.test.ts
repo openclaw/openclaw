@@ -402,6 +402,12 @@ describe("Gateway admitted Discord transcript capture", () => {
       const { createPluginRecord } = await import("../../src/plugins/loader-records.js");
       const { getPluginInstance, getPluginValueInstance } =
         await import("../../src/plugins/plugin-instance-scope.js");
+      const { loadPluginMetadataSnapshot } =
+        await import("../../src/plugins/plugin-metadata-snapshot.js");
+      const { bindPluginRuntimeArtifactSelection } =
+        await import("../../src/plugins/plugin-runtime-artifact-binding.js");
+      const { resolvePluginRuntimeArtifactSelection, resolvePluginRuntimeExecutionArtifact } =
+        await import("../../src/plugins/plugin-runtime-artifact-selection.js");
       const { PluginRegistryInspectionResources } =
         await import("../../src/plugins/registry-inspection-resources.js");
       const { retireInspectionInstances } =
@@ -429,8 +435,8 @@ describe("Gateway admitted Discord transcript capture", () => {
         await import("../../src/config/sessions/store-writer-state.test-support.js");
       const { closeOpenClawStateDatabaseByPathAsync } =
         await import("../../src/state/openclaw-state-db-cache.js");
-      const { activeSessions, resolveSourceProvider } =
-        await import("../../src/transcripts/capture.js");
+      const { activeSessions } = await import("../../src/transcripts/capture-startup.js");
+      const { resolveSourceProvider } = await import("../../src/transcripts/capture.js");
       const { createTranscriptsAutoStartService } =
         await import("../../src/transcripts/auto-start.js");
       const { readConfiguredTranscriptStarts } =
@@ -526,13 +532,40 @@ describe("Gateway admitted Discord transcript capture", () => {
       const registryResources = new PluginRegistryInspectionResources(retireInspectionInstances);
       registryResources.attach(registration.registry);
       releaseFixtureRegistry = () => registryResources.release();
-      const record = createPluginRecord({
-        id: "discord",
+      const registrationMetadata = loadPluginMetadataSnapshot({
+        config: cfg,
+        workspaceDir: workspace,
+      });
+      const manifest = registrationMetadata.manifestRegistry.plugins.find(
+        (plugin) => plugin.id === "discord",
+      );
+      if (!manifest) {
+        throw new Error("Discord fixture manifest was not selected");
+      }
+      const runtimeEntry = resolvePluginRuntimeExecutionArtifact(
+        resolvePluginRuntimeArtifactSelection({
+          ...manifest,
+          entryKind: "runtime",
+          preferBuiltPluginArtifacts: true,
+        }),
+      );
+      expect(runtimeEntry).toEqual({
         source: path.join(discordPluginDir, "index.ts"),
         rootDir: discordPluginDir,
-        origin: "bundled",
+      });
+      const record = createPluginRecord({
+        id: "discord",
+        ...runtimeEntry,
+        origin: manifest.origin,
         enabled: true,
         configSchema: true,
+      });
+      // Match the loader's artifact identity so publication retains this registration
+      // instead of loading another Discord provider behind the edge spies.
+      const artifactBinding = bindPluginRuntimeArtifactSelection(record, {
+        ...manifest,
+        runtimeEntry,
+        preferBuiltPluginArtifacts: true,
       });
       registration.registry.plugins.push(record);
       const api = registration.createApi(record, { config: cfg });
@@ -547,6 +580,10 @@ describe("Gateway admitted Discord transcript capture", () => {
       phase("fixture:created");
       expect(registration.registry.diagnostics).toEqual([]);
       expect(record.transcriptSourceProviderIds).toEqual(["discord-voice"]);
+      expect(
+        getPluginValueInstance(registration.registry.transcriptSourceProviders[0]!.provider),
+      ).toBe(pluginInstance);
+      artifactBinding.runtimeRegistrationComplete = true;
       // Minimal startup retains this real registration; it skips monitor login/sidecars only.
       // This does not prove full plugin discovery or Discord monitor startup.
       setActivePluginRegistry(registration.registry);
@@ -588,7 +625,8 @@ describe("Gateway admitted Discord transcript capture", () => {
         const inboundProvider = published?.inboundPluginRegistry.transcriptSourceProviders.find(
           (entry) => entry.provider.id === "discord-voice",
         )?.provider;
-        expect(inboundProvider).toBeDefined();
+        expect(inboundProvider).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
+        expect(getPluginValueInstance(inboundProvider!)).toBe(pluginInstance);
         const selectedRegistry = published?.pluginGeneration.pluginRegistry;
         const selectedProvider = selectedRegistry?.transcriptSourceProviders.find(
           (entry) => entry.provider.id === "discord-voice",
@@ -604,10 +642,7 @@ describe("Gateway admitted Discord transcript capture", () => {
             })),
           }),
         ).toBe(inboundProvider);
-        // Prepared providers can own a different initialized runtime than the active registry.
-        const providerInstance = getPluginValueInstance(selectedProvider!);
-        expect(providerInstance).toBeDefined();
-        providerInstance!.run(() => fixture!.bindPublishedRuntime());
+        expect(getPluginValueInstance(selectedProvider!)).toBe(pluginInstance);
       }
       pluginInstance.run(() => fixture!.bindPublishedRuntime());
       phase("model-publication:verified");
@@ -789,6 +824,7 @@ describe("Gateway admitted Discord transcript capture", () => {
           resolvedProviderId: routedProvider?.id,
         }),
       ).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
+      expect(getPluginValueInstance(routedProvider!)).toBe(pluginInstance);
       phase("routed-provider:verified");
       routedService = createTranscriptsAutoStartService(routedContext);
       phase("routed-service:start");

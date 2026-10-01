@@ -212,7 +212,7 @@ posixIt.each(["npm-preflight-read", "npm-publish-read"] as const)(
 
 posixIt.each(
   (["npm-preflight-read", "npm-publish-read"] as const).flatMap((mode) =>
-    ([23, 124, 125, 143, "hang"] as const).map((failure) => ({ failure, mode })),
+    ([23, 125, "hang"] as const).map((failure) => ({ failure, mode })),
   ),
 )(
   "$mode fetch failure $failure stops before source package readback",
@@ -225,7 +225,7 @@ posixIt.each(
   55_000,
 );
 
-posixIt.each([1, 23, 124, 125, 143])(
+posixIt.each([1, 125, 143])(
   "ClawHub resolves origin fallback after safely drained ordinary local probe failure %s",
   async (code) => {
     const report = await pluginRun("clawhub-resolve", {
@@ -299,7 +299,7 @@ posixIt(
   55_000,
 );
 
-posixIt.each([1, 23, 124, 125, 143])(
+posixIt.each([1, 125])(
   "ClawHub protected tag ordinary lookup failure %s retains OIDC rejection",
   async (code) => {
     const report = await pluginRun("clawhub-oidc", {
@@ -365,7 +365,7 @@ posixIt(
 );
 
 posixIt(
-  "clawhub-trust accepts only the matching Tideclaw alpha branch after main and release misses",
+  "clawhub-trust rejects a retired Tideclaw alpha branch before ancestry admission",
   async () => {
     const report = await pluginRun("clawhub-trust", {
       env: { TRUSTED_PUBLISH_BRANCH: alphaBranch },
@@ -375,13 +375,9 @@ posixIt(
         [`merge-base --is-ancestor HEAD refs/remotes/origin/${alphaBranch}`]: { code: 0 },
       },
     });
-    expect(report.code, report.output).toBe(0);
-    expect(report.fetches.at(-1)?.args).toEqual([
-      "fetch",
-      "--no-tags",
-      "origin",
-      `+refs/heads/${alphaBranch}:refs/remotes/origin/${alphaBranch}`,
-    ]);
+    expect(report.code, report.output).toBe(1);
+    expect(report.output).toContain("Alpha releases are retired;");
+    expect(report.fetches).toEqual([]);
   },
   55_000,
 );

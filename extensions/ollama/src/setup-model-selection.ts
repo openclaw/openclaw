@@ -81,32 +81,6 @@ export function orderPreferredOllamaModelIds(modelIds: Iterable<string>): string
   return ordered;
 }
 
-function selectAppGuidedOllamaModelId(
-  models: Iterable<{
-    id: string;
-    contextWindow?: number;
-    supportsTools?: boolean;
-    reasoning?: boolean;
-    size?: number;
-  }>,
-): string | undefined {
-  const eligible = [...models].filter(
-    (model) =>
-      model.supportsTools === true &&
-      model.contextWindow !== undefined &&
-      model.contextWindow >= OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
-  );
-  const nonReasoning = eligible.filter((model) => model.reasoning !== true);
-  const pool = nonReasoning.length > 0 ? nonReasoning : eligible;
-  const measuredSizes = pool
-    .map((model) => model.size)
-    .filter((size): size is number => typeof size === "number" && size > 0);
-  const smallestSize = measuredSizes.length > 0 ? Math.min(...measuredSizes) : undefined;
-  const fastest =
-    smallestSize === undefined ? pool : pool.filter((model) => model.size === smallestSize);
-  return orderPreferredOllamaModelIds(fastest.map((model) => model.id))[0];
-}
-
 function isOllamaToolsCapableModel(model: OllamaModelWithContext): boolean {
   return !isOllamaEmbeddingOnlyModel(model) && model.capabilities?.includes("tools") === true;
 }
@@ -114,15 +88,23 @@ function isOllamaToolsCapableModel(model: OllamaModelWithContext): boolean {
 export function selectAppGuidedOllamaModelFromDiscovery(
   models: Iterable<OllamaModelWithContext>,
 ): string | undefined {
-  return selectAppGuidedOllamaModelId(
-    [...models].map((model) => ({
-      id: model.name,
-      contextWindow: model.contextWindow,
-      supportsTools: isOllamaToolsCapableModel(model),
-      reasoning: model.capabilities?.includes("thinking") ?? isReasoningModelHeuristic(model.name),
-      size: model.size,
-    })),
+  const eligible = [...models].filter(
+    (model) =>
+      isOllamaToolsCapableModel(model) &&
+      model.contextWindow !== undefined &&
+      model.contextWindow >= OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
   );
+  const nonReasoning = eligible.filter(
+    (model) => !(model.capabilities?.includes("thinking") ?? isReasoningModelHeuristic(model.name)),
+  );
+  const pool = nonReasoning.length > 0 ? nonReasoning : eligible;
+  const measuredSizes = pool
+    .map((model) => model.size)
+    .filter((size): size is number => typeof size === "number" && size > 0);
+  const smallestSize = measuredSizes.length > 0 ? Math.min(...measuredSizes) : undefined;
+  const fastest =
+    smallestSize === undefined ? pool : pool.filter((model) => model.size === smallestSize);
+  return orderPreferredOllamaModelIds(fastest.map((model) => model.name))[0];
 }
 
 export function buildOllamaModelsConfig(

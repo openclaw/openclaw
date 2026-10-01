@@ -1,4 +1,3 @@
-// Browser snapshot, navigation, and screenshot routes.
 import path from "node:path";
 import {
   ensureMediaDir,
@@ -29,7 +28,6 @@ import {
 } from "../navigation-guard.js";
 import {
   getBrowserProfileCapabilities,
-  shouldUsePlaywrightForAriaSnapshot,
   shouldUsePlaywrightForScreenshot,
 } from "../profile-capabilities.js";
 import { getLoadedPwAiModule, getPwAiModule } from "../pw-ai-module.js";
@@ -132,7 +130,6 @@ async function rescaleAnnotationsForNormalization(params: {
   return scaleAnnotations(params.annotations, next.width / orig.width, next.height / orig.height);
 }
 
-/** Register snapshot, screenshot, and navigation endpoints. */
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -723,12 +720,8 @@ export function registerBrowserAgentSnapshotRoutes(
             });
           }
 
-          const usePlaywrightAriaSnapshot = shouldUsePlaywrightForAriaSnapshot({
-            profile: profileCtx.profile,
-            wsUrl: tab.wsUrl,
-          });
           let resolved: Awaited<ReturnType<typeof snapshotAria>>;
-          if (usePlaywrightAriaSnapshot) {
+          if (!tab.wsUrl) {
             const pw = await requirePwAi(res, "aria snapshot");
             if (!pw) {
               return;

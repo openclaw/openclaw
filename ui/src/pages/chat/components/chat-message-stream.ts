@@ -1,25 +1,28 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatReplyTarget, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-  type MessageReplyTarget,
-} from "./chat-message-markdown.ts";
+import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
-import { renderChatReplyAttribution } from "./chat-reply-attribution.ts";
+import {
+  renderReplyLine,
+  renderReplyLineConnector,
+  resolveGroupReplyLine,
+} from "./chat-reply-attribution.ts";
+import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
-import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
+import { syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
@@ -31,6 +34,9 @@ export type StreamGroupPart = Extract<
 
 type StreamMessageOptions = Pick<
   Parameters<typeof renderGroupedMessage>[2],
+  | "onResolveReply"
+  | "onOpenReply"
+  | "replyNavigationId"
   | "sessionKey"
   | "presented"
   | "boardProvider"
@@ -44,6 +50,7 @@ type StreamMessageOptions = Pick<
   | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
+  | "getTurnVideoMessages"
   | "onRequestOpenImage"
   | "onOpenImage"
   | "onAssistantAttachmentLoaded"
@@ -57,9 +64,10 @@ type StreamMessageOptions = Pick<
 >;
 
 export type StreamGroupOptions = StreamMessageOptions & {
+  resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
   entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
-  onReply?: (target: MessageReplyTarget) => void;
+  onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: Parameters<typeof renderChatAvatar>[1];
   showAssistantAvatar?: boolean;
@@ -145,15 +153,26 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
       : renderChatAvatar("assistant", assistant);
-  const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
+  const sourcePart = parts.find((part) => part.kind === "stream");
+  const replyLine = resolveGroupReplyLine(
+    {
+      role: "assistant",
+      messages: [],
+      replyToSender: sourcePart?.replyToSender,
+      replyToMessage: sourcePart?.replyToMessage,
+    },
+    opts.resolveReplyPreview,
+  );
+  const hasReplyRow = replyLine.state !== "hidden" && avatar !== nothing;
+  const groupClass = `chat-group assistant${hasReplyRow ? " chat-group--reply" : ""}${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">
-        ${renderChatReplyAttribution(parts.find((part) => part.kind === "stream")?.replyToSender)}
-        ${renderStreamGroupParts(parts, opts, "standalone")}
+        ${renderReplyLine(replyLine, opts)} ${renderStreamGroupParts(parts, opts, "standalone")}
       </div>
+      ${renderReplyLineConnector(replyLine, avatar)}
       ${
         footerStartedAt === null
           ? nothing
@@ -186,14 +205,52 @@ export function renderWorkGroupSummary(
   },
 ) {
   const duration = formatDurationCompact(item.durationMs);
-  const cards = item.groups.flatMap((group) =>
-    group.messages.flatMap(({ message }) => extractToolCardsCached(message)),
+  const entries = item.groups.flatMap((group) =>
+    group.messages.map(({ message }) => ({
+      cards: extractToolCardsCached(message),
+      // An explicit empty projection also owns the message: its calls were hidden.
+      activity: Array.isArray(asOptionalRecord(message)?.activity)
+        ? readPreparedActivity(message)
+        : undefined,
+    })),
   );
-  const activity = item.groups.flatMap((group) =>
-    group.messages.flatMap(({ message }) => readPreparedActivity(message)),
+  const prepared = entries.flatMap(({ cards, activity }) =>
+    activity === undefined ? [] : [{ cards, activity }],
   );
+  const preparedCallIds = new Set(
+    prepared.flatMap(({ cards, activity }) => [
+      ...cards.flatMap((card) => (card.callId ? [card.callId] : [])),
+      ...activity.map((activityItem) => activityItem.toolCallId ?? activityItem.itemId),
+    ]),
+  );
+  const cardsById = new Map(
+    entries.flatMap((entry) => entry.cards).map((card) => [card.callId ?? card, card]),
+  );
+  const cards = [...cardsById.values()];
+  const rawCards = new Set(
+    entries.filter((entry) => entry.activity === undefined).flatMap((entry) => entry.cards),
+  );
+  const fallback = cards.filter(
+    (card) => rawCards.has(card) && (!card.callId || !preparedCallIds.has(card.callId)),
+  );
+  const activity = prepared.flatMap((entry) => entry.activity);
+  for (const [index, card] of fallback.entries()) {
+    const outcome = resolveToolCardOutcome(card, false);
+    activity.push({
+      itemId: `work-summary-raw:${index}`,
+      toolCallId: card.callId,
+      kind: "tool",
+      phase: "end",
+      title: card.name,
+      name: card.name,
+      status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
+    });
+  }
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
-  const outcomes = describeToolGroup(activity).outcomes.filter(({ kind }) => kind !== "failed");
+  const summary = describeToolGroup(activity);
+  const total = summary.total;
+  const outcomes = summary.outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped");
+  const toolOutcomes = renderToolOutcomeSummary(cards, true, activity);
   const content = html`
     <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
       <button
@@ -202,17 +259,25 @@ export function renderWorkGroupSummary(
         aria-expanded=${String(opts.expanded)}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
-        @click=${(event: MouseEvent) => {
-          if (shouldToggleSelectableDisclosure(event)) {
-            opts.onToggle();
-          }
-        }}
+        @click=${opts.onToggle}
       >
         <span class="chat-tool-disclosure__content">
           <span class="chat-activity-group__label">${label}</span>
         </span>
-        ${outcomes.map((outcome) => html`<span class="muted">${outcome.label}</span>`)}
-        ${renderToolOutcomeSummary(cards, true, activity.length ? activity : undefined)}
+        ${
+          total > 0
+            ? html`<span class="chat-work-group__total"
+                >·
+                ${t(`chat.workRun.toolCalls${total === 1 ? "One" : "Many"}`, { count: String(total) })}</span
+              >`
+            : nothing
+        }
+        ${outcomes.map((outcome) => html`<span class="muted">· ${outcome.label}</span>`)}
+        ${
+          toolOutcomes === nothing
+            ? nothing
+            : html`<span class="chat-work-group__outcomes">· ${toolOutcomes}</span>`
+        }
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-work-group__separator" aria-hidden="true"></div>

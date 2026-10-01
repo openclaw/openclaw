@@ -240,28 +240,13 @@ export function trimLeadingEnv(words: string[]): string[] {
     return words;
   }
 
-  let index = 0;
-  if (binaryName(words[0]) === "env") {
-    index = 1;
-    while (index < words.length) {
-      const token = words[index];
-      if (!token) {
-        break;
-      }
-      if (token.startsWith("-")) {
-        index += 1;
-        continue;
-      }
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
-        index += 1;
-        continue;
-      }
+  const isEnv = binaryName(words[0]) === "env";
+  let index = isEnv ? 1 : 0;
+  while (index < words.length) {
+    const token = words[index];
+    if (!token || (!(isEnv && token.startsWith("-")) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token))) {
       break;
     }
-    return words.slice(index);
-  }
-
-  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words.at(index) ?? "")) {
     index += 1;
   }
   return words.slice(index);
@@ -299,7 +284,11 @@ type HeredocMarker = {
   operatorIndex: number;
 };
 
-function parseHeredocMarker(command: string, operatorIndex: number): HeredocMarker | undefined {
+export function parseHeredocMarker(
+  command: string,
+  operatorIndex: number,
+  whitespace = /[ \t]/u,
+): HeredocMarker | undefined {
   if (
     command[operatorIndex] !== "<" ||
     command[operatorIndex - 1] === "<" ||
@@ -311,7 +300,7 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
 
   const stripLeadingTabs = command[operatorIndex + 2] === "-";
   let index = operatorIndex + (stripLeadingTabs ? 3 : 2);
-  while (/[ \t]/u.test(command[index] ?? "")) {
+  while (whitespace.test(command[index] ?? "")) {
     index += 1;
   }
 
@@ -333,7 +322,7 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
       continue;
     }
 
-    if (/[\r\n;&|<>]/u.test(char) || /[ \t]/u.test(char)) {
+    if (/[\r\n;&|<>]/u.test(char) || whitespace.test(char)) {
       break;
     }
     if (char === "'" || char === '"') {

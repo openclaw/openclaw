@@ -45,6 +45,11 @@ context messages. If transcript persistence rejects a completion because its
 keyed input belongs to a closed turn, delivery records a permanent failure with
 the error. It does not retry other models or keep scheduling the same completion.
 
+If a chunk in a direct-message text fallback fails or is aborted after earlier
+chunks were sent, OpenClaw records an incomplete delivery. It stops automatic
+retries to avoid duplicating chunks the recipient already received. A successful
+child's result remains available for recovery.
+
 ### Private parent completion
 
 Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a
@@ -63,6 +68,9 @@ settles. A normal parent finish releases each ready result for private review;
 removed parent does not transfer the result to another session. When a settled
 batch contains a private result, its combined review stays private; ordinary
 siblings retain their individual completion delivery.
+
+Inspecting a completed child's status before yielding does not consume or invalidate
+its private result.
 
 Waiting for the spawning parent turn does not consume a private result's delivery
 retry window. A normal parent finish starts that window when it releases the

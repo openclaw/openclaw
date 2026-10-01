@@ -28,7 +28,6 @@ import {
   resolveAnthropicRequestBetaHeader,
 } from "../transports/anthropic-payload-policy.js";
 import { consumeAnthropicStream } from "../transports/anthropic-stream-reducer.js";
-// Anthropic provider adapts Anthropic streams and tool calls for the runtime.
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import {
@@ -48,6 +47,7 @@ import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseJsonWithRepair } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import {
   isAnthropicOAuthApiKey,
   omitFoundryBearerCredentialHeaders,
@@ -60,6 +60,7 @@ import {
   resolveAnthropicThinkingEffort,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   usesClaudeFable5MessagesContract,
@@ -73,7 +74,7 @@ import {
 } from "./anthropic-tool-projection.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { buildCopilotDynamicHeaders } from "./github-copilot-headers.js";
 import {
   adjustMaxTokensForThinking,
   buildBaseOptions,
@@ -104,18 +105,6 @@ function getAnthropicCompat(model: Model<"anthropic-messages">) {
       model.compat?.sendSessionAffinityHeaders ?? (isFireworks || isCloudflareAiGatewayAnthropic),
     allowEmptySignature: model.compat?.allowEmptySignature ?? false,
   };
-}
-
-function mergeHeaders(
-  ...headerSources: (Record<string, string | null> | undefined)[]
-): Record<string, string | null> {
-  const merged: Record<string, string | null> = {};
-  for (const headers of headerSources) {
-    if (headers) {
-      Object.assign(merged, headers);
-    }
-  }
-  return merged;
 }
 
 const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
@@ -193,14 +182,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       } else {
         const apiKey = requestOptions?.apiKey ?? getEnvApiKey(model.provider) ?? "";
 
-        let copilotDynamicHeaders: Record<string, string> | undefined;
-        if (model.provider === "github-copilot") {
-          const hasImages = hasCopilotVisionInput(requestContext.messages);
-          copilotDynamicHeaders = buildCopilotDynamicHeaders({
-            messages: requestContext.messages,
-            hasImages,
-          });
-        }
+        const copilotDynamicHeaders =
+          model.provider === "github-copilot"
+            ? buildCopilotDynamicHeaders(requestContext.messages)
+            : undefined;
 
         const cacheRetention = requestOptions?.cacheRetention ?? resolveCacheRetention();
         const cacheSessionId = cacheRetention === "none" ? undefined : requestOptions?.sessionId;
@@ -210,7 +195,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
           apiKey,
           requestOptions?.thinkingEnabled === true,
           requestOptions?.interleavedThinking ?? true,
-          shouldUseFineGrainedToolStreamingBeta(model, requestContext),
+          Boolean(requestContext.tools?.length) &&
+            !getAnthropicCompat(model).supportsEagerToolInputStreaming,
           resolveOpencodeSessionHeaders(model, requestOptions),
           copilotDynamicHeaders,
           cacheSessionId,
@@ -326,10 +312,7 @@ export const streamSimpleAnthropic: StreamFunction<
   context: Context,
   options?: AnthropicSimpleStreamOptions,
 ) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = {
     ...buildBaseOptions(model, options, apiKey),
@@ -348,13 +331,12 @@ export const streamSimpleAnthropic: StreamFunction<
       thinkingEnabled: false,
     } satisfies AnthropicCompactionOptions);
   }
-  const reasoning =
-    options?.reasoning === "off"
-      ? mandatoryAdaptiveThinking
-        ? "low"
-        : "high"
-      : options?.reasoning;
-  if (resolveClaudeOpus5ModelIdentity(model) || resolveClaudeSonnet5ModelIdentity(model)) {
+  const reasoning = options?.reasoning === "off" ? "low" : options?.reasoning;
+  if (
+    resolveClaudeOpus5ModelIdentity(model) ||
+    resolveClaudeSonnet5ModelIdentity(model) ||
+    (reasoning && supportsClaudeAdaptiveThinking(model))
+  ) {
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
@@ -365,17 +347,6 @@ export const streamSimpleAnthropic: StreamFunction<
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: mandatoryAdaptiveThinking,
-    } satisfies AnthropicCompactionOptions);
-  }
-
-  // For Opus 4.6 and Sonnet 4.6: use adaptive thinking with effort level
-  // For older models: use budget-based thinking
-  if (supportsClaudeAdaptiveThinking(model)) {
-    const effort = resolveAnthropicThinkingEffort(model, reasoning);
-    return streamAnthropic(model, context, {
-      ...base,
-      thinkingEnabled: true,
-      effort,
     } satisfies AnthropicCompactionOptions);
   }
 
@@ -411,7 +382,8 @@ export const streamSimpleAnthropic: StreamFunction<
 function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">): boolean {
   if (
     (!usesClaudeFable5MessagesContract(model) &&
-      resolveClaudeOpus5ModelIdentity(model) === undefined) ||
+      resolveClaudeOpus5ModelIdentity(model) === undefined &&
+      resolveClaudeSonnet55ModelIdentity(model) === undefined) ||
     model.provider !== "anthropic"
   ) {
     return false;
@@ -450,17 +422,28 @@ function createClient(
       ? { sanitizeSse: false as const }
       : undefined;
   // Anthropic supports custom fetch, so sentinels stay opaque until guarded egress.
-  const fetch = getAiTransportHost().buildModelFetch(model, undefined, fetchOptions);
+  const clientOptions = {
+    baseURL: model.baseUrl,
+    dangerouslyAllowBrowser: true,
+    fetch: getAiTransportHost().buildModelFetch(model, undefined, fetchOptions),
+    maxRetries: 0,
+  };
+  const baseHeaders = {
+    accept: "application/json",
+    "anthropic-dangerous-direct-browser-access": "true",
+    ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
+  };
 
   if (model.provider === "cloudflare-ai-gateway") {
     const client = new Anthropic({
+      ...clientOptions,
       apiKey,
       authToken: null,
       baseURL: resolveCloudflareBaseUrl(model),
-      dangerouslyAllowBrowser: true,
-      defaultHeaders: mergeHeaders(
+      defaultHeaders: Object.assign(
+        {},
         {
-          accept: "application/json",
+          accept: baseHeaders.accept,
           "anthropic-dangerous-direct-browser-access": "true",
           Authorization: null,
           ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
@@ -468,62 +451,31 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
-      fetch,
-      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
   }
 
-  // Copilot: Bearer auth, selective betas.
-  if (model.provider === "github-copilot") {
-    const client = new Anthropic({
-      apiKey: null,
-      authToken: apiKey,
-      baseURL: model.baseUrl,
-      dangerouslyAllowBrowser: true,
-      defaultHeaders: mergeHeaders(
-        {
-          accept: "application/json",
-          "anthropic-dangerous-direct-browser-access": "true",
-          ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-        },
-        model.headers,
-        dynamicHeaders,
-        optionsHeaders,
-      ),
-      fetch,
-      maxRetries: 0,
-    });
-
-    return { client, isOAuthToken: false, serverSideFallback: false };
-  }
-
+  const isCopilot = model.provider === "github-copilot";
   if (
+    isCopilot ||
     usesFoundryBearerAuth({
       ...model,
       headers: resolveAiTransportHeaderSentinels(model.headers),
     })
   ) {
     const client = new Anthropic({
+      ...clientOptions,
       apiKey: null,
       authToken: apiKey,
-      baseURL: model.baseUrl,
-      dangerouslyAllowBrowser: true,
-      defaultHeaders: mergeHeaders(
-        {
-          accept: "application/json",
-          "anthropic-dangerous-direct-browser-access": "true",
-          ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-        },
-        omitFoundryBearerCredentialHeaders(model.headers),
+      defaultHeaders: Object.assign(
+        {},
+        baseHeaders,
+        isCopilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
         dynamicHeaders,
         optionsHeaders,
       ),
-      fetch,
-      maxRetries: 0,
     });
-
     return { client, isOAuthToken: false, serverSideFallback: false };
   }
 
@@ -535,13 +487,10 @@ function createClient(
       optionsHeaders,
     );
     const client = new Anthropic({
+      ...clientOptions,
       apiKey: null,
       authToken: apiKey,
-      baseURL: model.baseUrl,
-      dangerouslyAllowBrowser: true,
       defaultHeaders: identity.headers,
-      fetch,
-      maxRetries: 0,
     });
 
     return {
@@ -558,24 +507,18 @@ function createClient(
     sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
       ? { "x-session-affinity": sessionId }
       : {};
-  const defaultHeaders = mergeHeaders(
-    {
-      accept: "application/json",
-      "anthropic-dangerous-direct-browser-access": "true",
-      ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-    },
+  const defaultHeaders: Record<string, string | null> = Object.assign(
+    {},
+    baseHeaders,
     sessionAffinityHeaders,
     model.headers,
     optionsHeaders,
   );
   const client = new Anthropic({
+    ...clientOptions,
     apiKey,
     authToken: null,
-    baseURL: model.baseUrl,
-    dangerouslyAllowBrowser: true,
     defaultHeaders,
-    fetch,
-    maxRetries: 0,
   });
 
   return {
@@ -654,7 +597,7 @@ async function buildParams(
     params.system = system;
   }
 
-  // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
+  // Fable 5, Opus 5, and Sonnet 5.5 safety classifiers can decline benign-adjacent work.
   // Anthropic owns the per-category fallback recommendation so routing can
   // evolve without a client release.
   if (serverSideFallback) {
@@ -674,13 +617,4 @@ async function buildParams(
   );
 
   return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
-}
-
-function shouldUseFineGrainedToolStreamingBeta(
-  model: Model<"anthropic-messages">,
-  context: Context,
-): boolean {
-  return (
-    Boolean(context.tools?.length) && !getAnthropicCompat(model).supportsEagerToolInputStreaming
-  );
 }

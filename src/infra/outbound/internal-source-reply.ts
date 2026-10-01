@@ -8,6 +8,7 @@ import type { ChannelThreadingToolContext } from "../../channels/plugins/types.p
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { isConfiguredChannel, listConfiguredMessageChannels } from "./channel-selection.js";
 
@@ -29,13 +30,10 @@ function hasExternalSessionDeliveryRoute(sessionKey: string | undefined): boolea
 }
 
 function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
-  for (const key of ["channel", "target", "to", "channelId"]) {
-    if (normalizeOptionalString(params[key])) {
-      return true;
-    }
-  }
   return (
-    Array.isArray(params.targets) && params.targets.some((value) => normalizeOptionalString(value))
+    readTrimmedStringAlias(params, ["channel", "target", "to", "channelId"]) !== undefined ||
+    (Array.isArray(params.targets) &&
+      params.targets.some((value) => normalizeOptionalString(value)))
   );
 }
 

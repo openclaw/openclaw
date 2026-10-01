@@ -9,7 +9,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -18,7 +17,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
+import {
+  resolveDatabasePath,
+  resolveOpenClawStateDirForDatabasePath,
+} from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -320,8 +322,6 @@ function enqueueExecAuthorization(
       owner.admission.identity.key !== context.admission.identity.key ||
       owner.maintenanceScope !== context.maintenanceScope ||
       owner.existingSchemaPath !== context.existingSchemaPath ||
-      owner.coordinatorRuntime.directory !== context.coordinatorRuntime.directory ||
-      owner.coordinatorRuntime.keepAlive !== context.coordinatorRuntime.keepAlive ||
       owner.environment.OPENCLAW_SUPERVISOR_MODE !== context.environment.OPENCLAW_SUPERVISOR_MODE
     ) {
       batch = undefined;

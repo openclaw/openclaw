@@ -14,7 +14,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { collectDoctorFindings, runDoctorLintCli } from "./doctor-lint.js";
+import { collectDoctorFindings } from "./doctor-lint-runner.js";
+import { runDoctorLintCli } from "./doctor-lint.js";
 import { snapshotDoctorLintSqliteFamily } from "./doctor-lint.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -38,6 +39,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 vi.mock("../agents/mcp-http-fetch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/mcp-http-fetch.js")>()),
   buildMcpHttpFetch: () => mocks.fetch,
+  buildMcpOAuthHttpFetch: () => mocks.fetch,
 }));
 
 const ISSUER = "https://oauth.example.test";

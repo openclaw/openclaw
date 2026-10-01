@@ -35,21 +35,7 @@ export async function loadOutboundMediaFromUrl(
   mediaUrl: string,
   options: OutboundMediaLoadOptions = {},
 ) {
-  return await loadWebMedia(
-    mediaUrl,
-    buildOutboundMediaLoadOptions({
-      maxBytes: options.maxBytes,
-      mediaAccess: options.mediaAccess,
-      mediaLocalRoots: options.mediaLocalRoots,
-      mediaReadFile: options.mediaReadFile,
-      workspaceDir: options.workspaceDir,
-      proxyUrl: options.proxyUrl,
-      fetchImpl: options.fetchImpl,
-      requestInit: options.requestInit,
-      optimizeImages: options.optimizeImages,
-      trustExplicitProxyDns: options.trustExplicitProxyDns,
-    }),
-  );
+  return await loadWebMedia(mediaUrl, buildOutboundMediaLoadOptions(options));
 }
 
 export type HostedOutboundMediaMetadata = {
@@ -134,14 +120,6 @@ const DEFAULT_HOSTED_OUTBOUND_MEDIA_MAX_ENTRIES = 64;
 const DEFAULT_HOSTED_OUTBOUND_MEDIA_CHUNK_ROWS_PER_ENTRY_BUDGET = 512;
 const HOSTED_OUTBOUND_MEDIA_METADATA_TTL_GRACE_MS = 60_000;
 
-function createHostedOutboundMediaId(): string {
-  return randomBytes(12).toString("hex");
-}
-
-function createHostedOutboundMediaToken(): string {
-  return randomBytes(24).toString("hex");
-}
-
 function buildHostedOutboundMediaMetaKey(id: string): string {
   return `media:${id}:meta`;
 }
@@ -174,28 +152,6 @@ function isRetainedHostedOutboundMediaExpiry(
     Number.isSafeInteger(expiresAt) &&
     (expiresAt > nowMs || nowMs - expiresAt < postExpiryRetentionMs)
   );
-}
-
-function createHostedOutboundMediaMetaRecord(params: {
-  id: string;
-  routePath: string;
-  token: string;
-  contentType?: string;
-  fileName?: string;
-  expiresAt: number;
-  chunkCount: number;
-  byteLength: number;
-}): HostedOutboundMediaMetaRecord {
-  return {
-    id: params.id,
-    routePath: params.routePath,
-    token: params.token,
-    ...(params.contentType ? { contentType: params.contentType } : {}),
-    ...(params.fileName ? { fileName: params.fileName } : {}),
-    expiresAt: params.expiresAt,
-    chunkCount: params.chunkCount,
-    byteLength: params.byteLength,
-  };
 }
 
 function createHostedOutboundMediaMetadata(
@@ -258,8 +214,8 @@ export function createHostedOutboundMediaStore(
   if (overflowPolicy !== "evict-oldest" && overflowPolicy !== "reject-new") {
     throw new Error("hosted outbound media overflowPolicy must be evict-oldest or reject-new");
   }
-  const createId = options.createId ?? createHostedOutboundMediaId;
-  const createToken = options.createToken ?? createHostedOutboundMediaToken;
+  const createId = options.createId ?? (() => randomBytes(12).toString("hex"));
+  const createToken = options.createToken ?? (() => randomBytes(24).toString("hex"));
   const chunkPhysicalTtlMs = options.ttlMs + postExpiryRetentionMs;
   const metadataPhysicalTtlMs =
     options.ttlMs +
@@ -304,10 +260,6 @@ export function createHostedOutboundMediaStore(
     } finally {
       deletingEntries.delete(id);
     }
-  }
-
-  async function deleteEntryRows(id: string, chunkCount: number): Promise<void> {
-    await deleteHostedOutboundMediaRows(id, options.metadataStore, options.chunkStore, chunkCount);
   }
 
   async function readMetadataRecord(
@@ -385,7 +337,10 @@ export function createHostedOutboundMediaStore(
       await close();
       return null;
     }
-    const meta = await readMetadataRecord(id, nowMs);
+    const meta = await readMetadataRecord(id, nowMs).catch(async (error: unknown) => {
+      await close();
+      throw error;
+    });
     if (!meta) {
       await close();
       return null;
@@ -518,20 +473,25 @@ export function createHostedOutboundMediaStore(
           }
           await options.metadataStore.register(
             buildHostedOutboundMediaMetaKey(id),
-            createHostedOutboundMediaMetaRecord({
+            {
               id,
               routePath: params.routePath,
               token,
-              contentType: media.contentType,
-              fileName: media.fileName,
+              ...(media.contentType ? { contentType: media.contentType } : {}),
+              ...(media.fileName ? { fileName: media.fileName } : {}),
               expiresAt,
               chunkCount,
               byteLength: media.buffer.byteLength,
-            }),
+            },
             { ttlMs: metadataPhysicalTtlMs },
           );
         } catch (error) {
-          await deleteEntryRows(id, chunkCount);
+          await deleteHostedOutboundMediaRows(
+            id,
+            options.metadataStore,
+            options.chunkStore,
+            chunkCount,
+          );
           throw error;
         }
         return `${params.publicBaseUrl}${params.routePath}${id}?token=${token}`;

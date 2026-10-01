@@ -1,10 +1,16 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import { vi } from "vitest";
-import type { SessionEntry } from "../../../config/sessions.js";
 import type {
   listSessionEntriesCore,
   loadSessionEntry,
   patchSessionEntryCore,
+  SessionEntryReadScope,
 } from "../../../config/sessions/session-accessor.js";
+import type { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import type { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
+import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
+import type { SessionEntryReadWorkerOwner } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
@@ -18,6 +24,7 @@ import type {
   persistSubagentRunsToDiskOrThrow,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
 
@@ -42,6 +49,42 @@ export function createSubagentRegistryMockState() {
     entries: {} as Record<string, SessionEntry>,
     loadSessionEntry: vi.fn<typeof loadSessionEntry>(
       (scope): ReturnType<typeof loadSessionEntry> => mocks.entries[scope.sessionKey],
+    ),
+    readSessionCurrent: vi.fn<
+      (scope: Pick<SessionEntryReadScope, "sessionKey">) => SessionEntryCurrentFacts | undefined
+    >((scope): SessionEntryCurrentFacts | undefined => {
+      const entry = mocks.entries[scope.sessionKey];
+      return (
+        entry && {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          lifecycleRunId: entry.lifecycleRunId,
+          activeWriterRunId: entry.activeWriterRunId,
+          subagentRecovery: entry.subagentRecovery,
+        }
+      );
+    }),
+    applySessionEntryExactReplacements: vi.fn<typeof applySessionEntryExactReplacements>(
+      async <T>(
+        params: Parameters<typeof applySessionEntryExactReplacements<T>>[0],
+      ): Promise<T> => {
+        const entries = (params.sessionKeys ?? Object.keys(mocks.entries)).flatMap((sessionKey) => {
+          const entry = mocks.entries[sessionKey];
+          return entry ? [{ sessionKey, entry: structuredClone(entry) }] : [];
+        });
+        const selectedKeys = new Set(entries.map(({ sessionKey }) => sessionKey));
+        const operation = await params.update(entries);
+        const replacements = [...(operation.replacements ?? [])].filter(({ sessionKey }) =>
+          selectedKeys.has(sessionKey),
+        );
+        if (replacements.length) {
+          params.assertCommitAllowed?.();
+          for (const { sessionKey, entry } of replacements) {
+            mocks.entries[sessionKey] = entry;
+          }
+        }
+        return operation.result;
+      },
     ),
     listSessionEntriesCore: vi.fn<typeof listSessionEntriesCore>(
       (): ReturnType<typeof listSessionEntriesCore> =>
@@ -80,7 +123,7 @@ export function createSubagentRegistryMockState() {
     clearSubagentRunsReadCacheForTest: vi.fn(),
     persistSubagentRunsToDisk: vi.fn<typeof persistSubagentRunsToDisk>(),
     persistSubagentRunsToDiskOrThrow: vi.fn<typeof persistSubagentRunsToDiskOrThrow>(),
-    restoreSubagentRunsFromDisk: vi.fn<typeof restoreSubagentRunsFromDisk>(() => 0),
+    restoreSubagentRunsFromDisk: vi.fn<typeof restoreSubagentRunsFromDisk>(async () => 0),
     getSubagentRunsSnapshotForRead: vi.fn(
       (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>
         new Map(runs),
@@ -114,5 +157,52 @@ export function createSubagentRegistryMockState() {
     })),
     lifecycleGeneration: "test-generation",
   };
-  return mocks;
+  return Object.assign(mocks, {
+    mockRestoredRuns: (createEntries: () => SubagentRunRecord[]) =>
+      mocks.restoreSubagentRunsFromDisk.mockImplementation(async ({ runs }) => {
+        const entries = createEntries();
+        for (const entry of entries) {
+          runs.set(entry.runId, entry);
+        }
+        return entries.length;
+      }),
+    sessionAccessors: {
+      findTranscriptEvent: vi.fn(async () => undefined),
+      listSessionEntriesCore: mocks.listSessionEntriesCore,
+      listSessionEntriesReadOnly: mocks.listSessionEntriesCore,
+      loadSessionEntry: mocks.loadSessionEntry,
+      loadSessionEntryReadOnly: mocks.loadSessionEntry,
+      patchSessionEntryCore: mocks.patchSessionEntryCore,
+    },
+    captureSessionEntryCurrentRead: (
+      scope: Parameters<typeof captureSessionEntryCurrentRead>[0],
+      owner: Parameters<typeof captureSessionEntryCurrentRead>[1],
+    ): ReturnType<typeof captureSessionEntryCurrentRead> => {
+      owner.assertCurrent();
+      return {
+        kind: "native",
+        assertSourceCurrent: noop,
+        readCurrent: () => mocks.readSessionCurrent(scope),
+      };
+    },
+    withSessionEntryReadOnlyInWorker: async <T>(
+      scope: SessionEntryReadScope,
+      assertCurrent: () => void,
+      consume: (
+        read: Result<SessionEntry | undefined, unknown>,
+        owner: SessionEntryReadWorkerOwner,
+      ) => Promise<T>,
+    ): Promise<T> => {
+      assertCurrent();
+      let read: Result<SessionEntry | undefined, unknown>;
+      try {
+        read = { ok: true, value: mocks.loadSessionEntry(scope) };
+      } catch (error) {
+        read = { ok: false, error };
+      }
+      const result = await consume(read, { kind: "native", assertCurrent });
+      assertCurrent();
+      return result;
+    },
+  });
 }

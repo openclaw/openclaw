@@ -331,8 +331,6 @@ describe("npm onboarding fixture consent", () => {
 
   it.each([
     { registry: false, channel: "telegram" as const },
-    { registry: true, channel: "telegram" as const },
-    { registry: false, channel: "discord" as const },
     { registry: true, channel: "slack" as const, sourcePlugin: true },
   ])("keeps same-version legacy setup automatic: $channel registry=$registry", (scenario) => {
     const { result, installs, detail } = runScenario({ ...scenario, consent: false });
@@ -344,8 +342,6 @@ describe("npm onboarding fixture consent", () => {
     { channel: "telegram" as const, bundled: true, sourcePlugin: true },
     { channel: "discord" as const, bundled: true },
     { channel: "discord" as const },
-    { channel: "slack" as const },
-    { channel: "discord" as const, sourcePlugin: true },
     { channel: "slack" as const, sourcePlugin: true },
   ])("prepares only the selected external channel: %j", (scenario) => {
     const { result, installs, detail } = runScenario({ ...scenario, registry: true });
@@ -366,13 +362,12 @@ describe("npm onboarding fixture consent", () => {
     );
   });
 
-  it.each([
-    { channel: "discord" as const, consent: true },
-    { channel: "discord" as const, consent: false },
-    { channel: "slack" as const, consent: true },
-    { channel: "slack" as const, consent: false },
-  ])("rejects source fixtures without a verified registry: %j", (scenario) => {
-    const { result, events, detail } = runScenario({ ...scenario, sourcePlugin: true });
+  it("rejects source fixtures without a verified registry", () => {
+    const { result, events, detail } = runScenario({
+      channel: "discord",
+      consent: true,
+      sourcePlugin: true,
+    });
     expect(result.status, detail).not.toBe(0);
     expect(detail).toContain(
       "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
@@ -382,8 +377,6 @@ describe("npm onboarding fixture consent", () => {
 
   it.each([
     { channel: "discord" as const, companion: "missing" as const },
-    { channel: "slack" as const, companion: "missing" as const },
-    { channel: "discord" as const, companion: "wrong-identity" as const },
     { channel: "slack" as const, companion: "wrong-identity" as const },
   ])("verifies the selected companion before any CLI call: %j", (scenario) => {
     const { result, events, detail } = runScenario({

@@ -196,6 +196,7 @@ describe("ordinary chat input admission", () => {
         expect.anything(),
       );
       await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
+      const accepted = listSessionPendingInputs(fixture.scope);
       const reconnect = await fixture.send();
       expect(reconnect).toHaveBeenCalledWith(
         true,
@@ -208,6 +209,9 @@ describe("ordinary chat input admission", () => {
         total: 1,
         items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
       });
+      expect(listSessionPendingInputs(fixture.scope)).toEqual(accepted);
+      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
       expect(fixture.context.removeChatRun).not.toHaveBeenCalled();
       expect(fixture.context.broadcast).not.toHaveBeenCalledWith(
         "chat",
@@ -367,7 +371,7 @@ describe("ordinary chat input admission", () => {
     async (executionMode) => {
       const fixture = await createBrowserFollowupFixture({ active: false });
       const placements = createWorkerSessionPlacementStore();
-      const requested = placements.startDispatch({ ...fixture.scope, executionMode });
+      const requested = await placements.startDispatch({ ...fixture.scope, executionMode });
       const provisioning = placements.transition({
         sessionId: fixture.scope.sessionId,
         from: "requested",
@@ -496,27 +500,6 @@ describe("ordinary chat input admission", () => {
       }
     },
   );
-
-  it("keeps one approved source when an accepted browser request is retried", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    try {
-      await fixture.send();
-      const accepted = listSessionPendingInputs(fixture.scope);
-      expect(accepted.total).toBe(1);
-      const retried = await fixture.send();
-      expect(retried).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "in_flight" }),
-        undefined,
-        expect.objectContaining({ cached: true }),
-      );
-      expect(listSessionPendingInputs(fixture.scope)).toEqual(accepted);
-      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-    } finally {
-      await fixture.cleanup();
-    }
-  });
 
   it("does not execute a consumed collected source when retried after the session becomes idle", async () => {
     const fixture = await createBrowserFollowupFixture();
