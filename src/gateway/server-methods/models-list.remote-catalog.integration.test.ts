@@ -3,7 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { startSerializedSnapshotBuildBatch } from "../../agents/prepared-model-runtime.build.js";
 import {
@@ -24,10 +24,10 @@ import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each([1, 2])(
+it.for([1, 2])(
   "publishes one remote rows/pricing generation without blocking readers or repricing admitted runs (v%s)",
   { timeout: 120_000 },
-  async (schemaVersion) => {
+  async (schemaVersion, { signal }) => {
     const createUpdateCheck = updateStartup.createGatewayUpdateCheck;
     vi.spyOn(updateStartup, "createGatewayUpdateCheck").mockImplementation((params) => ({
       ...createUpdateCheck(params),
@@ -254,11 +254,7 @@ it.each([1, 2])(
           });
           try {
             read();
-            return await withTestTimeout(
-              ready.promise,
-              15_000,
-              "Published catalog rows did not arrive",
-            );
+            return await withinTest(ready.promise, signal);
           } finally {
             stop();
           }
@@ -270,14 +266,13 @@ it.each([1, 2])(
             provider: "kimi",
             model,
           })?.input;
-        const settleInterrupted = async (pending: Promise<ModelsListResult>, phase: string) => {
-          const outcome = await withTestTimeout(
+        const settleInterrupted = async (pending: Promise<ModelsListResult>) => {
+          const outcome = await withinTest(
             pending.then(
               (value) => ({ value }),
               (error: unknown) => ({ error }),
             ),
-            15_000,
-            `Superseded catalog request did not settle: ${phase}`,
+            signal,
           );
           if ("error" in outcome) {
             expect(outcome.error).toMatchObject({ code: "UNAVAILABLE" });
@@ -303,12 +298,9 @@ it.each([1, 2])(
         body = encode(next);
         expect((await refresh()).status).toBe("updated");
         expect(kimiIds(await list(true))).not.toContain("remote-next");
-        await withTestTimeout(preparing.promise, 10_000, "Candidate did not prepare pricing");
-        const saved = await withTestTimeout(
-          Promise.all([list(), list(), list()]),
-          1_000,
-          "Picker waited for a candidate provider",
-        );
+        await withinTest(preparing.promise, signal);
+        // The candidate's commit stays held below; a picker read that joined it never settles.
+        const saved = await withinTest(Promise.all([list(), list(), list()]), signal);
         for (const catalog of saved) {
           expect(kimiIds(catalog)).toContain("remote-first");
           expect(kimiIds(catalog)).not.toContain("remote-next");
@@ -424,7 +416,7 @@ it.each([1, 2])(
 
         const committedThread = providerThread;
         exitWorkerOnce = true;
-        await settleInterrupted(list(true), "committed worker exit");
+        await settleInterrupted(list(true));
         await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
         expect(kimiIds(await list(true))).toContain("remote-next");
         expect(providerThread).not.toBe(committedThread);
@@ -482,7 +474,7 @@ it.each([1, 2])(
           commit = createDeferred();
           pausePublication = true;
           await list(true);
-          await withTestTimeout(preparing.promise, 10_000, "Candidate did not prepare pricing");
+          await withinTest(preparing.promise, signal);
           const pending = applyRemoteModelCatalogUpdate(getRuntimeConfig);
           if (publication === "config") {
             const snapshot = await client.request<{ hash: string }>("config.get", {});
@@ -498,17 +490,12 @@ it.each([1, 2])(
               agentId: "main",
             });
           }
-          const dispatch = await withTestTimeout(
+          const dispatch = await withinTest(
             loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" }),
-            15_000,
-            "Concurrent publication did not finish",
+            signal,
           );
           expect(dispatch?.agentId).toBe("main");
-          const current = await withTestTimeout(
-            list(),
-            1_000,
-            "Supersession retired current readers",
-          );
+          const current = await withinTest(list(), signal);
           expect(kimiIds(current)).toContain("remote-next");
           expect(kimiIds(current)).not.toContain(model);
           expect(currentPrice(model)).toBeUndefined();
@@ -539,7 +526,7 @@ it.each([1, 2])(
         expect(currentPrice("remote-last")).toBeUndefined();
         const disabledThread = providerThread;
         exitWorkerOnce = true;
-        await settleInterrupted(list(true), "worker exit with remote catalog disabled");
+        await settleInterrupted(list(true));
         await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
         expect(kimiIds(await list(true))).not.toContain("remote-last");
         expect(currentPrice("remote-last")).toBeUndefined();

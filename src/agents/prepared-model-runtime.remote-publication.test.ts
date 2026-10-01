@@ -5,7 +5,7 @@ import {
   usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelsHandlers } from "../gateway/server-methods/models.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
@@ -201,7 +201,9 @@ it("returns usable refresh rows when the saved remote bundle is corrupt", async 
   expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
 });
 
-it("bounds refresh with two agents while another discovery is held and publishes later", async () => {
+it("bounds refresh with two agents while another discovery is held and publishes later", async ({
+  signal,
+}) => {
   const release = createDeferred();
   const discovering = createDeferred();
   const published = createDeferred();
@@ -239,13 +241,10 @@ it("bounds refresh with two agents while another discovery is held and publishes
   await discovering.promise;
   const pending = refresh();
   try {
-    const result = await withTestTimeout(
-      pending,
-      6_000,
-      "refresh exceeded the foreground fallback",
-    );
+    // Discovery stays held until `finally`: a refresh or adoption that joined it never settles.
+    const result = await withinTest(pending, signal);
     expect(result.models.map((row: { id: string }) => row.id)).toContain("remote-200");
-    await withTestTimeout(published.promise, 6_000, "background adoption waited for another agent");
+    await withinTest(published.promise, signal);
     expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
   } finally {
     release.resolve();
@@ -270,7 +269,9 @@ it("publishes the accepted bundle despite a provider discovery failure", async (
   );
 });
 
-it("retries a scheduled adoption when its pending auth owner settles", async () => {
+it("retries a scheduled adoption when its pending auth owner settles", async ({
+  signal: testSignal,
+}) => {
   await setup();
   const rebuilding = createDeferred();
   const releaseRebuild = createDeferred();
@@ -314,11 +315,9 @@ it("retries a scheduled adoption when its pending auth owner settles", async () 
       agentDir: fixture.agentInput("default", config).agentDir,
       affectsInheritedStores: false,
     });
-    await withTestTimeout(rebuilding.promise, 10_000, "auth mutation did not start a rebuild");
+    await withinTest(rebuilding.promise, testSignal);
     check.start();
-    expect(await withTestTimeout(checked.promise, 10_000, "catalog check did not settle")).toBe(
-      "remote model catalog applied",
-    );
+    expect(await withinTest(checked.promise, testSignal)).toBe("remote model catalog applied");
     expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
   } finally {
     releaseRebuild.resolve();
@@ -415,7 +414,7 @@ it("ends adoption instead of joining a timed-out owner build", async () => {
   }
 });
 
-it("does not hold Gateway shutdown on an adoption's pricing preparation", async () => {
+it("does not hold Gateway shutdown on an adoption's pricing preparation", async ({ signal }) => {
   await setup();
   const preparing = createDeferred();
   const held = createDeferred();
@@ -428,11 +427,8 @@ it("does not hold Gateway shutdown on an adoption's pricing preparation", async 
   const adoption = applyRemoteModelCatalogUpdate(() => config);
   try {
     await preparing.promise;
-    await withTestTimeout(
-      closePreparedModelRuntimeSnapshots(),
-      5_000,
-      "shutdown waited for held pricing preparation",
-    );
+    // Pricing stays held until `finally`; shutdown that joined it never settles.
+    await withinTest(closePreparedModelRuntimeSnapshots(), signal);
     expect(await adoption).toBe("superseded");
     expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
   } finally {
@@ -441,9 +437,9 @@ it("does not hold Gateway shutdown on an adoption's pricing preparation", async 
   }
 });
 
-it.each(["after", "before"] as const)(
+it.for(["after", "before"] as const)(
   "recovers adopted owners when their borrowed Gateway plugin retires %s commit",
-  async (phase) => {
+  async (phase, { signal }) => {
     const lender = createEmptyPluginRegistry();
     const record = createPluginRecord({ id: "gateway-lender" });
     lender.plugins.push(record);
@@ -478,9 +474,7 @@ it.each(["after", "before"] as const)(
         mocks.loadAgentRuntimePluginRegistryHandle.mockClear().mockReturnValue(nextRegistry);
         quiescePluginRegistry(lender);
         commit.resolve();
-        expect(await withTestTimeout(adoption, 10_000, "adoption did not settle")).toBe(
-          "published",
-        );
+        expect(await withinTest(adoption, signal)).toBe("published");
       } else {
         expect(await adoption).toBe("published");
         expect(instance.owner?.registry).toBe(lender);
@@ -490,11 +484,7 @@ it.each(["after", "before"] as const)(
         expect(adopted.isCurrent()).toBe(false);
       }
       // A lost loan never leaves the adopted catalog's owners unusable until a restart.
-      const replacement = await withTestTimeout(
-        prepareModelRuntimeSnapshot(input),
-        10_000,
-        "adopted owner was not republished after its Gateway lender retired",
-      );
+      const replacement = await withinTest(prepareModelRuntimeSnapshot(input), signal);
       expect(replacement.pluginRegistry).toBe(nextRegistry);
       expect(replacement.isCurrent()).toBe(true);
       expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
