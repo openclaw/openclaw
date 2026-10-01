@@ -5,8 +5,10 @@ import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { Readable } from "node:stream";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -42,6 +44,7 @@ import {
   createOpenClawTestInstance,
   GatewayStartupRefusedError,
 } from "./openclaw-test-instance.js";
+import { withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 import { stopChildProcess } from "./stop-child-process.js";
 
@@ -71,6 +74,7 @@ type OpenClawTestInstance = Awaited<ReturnType<typeof createOpenClawTestInstance
 type RunOptions = {
   print?: boolean;
   requireBuiltCli?: boolean;
+  signal?: AbortSignal;
 };
 
 const AGENT_ID = "main";
@@ -132,7 +136,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
     startTimeoutMs: 90_000,
     stopTimeoutMs: 3_000,
   });
-  const context = buildProofContext(inst.stateDir);
+  const context = buildProofContext(inst.stateDir, options.signal);
   const checkpoints: ProofCheckpoint[] = [];
   const failures: string[] = [];
   let bodyFailure: { error: unknown } | undefined;
@@ -429,7 +433,7 @@ function isBuiltCliEntrypoint(entrypoint: readonly string[]): boolean {
   return rest.length === 0 && (first === "dist/index.js" || first === "dist/index.mjs");
 }
 
-function buildProofContext(stateDir: string) {
+function buildProofContext(stateDir: string, signal?: AbortSignal) {
   const agentDir = path.join(stateDir, "agents", AGENT_ID);
   const activeSessionsDir = path.join(agentDir, "sessions");
   const legacySessionsDir = path.join(stateDir, "sessions");
@@ -451,6 +455,7 @@ function buildProofContext(stateDir: string) {
     oldStateSessionKeys: [...OLD_STATE_SESSION_KEYS],
     resetSessionKey: RESET_SESSION_KEY,
     sharedSessionKeys: [...SHARED_SESSION_KEYS],
+    signal,
     stateDir,
     storePath: path.join(activeSessionsDir, "sessions.json"),
     trackedSessionKeys: [
@@ -1287,6 +1292,7 @@ async function runSqliteBusyContentionProof(context: ProofContext) {
         const db = new DatabaseSync(process.env.OPENCLAW_E2E_BUSY_DB_PATH);
         db.exec("PRAGMA busy_timeout = 30000; BEGIN IMMEDIATE;");
         fs.writeFileSync(process.env.OPENCLAW_E2E_BUSY_READY_PATH, "ready");
+        process.stdout.write("lock-acquired\\n");
         setTimeout(() => {
           db.exec("COMMIT");
           db.close();
@@ -1306,17 +1312,32 @@ async function runSqliteBusyContentionProof(context: ProofContext) {
   );
   const stop = ownProofChild(context, child);
   const childOutput = captureChildOutput(child);
+  const observers = new AbortController();
+  const lines = createInterface({ input: child.stdout });
+  const ready = once(lines, "line", { signal: observers.signal }).then(([message]) => {
+    if (message !== "lock-acquired") {
+      throw new Error(`unexpected SQLite busy child readiness: ${String(message)}`);
+    }
+  });
+  const exited = once(child, "exit", { signal: observers.signal }).then(
+    ([code, signal]): { code: number | null; signal: NodeJS.Signals | null } => ({ code, signal }),
+  );
 
   const proof = (async () => {
-    await waitForFile(readyPath, SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS, () => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(
-          `SQLite busy child exited before acquiring lock code=${String(
-            child.exitCode,
-          )} signal=${String(child.signalCode)} ${tail(childOutput())}`,
-        );
-      }
-    });
+    const acquired = Promise.race([
+      ready,
+      exited.then(({ code, signal }) => {
+        // Output and process exit are unordered; the child records acquisition before sending.
+        if (!fsSync.existsSync(readyPath)) {
+          throw new Error(
+            `SQLite busy child exited before acquiring lock code=${String(
+              code,
+            )} signal=${String(signal)} ${tail(childOutput())}`,
+          );
+        }
+      }),
+    ]);
+    await (context.signal ? withinTest(acquired, context.signal) : acquired);
 
     const startedAt = Date.now();
     const result = await importProofSession(
@@ -1327,7 +1348,7 @@ async function runSqliteBusyContentionProof(context: ProofContext) {
       [messageEvent("sqlite-busy-contention-1", "user", SQLITE_BUSY_TEXT)],
     );
     const elapsedMs = Date.now() - startedAt;
-    const exit = await waitForChildExit(child, SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS);
+    const exit = await (context.signal ? withinTest(exited, context.signal) : exited);
     if (exit.code !== 0) {
       throw new Error(
         `SQLite busy child exited non-zero code=${String(exit.code)} signal=${String(
@@ -1354,9 +1375,15 @@ async function runSqliteBusyContentionProof(context: ProofContext) {
       transcriptEvents: result.transcriptEvents,
     };
   })();
-  await runQaGatewayFixture(async () => {
-    await proof;
-  }, stop);
+  try {
+    await runQaGatewayFixture(async () => {
+      await proof;
+    }, stop);
+  } finally {
+    lines.close();
+    observers.abort();
+    await Promise.allSettled([ready, exited]);
+  }
   return await proof;
 }
 
@@ -1376,7 +1403,7 @@ async function runAbruptRestartProof(
   const before = await snapshot(client);
   const child = expectDefined(inst.child, "running Gateway before abrupt restart");
   await disconnect();
-  const forcedExit = await forceGatewayExit(child);
+  const forcedExit = await forceGatewayExit(child, context.signal);
   await record("after-abrupt-gateway-exit");
   // Release the existing owner only after forced exit and tree closure are proven;
   // its graceful stop must not turn a failed kill into a passing recovery test.
@@ -1417,7 +1444,7 @@ async function runAbruptRestartProof(
   return await proof;
 }
 
-async function forceGatewayExit(child: ProofChildProcess) {
+async function forceGatewayExit(child: ProofChildProcess, abortSignal?: AbortSignal) {
   if (child.exitCode !== null || child.signalCode !== null) {
     throw new Error("Gateway already exited before the abrupt-restart proof");
   }
@@ -1429,11 +1456,9 @@ async function forceGatewayExit(child: ProofChildProcess) {
   ]);
   try {
     const termination = terminateManagedChild(child, "SIGKILL");
-    const [[code, signal], [closeCode, closeSignal]] = await withTimeout(
-      observed,
-      SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-      { createError: () => new Error("Gateway did not exit and close after SIGKILL") },
-    );
+    const [[code, signal], [closeCode, closeSignal]] = await (abortSignal
+      ? withinTest(observed, abortSignal)
+      : observed);
     if (
       (process.platform === "win32"
         ? termination?.processTreeState !== "terminated" || code === null || code === 0
@@ -1445,11 +1470,17 @@ async function forceGatewayExit(child: ProofChildProcess) {
         `Gateway did not exit forcibly: ${JSON.stringify({ code, signal, termination })}`,
       );
     }
-    const processTreeState = await pollUntil(
-      () => inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }),
-      (state) => state === "dead",
-      () => new Error("Gateway process tree remained alive after SIGKILL"),
-    );
+    // Child close cannot report descendants without inherited pipes. The managed
+    // owner exposes a census, not an extinction event; only cancellation bounds this check.
+    let processTreeState = inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" });
+    while (processTreeState !== "dead") {
+      try {
+        await waitForProcessTick(10, undefined, { signal: abortSignal });
+      } catch (cause) {
+        throw new Error("Gateway process tree remained alive after SIGKILL", { cause });
+      }
+      processTreeState = inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" });
+    }
     return { code, signal, closeCode, closeSignal, platform: process.platform, processTreeState };
   } finally {
     abort.abort();
@@ -1925,45 +1956,6 @@ async function waitForSqliteMessageContains(
           expected,
         )} for ${sessionId}: ${JSON.stringify(readSqliteTranscriptMessages(dbPath, sessionId))}`,
       ),
-  );
-}
-
-async function waitForFile(filePath: string, timeoutMs: number, poll: () => void): Promise<void> {
-  await pollUntil(
-    () => {
-      poll();
-      return fsSync.existsSync(filePath);
-    },
-    Boolean,
-    () => new Error(`timed out waiting for ${filePath}`),
-    { intervalMs: 25, timeoutMs },
-  );
-}
-
-async function waitForChildExit(
-  child: ProofChildProcess,
-  timeoutMs: number,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return { code: child.exitCode, signal: child.signalCode };
-  }
-  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      const timer = setTimeout(() => {
-        child.off("exit", onExit);
-        reject(new Error(`timed out waiting for child process ${child.pid ?? "unknown"} to exit`));
-      }, timeoutMs);
-      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-        clearTimeout(timer);
-        resolve({ code, signal });
-      };
-      child.once("exit", onExit);
-      if (child.exitCode !== null || child.signalCode !== null) {
-        child.off("exit", onExit);
-        clearTimeout(timer);
-        resolve({ code: child.exitCode, signal: child.signalCode });
-      }
-    },
   );
 }
 
@@ -2464,6 +2456,16 @@ function printCheckpoint(checkpoint: ProofCheckpoint): void {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const report = await runSqliteSessionsTranscriptsFlipProof({ print: true });
+  const abort = new AbortController();
+  const interrupt = () => abort.abort(new Error("SQLite flip proof interrupted"));
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
+  const report = await runSqliteSessionsTranscriptsFlipProof({
+    print: true,
+    signal: abort.signal,
+  }).finally(() => {
+    process.off("SIGINT", interrupt);
+    process.off("SIGTERM", interrupt);
+  });
   process.exit(report.ok ? 0 : 1);
 }
