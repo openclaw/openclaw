@@ -11,10 +11,8 @@ import {
   createSessionListEntryFilter,
   resolveSessionMutationAuthorization,
 } from "../session-sharing.js";
-import {
-  type GatewaySessionStoreDiscoveryCache,
-  loadGatewaySessionEntryReadOnly,
-} from "../session-utils.js";
+import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-candidates.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import {
   isIneligiblePersonalGatewayCaller,
