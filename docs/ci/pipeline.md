@@ -425,7 +425,7 @@ The job is part of `openclaw/ci-gate`. It uses at most one runner registration p
 selected run; widening survivor selection does not increase the full-inventory
 registration cap, job count, or matrix fanout.
 
-Standalone Periphery workflows enforce zero dead-code findings for the iOS and macOS apps. The shared OpenClawKit workflow scans both consumers in parallel and reports a declaration only when Periphery emits the same Swift USR from both builds. Its generated `OpenClawProtocol/GatewayModels.swift` schema contract is retained as generator-owned code rather than treated as app-local dead code.
+Standalone Periphery workflows enforce zero dead-code findings for the iOS and macOS apps. The shared OpenClawKit workflow scans both consumers in parallel and reports a declaration only when Periphery emits the same Swift USR from both builds. Its generated `GenerateGatewayProtocol/GatewayModels.swift` build-plugin output is retained as generator-owned code rather than treated as app-local dead code. The shared scan and native CI jobs install the filtered gateway-protocol generator dependencies alongside their existing native asset dependencies; CodeQL installs the same generator dependencies before its Swift build.
 
 All four scans use `scripts/install-periphery.sh` to install the checksum-pinned Periphery 3.8.0 OSS release, including its adjacent `libIndexStore.dylib`, in a dedicated runner-temporary directory. The installer rejects download, checksum, and version failures without falling back to Homebrew. Installer changes select all three native workflows.
 
