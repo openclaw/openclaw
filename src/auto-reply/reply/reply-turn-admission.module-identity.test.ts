@@ -41,7 +41,7 @@ it("keeps admitted session ownership when transformed plugins import the native 
       path.join(root, "plugin.ts"),
       'export * from "openclaw/plugin-sdk/admission-fixture";\n',
     );
-    // Admission now reads through the real history worker. Borrow the maintained
+    // Admission uses the real history worker and its cleanup owner. Borrow the maintained
     // subprocess generation; keep unrelated recovery/archival graphs deferred.
     await build({
       plugins: [
@@ -59,7 +59,8 @@ it("keeps admitted session ownership when transformed plugins import the native 
             if (
               options.kind !== "dynamic-import" ||
               filename ===
-                path.join(repo, "src/config/sessions/session-transcript-worker-runtime.ts")
+                path.join(repo, "src/config/sessions/session-transcript-worker-runtime.ts") ||
+              filename === path.join(repo, "src/infra/temp-artifact-cleanup.ts")
             ) {
               return resolved;
             }
