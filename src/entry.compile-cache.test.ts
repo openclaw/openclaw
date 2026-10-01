@@ -17,7 +17,6 @@ import {
 } from "vitest";
 import { maintainOpenClawCompileCache } from "../node-compile-cache.mjs";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
-import { resolveNodeCompileCacheEnv } from "./infra/node-compile-cache-env.js";
 import { mockNodeBuiltinModule } from "./plugin-sdk/test-helpers/node-builtin-mocks.js";
 import { createDeferredCore } from "./shared/deferred.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "./test-utils/env.js";
@@ -57,6 +56,7 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
+import { resolveNodeCompileCacheEnv } from "./infra/node-compile-cache-env.js";
 
 function enabledDirectory(callIndex = 0): string {
   const [directory] = expectDefined(enableCompileCache.mock.calls[callIndex], "cache enable call");
