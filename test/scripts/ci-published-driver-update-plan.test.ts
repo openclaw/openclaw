@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { shouldRunPublishedDriverUpdate } from "../../scripts/lib/ci-published-driver-update-plan.mts";
@@ -10,6 +10,7 @@ import {
   evaluateWorkflowExpression,
   readCiWorkflow,
   readWorkflow,
+  readWorkflowOutputs,
   runWorkflowShellScript,
   type WorkflowStep,
   writeExecutable,
@@ -280,14 +281,44 @@ describe("published-driver update selection", () => {
     const restore = job.steps.find((step: WorkflowStep) =>
       step.uses?.startsWith("actions/cache/restore@"),
     );
+    const driver = job.steps.find((step: WorkflowStep) => step.id === "driver");
+    const context = {
+      eventName: scenario.eventName,
+      ref: scenario.ref,
+      repository: scenario.repository ?? "openclaw/openclaw",
+      runAttempt: 1,
+    };
+    const cacheMode = String(evaluateWorkflowExpression(driver.env.DRIVER_CACHE_MODE, context));
+    const root = tempDirs.make("openclaw-published-driver-cache-mode-");
+    const bin = path.join(root, "bin");
+    const lib = path.join(root, "scripts/lib");
+    const output = path.join(root, "outputs");
+    mkdirSync(bin);
+    mkdirSync(lib, { recursive: true });
+    copyFileSync("scripts/lib/release-version.mjs", path.join(lib, "release-version.mjs"));
+    writeExecutable(path.join(bin, "npm"), ["#!/bin/sh", `echo '"2026.9.7"'`]);
+    const resolved = runWorkflowShellScript(driver.run, {
+      cwd: root,
+      env: {
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        SystemRoot: process.env.SystemRoot,
+        BASH_ENV: "",
+        ENV: "",
+        DRIVER_CACHE_MODE: cacheMode,
+        GITHUB_OUTPUT: output,
+      },
+    });
+    expect(resolved.status, `${resolved.stdout}${resolved.stderr}`).toBe(0);
+    const driverOutputs = readWorkflowOutputs(output);
+    expect(driverOutputs).toEqual({ version: "2026.9.7", "cache-mode": cacheMode });
     for (const step of [prepare, save]) {
       expect(
         evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
-          eventName: scenario.eventName,
-          ref: scenario.ref,
-          repository: scenario.repository ?? "openclaw/openclaw",
-          runAttempt: 1,
-          steps: { driver_cache: { outputs: { "cache-hit": scenario.hit } } },
+          ...context,
+          steps: {
+            driver: { outputs: driverOutputs },
+            driver_cache: { outputs: { "cache-hit": scenario.hit } },
+          },
         }),
       ).toBe(scenario.allowed);
     }
@@ -296,53 +327,95 @@ describe("published-driver update selection", () => {
     expect(restore.with["restore-keys"]).toBeUndefined();
   });
 
-  it.each([0, 42])("removes the private runtime volume after container exit %i", (commandExit) => {
-    const root = tempDirs.make("openclaw-published-driver-volume-");
-    const bin = path.join(root, "bin");
-    const log = path.join(root, "docker.jsonl");
-    const candidate = path.join(root, "candidate.tgz");
-    mkdirSync(bin);
-    writeFileSync(candidate, "synthetic candidate package\n");
-    writeExecutable(path.join(bin, "docker"), [
-      `#!${process.execPath}`,
-      'const fs = require("node:fs");',
-      "const args = process.argv.slice(2);",
-      `fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");`,
-      'if (args[0] === "volume" && args[1] === "create") console.log("fixture-runtime-volume");',
-      'if (args[0] === "run") {',
-      '  fs.writeFileSync(args[args.indexOf("--cidfile") + 1], "fixture-container");',
-      `  process.exit(${commandExit});`,
-      "}",
-    ]);
-    const result = runWorkflowShellScript('bash "$CELL_SCRIPT" "$CANDIDATE" "$ARTIFACTS"', {
-      cwd: root,
-      env: {
-        ...process.env,
-        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-        CELL_SCRIPT: path.resolve("scripts/e2e/published-driver-update-docker.sh"),
-        CANDIDATE: candidate,
-        ARTIFACTS: path.join(root, "artifacts"),
-        OPENCLAW_SKIP_DOCKER_BUILD: "1",
-      },
-    });
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(commandExit);
-    const commands = readFileSync(log, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as string[]);
-    const run = commands.find((args) => args[0] === "run")!;
-    expect(run[run.indexOf("--mount") + 1]).toBe(
-      "type=volume,source=fixture-runtime-volume,target=/tmp",
-    );
-    expect(commands.indexOf(run)).toBeGreaterThan(
-      commands.findIndex((args) => args[0] === "volume" && args[1] === "create"),
-    );
-    const containerRemoved = commands.findIndex(
-      (args) => args[0] === "rm" && args.includes("fixture-container"),
-    );
-    expect(containerRemoved).toBeGreaterThan(commands.indexOf(run));
-    expect(commands.at(-1)).toEqual(["volume", "rm", "fixture-runtime-volume"]);
-  });
+  it.each([0, 42])(
+    "removes the private runtime volume after container exit %i with an existing image",
+    (commandExit) => {
+      const root = tempDirs.make("openclaw-published-driver-volume-");
+      const bin = path.join(root, "bin");
+      const log = path.join(root, "docker.log");
+      const runArgs = path.join(root, "run-args");
+      const imageState = path.join(root, "existing-image");
+      const hostDockerAttempt = path.join(root, "host-docker-attempt");
+      const candidate = path.join(root, "candidate.tgz");
+      const script = path.join(root, "scripts/e2e/published-driver-update-docker.sh");
+      const helpers = path.join(root, "scripts/lib");
+      mkdirSync(bin);
+      mkdirSync(path.dirname(script), { recursive: true });
+      mkdirSync(helpers);
+      copyFileSync("scripts/e2e/published-driver-update-docker.sh", script);
+      writeFileSync(candidate, "synthetic candidate package\n");
+      writeFileSync(imageState, "openclaw-published-driver-update-e2e\n");
+      // Exercise the wrapper's volume ownership; the shared container owner has
+      // its own tests. No helper in this fixture can fall through to host Docker.
+      writeFileSync(
+        path.join(helpers, "docker-e2e-image.sh"),
+        String.raw`
+docker_e2e_resolve_image() { printf '%s\n' "$1"; }
+docker_e2e_build_or_reuse() {
+  [ "$(cat "$IMAGE_STATE")" = "$1" ] || return 91
+  printf 'image reuse\n' >> "$DOCKER_LOG"
+}
+docker_e2e_docker_cmd() {
+  printf '%s\n' "$*" >> "$DOCKER_LOG"
+  case "$*" in
+    'volume create') printf 'fixture-runtime-volume\n' ;;
+    'volume rm fixture-runtime-volume') ;;
+    *) return 92 ;;
+  esac
+}
+`,
+      );
+      writeFileSync(
+        path.join(helpers, "docker-e2e-package.sh"),
+        String.raw`
+docker_e2e_prepare_package_tgz() { printf '%s\n' "$2"; }
+docker_e2e_cleanup_package_tgz() { :; }
+docker_e2e_package_mount_args() { DOCKER_E2E_PACKAGE_ARGS=(-v "$1:/tmp/openclaw-current.tgz:ro"); }
+docker_e2e_run_with_harness() {
+  printf 'run\n' >> "$DOCKER_LOG"
+  printf '%s\n' "$@" > "$RUN_ARGS"
+  return "$CONTAINER_EXIT"
+}
+`,
+      );
+      writeExecutable(path.join(bin, "docker"), [
+        "#!/bin/sh",
+        'printf "unexpected host Docker request\\n" > "$HOST_DOCKER_ATTEMPT"',
+        "exit 97",
+      ]);
+      const result = runWorkflowShellScript('bash "$CELL_SCRIPT" "$CANDIDATE" "$ARTIFACTS"', {
+        cwd: root,
+        env: {
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          SystemRoot: process.env.SystemRoot,
+          HOME: root,
+          BASH_ENV: "",
+          ENV: "",
+          CELL_SCRIPT: script,
+          CANDIDATE: candidate,
+          ARTIFACTS: path.join(root, "artifacts"),
+          IMAGE_STATE: imageState,
+          DOCKER_LOG: log,
+          RUN_ARGS: runArgs,
+          CONTAINER_EXIT: String(commandExit),
+          HOST_DOCKER_ATTEMPT: hostDockerAttempt,
+          OPENCLAW_SKIP_DOCKER_BUILD: "1",
+        },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(commandExit);
+      expect(existsSync(hostDockerAttempt)).toBe(false);
+      const run = readFileSync(runArgs, "utf8").trim().split("\n");
+      expect(run[run.indexOf("--mount") + 1]).toBe(
+        "type=volume,source=fixture-runtime-volume,target=/tmp",
+      );
+      expect(readFileSync(log, "utf8").trim().split("\n")).toEqual([
+        "image reuse",
+        "volume create",
+        "run",
+        "volume rm fixture-runtime-volume",
+      ]);
+    },
+  );
 
   it("gives direct callers and the release lane the CI cell envelope", () => {
     const root = tempDirs.make("openclaw-published-driver-envelope-");
