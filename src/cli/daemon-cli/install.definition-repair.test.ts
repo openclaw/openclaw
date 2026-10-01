@@ -574,6 +574,32 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+it.skipIf(process.platform === "win32")(
+  "restores and reloads the previous definition after candidate activation fails",
+  async () => {
+    const f = await fixture();
+    const execute = native.systemctl.getMockImplementation()!;
+    native.systemctl.mockImplementation(async (...args) =>
+      args[1][0] === "restart"
+        ? { code: 1, stdout: "", stderr: "fixture activation failed", termination: "exit" }
+        : execute(...args),
+    );
+    await expect(runDaemonInstall({ force: true, json: true })).rejects.toThrow("fixture-exit:1");
+    expect(response().error).toContain("previous definition was restored");
+    expect(response().definitionBackup).toBeUndefined();
+    expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
+    expect(
+      native.systemctl.mock.calls.filter(([, args]) => args[0] === "daemon-reload"),
+    ).toHaveLength(2);
+    expect(getUpdateRun(f.runId)?.steps).toContainEqual(
+      expect.objectContaining({
+        step: expect.stringContaining("warning:managed-service-reconciliation"),
+        detail: expect.stringContaining("previous definition was restored"),
+      }),
+    );
+  },
+);
+
 it
   .skipIf(process.platform === "win32")
   .each(["ExecStartPre", "foreign-unit", "foreign-root"] as const)(

@@ -1060,17 +1060,46 @@ describe("microsoft-foundry plugin", () => {
     ).toBe(baseStreamFn);
   });
 
-  it("uses Foundry-native token limits for GPT-5.4 mini", () => {
+  it.each([
+    ["gpt-5.6-sol", 1_050_000, 128_000],
+    ["gpt-5.4-pro", 1_050_000, 128_000],
+    ["gpt-5.4-mini", 400_000, 128_000],
+    ["gpt-4o-mini", 128_000, 16_384],
+  ] as const)(
+    "uses Foundry-native token limits for %s",
+    (modelNameHint, contextWindow, maxTokens) => {
+      const result = buildAuthResult({
+        modelId: `prod-${modelNameHint}`,
+        modelNameHint,
+        api: modelNameHint.startsWith("gpt-5") ? "openai-responses" : "openai-completions",
+        authMethod: "api-key",
+      });
+
+      expect(providerPatch(result).models[0]).toMatchObject({
+        name: modelNameHint,
+        contextWindow,
+        maxTokens,
+      });
+    },
+  );
+
+  it.each([
+    ["claude-opus-5", 128_000],
+    ["claude-sonnet-4.6", 128_000],
+    ["claude-sonnet-4.5", 64_000],
+    ["claude-opus-4.1", 32_000],
+  ] as const)("preserves Foundry Claude token limits for %s", (modelNameHint, maxTokens) => {
     const result = buildAuthResult({
-      modelId: "prod-gpt-5.4-mini",
-      modelNameHint: "gpt-5.4-mini",
-      api: "openai-responses",
-      authMethod: "api-key",
+      modelId: `prod-${modelNameHint.replaceAll(".", "-")}`,
+      modelNameHint,
+      api: "anthropic-messages",
     });
+
     expect(providerPatch(result).models[0]).toMatchObject({
-      name: "gpt-5.4-mini",
-      contextWindow: 400_000,
-      maxTokens: 128_000,
+      name: modelNameHint,
+      api: "anthropic-messages",
+      contextWindow: maxTokens === 128_000 ? 1_000_000 : 200_000,
+      maxTokens,
     });
   });
 
