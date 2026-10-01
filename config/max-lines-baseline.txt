@@ -602,7 +602,6 @@ src/plugins/loader.registration.test-utils.ts
 src/plugins/loader.test-harness.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/marketplace.ts
-src/plugins/official-external-plugin-catalog.test.ts
 src/plugins/plugin-registry-snapshot.test.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts
