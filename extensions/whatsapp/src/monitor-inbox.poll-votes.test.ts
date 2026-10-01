@@ -2,6 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { enqueueWhatsAppHookQueueBarrierForTests } from "./hook-queue.test-helper.js";
 import {
+  createWhatsAppDurableInboundMessageId,
+  createWhatsAppDurableInboundQueue,
+} from "./inbound/durable-receive.js";
+import {
   maybeEmitWhatsAppPollVoteReceivedHook,
   rememberWhatsAppOwnPollCreation,
 } from "./inbound/poll-votes.js";
@@ -16,6 +20,7 @@ import {
 } from "./monitor-inbox.streams-inbound-messages.test-support.js";
 import {
   DEFAULT_ACCOUNT_ID,
+  getRecordChannelActivityMock,
   mockLoadConfig,
   startInboxMonitor,
   waitForInboundWorkDrained,
@@ -328,6 +333,8 @@ describe("web monitor inbox poll vote hook", () => {
     const baileysCache = createBaileysCacheSupport();
     const pollMessageId = "POLL-HOOK-THROWS";
     const voteMessageId = "VOTE-HOOK-THROWS";
+    const durableQueue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const enqueueSpy = vi.spyOn(durableQueue, "enqueue");
     const { pollEncKey } = buildPollCreationMessageForTests({
       section: "pollCreationMessage",
       options: ["Pizza", "Sushi"],
@@ -339,7 +346,25 @@ describe("web monitor inbox poll vote hook", () => {
     const { sock } = await startInboxMonitor(onMessage, {
       recentMessageKeys: baileysCache.recentMessageKeys,
       baileysGroupMetaCache: baileysCache.baileysGroupMetaCache,
+      durableInboundQueue: durableQueue,
     });
+
+    const preflightMessageId = "NORMAL-BEFORE-THROWING-POLL-HOOK";
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { remoteJid: CHAT_JID, id: preflightMessageId, fromMe: false },
+          message: { conversation: "ordinary message before poll hook failure" },
+          messageTimestamp: 1_700_000_099,
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained();
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ event: expect.objectContaining({ id: preflightMessageId }) }),
+    );
 
     // Simulate ownership recorded from an accepted send (the only producer
     // since round 3), so the hook actually reaches the point that throws.
@@ -384,13 +409,32 @@ describe("web monitor inbox poll vote hook", () => {
       ],
     });
 
-    await waitForMessageCalls(onMessage, 1);
+    expect(maybeEmitWhatsAppPollVoteReceivedHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ key: expect.objectContaining({ id: voteMessageId }) }),
+    );
+    await waitForInboundWorkDrained();
+
+    const normalDurableId = createWhatsAppDurableInboundMessageId({
+      remoteJid: CHAT_JID,
+      id: normalMessageId,
+    });
+    expect(enqueueSpy).toHaveBeenCalledWith(
+      normalDurableId,
+      expect.objectContaining({
+        message: expect.objectContaining({
+          key: expect.objectContaining({ id: normalMessageId }),
+        }),
+      }),
+      expect.objectContaining({ laneKey: CHAT_JID }),
+    );
+    expect(getRecordChannelActivityMock()).toHaveBeenCalledTimes(2);
+    await waitForMessageCalls(onMessage, 2);
     await waitForInboundWorkDrained();
 
     expect(maybeEmitWhatsAppPollVoteReceivedHookMock).toHaveBeenCalledWith(
       expect.objectContaining({ key: expect.objectContaining({ id: voteMessageId }) }),
     );
-    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledTimes(2);
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({ event: expect.objectContaining({ id: normalMessageId }) }),
     );
