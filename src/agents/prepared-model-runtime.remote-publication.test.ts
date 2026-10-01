@@ -152,17 +152,16 @@ it("keeps downloaded catalogs pending while plugin work drains", async ({ signal
       return await preparePricing(...args);
     });
   const attempted = createDeferred();
-  const enqueue = PreparedModelRuntimePublicationQueue.prototype.enqueue;
-  const queueSpy = vi
-    .spyOn(PreparedModelRuntimePublicationQueue.prototype, "enqueue")
-    .mockImplementationOnce(function (this: PreparedModelRuntimePublicationQueue, ...args) {
-      const publication = enqueue.apply(this, args);
-      void publication.then(
-        () => attempted.resolve(),
-        () => attempted.resolve(),
-      );
-      return publication;
-    });
+  const queueSpy = vi.spyOn(PreparedModelRuntimePublicationQueue.prototype, "enqueue");
+  queueSpy.mockImplementationOnce(function (this: PreparedModelRuntimePublicationQueue, ...args) {
+    queueSpy.mockRestore();
+    const publication = this.enqueue(...args);
+    void publication.then(
+      () => attempted.resolve(),
+      () => attempted.resolve(),
+    );
+    return publication;
+  });
   const adoption = applyRemoteModelCatalogUpdate(() => config);
   let drain: ReturnType<typeof beginPreparedModelRuntimePluginDrain> | undefined;
   try {
