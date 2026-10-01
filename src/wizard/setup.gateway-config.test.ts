@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   withSecureTestNodeCommand,
   withSecureTestNodeExecPath,
@@ -60,14 +59,6 @@ describe("configureGatewayForSetup", () => {
     });
   }
 
-  function createRuntime(): RuntimeEnv {
-    return {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-  }
-
   function createQuickstartGateway(authMode: "token" | "password") {
     return {
       hasExisting: false,
@@ -86,10 +77,8 @@ describe("configureGatewayForSetup", () => {
       flow: "advanced",
       baseConfig: {},
       nextConfig: {},
-      localPort: 18789,
       quickstartGateway: createQuickstartGateway("token"),
       prompter: createPrompter({ selectQueue: [], textQueue: [] }),
-      runtime: createRuntime(),
       ...overrides,
     });
   }
@@ -176,7 +165,6 @@ describe("configureGatewayForSetup", () => {
 
     const result = await configure({
       flow: "advanced",
-      localPort: gatewayDefaults.port,
       quickstartGateway: gatewayDefaults,
       prompter,
     });
@@ -327,14 +315,12 @@ describe("configureGatewayForSetup", () => {
         selectQueue: ["loopback", "off", "env"],
         textQueue: ["18789", "OPENCLAW_GATEWAY_TOKEN"],
       });
-      const runtime = createRuntime();
 
       const result = await configure({
         flow: "advanced",
         quickstartGateway: createQuickstartGateway("token"),
         secretInputMode: "ref", // pragma: allowlist secret
         prompter,
-        runtime,
       });
 
       expect(result.nextConfig.gateway?.auth?.mode).toBe("token");
@@ -356,7 +342,7 @@ describe("configureGatewayForSetup", () => {
         id: "gateway/auth/token",
       },
     };
-    const runtime = createRuntime();
+
     const prompter = createPrompter({
       selectQueue: [],
       textQueue: [],
@@ -381,7 +367,6 @@ describe("configureGatewayForSetup", () => {
         },
         quickstartGateway,
         prompter,
-        runtime,
       }),
     );
 
@@ -397,7 +382,6 @@ describe("configureGatewayForSetup", () => {
       );
       const result = await configure({
         flow: "advanced",
-        localPort: gatewayDefaults.port,
         quickstartGateway: gatewayDefaults,
         prompter: createPrompter({ selectQueue: [], textQueue: [] }),
       });

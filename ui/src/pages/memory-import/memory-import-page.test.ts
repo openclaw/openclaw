@@ -143,7 +143,7 @@ afterEach(() => {
 });
 
 describe("MemoryImportPage", () => {
-  it("settles a failed roster load until Refresh retries it", async () => {
+  it("hides stale plans after roster failures until Refresh retries them", async () => {
     const roster = createDeferredCore<unknown>();
     const request = vi.fn((method: string) =>
       method === "agents.list" ? roster.promise : Promise.resolve(createPlan()),
@@ -186,8 +186,35 @@ describe("MemoryImportPage", () => {
       );
       await agents.refreshList();
       await page.updateComplete;
+      expect(page.textContent).toContain("Agent roster unavailable");
+      expect(page.querySelector("[data-test-id='memory-import-provider-button']")).toBeNull();
+      expect(page.textContent).not.toContain("/tmp/openclaw-research");
+      expect(
+        request.mock.calls.filter(([method]) => method === "migrations.memory.plan"),
+      ).toHaveLength(1);
+
+      request.mockImplementation((method: string) =>
+        Promise.resolve(
+          method === "agents.list"
+            ? { defaultId: "writer", agents: [{ id: "writer", name: "Writer" }] }
+            : createPlan("writer"),
+        ),
+      );
+      [...page.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "Refresh")
+        ?.click();
+      await waitForMemoryImport(() =>
+        expect(page.querySelector("[data-test-id='memory-import-provider-button']")).not.toBeNull(),
+      );
+      expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(4);
+      expect(request).toHaveBeenLastCalledWith(
+        "migrations.memory.plan",
+        { agentId: "writer", overwrite: false },
+        expect.anything(),
+      );
       expect(page.textContent).not.toContain("Agent roster unavailable");
-      expect(page.querySelector("[data-test-id='memory-import-provider-button']")).not.toBeNull();
+      expect(page.textContent).toContain("/tmp/openclaw-writer");
+      expect(page.textContent).not.toContain("/tmp/openclaw-research");
     } finally {
       page.parentElement?.remove();
       agents.dispose();

@@ -530,6 +530,7 @@ export function createGatewayHookDispatcher(params: {
                 cfg,
                 deps,
                 job,
+                deliveryAttemptFence: null,
                 message: acceptedValue.message,
                 sessionKey,
                 // Isolated runs derive their lifecycle key from random jobId (or an

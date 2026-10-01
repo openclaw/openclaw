@@ -91,6 +91,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       query,
       scope: Object.freeze({ ...scope }),
       retainedLimit: query.limit,
+      readGeneration: 0,
       connectionEpoch: null,
       snapshot: { result: null, agentId: null, loading: false, error: null },
       listeners: new Set(),
@@ -126,6 +127,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     primaryWindows.retire((entry) => entry.key !== excludedKey && matches(entry));
     for (const entry of managedLists.values()) {
       if (entry.key !== excludedKey && matches(entry)) {
+        entry.readGeneration += 1;
         entry.coordinator.schedule();
       }
     }
@@ -197,7 +199,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     try {
       const issuedRevision = ++requestRevision;
-      let result = await requestSessionList(scope.client, requestOptions);
+      let result = await requestSessionList(scope.client, requestOptions, isCurrent);
       if (!isCurrent()) {
         return null;
       }

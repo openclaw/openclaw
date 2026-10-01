@@ -149,13 +149,9 @@ function isAssistantReplyTranscriptArtifact(message: unknown): boolean {
   return (
     isTranscriptOnlyOpenClawAssistantMessage(message) ||
     isOpenClawMessageToolMirrorAssistantMessage(message) ||
-    isInterSessionInputMessage(message)
-  );
-}
-
-function isInterSessionInputMessage(message: unknown): boolean {
-  return (
-    isRecord(message) && isRecord(message.provenance) && message.provenance.kind === "inter_session"
+    (isRecord(message) &&
+      isRecord(message.provenance) &&
+      message.provenance.kind === "inter_session")
   );
 }
 

@@ -1,6 +1,21 @@
 import path from "node:path";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
+import { createFreeBsdPkgOwnershipInspection } from "./update-freebsd-pkg-ownership.js";
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "./update-npm-prefix.js";
+import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
+
+export async function assertSwapTargetUnowned(
+  root: string,
+  launchers: readonly { destination: string }[],
+  timeoutMs?: number,
+): Promise<void> {
+  // A fresh observation, not an atomic lock against an external pkg writer.
+  const inspection = createFreeBsdPkgOwnershipInspection(timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS);
+  await inspection.assertUnowned(root);
+  for (const launcher of launchers) {
+    await inspection.assertEntryUnowned(launcher.destination);
+  }
+}
 
 export function resolveStagedPackageSwapTarget(params: StagedPackageSwapParams) {
   const native = params.stage.native;

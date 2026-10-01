@@ -196,6 +196,13 @@ holding `operator.admin` retain their administrative session access.
 Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.
 The allowlist also applies when a run targets an already-existing session.
+Agent discovery and the Control UI agent picker show only agents allowed by the
+caller's role. An empty allowlist returns an empty agent roster; the Gateway's
+session-routing ownership remains unchanged.
+Discovery does not grant or revoke access to existing sessions: the role's
+separate session-read policy still governs which sessions the caller can read.
+The Control UI waits for a live agent roster after loading or reconnecting, so
+an older browser roster cannot restore agents excluded by the current role.
 
 Set a role's optional `modelPolicy` to limit the models used by its requests:
 

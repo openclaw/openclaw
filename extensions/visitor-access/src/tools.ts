@@ -64,8 +64,15 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       name: "visitor_revoke",
       label: "Revoke visitor",
       description:
-        "Remove visitor access by email or GitHub login. GitHub login removes all recorded grants for that login. Explicit email can also remove an unmanaged policy entry. Already absent grants are a no-op.",
-      parameters: Type.Object(identityFields, { additionalProperties: false }),
+        "Remove the recorded Visitor invitations selected for a canonical profileId, or cancel one invitation by grantId, including before first sign-in. Use the IDs returned by visitor_list or visitor_invite. Person selection requires the original profile bindings to remain current at local commit and before policy requests. Already committed expirations remain ended if cleanup fails. Email cancels one email's invitation and can remove an unmanaged policy entry. GitHub login removes matching grants. Do not combine profileId or grantId with another selector. Preserves saved work, existing PRs and independent staff access. Already absent grants are a no-op.",
+      parameters: Type.Object(
+        {
+          ...identityFields,
+          profileId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+          grantId: Type.Optional(Type.String({ format: "uuid" })),
+        },
+        { additionalProperties: false },
+      ),
       outputSchema: Type.Union([visitorRevokeDetailsSchema, visitorToolErrorSchema]),
       run: (service: VisitorAccessService, raw: unknown) => service.revoke(raw, assertCurrent),
     },

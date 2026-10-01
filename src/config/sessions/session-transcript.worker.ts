@@ -358,10 +358,13 @@ serveOwnedWorkerTasks(
           await import("./session-accessor.sqlite-entry-list.read.js");
         return {
           kind: "session-entry-list" as const,
-          entries: listSessionEntriesReadOnly({
-            ...request.scope,
-            env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-          }),
+          entries: listSessionEntriesReadOnly(
+            {
+              ...request.scope,
+              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+            },
+            { continuation: request.continuation },
+          ),
         };
       }
       if (request.kind === "usage-cache") {

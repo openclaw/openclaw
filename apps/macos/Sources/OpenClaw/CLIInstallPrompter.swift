@@ -30,6 +30,19 @@ final class CLIInstallPrompter {
         guard connectionMode == .local else { return }
         await GatewayProcessManager.shared.waitForStartupAttempt()
         guard GatewayProcessManager.shared.installation == .managed else { return }
+        if BundledRuntime.isBundledApp {
+            guard userInitiated else { return }
+            self.installStatus = String(localized: "Preparing OpenClaw…")
+            do {
+                _ = try await CLIInstaller.prepareBundledGateway { self.installStatus = $0 }
+                let activation = await CLIInstaller.activateLocalGateway()
+                CLIInstaller.completeBundledSetup(after: activation)
+                self.installStatus = Self.activationMessage(activation)
+            } catch {
+                self.installStatus = error.localizedDescription
+            }
+            return
+        }
         guard let version = Self.appVersion() else { return }
         let status = await CLIInstaller.status()
         let managedStatus = await CLIInstaller.managedStatus()
@@ -101,6 +114,7 @@ final class CLIInstallPrompter {
         presentingSheetOn window: NSWindow?) async -> CLIInstaller.InstallTarget?
     {
         let appVersion = Self.appVersion()
+        if BundledRuntime.isBundledApp, let appVersion { return .exact(appVersion) }
         if let target = CLIInstaller.automaticInstallTarget(
             appVersion: appVersion,
             isDebug: CLIInstallBuild.isDebug)
@@ -210,6 +224,7 @@ final class CLIInstallPrompter {
                 self.logger.info("managed CLI repair: Starting OpenClaw Gateway…")
             }
             let activation = await CLIInstaller.activateLocalGateway()
+            if BundledRuntime.isBundledApp { CLIInstaller.completeBundledSetup(after: activation) }
             if case .failed = activation { activated = false } else { activated = true }
             if shouldRestartManagedGateway {
                 // Only proven gateway health closes the recovery loop; the
@@ -331,7 +346,7 @@ final class CLIInstallPrompter {
     /// Shared gate for auto-repair and the dashboard's native update bridge.
     /// If these drift apart, the card can route to Sparkle while the
     /// post-relaunch gateway repair refuses, stranding an old gateway.
-    static func managedRepairGatesOpen(
+    nonisolated static func managedRepairGatesOpen(
         launchAgentUsesManagedCLI: Bool,
         gatewayUpdateChannel: String?,
         installPolicy: String?,
@@ -392,7 +407,10 @@ final class CLIInstallPrompter {
         return tail.isEmpty ? nil : tail
     }
 
-    static func launchAgentUsesManagedCLI(programArguments: [String]) -> Bool {
+    static func launchAgentUsesManagedCLI(
+        programArguments: [String],
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool
+    {
         var command = programArguments[...]
         if command.count >= 3,
            command[command.startIndex] == "/bin/sh",
@@ -404,7 +422,7 @@ final class CLIInstallPrompter {
         {
             command = command.dropFirst(2)
         }
-        let managedRoot = URL(fileURLWithPath: CLIInstaller.managedExecutableLocation())
+        let managedRoot = URL(fileURLWithPath: CLIInstaller.managedExecutableLocation(homeDirectory: homeDirectory))
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .standardizedFileURL.path + "/"

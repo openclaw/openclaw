@@ -17,6 +17,7 @@ import {
   recordGatewayBootStart,
 } from "./gateway-boot-lifecycle.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
+import * as integrityWorker from "./sqlite-integrity-worker.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
@@ -72,22 +73,10 @@ it("checks healthy agent integrity once before media migration", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("media-persistence-integrity-") };
   const initial = openOpenClawAgentDatabase({ agentId: "main", env });
   closeOpenClawAgentDatabasesForTest();
-  const checks: string[] = [];
-  // Preserve native dispatch to each observed database connection.
-  // oxlint-disable-next-line typescript/unbound-method
-  const prepare = DatabaseSync.prototype.prepare;
-  vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-    this: DatabaseSync,
-    sql,
-  ) {
-    if (this.location() === initial.path && /^PRAGMA integrity_check\b/i.test(sql)) {
-      checks.push(sql);
-    }
-    return prepare.call(this, sql);
-  });
+  const checks = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
 
   expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
-  expect(checks).toHaveLength(1);
+  expect(checks.mock.calls.filter(([pathname]) => pathname === initial.path)).toHaveLength(1);
 });
 
 it.each([true])(

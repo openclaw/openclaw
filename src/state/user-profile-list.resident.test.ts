@@ -106,8 +106,32 @@ describe("resident profile display and reference catalog", () => {
       const prepared = await prepareUserProfileIdentity(first.id, options);
       releases.push(prepared.release);
       const bindings = prepared.emailBindingIds;
+      const selected = await prepareUserProfileIdentity(first.id, options, [email, email]);
+      releases.push(selected.release);
+      const selectedBindings = selected.emailBindingIds;
+      expect(selectedBindings).toHaveLength(1);
+      const retained = await prepareUserProfileIdentity(first.id, options, [
+        "retained@example.test",
+      ]);
+      releases.push(retained.release);
+      const retainedBindings = retained.emailBindingIds;
+      if (producer === "email") {
+        for (const unavailableEmail of ["missing@example.test", "target@example.test"]) {
+          const unavailable = await prepareUserProfileIdentity(first.id, options, [
+            email,
+            unavailableEmail,
+          ]);
+          try {
+            expect(() => unavailable.emailBindingIds).toThrow("user profile not found");
+          } finally {
+            unavailable.release();
+          }
+        }
+      }
       const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
       const current = prepared.readCurrentFacts(bindings);
+      expect(selected.readCurrentFacts(selectedBindings)).toEqual(current);
+      expect(retained.readCurrentFacts(retainedBindings)).toEqual(current);
       expect(current.profile).toEqual({
         profileId: first.id,
         emails: [email, "retained@example.test"].toSorted(),
@@ -154,6 +178,8 @@ describe("resident profile display and reference catalog", () => {
         assignedRole: "reader",
       });
       expect(() => prepared.readCurrentFacts(bindings)).toThrow("user profile not found");
+      expect(() => selected.readCurrentFacts(selectedBindings)).toThrow("user profile not found");
+      expect(retained.readCurrentFacts(retainedBindings)).toEqual(prepared.readCurrentFacts());
       expect(after).not.toHaveBeenCalled();
     },
   );

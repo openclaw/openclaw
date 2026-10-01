@@ -41,9 +41,9 @@ it("blocks captured native calls and the real broker while settlement controls a
   }
 });
 
-it.each([false, true])(
-  "captures settled Doctor writes without attributing earlier writes (changed=%s)",
-  async (changed) => {
+it.each(["unchanged", "before", "during"])(
+  "requires unchanged fingerprints through Doctor settlement (%s)",
+  async (scenario) => {
     vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
       async (paths) => readUpdateDatabaseGenerations(paths),
     );
@@ -53,7 +53,7 @@ it.each([false, true])(
     seed.exec("CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)");
     seed.close();
     const databaseGenerations = readUpdateDatabaseGenerations([pathname, missing]);
-    if (changed) {
+    if (scenario === "before") {
       const foreign = new DatabaseSync(pathname);
       foreign.exec("INSERT INTO evidence VALUES (99)");
       foreign.close();
@@ -66,17 +66,21 @@ it.each([false, true])(
       databaseGenerations,
     });
     expect(maintenance?.databaseWrites).toBeUndefined();
-    const owned = new DatabaseSync(pathname);
-    owned.exec("PRAGMA journal_mode=WAL; INSERT INTO evidence VALUES (2)");
-    boundary.close.mockImplementationOnce(async () => owned.close());
+    if (scenario === "during") {
+      const owned = new DatabaseSync(pathname);
+      owned.exec("PRAGMA journal_mode=WAL; INSERT INTO evidence VALUES (2)");
+      boundary.close.mockImplementationOnce(async () => owned.close());
+    }
     await maintenance!.releaseState();
     const receipt = maintenance!.databaseWrites;
     expect(receipt).toEqual({
-      unchanged: !changed,
+      unchanged: scenario === "unchanged",
       fromGenerations: admitted,
       generations: readUpdateDatabaseGenerations([pathname, missing]),
     });
-    expect(receipt?.generations[pathname]).not.toBe(databaseGenerations[pathname]);
+    expect(receipt?.generations[pathname] === databaseGenerations[pathname]).toBe(
+      scenario === "unchanged",
+    );
     const later = new DatabaseSync(pathname);
     later.exec("INSERT INTO evidence VALUES (100)");
     later.close();
@@ -88,7 +92,7 @@ it.each([false, true])(
   },
 );
 
-it("attributes a NOCOW physical replacement to the retained Doctor maintenance interval", async () => {
+it("refuses automatic restore after a NOCOW physical replacement during Doctor maintenance", async () => {
   vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
     readUpdateDatabaseGenerations(paths),
   );
@@ -112,8 +116,10 @@ it("attributes a NOCOW physical replacement to the retained Doctor maintenance i
   await maintenance!.repairSqliteNoCow([pathname]);
   await maintenance!.release();
   expect(rewrite).toHaveBeenCalledOnce();
+  // Independent SQLite writers are not excluded during the rewrite, so even this
+  // Doctor-owned replacement cannot be attributed and must not be auto-restored.
   expect(maintenance!.databaseWrites).toEqual({
-    unchanged: true,
+    unchanged: false,
     fromGenerations: generations,
     generations: readUpdateDatabaseGenerations([pathname]),
   });

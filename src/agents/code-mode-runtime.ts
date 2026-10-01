@@ -71,17 +71,10 @@ export type CodeModeHeadlessResult =
     };
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
-  const codeMode = value;
-  if (codeMode === true) {
-    return { enabled: true };
+  if (typeof value === "boolean" || value === "auto") {
+    return { enabled: value };
   }
-  if (codeMode === false) {
-    return { enabled: false };
-  }
-  if (codeMode === "auto") {
-    return { enabled: "auto" };
-  }
-  return isRecord(codeMode) ? codeMode : undefined;
+  return isRecord(value) ? value : undefined;
 }
 
 function readCodeModeRawConfig(

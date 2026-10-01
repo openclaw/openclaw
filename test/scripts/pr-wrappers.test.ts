@@ -441,7 +441,7 @@ describe("scripts/pr wrappers", () => {
       input: "[[]]",
     });
     expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("completed review is missing or expired");
+    expect(result.stderr).toContain("completed review is missing.");
     expect(existsSync(join(fixture.linked, "scripts/pr-lib/clawsweeper-review-gate.mjs"))).toBe(
       true,
     );

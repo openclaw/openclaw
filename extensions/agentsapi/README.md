@@ -4,7 +4,7 @@ The `agentsapi` harness runs commands and file operations in an OpenAI-hosted Li
 VM by default, while OpenClaw handles channel messaging and configured Gateway
 tools. It uses OpenAI API-key authentication.
 
-Start with the [setup and supported features guide](https://docs.openclaw.ai/providers/openai/runtimes#agents-api-mvp).
+Start with the [setup and supported features guide](https://docs.openclaw.ai/plugins/agentsapi).
 Enable the `agentsapi` plugin and select it for the model through
 `agents.defaults.models["openai/<model>"].agentRuntime.id: "agentsapi"`.
 Replace `<model>` with a model available to your Agents API project. Enabling the
