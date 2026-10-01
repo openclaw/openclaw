@@ -72,17 +72,24 @@ decision.
 
 ## 4. Readable fallback
 
-A components v2 message ships with an empty `content`; any fallback text passed alongside
-`components` is currently discarded, so a client that does not render v2 shows a blank message.
-Because the card can never be the only record, every producer must keep its output legible without
-it, and **that takes a second, text-only send**. Text passed in the same send as `components` does
-not become plain content: `buildDiscordMessagePayload`
-(`extensions/discord/src/send.message-request.ts`) sets `payload.content` only when the request has
-no v2 components, so the text either disappears or ends up inside the v2 container, which is the
-surface that failed to render in the first place. Send the decision-relevant text as its own
-message, with no `components`, so a client (or a human) that only sees plain text still knows what
-was asked and what the current state is. Do not rely on the card's own fallback field to carry that
-text today.
+A components v2 message ships with an empty `content`, so a client that does not render v2 shows a
+blank message. Because the card can never be the only record, every producer must keep its output
+legible without it, and **that takes a second, text-only send**.
+
+Text passed in the same send as `components` never becomes plain content, and the exact mechanism
+matters because it is two different outcomes, neither of them a usable fallback:
+
+- `buildDiscordMessagePayload` (`extensions/discord/src/send.message-request.ts`) sets
+  `payload.content` only when the request carries no v2 components, so with a card the plain
+  `content` field stays empty.
+- The component builder resolves its leading text as `params.spec.text ?? params.fallbackText`
+  (`extensions/discord/src/components.builders.ts`) and pushes it as a `TextDisplay` **inside the
+  v2 container**. So a `message` sent alongside `components` is discarded when the spec already has
+  its own `text`, and otherwise it is rendered inside the very surface that failed to render.
+
+Send the decision-relevant text as its own message, with no `components`, so a client (or a human)
+that only sees plain text still knows what was asked and what the current state is. Do not rely on
+the card's own text or on the same-send `message` to carry that fallback.
 
 ## 5. Degradation after TTL
 

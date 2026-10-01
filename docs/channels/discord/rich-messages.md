@@ -57,7 +57,10 @@ Example:
   channel: "discord",
   action: "send",
   to: "channel:123456789012345678",
-  message: "Optional fallback text",
+  // Not a plain-text fallback: with `components` present this text renders inside the card,
+  // and only when `components.text` is unset, so it is ignored here. Send plain-text fallback
+  // as its own message (see Actionable cards, section 4).
+  message: "Choose a path",
   components: {
     reusable: true,
     text: "Choose a path",
