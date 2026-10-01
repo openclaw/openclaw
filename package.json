@@ -2312,7 +2312,7 @@
     "@a2ui/lit": "0.11.0",
     "@a2ui/web_core": "0.11.0",
     "@babel/types": "8.0.6",
-    "@copilotkit/aimock": "1.42.1",
+    "@copilotkit/aimock": "1.43.0",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",
