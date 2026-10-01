@@ -57,6 +57,8 @@ export type PackageUpdateStepRunner = (params: {
   cwd?: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  /** Optional stdin payload; an empty string provides an explicit non-interactive EOF. */
+  input?: string | Uint8Array;
 }) => Promise<UpdateStepResult>;
 
 type PackageUpdateLifecycleResult =
