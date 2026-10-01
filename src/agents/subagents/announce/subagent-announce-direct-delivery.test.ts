@@ -187,6 +187,7 @@ describe("late exact requester recovery", () => {
     if (ending === "private") {
       fixture.params.completionTarget = "parent";
       fixture.params.completionRequesterSessionId = "requester-session";
+      fixture.params.completionRequesterLifecycleRevision = "requester-revision";
     }
     if (ending === "child") {
       fixture.params.requesterIsSubagent = true;
@@ -418,6 +419,7 @@ describe("late exact requester recovery", () => {
       if (scope === "private") {
         fixture.params.completionTarget = "parent";
         fixture.params.completionRequesterSessionId = "requester-session";
+        fixture.params.completionRequesterLifecycleRevision = "requester-revision";
       } else if (scope === "incognito") {
         fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
         fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;

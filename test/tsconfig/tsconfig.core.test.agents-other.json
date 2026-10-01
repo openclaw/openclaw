@@ -28,6 +28,8 @@
     "../../src/agents/sandbox/**/*.test.tsx",
     "../../src/agents/sessions/**/*.test.ts",
     "../../src/agents/sessions/**/*.test.tsx",
+    "../../src/agents/subagents/**/*.test.ts",
+    "../../src/agents/subagents/**/*.test.tsx",
     "../../src/agents/tools/**/*.test.ts",
     "../../src/agents/tools/**/*.test.tsx",
     "../../src/agents/worktrees/**/*.test.ts",

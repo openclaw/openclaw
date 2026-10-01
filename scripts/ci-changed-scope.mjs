@@ -11,6 +11,7 @@ import {
 } from "./lib/ci-native-generated-scope.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+import nativeProtocolInputs from "./native-protocol-inputs.json" with { type: "json" };
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runMacosNode: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
@@ -247,6 +248,11 @@ export function detectChangedScope(changedPaths) {
     }
 
     const isAppleBuildInput = isAppleSharedBuildInput(path);
+    const isNativeProtocolInput =
+      nativeProtocolInputs.files.includes(path) ||
+      (/\.(?:ts|mts|mjs|json)$/.test(path) &&
+        !/\.(?:test|spec)\./.test(path) &&
+        nativeProtocolInputs.directories.some((directory) => path.startsWith(`${directory}/`)));
 
     if (facts.surface === "docs") {
       continue;
@@ -272,12 +278,13 @@ export function detectChangedScope(changedPaths) {
         isMacosToolingPath(path) ||
         WORKER_DEPLOY_ARTIFACT_SCOPE_RE.test(path) ||
         APPLE_SHARED_CONTRACT_FIXTURE_RE.test(path) ||
-        isAppleBuildInput)
+        isAppleBuildInput ||
+        isNativeProtocolInput)
     ) {
       runMacos = true;
     }
 
-    if (IOS_BUILD_RE.test(path) || isAppleBuildInput) {
+    if (IOS_BUILD_RE.test(path) || isAppleBuildInput || isNativeProtocolInput) {
       runIosBuild = true;
     }
 
@@ -285,7 +292,8 @@ export function detectChangedScope(changedPaths) {
       !NATIVE_PROTOCOL_GEN_RE.test(path) &&
       (ANDROID_NATIVE_RE.test(path) ||
         ANDROID_TALK_CONTRACT_FIXTURE_RE.test(path) ||
-        MERMAID_ASSET_INPUT_RE.test(path))
+        MERMAID_ASSET_INPUT_RE.test(path) ||
+        isNativeProtocolInput)
     ) {
       runAndroid = true;
     }

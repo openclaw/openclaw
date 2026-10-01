@@ -1511,10 +1511,7 @@ async function prepareCliRunContextWithinReadFence(
       ...(preparedBackend.backend.clearEnv ?? []),
       ...(preparedExecution?.clearEnv ?? []),
     ];
-    const processPerTurnBackend = (() => {
-      const { liveSession: _liveSession, ...backend } = preparedBackend.backend;
-      return backend;
-    })();
+    const { liveSession: _liveSession, ...processPerTurnBackend } = preparedBackend.backend;
     const preparedBackendFinal = {
       ...preparedBackend,
       backend: {

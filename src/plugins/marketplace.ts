@@ -397,10 +397,6 @@ function parseMarketplaceManifest(
 
 async function readClaudeKnownMarketplaces(): Promise<Record<string, KnownMarketplaceRecord>> {
   const knownPath = resolveOsHomeRelativePath(CLAUDE_KNOWN_MARKETPLACES_PATH);
-  if (!(await pathExists(knownPath))) {
-    return {};
-  }
-
   const parsed = await tryReadJson<unknown>(knownPath);
 
   if (!parsed || typeof parsed !== "object") {
