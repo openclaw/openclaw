@@ -1,5 +1,5 @@
-import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
 /** Retains cancellation selection, session facts, and exact dispatch ownership. */
+import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -340,10 +340,20 @@ export async function withSubagentKillScope<T>(
         published = publish(result, trees);
       }
     };
-    if (preparePublication) {
-      await preparePublication(publishResult);
+    const prepareResult = async () => {
+      if (preparePublication) {
+        await preparePublication(publishResult);
+      } else {
+        publishResult();
+      }
+    };
+    // Exact-run cancellation publishes one root's outcome. Join session writers
+    // through row preparation and the synchronous generation check, after drain.
+    const publicationSession = publish ? trees[0]?.session : undefined;
+    if (publicationSession) {
+      await publicationSession.withPublication(prepareResult);
     } else {
-      publishResult();
+      await prepareResult();
     }
     if (!publicationConsumed) {
       throw new Error("Subagent cancellation publication did not consume its prepared scope");
