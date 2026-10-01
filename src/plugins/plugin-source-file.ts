@@ -11,6 +11,17 @@ import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
 export const isPluginSourceEntry = (name: string): boolean =>
   name !== "node_modules" && name !== ".git" && !isGitRuntimeStagingName(name);
 
+function shouldFallbackFromPluginDescriptorCopy(
+  error: unknown,
+  platform: NodeJS.Platform = process.platform,
+  isBun = Object.hasOwn(process.versions, "bun"),
+): boolean {
+  return (
+    ["ENOENT", "ENOTDIR", "EACCES", "EPERM"].some((code) => hasErrnoCode(error, code)) ||
+    (platform === "darwin" && isBun && hasErrnoCode(error, "EBADF"))
+  );
+}
+
 // Capture and native module hooks are synchronous; no read retains this scratch buffer.
 const scratch = Buffer.allocUnsafe(64 * 1024);
 
@@ -71,7 +82,7 @@ export function copyPluginSourceFile(source: string, boundary: string, target: s
         return;
       } catch (error) {
         // Chroots and restricted mounts can lack descriptor paths despite a valid open file.
-        if (!["ENOENT", "ENOTDIR", "EACCES", "EPERM"].some((code) => hasErrnoCode(error, code))) {
+        if (!shouldFallbackFromPluginDescriptorCopy(error)) {
           throw error;
         }
       }

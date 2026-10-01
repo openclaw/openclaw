@@ -7,6 +7,22 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 type ResultStep = Omit<UpdateStepResult, "command" | "cwd" | "durationMs" | "recoverySteps">;
 
+/** Preserve the failed outcome without attaching command or working-directory metadata. */
+export function createUpdateStepFailureError(step: ResultStep): Error {
+  return new Error(summarizeUpdateStepFailure(step), {
+    cause: {
+      exitCode: step.exitCode,
+      stderrTail: step.stderrTail,
+      failureFacts: step.failureFacts,
+      signal: step.signal,
+      killed: step.killed,
+      outputLimitExceeded: step.outputLimitExceeded,
+      termination: step.termination,
+      snapshotCapacity: step.snapshotCapacity,
+    },
+  });
+}
+
 /** Physical process success does not erase a failed inspection or incomplete termination. */
 export function isFailedUpdateStep(
   step: Pick<

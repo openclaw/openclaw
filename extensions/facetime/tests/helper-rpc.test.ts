@@ -1,8 +1,11 @@
 import { createHmac } from "node:crypto";
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FaceTimeHelperActionError } from "../src/helper-results.js";
-import { FaceTimeHelperSocketServer, FaceTimeHelperUnavailableError } from "../src/helper-rpc.js";
+import {
+  FaceTimeHelperActionError,
+  FaceTimeHelperUnavailableError,
+} from "../src/helper-results.js";
+import { FaceTimeHelperSocketServer } from "../src/helper-rpc.js";
 
 const TEST_HELPER_AUTH_TOKEN = "a".repeat(64);
 const TEST_HELPER_BUILD_ID = "b".repeat(64);

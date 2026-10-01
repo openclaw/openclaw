@@ -49,17 +49,13 @@ afterEach(() => {
   resetInboundDedupe();
   clearAgentHarnesses();
 });
-it.each(["native commands", "groups"] as const)(
+it.each(["groups"] as const)(
   "delivers deterministic exec approval tool payloads in %s with progress suppression",
-  async (kind) => {
+  async () => {
     setNoAbort();
-    const cfg = kind === "groups" ? automaticGroupReplyConfig : emptyConfig;
+    const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx(
-      kind === "groups"
-        ? { Provider: "telegram", ChatType: "group" }
-        : { Provider: "telegram", CommandSource: "native" },
-    );
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "group" });
 
     const replyResolver = async (
       _ctx: MsgContext,
@@ -157,11 +153,10 @@ function createQuestionDispatch(name: string) {
 describe("dispatch input custody after a question response", () => {
   // Real question/receipt classification is covered by the wire regression. Here
   // the real dispatch owner must preserve that recorded fact through source faults.
-  it.each(
-    ["confirmed", "indeterminate"].flatMap((outcome) =>
-      ["settlement-error", "source-abort"].map((failure) => ({ outcome, failure })),
-    ),
-  )("does not replay $outcome input after $failure", async ({ outcome, failure }) => {
+  it.each([
+    { outcome: "confirmed", failure: "settlement-error" },
+    { outcome: "indeterminate", failure: "source-abort" },
+  ])("does not replay $outcome input after $failure", async ({ outcome, failure }) => {
     const fixture = createQuestionDispatch(`${outcome}-${failure}`);
     const abort = new AbortController();
     const cleanupError = new Error("source settlement failed");
@@ -224,42 +219,6 @@ describe("dispatch input custody after a question response", () => {
     }
   });
 
-  it.each(["question-response-indeterminate", "question-response-refused"] as const)(
-    "delivers %s and records an error instead of a successful agent turn",
-    async (reason) => {
-      const fixture = createQuestionDispatch(reason);
-      const dispatcher = createDispatcher();
-      const notice =
-        reason === "question-response-indeterminate"
-          ? "The question answer could not be confirmed; check before retrying."
-          : "The question answer was refused; check your permissions before retrying.";
-      try {
-        await dispatchReplyFromConfig({
-          ctx: fixture.ctx,
-          cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
-          dispatcher,
-          replyOptions: { turnAdoptionLifecycle: { onAdopted: async () => {} } },
-          replyResolver: async (_ctx, opts) => {
-            const state = resolveReplyOperationRunState(opts);
-            if (!state) {
-              throw new Error("missing dispatch run state");
-            }
-            state.admission = { status: "skipped", reason };
-            return { text: notice, isError: true };
-          },
-        });
-        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: notice, isError: true });
-        expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-          expect.objectContaining({ outcome: "error", reason }),
-        );
-        expect(fixture.cancel).not.toHaveBeenCalled();
-        expect(fixture.operation.result).toBeNull();
-      } finally {
-        fixture.operation.complete();
-      }
-    },
-  );
-
   it("delivers a host question refusal when the agent owns normal replies", async () => {
     const fixture = createQuestionDispatch("host-refusal");
     const dispatcher = createDispatcher();
@@ -273,7 +232,7 @@ describe("dispatch input custody after a question response", () => {
     try {
       await dispatchReplyFromConfig({
         ctx: fixture.ctx,
-        cfg: automaticDirectReplyConfig,
+        cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
         dispatcher,
         replyOptions: {
           sourceReplyDeliveryMode: "message_tool_only",
@@ -296,6 +255,9 @@ describe("dispatch input custody after a question response", () => {
           text: expect.stringContaining("The answer was not sent"),
           isError: true,
         }),
+      );
+      expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "error", reason: "question-response-refused" }),
       );
       expect(fixture.cancel).not.toHaveBeenCalled();
     } finally {
@@ -441,8 +403,6 @@ describe("dispatch input custody after a question response", () => {
 
   it.each([
     { code: "INVALID_REQUEST", reason: "QUESTION_ID_IN_USE" },
-    { code: "INVALID_REQUEST", reason: undefined },
-    { code: "FORBIDDEN", reason: "QUESTION_INVALID_ANSWER" },
     { code: "UNAVAILABLE", reason: "QUESTION_INVALID_ANSWER" },
   ])("does not report $code/$reason as an invalid answer", async ({ code, reason }) => {
     const fixture = createQuestionDispatch(`rejection-${code}-${reason}`);

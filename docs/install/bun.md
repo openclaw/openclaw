@@ -51,6 +51,28 @@ Bun remains usable as an optional package-script runner. The default package man
   </Step>
 </Steps>
 
+## Bun-only global install
+
+With a supported [OpenClaw Bun fork](/install/bun-compatibility) executable:
+
+```sh
+OPENCLAW_PACKAGE_BUN_LAUNCHER=/absolute/path/to/bun /absolute/path/to/bun add -g --trust openclaw
+export PATH="$(/absolute/path/to/bun pm bin -g):$PATH"
+openclaw --version
+openclaw status --json
+```
+
+On macOS and Linux without Node, the trusted package lifecycle installs a launcher
+that uses that exact Bun executable. Updates preserve it. To repair an older or
+missing launcher, run `/absolute/path/to/bun <package-root>/openclaw.mjs doctor --fix`.
+Paths with spaces, quotes, dollar signs, backticks, backslashes, and globs remain
+literal. Paths containing newlines or carriage returns require explicit Bun
+invocation instead of a generated launcher.
+See [Bun-only installs](/install/bun-compatibility#bun-only-installs) for update,
+rollback, and custom-bin behavior.
+
+Known limitation: the published 2026.9.7 updater can wait for its full Gateway readiness timeout after a failed update rolls back, even with `--no-restart`; once it exits, run `openclaw doctor` with Bun as shown above or follow the printed recovery command before retrying.
+
 ## Lifecycle scripts
 
 Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:

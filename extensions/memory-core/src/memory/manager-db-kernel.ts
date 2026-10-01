@@ -47,29 +47,23 @@ export class MemoryIndexRevisionConflictError extends Error {
   override name = "MemoryIndexRevisionConflictError";
 }
 
-function replaceVirtualTable(params: {
-  db: DatabaseSync;
-  tableName: "memory_index_chunks_vec";
-  columns: string;
-  ignoreDropErrorWhenSourceMissing?: boolean;
-}): void {
-  const { db, tableName, columns } = params;
+function replaceMemoryVectorTable(db: DatabaseSync): void {
+  const tableName = "memory_index_chunks_vec";
   const createSql = readTableSql(db, MEMORY_REINDEX_SCHEMA, tableName);
   if (!createSql) {
+    // A vector-disabled connection may not have sqlite-vec loaded and cannot
+    // drop an old virtual table. Missing vector metadata forces a strict
+    // rebuild before that table can be queried again.
     try {
       db.exec(`DROP TABLE IF EXISTS main.${tableName}`);
-    } catch (err) {
-      if (!params.ignoreDropErrorWhenSourceMissing) {
-        throw err;
-      }
-    }
+    } catch {}
     return;
   }
   db.exec(`DROP TABLE IF EXISTS main.${tableName}`);
   db.exec(createSql);
   db.exec(
-    `INSERT INTO main.${tableName} (${columns}) ` +
-      `SELECT ${columns} FROM ${MEMORY_REINDEX_SCHEMA}.${tableName}`,
+    `INSERT INTO main.${tableName} (id, embedding) ` +
+      `SELECT id, embedding FROM ${MEMORY_REINDEX_SCHEMA}.${tableName}`,
   );
 }
 
@@ -182,15 +176,7 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
         if (publishesPathFts) {
           ensureMemoryPathFtsTriggers(params.targetDb);
         }
-        replaceVirtualTable({
-          db: params.targetDb,
-          tableName: "memory_index_chunks_vec",
-          columns: "id, embedding",
-          // A vector-disabled connection may not have sqlite-vec loaded and cannot
-          // drop an old virtual table. Missing vector metadata forces a strict
-          // rebuild before that table can be queried again.
-          ignoreDropErrorWhenSourceMissing: true,
-        });
+        replaceMemoryVectorTable(params.targetDb);
         if (params.vectorIndexComplete) {
           markMemoryVectorIndexClean(params.targetDb);
         }

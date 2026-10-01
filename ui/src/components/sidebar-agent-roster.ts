@@ -30,7 +30,8 @@ registerAgentsHomeEnglish();
 type RosterHost = AppSidebarRenderHost & SessionListHost;
 
 class SidebarAgentRoster extends AgentRosterElement {
-  @property({ attribute: false }) host!: RosterHost;
+  // Selection, menus, drag state, and presence belong to the mutable host, not the row projection.
+  @property({ attribute: false, hasChanged: () => true }) host!: RosterHost;
   @property({ attribute: false }) sections: SidebarVisibleSections["sections"] = [];
   @property({ attribute: false }) involvingMe = false;
   @property({ attribute: false }) empty = false;

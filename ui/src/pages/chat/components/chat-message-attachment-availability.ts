@@ -1,6 +1,7 @@
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
+import { buildChatMediaFetchHeaders } from "./chat-media-playback.ts";
 import {
   buildAssistantAttachmentUrl,
   isLocalAssistantAttachmentSource,
@@ -123,11 +124,8 @@ export function resolveAssistantAttachmentAvailability(
     };
   };
   if (typeof fetch === "function") {
-    const headers = new Headers({ Accept: "application/json" });
-    const normalizedAuthToken = options.authToken?.trim();
-    if (normalizedAuthToken) {
-      headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
-    }
+    const headers = buildChatMediaFetchHeaders(options.authToken);
+    headers.set("Accept", "application/json");
     const controller = new AbortController();
     resource.abortController = controller;
     const timeout = setTimeout(

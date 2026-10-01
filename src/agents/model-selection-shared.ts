@@ -26,6 +26,7 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { isVllmQwenThinkingCompat } from "./model-compat-catalog.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
@@ -767,7 +768,12 @@ export function resolveConfiguredModelRef(
       let inferredProviderManifestPlugins = manifestPlugins;
       if (
         (!inferredProvider || inferredProvider !== "openai") &&
-        hasConfiguredRowsNeedingManifestLookup(params.cfg, params.defaultProvider, params.agentId)
+        (hasConfiguredProviderRowsNeedingManifestLookup(params.cfg) ||
+          hasConfiguredModelRefsNeedingManifestLookup(
+            params.cfg,
+            params.defaultProvider,
+            params.agentId,
+          ))
       ) {
         // Non-default provider rows may normalize through plugin manifests. Avoid
         // that heavier lookup unless the cheap configured pass was ambiguous.
@@ -856,7 +862,9 @@ export function buildAllowedModelSet(
 
 function prepareModelPolicy(params: ModelPolicyPreparationParams) {
   const visibility = parseConfiguredModelVisibilityEntries(params);
-  const policyAliasAgentId = resolvePolicyAliasAgentId(visibility.configPath, params.agentId);
+  const requestedAgentId = params.agentId;
+  const policyAliasAgentId =
+    visibility.configPath === AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH ? requestedAgentId : undefined;
   const policyAliasIndex = buildModelAliasIndex({ ...params, agentId: policyAliasAgentId });
   // Inherited policy aliases keep their owner's scope; selection and display
   // aliases still honor the selected agent's overrides.
@@ -960,7 +968,9 @@ function buildAllowedModelSetFromPrepared(
     allowedCaseInsensitiveIdentities.add(caseInsensitiveIdentity(ref.provider, ref.model));
     return modelCatalogEntryKey({ provider: ref.provider, id: ref.model });
   };
-  for (const entry of expandModelCatalogWildcards(catalog, wildcardModelKeys)) {
+  for (const entry of catalog.filter((candidate) =>
+    isModelKeyAllowedBySet(wildcardModelKeys, modelKey(candidate.provider, candidate.id)),
+  )) {
     allowedKeys.add(modelKey(entry.provider, entry.id));
     addAllowedCatalogRef({ provider: entry.provider, model: entry.id });
   }
@@ -1099,7 +1109,6 @@ export function resolveAllowedModelRefFromAliasIndex(
   return { ref: resolved.ref, key: status.key };
 }
 
-/** True when config contains provider model rows that should seed catalogs. */
 function hasConfiguredProviderModelRows(cfg: OpenClawConfig): boolean {
   const providers = cfg.models?.providers;
   if (!providers || typeof providers !== "object") {
@@ -1138,17 +1147,6 @@ function hasConfiguredModelRefsNeedingManifestLookup(
       const provider = normalizeProviderId(key.slice(0, slashIndex));
       return Boolean(provider && provider !== normalizedDefaultProvider);
     }),
-  );
-}
-
-function hasConfiguredRowsNeedingManifestLookup(
-  cfg: OpenClawConfig,
-  defaultProvider: string,
-  agentId?: string,
-): boolean {
-  return (
-    hasConfiguredProviderRowsNeedingManifestLookup(cfg) ||
-    hasConfiguredModelRefsNeedingManifestLookup(cfg, defaultProvider, agentId)
   );
 }
 
@@ -1253,16 +1251,6 @@ export function buildConfiguredModelCatalog(params: {
   return catalog;
 }
 
-function isVllmQwenThinkingCompat(
-  providerId: string,
-  compat?: { thinkingFormat?: unknown } | null,
-): boolean {
-  return (
-    providerId === "vllm" &&
-    (compat?.thinkingFormat === "qwen" || compat?.thinkingFormat === "qwen-chat-template")
-  );
-}
-
 export function resolveHooksGmailModel(
   params: {
     cfg: OpenClawConfig;
@@ -1294,13 +1282,6 @@ export function resolveHooksGmailModel(
 const DEFAULT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.modelPolicy.allow";
 const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.entries.*.modelPolicy.allow";
 export const LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.models";
-
-function resolvePolicyAliasAgentId(
-  configPath: string | null,
-  agentId: string | undefined,
-): string | undefined {
-  return configPath === AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH ? agentId : undefined;
-}
 
 export function resolveConfiguredModelPolicyAllow(params: {
   cfg?: OpenClawConfig;
@@ -1378,16 +1359,6 @@ export function parseConfiguredModelVisibilityEntries(params: {
     configPath: configured.configPath,
     repairConfigPath: configured.repairConfigPath,
   };
-}
-
-/** Expand segment-boundary prefix wildcard policy entries against discovered catalog rows. */
-function expandModelCatalogWildcards<T extends { provider: string; id: string }>(
-  catalog: readonly T[],
-  wildcardModelKeys: ReadonlySet<string>,
-): T[] {
-  return catalog.filter((entry) =>
-    isModelKeyAllowedBySet(wildcardModelKeys, modelKey(entry.provider, entry.id)),
-  );
 }
 
 export function isModelKeyAllowedBySet(allowedKeys: ReadonlySet<string>, key: string): boolean {

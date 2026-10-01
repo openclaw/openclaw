@@ -85,18 +85,6 @@ function resolvePendingSettlementOutcome(
   return entry.settlementOutcome ?? (entry.acknowledgedAt !== undefined ? "recovered" : undefined);
 }
 
-function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
-  return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
-}
-
-function canReconcileStartedAgentAttemptAtRetryLimit(entry: QueuedSessionDelivery): boolean {
-  return (
-    entry.kind === "agentTurn" &&
-    entry.deliveryStartedAt !== undefined &&
-    entry.retryCount === resolveSessionDeliveryMaxRetries(entry)
-  );
-}
-
 function resolveSessionRetryEligibility(entry: QueuedSessionDelivery, now: number) {
   if (entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion") {
     if (now >= entry.owner.deadlineAt) {
@@ -136,10 +124,12 @@ async function processPendingSessionDelivery(opts: {
     });
     return { status: pendingSettlementOutcome, finalized };
   }
-  if (
-    !canReconcileStartedAgentAttemptAtRetryLimit(entry) &&
-    entry.retryCount >= resolveSessionDeliveryMaxRetries(entry)
-  ) {
+  const maxRetries = entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
+  const canReconcileStartedAgentAttempt =
+    entry.kind === "agentTurn" &&
+    entry.deliveryStartedAt !== undefined &&
+    entry.retryCount === maxRetries;
+  if (!canReconcileStartedAgentAttempt && entry.retryCount >= maxRetries) {
     await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
     const finalized = await finalizeSessionDeliverySettlement({
       ...context,

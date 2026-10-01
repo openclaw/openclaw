@@ -42,20 +42,53 @@ async function captureCommandInput(
   model: Parameters<typeof streamSimpleBedrock>[0],
   context: Parameters<typeof streamSimpleBedrock>[1],
   options: BedrockOptions = {},
+  validateRequest?: (input: Record<string, unknown>) => void,
 ): Promise<Record<string, unknown>> {
-  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+  const response = {
     $metadata: { httpStatusCode: 200 },
     stream: streamEvents([
       { messageStart: { role: ConversationRole.ASSISTANT } },
       { messageStop: { stopReason: BedrockStopReason.END_TURN } },
     ]),
-  } as never);
-  await streamBedrockForTest(model, context, options).result();
+  };
+  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send");
+  if (validateRequest) {
+    send.mockImplementation((command) => {
+      const input = (command as unknown as { input?: Record<string, unknown> }).input;
+      if (!input) {
+        throw new Error("expected ConverseStreamCommand input");
+      }
+      validateRequest(input);
+      return response as never;
+    });
+  } else {
+    send.mockResolvedValue(response as never);
+  }
+  const result = await streamBedrockForTest(model, context, options).result();
+  if (validateRequest && result.stopReason !== "stop") {
+    throw new Error(
+      `Bedrock request fixture rejected replay: ${result.errorMessage ?? result.stopReason}`,
+    );
+  }
   const command = send.mock.calls.at(-1)?.[0] as { input?: Record<string, unknown> } | undefined;
   if (!command?.input) {
     throw new Error("expected ConverseStreamCommand input");
   }
   return command.input;
+}
+
+function findToolUse(input: Record<string, unknown>) {
+  const messages = input.messages as Array<{
+    content?: Array<{ toolUse?: { input?: unknown } }>;
+  }>;
+  return messages.flatMap((message) => message.content ?? []).find((block) => block.toolUse)
+    ?.toolUse;
+}
+
+function expectObjectToolUseInput(input: Record<string, unknown>): void {
+  const toolInput = findToolUse(input)?.input;
+  expect(toolInput).toEqual(expect.any(Object));
+  expect(Array.isArray(toolInput)).toBe(false);
 }
 
 async function captureClientRegion(
@@ -208,6 +241,65 @@ describe("Bedrock tool-result replay", () => {
     });
     expect(JSON.stringify(messages)).not.toContain('"image"');
     expect(JSON.stringify(messages)).not.toContain("see attached image");
+  });
+});
+
+describe("Bedrock assistant tool-use replay", () => {
+  const replayContext = (argumentsValue: unknown) =>
+    ({
+      messages: [
+        {
+          role: "assistant",
+          provider: "amazon-bedrock",
+          api: "bedrock-converse-stream",
+          model: "amazon.nova-micro-v1:0",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_replay",
+              name: "read",
+              arguments: argumentsValue,
+            },
+          ],
+          timestamp: 0,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_replay",
+          toolName: "read",
+          content: [{ type: "text", text: "existing result" }],
+          isError: false,
+          timestamp: 1,
+        },
+        { role: "user", content: "continue", timestamp: 2 },
+      ],
+    }) as never;
+
+  it.each(['{"path":', 42])(
+    "normalizes invalid stored arguments %j at the Bedrock request boundary",
+    async (malformedArguments) => {
+      const context = replayContext(malformedArguments);
+      const originalContext = JSON.stringify(context);
+      const input = await captureCommandInput(
+        bedrockModel({}),
+        context,
+        {},
+        expectObjectToolUseInput,
+      );
+      expect(findToolUse(input)?.input).toEqual({});
+      expect(JSON.stringify(context)).toBe(originalContext);
+    },
+  );
+
+  it("preserves valid object arguments at the same request boundary", async () => {
+    const validArguments = { path: "README.md" };
+    const input = await captureCommandInput(
+      bedrockModel({}),
+      replayContext(validArguments),
+      {},
+      expectObjectToolUseInput,
+    );
+    expect(findToolUse(input)?.input).toEqual(validArguments);
   });
 });
 

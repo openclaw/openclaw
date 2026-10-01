@@ -7,6 +7,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { renderSessionMenuItem } from "./cloud-target.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftBranches } from "./discovery.ts";
+import { renderPickerLabel } from "./picker-label.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -93,12 +94,11 @@ function handleBranchKeydown(target: HTMLElement, event: KeyboardEvent): boolean
 export function resolveCheckoutChip(params: {
   destination: "local" | "remote" | "cloud";
   worktree: boolean;
-  worktreeAvailable: boolean;
   worktreeName: string;
   headBranch?: string;
   baseRef: string;
   repository?: boolean;
-}): CheckoutChipState | null {
+}): CheckoutChipState {
   const worktreeName = params.worktreeName.trim();
   if (params.worktree && !params.repository && worktreeName) {
     return { label: t("newSession.checkoutWorktreeNamed", { name: worktreeName }) };
@@ -116,9 +116,6 @@ export function resolveCheckoutChip(params: {
         ? t("newSession.checkoutRepositoryFrom", { branch: params.baseRef })
         : t("newSession.checkoutRepository"),
     };
-  }
-  if (params.destination === "local" && !params.worktreeAvailable && !params.worktree) {
-    return null;
   }
   if (!params.worktree) {
     return { label: params.headBranch || t("newSession.checkoutCurrent") };
@@ -350,18 +347,7 @@ export function renderCheckoutChip(params: {
         ?disabled=${params.submitting || params.pendingPlacement}
         @click=${params.onGuardTransition}
       >
-        <span class="new-session-page__target-icon" aria-hidden="true">${icons.gitBranch}</span>
-        <span class="new-session-page__trigger-label">${params.state.label}</span>
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
-          aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
-          aria-hidden="true"
-          >${icons.chevronsUpDown}</span
-        >
+        ${renderPickerLabel(icons.gitBranch, params.state.label)}
       </button>
     </span>
     <wa-popover

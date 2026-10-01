@@ -192,9 +192,12 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       ? false
       : typeof resolvedBlockStreamingEnabled === "boolean"
         ? !resolvedBlockStreamingEnabled
-        : canStreamAnswerDraft
-          ? true
-          : undefined;
+        : !params.allowProviderPreview && !params.context.ctxPayload.GroupThread
+          ? // Hooked blocks replace gated drafts, but preserve an explicit global opt-out.
+            params.cfg.agents?.defaults?.blockStreamingDefault === "off"
+          : canStreamAnswerDraft
+            ? true
+            : undefined;
 
   return {
     answerLane: lanes.answer,
@@ -219,13 +222,11 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
 
 export function resetLaneState(turn: Turn, lane: DraftLaneState): void {
   lane.lastPartialText = "";
-  if (lane === turn.answerLane) {
-    turn.lastAnswerPartialText = "";
-  }
   lane.hasStreamedMessage = false;
   lane.finalized = false;
   lane.retainedPromptContextPages = [];
   if (lane === turn.answerLane) {
+    turn.lastAnswerPartialText = "";
     turn.activeAnswerDraftIsToolProgressOnly = false;
     turn.pendingAnswerBlockAssistantMessageIndex = undefined;
     turn.activeAnswerBlockDelivery = undefined;
@@ -240,14 +241,12 @@ export function repositionLaneForNewMessage(turn: Turn, lane: DraftLaneState): v
 }
 
 export async function rotateLaneForNewMessage(turn: Turn, lane: DraftLaneState): Promise<void> {
-  if (!lane.hasStreamedMessage && typeof lane.stream?.messageId() !== "number") {
-    resetLaneState(turn, lane);
-    return;
+  if (lane.hasStreamedMessage || typeof lane.stream?.messageId() === "number") {
+    // Settle pending edits before changing stream identity; reset only after the
+    // new Telegram message is selected or delivery state can describe the old one.
+    await lane.stream?.stop();
+    lane.stream?.forceNewMessage();
   }
-  // Settle pending edits before changing stream identity; reset only after the
-  // new Telegram message is selected or delivery state can describe the old one.
-  await lane.stream?.stop();
-  lane.stream?.forceNewMessage();
   resetLaneState(turn, lane);
 }
 
@@ -302,10 +301,10 @@ export async function prepareAnswerLaneForText(turn: Turn): Promise<boolean> {
   if (turn.streamMode === "progress") {
     return false;
   }
-  if (await rotateAnswerLaneAfterToolProgress(turn)) {
-    return true;
-  }
-  if (await rotateAnswerLaneAfterQueuedBlocksSettle(turn)) {
+  if (
+    (await rotateAnswerLaneAfterToolProgress(turn)) ||
+    (await rotateAnswerLaneAfterQueuedBlocksSettle(turn))
+  ) {
     return true;
   }
   if (!turn.answerLane.finalized) {

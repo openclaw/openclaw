@@ -108,6 +108,9 @@ describe("session store target dedupe", () => {
       await Promise.all(
         [...databaseDirs].map((databaseDir) => fs.mkdir(databaseDir, { recursive: true })),
       );
+      const databasePaths = new Set(
+        [...databaseDirs].map((databaseDir) => path.join(databaseDir, "openclaw-agent.sqlite")),
+      );
       const realpathNative = vi.spyOn(realpathSync, "native");
       try {
         expect(
@@ -115,8 +118,9 @@ describe("session store target dedupe", () => {
             defaultAgentId: targets[0]!.agentId,
           }),
         ).toEqual(targets);
+        // Parent lookup can use fs-safe's native backend; every identity starts here.
         const preparedPaths = realpathNative.mock.calls.flatMap(([pathname]) =>
-          typeof pathname === "string" && databaseDirs.has(pathname) ? [pathname] : [],
+          typeof pathname === "string" && databasePaths.has(pathname) ? [pathname] : [],
         );
         expect(preparedPaths).toHaveLength(targets.length);
         expect(new Set(preparedPaths).size).toBe(preparedPaths.length);

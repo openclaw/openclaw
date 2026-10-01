@@ -1374,13 +1374,13 @@ describe("talk.config handler", () => {
     return expectRespondOk(respond) as TalkConfigProjectionResponse;
   });
 
-  it("projects effective legacy realtime provider config for native routing", async () => {
+  it("projects an automatically selected realtime provider without exposing secrets", async () => {
     const resolveConfig = vi.fn(
       ({ rawConfig }: { rawConfig: Record<string, unknown> }): Record<string, unknown> => ({
         ...rawConfig,
         apiKey: normalizeResolvedSecretInputString({
           value: rawConfig.apiKey,
-          path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
+          path: "talk.realtime.providers.openai.apiKey",
         }),
       }),
     );
@@ -1404,25 +1404,16 @@ describe("talk.config handler", () => {
         realtime: {
           speakerVoice: "marin",
           speakerVoiceId: "voice-id",
-        },
-      },
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: {
-              realtime: {
-                providers: {
-                  " OpenAI ": {
-                    apiKey: {
-                      source: "env",
-                      provider: "default",
-                      id: "AZURE_OPENAI_API_KEY",
-                    },
-                    azureEndpoint: "https://example.openai.azure.com",
-                    azureDeployment: "realtime-prod",
-                  },
-                },
+          providers: {
+            "other-realtime": {},
+            " OpenAI ": {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "AZURE_OPENAI_API_KEY",
               },
+              azureEndpoint: "https://example.openai.azure.com",
+              azureDeployment: "realtime-prod",
             },
           },
         },
@@ -1430,19 +1421,16 @@ describe("talk.config handler", () => {
     } as OpenClawConfig;
     const runtimeConfig = {
       ...sourceConfig,
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: {
-              realtime: {
-                providers: {
-                  " OpenAI ": {
-                    apiKey: "runtime-azure-secret",
-                    azureEndpoint: "https://example.openai.azure.com",
-                    azureDeployment: "realtime-prod",
-                  },
-                },
-              },
+      talk: {
+        ...sourceConfig.talk,
+        realtime: {
+          ...sourceConfig.talk?.realtime,
+          providers: {
+            "other-realtime": {},
+            " OpenAI ": {
+              apiKey: "runtime-azure-secret",
+              azureEndpoint: "https://example.openai.azure.com",
+              azureDeployment: "realtime-prod",
             },
           },
         },
@@ -1476,7 +1464,9 @@ describe("talk.config handler", () => {
       azureDeployment: "realtime-prod",
     });
     expect(resolveConfig).toHaveBeenCalledOnce();
-    expect(JSON.stringify(mockCallArg(resolveConfig))).toContain("runtime-azure-secret");
+    expect(mockCallArg(resolveConfig)).toMatchObject({
+      rawConfig: { apiKey: "runtime-azure-secret", model: "gpt-realtime" },
+    });
     expect(JSON.stringify(response)).not.toContain("runtime-azure-secret");
   });
 
@@ -1852,12 +1842,12 @@ describe("talk.session unified handlers", () => {
       mocks.createTalkRealtimeRelaySession.mockReturnValue({ relaySessionId: "model-realtime" });
       const config: OpenClawConfig = {
         agents: { defaults: { voiceModel: { primary: "acme/voice-default" } } },
+        talk: { realtime: { providers: { acme: { model: "retired-model" } } } },
         plugins: {
           entries: {
             "voice-call": {
               config: {
                 streaming: { providers: { acme: { model: "retired-model" } } },
-                realtime: { providers: { acme: { model: "retired-model" } } },
               },
             },
           },
@@ -4372,7 +4362,7 @@ describe("talk.client.create handler", () => {
     expectRespondOk(respond, { provider: "openai", transport: "webrtc" });
   });
 
-  it("keeps voice-call realtime provider ahead of unrelated voiceModel defaults", async () => {
+  it("does not read Voice Call realtime settings before Doctor migration", async () => {
     const createBrowserSession = createBrowserSessionMock();
     const provider = createBrowserProvider(createBrowserSession);
     mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
@@ -4408,8 +4398,8 @@ describe("talk.client.create handler", () => {
     });
 
     expectRecordFields(mockCallArg(mocks.resolveConfiguredRealtimeVoiceProvider), {
-      configuredProviderId: "openai",
-      providerConfigs: { openai: { apiKey: "openai-key" } },
+      configuredProviderId: undefined,
+      providerConfigs: {},
       defaultModel: undefined,
     });
     expectRespondOk(respond, { provider: "openai", transport: "webrtc" });

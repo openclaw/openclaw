@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -328,7 +329,7 @@ describe("target-release database schema preflight", () => {
 
 describe("planned legacy configuration admission", () => {
   it.each(["unchanged", "root edit", "include edit", "different profile"] as const)(
-    "preserves original config and fences %s",
+    "keeps profile ownership and authored bytes across %s",
     async (scenario) => {
       await withTempHome(async (home) => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
@@ -385,11 +386,18 @@ describe("planned legacy configuration admission", () => {
             ).rejects.toMatchObject({ reason: "invalid-config" });
           } else {
             fs.appendFileSync(scenario === "root edit" ? configPath : includePath, "\n");
-            await expect(
-              revalidateUpdateDatabaseContext(context).then(() => true),
-            ).rejects.toMatchObject({
-              reason: "database-schema-preflight",
-            });
+            const refreshed = await revalidateUpdateDatabaseContext(context);
+            expect(refreshed.config).toEqual(context.config);
+            expect(refreshed.configSnapshot.raw).toBe(fs.readFileSync(configPath, "utf8"));
+            expect(refreshed.legacyConfigPlan).toBeDefined();
+            expect(
+              refreshed.legacyConfigPlan?.includeIdentity.includeFileHashesForWrite?.[includePath],
+            ).toBe(
+              createHash("sha256")
+                .update("present\0")
+                .update(fs.readFileSync(includePath))
+                .digest("hex"),
+            );
           }
         });
       });
@@ -415,7 +423,7 @@ describe("planned migration managed profile isolation", () => {
     });
   });
 
-  it("refuses a newly valid replacement of the planned source before admission", async () => {
+  it("admits a newly valid replacement without reusing the prior legacy plan", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
         gateway: { mode: "local", bind: "localhost" },
@@ -429,11 +437,10 @@ describe("planned migration managed profile isolation", () => {
       expect(legacyConfigPlan).toBeDefined();
       const replacement = JSON.stringify({ gateway: { mode: "local", bind: "lan" } });
       fs.writeFileSync(configPath, replacement);
-      await expect(
-        captureTargetDatabaseSchemaContext(env, { legacyConfigPlan }),
-      ).rejects.toMatchObject({
-        reason: "database-schema-preflight",
-      });
+      const current = await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
+      expect(current.config.gateway?.bind).toBe("lan");
+      expect(current.configSnapshot.raw).toBe(replacement);
+      expect(current.legacyConfigPlan).toBeUndefined();
       expect(fs.readFileSync(configPath, "utf8")).toBe(replacement);
       expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
     });

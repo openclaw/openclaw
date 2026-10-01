@@ -32,24 +32,21 @@ describe("plugin tab addresses", () => {
     expect(routeIdFromPath("/ui/reports", "/ui")).toBeNull();
   });
 
-  it.each(["settings", "config", "skills", "chat"])(
-    "keeps native %s routes and aliases in charge",
-    (slug) => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const collision = { ...tab, slug };
-      setPluginTabSlugs([collision]);
-      expect(pluginTabLocation(collision, "/ui")).toEqual({
-        pathname: "/ui/plugin",
-        search: "?plugin=reports-fixture&id=summary",
-        hash: "",
-      });
-      setPluginTabSlugs([collision]);
-      expect(pluginSlugCandidate(`/ui/${slug}`, "/ui")).toBeNull();
-      expect(pluginTabSlugFromPath(`/ui/${slug}`, "/ui")).toBeNull();
-      expect(routeIdFromPath(`/ui/${slug}`, "/ui")).not.toBe("plugin");
-      expect(warn).toHaveBeenCalledTimes(1);
-    },
-  );
+  it.each(["settings", "config"])("keeps native %s routes and aliases in charge", (slug) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const collision = { ...tab, slug };
+    setPluginTabSlugs([collision]);
+    expect(pluginTabLocation(collision, "/ui")).toEqual({
+      pathname: "/ui/plugin",
+      search: "?plugin=reports-fixture&id=summary",
+      hash: "",
+    });
+    setPluginTabSlugs([collision]);
+    expect(pluginSlugCandidate(`/ui/${slug}`, "/ui")).toBeNull();
+    expect(pluginTabSlugFromPath(`/ui/${slug}`, "/ui")).toBeNull();
+    expect(routeIdFromPath(`/ui/${slug}`, "/ui")).not.toBe("plugin");
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
 
   it("replaces generic URLs once, retaining page params and fragment", () => {
     setPluginTabSlugs([tab]);

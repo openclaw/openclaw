@@ -1257,6 +1257,11 @@ jobs:
             if [[ "${CHILD_EVIDENCE_REUSE:-false}" == true && "$CHILD_WORKFLOW_KIND" != artifact-* ]]; then
               if node workflow/scripts/find-reusable-release-child.mjs "$workflow" "$@"; then
                 return 0
+              else
+                dispatch_status=$?
+                if [[ "$dispatch_status" != 3 ]]; then
+                  echo "::warning::Child reuse lookup exited ${dispatch_status}; dispatching fresh work." >&2
+                fi
               fi
             fi
 

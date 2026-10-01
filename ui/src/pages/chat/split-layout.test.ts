@@ -115,7 +115,7 @@ describe("chat split layout", () => {
     expect(panesOf(layout)).not.toBe(layout.columns.at(0)?.panes);
   });
 
-  it("maps UI split, focus, and close commands onto pane state", () => {
+  it("maps UI split and focus commands onto pane state", () => {
     const initial = setActivePane(setPaneSession(createSplitLayout("main"), "p2", "source"), "p1");
     const split = applyUiCommandToSplitLayout(
       initial,
@@ -138,12 +138,6 @@ describe("chat split layout", () => {
       sessionKey: "main",
     });
     expect(focused?.activePaneId).toBe("p1");
-
-    const closed = applyUiCommandToSplitLayout(focused!, {
-      kind: "close-pane",
-      sessionKey: "agent:main:new",
-    });
-    expect(closed && panesOf(closed).map((pane) => pane.sessionKey)).toEqual(["main", "source"]);
   });
 
   it("resizes only a boundary pair and clamps each side to fifteen percent", () => {

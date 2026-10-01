@@ -62,21 +62,6 @@ type AutoCaptureSession = {
   completedTexts: Set<string>;
 };
 
-export { normalizeEmbeddingVector } from "./embeddings.js";
-export { parseMemoryCliFilter } from "./memory-cli.js";
-export {
-  looksLikeEnvelopeSludge,
-  sanitizeForMemoryCapture,
-} from "./memory-capture-sanitization.js";
-export {
-  detectCategory,
-  escapeMemoryForPrompt,
-  formatRelevantMemoriesContext,
-  looksLikePromptInjection,
-  normalizeRecallQuery,
-  shouldCapture,
-} from "./memory-policy.js";
-
 function memoryDeleteFailureResult(id: string) {
   const error = `Memory ${id} was not deleted because it was not found.`;
   return textResult(error, { action: "not_found", status: "error", error, id });

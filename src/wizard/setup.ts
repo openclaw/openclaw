@@ -539,11 +539,9 @@ async function runSetupWizardOnce(
     flow: wizardFlow,
     baseConfig,
     nextConfig,
-    localPort,
     quickstartGateway,
     secretInputMode: opts.secretInputMode,
     prompter,
-    runtime,
   });
   const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
   const onboardingAgent = await ensureOnboardingAgent({

@@ -68,7 +68,11 @@ const ModelRuntimeProperties = {
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingDefault: Type.Optional(NonEmptyString),
-  effectiveFastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+  effectiveFastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
+  /** Account-scoped service tiers advertised for this selected runtime. Missing means unknown. */
+  serviceTiers: Type.Optional(Type.Array(NonEmptyString)),
   /** Local selected-request applicability, not preference or upstream fulfillment. */
   supportsFastMode: Type.Optional(Type.Boolean()),
   supportsTools: Type.Optional(Type.Boolean()),

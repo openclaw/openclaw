@@ -1,13 +1,20 @@
-// Normalizes channel config compatibility fields during config loading.
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLegacyDmAliases,
   type CompatMutationResult,
 } from "../channels/plugins/dm-access.js";
+import {
+  normalizeChannelAccounts,
+  type NormalizeLegacyChannelAccountParams,
+} from "./channel-config-normalization.js";
 
 export { normalizeLegacyDmAliases };
 export { asObjectRecord };
 export type { CompatMutationResult };
+export type {
+  NormalizeChannelConfigEntryParams,
+  NormalizeLegacyChannelAccountParams,
+} from "./channel-config-normalization.js";
 
 /** Resolved streaming values a channel doctor supplies while migrating legacy aliases. */
 export type LegacyStreamingAliasOptions = {
@@ -21,21 +28,6 @@ export type LegacyStreamingAliasOptions = {
   aliasOnlyMode?: string;
   includePreviewChunk?: boolean;
   resolvedNativeTransport?: unknown;
-};
-
-/** Account-level channel config passed to channel-specific doctor migrations. */
-export type NormalizeLegacyChannelAccountParams = {
-  account: Record<string, unknown>;
-  accountId: string;
-  pathPrefix: string;
-  changes: string[];
-};
-
-export type NormalizeChannelConfigEntryParams = {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-  accountId?: string;
 };
 
 export type RetiredChannelKeyRemoval = {
@@ -85,16 +77,7 @@ export function hasLegacyAccountStreamingAliases(
   value: unknown,
   match: (entry: unknown) => boolean,
 ): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => match(account));
-}
-
-function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
-  // Clone nested records before migration so callers keep immutable before/after snapshots.
-  return { ...asObjectRecord(owner[key]) };
+  return Object.values(asObjectRecord(value) ?? {}).some((account) => match(account));
 }
 
 /**
@@ -129,9 +112,10 @@ export function normalizeLegacyStreamingAliases(
 
   const updated = { ...params.entry };
   let changed = false;
-  const streaming = ensureNestedRecord(updated, "streaming");
-  const block = ensureNestedRecord(streaming, "block");
-  const preview = ensureNestedRecord(streaming, "preview");
+  // Clone nested records so callers keep immutable before/after snapshots.
+  const streaming = { ...asObjectRecord(updated.streaming) };
+  const block = { ...asObjectRecord(streaming.block) };
+  const preview = { ...asObjectRecord(streaming.preview) };
 
   // Only fill `streaming.mode` when the modern nested field is absent.
   let movedStreamMode = false;
@@ -243,7 +227,6 @@ export function normalizeLegacyStreamingAliases(
     params.changes.push(
       `Set ${params.pathPrefix}.streaming.mode (${params.aliasOnlyMode}) to keep the previous default while migrating flat streaming keys.`,
     );
-    changed = true;
   }
 
   if (Object.keys(preview).length > 0) {
@@ -450,168 +433,156 @@ export function normalizeLegacyChannelAliases(params: {
   updated = streaming.entry;
   changed = changed || streaming.changed;
 
-  const rawAccounts = asObjectRecord(updated.accounts);
-  if (!rawAccounts) {
-    return { entry: updated, changed };
-  }
-
   // For replace-semantics channels (seedAccountStreamingFromRoot), an account
   // object materialized by migration must be seeded with the settings the
   // account previously inherited from the root object, or `doctor --fix`
   // silently changes effective delivery/preview behavior for that account.
   const rootStreaming = asObjectRecord(updated.streaming);
 
-  let accountsChanged = false;
-  const accounts = { ...rawAccounts };
-  for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
-    const account = asObjectRecord(rawAccount);
-    if (!account) {
-      continue;
-    }
-    let accountEntry = account;
-    let accountChanged = false;
-    const accountPathPrefix = `${params.pathPrefix}.accounts.${accountId}`;
+  const accounts = normalizeChannelAccounts({
+    entry: updated,
+    pathPrefix: params.pathPrefix,
+    changes: params.changes,
+    normalizeAccount: ({ account, accountId, pathPrefix: accountPathPrefix }) => {
+      let accountEntry = account;
+      let accountChanged = false;
 
-    if (params.normalizeAccountDm === true) {
-      const accountDm = normalizeLegacyDmAliases({
+      if (params.normalizeAccountDm === true) {
+        const accountDm = normalizeLegacyDmAliases({
+          entry: accountEntry,
+          pathPrefix: accountPathPrefix,
+          changes: params.changes,
+        });
+        accountEntry = accountDm.entry;
+        accountChanged = accountDm.changed;
+      }
+
+      const accountStreamingOptions = { ...params.resolveStreamingOptions(accountEntry) };
+      if (rootStreaming) {
+        // Truth table rows 2-3: with a root object to seed from, the account
+        // previously resolved that object's semantics (its mode, or the
+        // object-without-mode default), so pinning absentObjectDefault is wrong.
+        delete accountStreamingOptions.aliasOnlyMode;
+      }
+      const beforeAccountStreaming = accountEntry.streaming;
+      const accountStreaming = normalizeLegacyStreamingAliases({
         entry: accountEntry,
         pathPrefix: accountPathPrefix,
         changes: params.changes,
+        ...accountStreamingOptions,
       });
-      accountEntry = accountDm.entry;
-      accountChanged = accountDm.changed;
-    }
+      accountEntry = accountStreaming.entry;
+      accountChanged = accountChanged || accountStreaming.changed;
 
-    const accountStreamingOptions = { ...params.resolveStreamingOptions(accountEntry) };
-    if (rootStreaming) {
-      // Truth table rows 2-3: with a root object to seed from, the account
-      // previously resolved that object's semantics (its mode, or the
-      // object-without-mode default), so pinning absentObjectDefault is wrong.
-      delete accountStreamingOptions.aliasOnlyMode;
-    }
-    const beforeAccountStreaming = accountEntry.streaming;
-    const accountStreaming = normalizeLegacyStreamingAliases({
-      entry: accountEntry,
-      pathPrefix: accountPathPrefix,
-      changes: params.changes,
-      ...accountStreamingOptions,
-    });
-    accountEntry = accountStreaming.entry;
-    accountChanged = accountChanged || accountStreaming.changed;
-
-    if (
-      params.seedAccountStreamingFromRoot === true &&
-      accountStreaming.changed &&
-      beforeAccountStreaming === undefined &&
-      rootStreaming
-    ) {
-      const created = asObjectRecord(accountEntry.streaming);
-      if (created) {
-        const seeded = seedMaterializedAccountStreaming({
-          created,
-          rootNestedBefore: rootNestedStreamingBefore,
-          rootFlat: rootFlatDeliverySeed,
-          rootAfter: rootStreaming,
-        });
-        if (JSON.stringify(seeded) !== JSON.stringify(created)) {
-          accountEntry = { ...accountEntry, streaming: seeded };
-          params.changes.push(
-            `Copied ${params.pathPrefix}.streaming into ${accountPathPrefix}.streaming to keep inherited settings while migrating flat streaming keys.`,
-          );
+      if (
+        params.seedAccountStreamingFromRoot === true &&
+        accountStreaming.changed &&
+        beforeAccountStreaming === undefined &&
+        rootStreaming
+      ) {
+        const created = asObjectRecord(accountEntry.streaming);
+        if (created) {
+          const seeded = seedMaterializedAccountStreaming({
+            created,
+            rootNestedBefore: rootNestedStreamingBefore,
+            rootFlat: rootFlatDeliverySeed,
+            rootAfter: rootStreaming,
+          });
+          if (JSON.stringify(seeded) !== JSON.stringify(created)) {
+            accountEntry = { ...accountEntry, streaming: seeded };
+            params.changes.push(
+              `Copied ${params.pathPrefix}.streaming into ${accountPathPrefix}.streaming to keep inherited settings while migrating flat streaming keys.`,
+            );
+          }
         }
-      }
-    } else if (rootFlatDeliverySeed && beforeAccountStreaming !== undefined) {
-      // The account already had a streaming value, so merged-entry channels
-      // (mattermost-style resolved accounts) replace the root object wholesale
-      // and would lose the root FLAT keys they previously read through the
-      // merged flat fallback. Fill only slots the account does not set itself
-      // (per-field for coalesce, atomically for preview.chunk); copying the
-      // current value freezes inheritance at fix time by design — the change
-      // message records it — while raw-entry channels (matrix, feishu) keep
-      // resolving the same values from the migrated root entry either way.
-      const accountStreamingObject = asObjectRecord(accountEntry.streaming);
-      if (accountStreamingObject) {
-        let seededAccount = accountStreamingObject;
-        if (rootFlatDeliverySeed.chunkMode !== undefined && seededAccount.chunkMode === undefined) {
-          seededAccount = { ...seededAccount, chunkMode: rootFlatDeliverySeed.chunkMode };
-        }
-        const rootFlatBlock = asObjectRecord(rootFlatDeliverySeed.block);
-        const rootFlatBlockEnabled = rootFlatBlock?.enabled;
-        if (
-          rootFlatBlockEnabled !== undefined &&
-          asObjectRecord(seededAccount.block)?.enabled === undefined
-        ) {
-          seededAccount = {
-            ...seededAccount,
-            block: {
-              ...asObjectRecord(seededAccount.block),
-              enabled: rootFlatBlockEnabled,
-            },
-          };
-        }
-        const rootFlatCoalesce = asObjectRecord(rootFlatBlock?.coalesce);
-        if (rootFlatCoalesce) {
-          const accountCoalesce = asObjectRecord(asObjectRecord(seededAccount.block)?.coalesce);
-          const mergedCoalesce = {
-            ...structuredClone(rootFlatCoalesce),
-            ...structuredClone(accountCoalesce ?? {}),
-          };
-          if (JSON.stringify(mergedCoalesce) !== JSON.stringify(accountCoalesce ?? {})) {
+      } else if (rootFlatDeliverySeed && beforeAccountStreaming !== undefined) {
+        // The account already had a streaming value, so merged-entry channels
+        // (mattermost-style resolved accounts) replace the root object wholesale
+        // and would lose the root FLAT keys they previously read through the
+        // merged flat fallback. Fill only slots the account does not set itself
+        // (per-field for coalesce, atomically for preview.chunk); copying the
+        // current value freezes inheritance at fix time by design — the change
+        // message records it — while raw-entry channels (matrix, feishu) keep
+        // resolving the same values from the migrated root entry either way.
+        const accountStreamingObject = asObjectRecord(accountEntry.streaming);
+        if (accountStreamingObject) {
+          let seededAccount = accountStreamingObject;
+          if (
+            rootFlatDeliverySeed.chunkMode !== undefined &&
+            seededAccount.chunkMode === undefined
+          ) {
+            seededAccount = { ...seededAccount, chunkMode: rootFlatDeliverySeed.chunkMode };
+          }
+          const rootFlatBlock = asObjectRecord(rootFlatDeliverySeed.block);
+          const rootFlatBlockEnabled = rootFlatBlock?.enabled;
+          if (
+            rootFlatBlockEnabled !== undefined &&
+            asObjectRecord(seededAccount.block)?.enabled === undefined
+          ) {
             seededAccount = {
               ...seededAccount,
               block: {
                 ...asObjectRecord(seededAccount.block),
-                coalesce: mergedCoalesce,
+                enabled: rootFlatBlockEnabled,
               },
             };
           }
-        }
-        const rootFlatPreviewChunk = asObjectRecord(rootFlatDeliverySeed.preview)?.chunk;
-        // Atomic slot: only copy the whole chunk object when the account has none.
-        if (
-          rootFlatPreviewChunk !== undefined &&
-          asObjectRecord(seededAccount.preview)?.chunk === undefined
-        ) {
-          seededAccount = {
-            ...seededAccount,
-            preview: {
-              ...asObjectRecord(seededAccount.preview),
-              chunk: structuredClone(rootFlatPreviewChunk),
-            },
-          };
-        }
-        if (seededAccount !== accountStreamingObject) {
-          accountEntry = { ...accountEntry, streaming: seededAccount };
-          accountChanged = true;
-          params.changes.push(
-            `Copied flat ${params.pathPrefix} delivery keys into ${accountPathPrefix}.streaming to keep inherited settings while migrating flat streaming keys.`,
-          );
+          const rootFlatCoalesce = asObjectRecord(rootFlatBlock?.coalesce);
+          if (rootFlatCoalesce) {
+            const accountCoalesce = asObjectRecord(asObjectRecord(seededAccount.block)?.coalesce);
+            const mergedCoalesce = {
+              ...structuredClone(rootFlatCoalesce),
+              ...structuredClone(accountCoalesce ?? {}),
+            };
+            if (JSON.stringify(mergedCoalesce) !== JSON.stringify(accountCoalesce ?? {})) {
+              seededAccount = {
+                ...seededAccount,
+                block: {
+                  ...asObjectRecord(seededAccount.block),
+                  coalesce: mergedCoalesce,
+                },
+              };
+            }
+          }
+          const rootFlatPreviewChunk = asObjectRecord(rootFlatDeliverySeed.preview)?.chunk;
+          // Atomic slot: only copy the whole chunk object when the account has none.
+          if (
+            rootFlatPreviewChunk !== undefined &&
+            asObjectRecord(seededAccount.preview)?.chunk === undefined
+          ) {
+            seededAccount = {
+              ...seededAccount,
+              preview: {
+                ...asObjectRecord(seededAccount.preview),
+                chunk: structuredClone(rootFlatPreviewChunk),
+              },
+            };
+          }
+          if (seededAccount !== accountStreamingObject) {
+            accountEntry = { ...accountEntry, streaming: seededAccount };
+            accountChanged = true;
+            params.changes.push(
+              `Copied flat ${params.pathPrefix} delivery keys into ${accountPathPrefix}.streaming to keep inherited settings while migrating flat streaming keys.`,
+            );
+          }
         }
       }
-    }
 
-    const accountExtra = params.normalizeAccountExtra?.({
-      account: accountEntry,
-      accountId,
-      pathPrefix: accountPathPrefix,
-      changes: params.changes,
-    });
-    if (accountExtra) {
-      accountEntry = accountExtra.entry;
-      accountChanged = accountChanged || accountExtra.changed;
-    }
+      const accountExtra = params.normalizeAccountExtra?.({
+        account: accountEntry,
+        accountId,
+        pathPrefix: accountPathPrefix,
+        changes: params.changes,
+      });
+      if (accountExtra) {
+        accountEntry = accountExtra.entry;
+        accountChanged = accountChanged || accountExtra.changed;
+      }
 
-    if (accountChanged) {
-      accounts[accountId] = accountEntry;
-      accountsChanged = true;
-    }
-  }
-  if (accountsChanged) {
-    updated = { ...updated, accounts };
-    changed = true;
-  }
-
-  return { entry: updated, changed };
+      return { entry: accountEntry, changed: accountChanged };
+    },
+  });
+  return { entry: accounts.entry, changed: changed || accounts.changed };
 }
 
 /** Detects legacy streaming aliases on one channel or account config entry. */

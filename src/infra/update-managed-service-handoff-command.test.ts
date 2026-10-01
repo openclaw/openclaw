@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
+import { withEnv } from "../test-utils/env.js";
+import { readDevUpdateTarget, type DevUpdateTarget } from "./update-dev-target.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -572,13 +573,15 @@ describe("managed service update handoff command", () => {
 
     expect(result.spawnEnv?.KEEP).toBe("value");
     expect(result.spawnEnv?.OPENCLAW_UPDATE_RUN_ID).toBe(runId);
-    expect(parseDevUpdateTargetEnv(result.spawnEnv ?? {})).toEqual({
-      status: "valid",
-      target: {
-        mode: "tracked",
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-      },
+    expect(
+      withEnv(
+        { OPENCLAW_UPDATE_DEV_TARGET_REF: result.spawnEnv?.OPENCLAW_UPDATE_DEV_TARGET_REF },
+        readDevUpdateTarget,
+      ),
+    ).toEqual({
+      mode: "tracked",
+      upstreamRef: "origin/main",
+      upstreamSha: "frozen-sha",
     });
   });
 });

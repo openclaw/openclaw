@@ -1,4 +1,4 @@
-import { ChildProcess } from "node:child_process";
+import { ChildProcess, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ const { spawn } = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn,
+  spawnSync: vi.fn(),
 }));
 
 afterEach(() => vi.restoreAllMocks());
@@ -31,6 +32,71 @@ function createChild() {
 }
 
 describe("managed child termination facts", () => {
+  it.each([
+    { phase: "inspection", rows: "12345 Z\n12345 ZN\n", accepted: true },
+    { phase: "signal", rows: "12345 Z\n", accepted: true },
+    { phase: "inspection", rows: "", reaped: true, accepted: true },
+    { phase: "signal", rows: "", failed: true, reaped: true, accepted: true },
+    { phase: "inspection", rows: "12345 Z\n12345 S\n", accepted: false },
+    { phase: "inspection", rows: "", accepted: false },
+    { phase: "inspection", rows: "23456 Z\n", accepted: false },
+    { phase: "inspection", rows: "12345 Z\n", failed: true, accepted: false },
+  ])(
+    "verifies Darwin EPERM at $phase against all group members ($rows, failed=$failed, reaped=$reaped)",
+    async ({ phase, rows, failed, reaped, accepted }) => {
+      const { child, exit } = createChild();
+      spawn.mockReturnValue(child);
+      vi.spyOn(child, "kill").mockReturnValue(false);
+      let signaled = false;
+      let inspected = false;
+      let now = 1_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+        if (signal !== 0) {
+          signaled = true;
+          if (!accepted) {
+            now += 100;
+          }
+        }
+        if (signal === 0 && signaled && !inspected) {
+          now += 100;
+        }
+        if (phase === "signal" && !signaled) {
+          return true;
+        }
+        throw Object.assign(new Error("group signal denied"), {
+          code: reaped && inspected ? "ESRCH" : "EPERM",
+        });
+      });
+      vi.mocked(spawnSync).mockImplementation(() => {
+        inspected = true;
+        return {
+          pid: 12346,
+          output: [],
+          stdout: rows,
+          stderr: "",
+          status: failed ? 1 : 0,
+          signal: null,
+        };
+      });
+      const command = runManagedCommand({
+        bin: "fixture",
+        platform: "darwin",
+        shell: false,
+        stdio: "ignore",
+        env: { TMPDIR: process.cwd() },
+        requireProcessTreeExit: true,
+        cleanupDrainTimeoutMs: 50,
+        onReady: exit,
+      });
+      if (accepted) {
+        await expect(command).resolves.toBe(0);
+      } else {
+        await expect(command).rejects.toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
+      }
+    },
+  );
+
   it.each(["SIGTERM", "SIGKILL"])(
     "retains POSIX %s failures through cleanup",
     async (failedSignal) => {

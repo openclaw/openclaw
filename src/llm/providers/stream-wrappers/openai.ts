@@ -1,6 +1,7 @@
 import {
   codeModeToolSurfaceObserver,
   type CodeModeToolSurfaceObservation,
+  hasResponsesWebSearchTool,
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
@@ -216,25 +217,6 @@ function shouldStripOpenAICompletionMessageKeys(model: {
   return model.api === "openai-completions" && compat?.strictMessageKeys === true;
 }
 
-function hasResponsesWebSearchTool(tools: unknown): boolean {
-  if (!Array.isArray(tools)) {
-    return false;
-  }
-  return tools.some((tool) => {
-    if (!isRecord(tool)) {
-      return false;
-    }
-    if (tool.type === "web_search") {
-      return true;
-    }
-    if (tool.type === "function" && tool.name === "web_search") {
-      return true;
-    }
-    const fn = tool.function;
-    return isRecord(fn) && fn.name === "web_search";
-  });
-}
-
 function resolveOpenAIThinkingPayloadEffort(params: {
   model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown; compat?: unknown };
   payloadObj: Record<string, unknown>;
@@ -303,7 +285,7 @@ function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
     return normalizeOpenAIFastMode((value as () => unknown)());
   }
   const fastMode = normalizeFastMode(value);
-  return fastMode === "auto" ? undefined : fastMode;
+  return fastMode === "auto" ? undefined : fastMode === "ultrafast" ? true : fastMode;
 }
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */

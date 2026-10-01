@@ -150,7 +150,7 @@ describe("memory migration registration resources", () => {
           OPENCLAW_CONFIG_PATH: path.join(fresh.root, "state", "openclaw.json"),
         },
         async () => {
-          const raw = loadAndActivateRootPluginRegistry({ config: active.config });
+          const raw = await loadAndActivateRootPluginRegistry({ config: active.config });
           expect(raw.migrationProviders).toHaveLength(1);
           active.state.failLabel = true;
           fresh.state.failPlan = true;

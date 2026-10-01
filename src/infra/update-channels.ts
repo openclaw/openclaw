@@ -1,8 +1,8 @@
-// Resolves OpenClaw update channels from config, tags, and versions.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseSemver, type SemVer } from "semver";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
+import type { UpdateInstallKind } from "./update-install-kind.js";
 
 /** Release stream used to choose registry tags and update policy defaults. */
 export type UpdateChannel = "stable" | "extended-stable" | "beta" | "dev";
@@ -137,7 +137,7 @@ export function resolveRegistryUpdateChannel(params: {
 export function resolveEffectiveUpdateChannel(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;
-  installKind: "git" | "package" | "unknown";
+  installKind: UpdateInstallKind;
   git?: { tag?: string | null; branch?: string | null };
 }): { channel: UpdateChannel; source: UpdateChannelSource } {
   // A one-off package tag does not replace the operator's saved update policy.
@@ -183,28 +183,22 @@ function formatUpdateChannelLabel(params: {
   gitTag?: string | null;
   gitBranch?: string | null;
 }): string {
-  if (params.source === "config") {
-    return `${params.channel} (config)`;
-  }
-  if (params.source === "git-tag") {
-    return params.gitTag ? `${params.channel} (${params.gitTag})` : `${params.channel} (tag)`;
-  }
-  if (params.source === "git-branch") {
-    return params.gitBranch
-      ? `${params.channel} (${params.gitBranch})`
-      : `${params.channel} (branch)`;
-  }
-  if (params.source === "installed-version") {
-    return `${params.channel} (installed version)`;
-  }
-  return `${params.channel} (default)`;
+  const label =
+    params.source === "git-tag"
+      ? params.gitTag || "tag"
+      : params.source === "git-branch"
+        ? params.gitBranch || "branch"
+        : params.source === "installed-version"
+          ? "installed version"
+          : params.source;
+  return `${params.channel} (${label})`;
 }
 
 /** Resolves channel metadata plus display label for status and update UIs. */
 export function resolveUpdateChannelDisplay(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;
-  installKind: "git" | "package" | "unknown";
+  installKind: UpdateInstallKind;
   gitTag?: string | null;
   gitBranch?: string | null;
 }): { channel: UpdateChannel; source: UpdateChannelSource; label: string } {
@@ -218,11 +212,9 @@ export function resolveUpdateChannelDisplay(params: {
         : undefined,
   });
   return {
-    channel: channelInfo.channel,
-    source: channelInfo.source,
+    ...channelInfo,
     label: formatUpdateChannelLabel({
-      channel: channelInfo.channel,
-      source: channelInfo.source,
+      ...channelInfo,
       gitTag: params.gitTag ?? null,
       gitBranch: params.gitBranch ?? null,
     }),

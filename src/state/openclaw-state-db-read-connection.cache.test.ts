@@ -8,6 +8,8 @@ import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   withOpenClawStateReadOnlyLocation,
@@ -18,8 +20,19 @@ import type {
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
 
+vi.hoisted(() => vi.resetModules());
 const worker = vi.hoisted(() => ({
   read: vi.fn<(input: OpenClawStateReadRequest) => OpenClawStateReadReply>(),
+  explicitSqliteCloseReleasesNativeResources: true,
+  decided: true,
+}));
+vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
+  getSqliteRuntimeCapabilities: () => ({
+    explicitSqliteCloseReleasesNativeResources: worker.explicitSqliteCloseReleasesNativeResources,
+    decided: worker.decided,
+    reason: "test policy",
+  }),
 }));
 vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/worker-task-server.js")>()),
@@ -40,6 +53,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 beforeEach(() => {
+  worker.explicitSqliteCloseReleasesNativeResources = true;
+  worker.decided = true;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 });
 
@@ -307,3 +322,84 @@ it("pins audit schema facts and inspection to one admission snapshot", () => {
     peer.close();
   }
 });
+
+it("uses a completed capability on the next retained read without hiding real cleanup failures", () => {
+  worker.explicitSqliteCloseReleasesNativeResources = false;
+  worker.decided = false;
+  const { root, pathname, read, workerRead, countOpens } = fixture();
+  expect(sqlite.bunSqliteNativeCleanupPending).toBe(true);
+  expect(workerRead({ type: "nodeHost.config" }).nativeCleanupFailure).toEqual({
+    error: undefined,
+  });
+  const reader = read(({ db }) => db);
+  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+  expect(reader.isOpen).toBe(true);
+
+  worker.explicitSqliteCloseReleasesNativeResources = true;
+  worker.decided = true;
+  expect(workerRead({ type: "nodeHost.config" }).nativeCleanupFailure).toBeUndefined();
+  expect(countOpens()).toBe(1);
+  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+  expect(reader.isOpen).toBe(false);
+  expect(workerRead({ type: "nodeHost.config" }).nativeCleanupFailure).toBeUndefined();
+  expect(countOpens()).toBe(2);
+  expect(sqlite.bunSqliteNativeCleanupPending).toBe(true);
+
+  const failure = new Error("native quarantine reader close failed");
+  vi.spyOn(
+    openClawStateDatabaseCache,
+    "assertOpenClawStateDatabaseFreshOpenAllowedAtPath",
+  ).mockImplementationOnce((_pathname, _env, reportCleanupFailure) => {
+    reportCleanupFailure?.(new OpenClawQuarantineReadCleanupError([failure]));
+  });
+  const reply = worker.read({
+    context: { environment: { OPENCLAW_STATE_DIR: root } },
+    databasePath: pathname,
+    location: pathname,
+    checkFreshAdmission: true,
+    command: { type: "nodeHost.config" },
+  });
+  expect(reply).toMatchObject({ ok: true, row: { updated_at_ms: 1 } });
+  expect(reply.nativeCleanupFailure?.error?.nodes).toEqual(
+    expect.arrayContaining([expect.objectContaining({ message: failure.message })]),
+  );
+});
+
+it.each([false, true])(
+  "retains readers and reports native cleanup by capability (capable=%s)",
+  (capable) => {
+    worker.explicitSqliteCloseReleasesNativeResources = capable;
+    const { root, pathname, read, workerRead, countOpens } = fixture();
+    if (!capable) {
+      expect(sqlite.bunSqliteNativeCleanupPending).toBe(true);
+    }
+    expect(workerRead({ type: "nodeHost.config" })).toMatchObject({
+      ok: true,
+      row: { updated_at_ms: 1 },
+    });
+    const previous = read(({ db }) => db);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(previous.isOpen).toBe(!capable);
+    expect(workerRead({ type: "nodeHost.config" })).toMatchObject({
+      ok: true,
+      row: { updated_at_ms: 1 },
+    });
+    expect(countOpens()).toBe(capable ? 2 : 1);
+
+    const replacementPath = path.join(root, "replacement.sqlite");
+    const replacement = sqlite.openNodeSqliteDatabase(replacementPath);
+    replacement.exec(
+      "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER); INSERT INTO config_machine_state VALUES ('nodeHost.config', '2', 2)",
+    );
+    replacement.close();
+    fs.renameSync(pathname, path.join(root, "previous.sqlite"));
+    fs.renameSync(replacementPath, pathname);
+    const reply = workerRead({ type: "nodeHost.config" });
+    expect(reply).toMatchObject({
+      ok: true,
+      row: { updated_at_ms: 2 },
+    });
+    expect(reply.nativeCleanupFailure).toEqual(capable ? undefined : { error: undefined });
+    expect(previous.isOpen).toBe(false);
+  },
+);

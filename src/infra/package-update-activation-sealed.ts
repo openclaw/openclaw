@@ -9,20 +9,15 @@ import {
   packageActivationIdentity,
   resolvePackageActivationHelper,
 } from "./package-update-activation-journal.js";
+import { assertPackageActivationRecoveryRuntime } from "./package-update-activation-sqlite.js";
 import {
   readPackageActivationStatus,
   runPackageActivationRecovery,
 } from "./package-update-activation.js";
-import { isSupportedNodeVersion } from "./runtime-guard.js";
 
 try {
-  if (
-    process.platform === "win32" ||
-    !isSupportedNodeVersion(process.versions.node) ||
-    process.versions.bun
-  ) {
-    throw new Error("Package publication recovery requires supported external Node on POSIX.");
-  }
+  const helper = fileURLToPath(import.meta.url);
+  await assertPackageActivationRecoveryRuntime(helper);
   const anchor = process.argv[3];
   const operationId = process.argv[5];
   const action = process.argv[6];
@@ -35,10 +30,9 @@ try {
     (action !== "status" && action !== "repair" && action !== "retire")
   ) {
     throw new Error(
-      "Usage: node recovery.mjs --anchor absolute-path --operation operation-id status|repair|retire",
+      "Usage: <node|bun> recovery.mjs --anchor absolute-path --operation operation-id status|repair|retire",
     );
   }
-  const helper = fileURLToPath(import.meta.url);
   if (path.resolve(anchor) !== anchor) {
     throw new Error("Package recovery anchor must be an absolute canonical path.");
   }

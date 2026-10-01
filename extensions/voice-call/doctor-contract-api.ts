@@ -1,7 +1,9 @@
 // Voice Call API module exposes the plugin public contract.
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 // Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
 // lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.
 import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
@@ -15,7 +17,6 @@ import {
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildChunkKey,
-  buildVoiceCallLegacyJsonlEventKey,
   encodeCallRecordEvent,
   type CallRecordEventChunk,
   type CallRecordEventMeta,
@@ -24,10 +25,9 @@ import {
   CALL_RECORD_EVENT_META_MAX_ENTRIES,
   CALL_RECORD_EVENTS_NAMESPACE,
   MAX_CALL_RECORD_EVENTS,
-  parseVoiceCallRecordLine,
-  resolveVoiceCallLegacyCallLogPath,
 } from "./src/manager/store.js";
 import { resolveDefaultVoiceCallStoreDir } from "./src/store-path.js";
+import { CallRecordSchema } from "./src/types.js";
 import { resolveUserPath } from "./src/utils.js";
 
 // Doctor state migration for Voice Call legacy JSONL call logs.
@@ -144,6 +144,30 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
   return migration.kind satisfies never;
 }
 
+function parseLegacyCallRecord(line: string, sequence: number) {
+  if (!line.trim()) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(line);
+    const record = asOptionalRecord(parsed);
+    const envelope = record?.version === 2 ? record : undefined;
+    return {
+      call: CallRecordSchema.parse(envelope ? envelope.call : parsed),
+      persistedAt:
+        typeof envelope?.persistedAt === "number" && Number.isFinite(envelope.persistedAt)
+          ? envelope.persistedAt
+          : 0,
+      sequence:
+        typeof envelope?.sequence === "number" && Number.isFinite(envelope.sequence)
+          ? envelope.sequence
+          : sequence,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Read and prepare legacy JSONL call records, collecting line-level warnings. */
 async function readLegacyCallRecords(filePath: string): Promise<{
   entries: PreparedLegacyCallRecord[];
@@ -159,7 +183,7 @@ async function readLegacyCallRecords(filePath: string): Promise<{
   const warnings: string[] = [];
   let index = 0;
   for (const line of content.split("\n")) {
-    const parsed = parseVoiceCallRecordLine(line, index);
+    const parsed = parseLegacyCallRecord(line, index);
     if (!parsed) {
       if (line.trim()) {
         warnings.push(`Skipped malformed Voice Call call-log line ${index + 1}`);
@@ -173,7 +197,7 @@ async function readLegacyCallRecords(filePath: string): Promise<{
         prepared.chunk(chunkIndex),
       );
       entries.push({
-        eventKey: buildVoiceCallLegacyJsonlEventKey(line, index),
+        eventKey: `jsonl:${String(index).padStart(8, "0")}:${createHash("sha256").update(line).digest("hex")}`,
         lineNumber: index + 1,
         chunks,
         meta: {
@@ -264,7 +288,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
       const { detectOpenClawStateDatabaseSchemaMigrations } =
         await import("openclaw/plugin-sdk/doctor-repair-runtime");
-      const filePath = resolveVoiceCallLegacyCallLogPath(storePath);
+      const filePath = path.join(storePath, "calls.jsonl");
       const { entries } = await readLegacyCallRecords(filePath);
       const schemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
         env: resolveVoiceCallStateDatabaseEnv(params),
@@ -295,7 +319,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
       const { detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema } =
         await import("openclaw/plugin-sdk/doctor-repair-runtime");
-      const filePath = resolveVoiceCallLegacyCallLogPath(storePath);
+      const filePath = path.join(storePath, "calls.jsonl");
       const { entries, warnings: readWarnings } = await readLegacyCallRecords(filePath);
       warnings.push(...readWarnings);
       const stateDatabaseEnv = resolveVoiceCallStateDatabaseEnv(params);

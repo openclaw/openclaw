@@ -60,8 +60,7 @@ function finalizeResolvedGatewayAuth(params: {
   tailscaleMode?: GatewayTailscaleMode;
 }): ResolvedGatewayAuth {
   const { authConfig, authOverride, token, password } = params;
-  const mode =
-    authOverride?.mode ?? authConfig.mode ?? (password ? "password" : token ? "token" : "token");
+  const mode = authOverride?.mode ?? authConfig.mode ?? (password ? "password" : "token");
   const modeSource =
     authOverride?.mode !== undefined
       ? "override"

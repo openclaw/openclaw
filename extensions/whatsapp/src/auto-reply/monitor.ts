@@ -147,8 +147,8 @@ export async function monitorWebChannel(
     }).cfg;
 
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
-  const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
-  const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
+  const heartbeatSeconds = resolveHeartbeatSeconds(tuning.heartbeatSeconds);
+  const reconnectPolicy = resolveReconnectPolicy(tuning.reconnect);
   const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
   const groupHistoryLimit = resolvePromptHistoryLimit(
     account.historyLimit ??

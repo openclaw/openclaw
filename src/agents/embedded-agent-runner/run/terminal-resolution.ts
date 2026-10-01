@@ -271,31 +271,24 @@ export async function resolveEmbeddedRunTerminal(input: {
   const replyRecoverySuppressed =
     emptyAssistantReplyIsSilent ||
     resolveSourceReplyDelivery(attempt, input.replyDeliveryState) !== "missing";
+  const retryInput = {
+    provider: input.activeErrorContext.provider,
+    modelId: input.activeErrorContext.model,
+    modelApi: input.modelApi,
+    executionContract: input.executionContract,
+    payloadCount,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
+    attempt,
+  };
   const nextReasoningOnlyRetryInstruction =
     replyRecoverySuppressed || settledTurnFinalizationAttempted
       ? null
-      : resolveReasoningOnlyRetryInstruction({
-          provider: input.activeErrorContext.provider,
-          modelId: input.activeErrorContext.model,
-          modelApi: input.modelApi,
-          executionContract: input.executionContract,
-          aborted: terminalAborted,
-          timedOut: terminalTimedOut,
-          attempt,
-        });
+      : resolveReasoningOnlyRetryInstruction(retryInput);
   const nextEmptyResponseRetryInstruction =
     replyRecoverySuppressed || settledTurnFinalizationAttempted
       ? null
-      : resolveEmptyResponseRetryInstruction({
-          provider: input.activeErrorContext.provider,
-          modelId: input.activeErrorContext.model,
-          modelApi: input.modelApi,
-          executionContract: input.executionContract,
-          payloadCount,
-          aborted: terminalAborted,
-          timedOut: terminalTimedOut,
-          attempt,
-        });
+      : resolveEmptyResponseRetryInstruction(retryInput);
   if (
     nextReasoningOnlyRetryInstruction &&
     retryState.reasoningOnlyAttempts < input.maxReasoningOnlyRetryAttempts
@@ -342,7 +335,8 @@ export async function resolveEmbeddedRunTerminal(input: {
     input.activateInternalPrompt(nextEmptyResponseRetryInstruction);
     log.warn(
       `empty response detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
+        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} ` +
+        `stopReason=${input.attemptAssistant?.stopReason ?? "missing"} — retrying ${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
         `with visible-answer continuation`,
     );
     return { action: "retry" };
@@ -595,14 +589,8 @@ async function completeEmbeddedRun(
   // The lifecycle owner needs that distinction to close only intentional non-delivery.
   const keepEmptyReplySilent =
     input.runParams.lane !== AGENT_LANE_SUBAGENT || Boolean(input.finalAssistantRawText?.trim());
-  // The truncation notice belongs to exactly the turns this fix newly delivers:
-  // a length stop whose only output is partial assistant text. A length stop that
-  // also produced terminal output (tool media, a committed source reply) was
-  // already complete before this fix and must not gain a misleading extra reply.
-  // Nonblank assistant text is also required: a cron turn whose only payload is
-  // the synthesized silent result of a successful tool has no partial prose to
-  // label, and appending a notice there would turn intentional silence into a
-  // visible message.
+  // Label only partial assistant prose: terminal tool output already completes
+  // the reply, and a silent cron result must not gain a visible notice.
   const hasPartialAssistantText =
     input.attempt.assistantTexts.some((text) => text.trim().length > 0) ||
     resolveFinalAssistantVisibleText(input.attemptAssistant) !== undefined;
@@ -710,8 +698,7 @@ async function completeEmbeddedRun(
                   : {}),
               },
               completion: {
-                ...(stopReason ? { stopReason } : {}),
-                ...(stopReason ? { finishReason: stopReason } : {}),
+                ...(stopReason ? { stopReason, finishReason: stopReason } : {}),
                 ...(stopReason?.toLowerCase().includes("refusal") ? { refusal: true } : {}),
               },
               contextManagement:

@@ -1,4 +1,3 @@
-// Atomic persistence for broad auto-reply session snapshots.
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";

@@ -57,15 +57,13 @@ import type {
 } from "./doctor-session-sqlite-types.js";
 
 /** Receipt recovery belongs to offline Doctor; canonical session data is never replayed. */
-export function prepareRetainedSessionImport(
-  params: {
-    cfg: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-    target: SessionStoreTarget;
+export async function prepareRetainedSessionImport(
+  params: Parameters<typeof archiveConflictingRetainedSessionSources>[0] & {
     mode: DoctorSessionSqliteMode;
   },
-  issues: DoctorSessionSqliteIssue[],
+  report: DoctorSessionSqliteTargetReport,
 ) {
+  const issues = report.issues;
   const isSqliteStore = params.target.storePath.endsWith(".sqlite");
   const sqlitePath = resolveTargetSqlitePath(params.target, params.env);
   if (!isSqliteStore && (params.mode === "import" || params.mode === "recover")) {
@@ -96,12 +94,14 @@ export function prepareRetainedSessionImport(
   }
   let retainedImport: DeferredPluginSessionImport | undefined;
   const sourceConflicts = new Map<string, string>();
+  const emptySources = new Map<string, string>();
   const sourceVerification = {
     ...prepareSessionSourceVerification({
       ...params,
       sqlitePath,
     }),
     allowMissingIndex: true,
+    onEmptySource: (sourcePath: string, reason: string) => emptySources.set(sourcePath, reason),
     onSourceConflict: (sourcePath: string, artifactPath = sourcePath, error?: unknown) => {
       if (sourceConflicts.has(artifactPath)) {
         return;
@@ -116,7 +116,7 @@ export function prepareRetainedSessionImport(
         code: fs.existsSync(params.target.storePath)
           ? "retained_plugin_source_conflict"
           : "historical_transcript_deferred",
-        message: `${artifactPath}: ${reason} Canonical SQLite sessions remain authoritative. Run openclaw doctor --fix to preserve the conflicting input in the migration archive.`,
+        message: `${artifactPath}: ${reason} Canonical SQLite sessions remain authoritative. Preserve this input and its backups. Restore the verified original at ${sourcePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state/config.`,
       });
     },
   };
@@ -124,7 +124,7 @@ export function prepareRetainedSessionImport(
     try {
       if (
         (params.mode === "import" || params.mode === "recover") &&
-        rebuildDeferredPluginSessionSourceIndex(sourceVerification)
+        (await rebuildDeferredPluginSessionSourceIndex(sourceVerification))
       ) {
         issues.push({
           code: "retained_plugin_source_index_rebuilt",
@@ -154,6 +154,14 @@ export function prepareRetainedSessionImport(
     sourceConflicts.has(path.resolve(params.target.storePath))
   ) {
     appendRetainedIndexComparison(params, issues);
+  }
+  if (emptySources.size) {
+    await archiveConflictingRetainedSessionSources(
+      { ...params, verifiedEmpty: true },
+      emptySources,
+      report,
+    );
+    sourceVerification.verification.clear();
   }
   return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath };
 }
@@ -229,6 +237,7 @@ export async function archiveConflictingRetainedSessionSources(
     protectedPaths?: ReadonlySet<string>;
     expectedIndexIdentity?: MigrationArtifactIdentity;
     targets?: readonly SessionSqliteMigrationTargetInput[];
+    verifiedEmpty?: boolean;
   },
   sourceConflicts: Map<string, string>,
   report: DoctorSessionSqliteTargetReport,
@@ -286,6 +295,9 @@ export async function archiveConflictingRetainedSessionSources(
         dependencies: [],
         disposal: { state: "retained" },
       };
+      if (params.verifiedEmpty && move.artifact.identity.size !== 0) {
+        throw new Error("Retained transcript is no longer empty; source needs verification");
+      }
       for (const owner of targets) {
         recordPlannedMigrationMoves(run, owner, [move]);
       }
@@ -318,7 +330,9 @@ export async function archiveConflictingRetainedSessionSources(
         : report.archivedTranscriptFiles
       ).push(move.archivePath);
       report.issues.push({
-        code: "retained_plugin_source_conflict",
+        code: params.verifiedEmpty
+          ? "retained_empty_transcript_superseded"
+          : "retained_plugin_source_conflict",
         message: `${source}: ${reason} Preserved at ${move.archivePath}; canonical SQLite sessions were not replayed.`,
       });
     } catch (error) {
@@ -337,7 +351,7 @@ export async function archiveConflictingRetainedSessionSources(
 
 /** Historical discovery yields; verify the receipt again before counting or authorizing archival. */
 export function countRetainedSessionSources(
-  retained: NonNullable<ReturnType<typeof prepareRetainedSessionImport>>,
+  retained: NonNullable<Awaited<ReturnType<typeof prepareRetainedSessionImport>>>,
   records: readonly LegacySessionRecord[],
   report: DoctorSessionSqliteTargetReport,
 ): void {

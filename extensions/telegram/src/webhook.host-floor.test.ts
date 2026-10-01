@@ -246,9 +246,9 @@ it("settles owned resources before joining an unfinished request on shutdown", a
     expect(mocks.stopIngress).toHaveBeenCalledOnce();
     expect(mocks.settleIngress).toHaveBeenCalledOnce();
     // Cross an I/O boundary before checking that stop still joins the held request.
-    await expect(fetch(webhookUrl(port, "/healthz"))).rejects.toMatchObject({
-      cause: { code: "ECONNREFUSED" },
-    });
+    await expect(fetch(webhookUrl(port, "/healthz"))).rejects.toMatchObject(
+      process.versions.bun ? { code: "ECONNREFUSED" } : { cause: { code: "ECONNREFUSED" } },
+    );
     expect(stopped).toBe(false);
     req.end(body);
     expect(await response.promise).toEqual({ statusCode: 500, accepted: undefined });

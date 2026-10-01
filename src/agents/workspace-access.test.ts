@@ -3,6 +3,11 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.message.js";
+import type {
+  UserTurnInput,
+  UserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   declareAgentWorkspaceAccess,
@@ -13,6 +18,7 @@ import {
   prepareAgentWorkspaceAttachments,
   type AgentWorkspaceAccess,
 } from "./workspace-access.js";
+import { prepareLocalWorkspaceAttachments } from "./workspace-attachments.local.js";
 
 function workspace() {
   return path.resolve("test-workspace", randomUUID());
@@ -320,7 +326,6 @@ describe("workspace attachment preparation", () => {
         }
         return handle;
       });
-      const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
 
       const note = await prepareLocalWorkspaceAttachments({
         media: [{ path: filePath }],
@@ -430,6 +435,118 @@ describe("workspace attachment preparation", () => {
     ).resolves.toBeUndefined();
   });
 
+  it.each([
+    { input: "declared", host: "absent" },
+    { input: "deferred", host: "absent" },
+    { input: "declared", host: "bridge-only" },
+    { input: "declared", host: "empty-note" },
+    { input: "declared", host: "blank-note" },
+  ])("rejects required $input attachments with provider state $host", async ({ input, host }) => {
+    const root = workspace();
+    if (host !== "absent") {
+      bindWorkspace(root, {
+        ...provider(),
+        ...(host === "empty-note" || host === "blank-note"
+          ? { prepareTurnAttachments: async () => (host === "blank-note" ? " \n\t" : undefined) }
+          : {}),
+      });
+    }
+    const attachmentTurn =
+      input === "deferred"
+        ? {
+            timeoutMs: turn.timeoutMs,
+            userTurnTranscriptRecorder: createDeferredRecorder({
+              text: "Read the attachment",
+              media: turn.media,
+            }),
+          }
+        : turn;
+    await expect(
+      prepareAgentWorkspaceAttachments({
+        workspaceDir: root,
+        turn: attachmentTurn,
+        assertCurrent: () => {},
+        requirePreparation: true,
+      }),
+    ).rejects.toThrow(
+      host === "empty-note" || host === "blank-note"
+        ? "Workspace attachment 1 could not be prepared; ensure every attachment is available to the registered attachment provider before retrying"
+        : "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
+    );
+  });
+
+  it.each([false, true])(
+    "preserves deferred attachment notes with required preparation %s",
+    async (requirePreparation) => {
+      const root = workspace();
+      bindWorkspace(root, {
+        ...provider(),
+        prepareTurnAttachments: async ({ media }) =>
+          media
+            ?.map((fact) => `[media attached: /executor/${path.basename(fact.path!)}]`)
+            .join("\n"),
+      });
+      const recorder = createDeferredRecorder({
+        text: "Read both attachments",
+        media: [
+          { path: "media://inbound/one.txt" },
+          { path: "media://inbound/one.txt" },
+          { path: "media://inbound/two.txt" },
+        ],
+      });
+
+      await expect(
+        prepareAgentWorkspaceAttachments({
+          workspaceDir: root,
+          turn: { ...turn, userTurnTranscriptRecorder: recorder },
+          assertCurrent: () => {},
+          requirePreparation,
+        }),
+      ).resolves.toBe(
+        requirePreparation
+          ? "[media attached: /executor/one.txt]\n[media attached: /executor/two.txt]"
+          : "[media attached: /executor/one.txt]\n[media attached: /executor/one.txt]\n[media attached: /executor/two.txt]",
+      );
+    },
+  );
+
+  it("allows a text-only recorder when attachment preparation is required without a provider", async () => {
+    const recorder = createDeferredRecorder({ text: "Text-only request" });
+    await expect(
+      prepareAgentWorkspaceAttachments({
+        workspaceDir: workspace(),
+        turn: { timeoutMs: turn.timeoutMs, userTurnTranscriptRecorder: recorder },
+        assertCurrent: () => {},
+        requirePreparation: true,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a replacement workspace while resolving required attachment facts", async () => {
+    const root = workspace();
+    const host = { ...provider(), prepareTurnAttachments: async () => "prepared path" };
+    const release = bindWorkspace(root, host);
+    const recorder = createDeferredRecorder({ text: "Read the attachment", media: turn.media });
+    await expect(
+      prepareAgentWorkspaceAttachments({
+        workspaceDir: root,
+        turn: {
+          timeoutMs: turn.timeoutMs,
+          userTurnTranscriptRecorder: {
+            ...recorder,
+            async resolveMessage() {
+              release();
+              bindWorkspace(root, host);
+              return await recorder.resolveMessage();
+            },
+          },
+        },
+        assertCurrent: () => {},
+        requirePreparation: true,
+      }),
+    ).rejects.toThrow("Workspace access changed during attachment preparation");
+  });
+
   it.each(["not-ready", "stopped"])(
     "rejects attachment input for a %s workspace",
     async (state) => {
@@ -521,3 +638,24 @@ describe("workspace attachment preparation", () => {
     ).rejects.toThrow(closure === "caller" ? "caller closed" : "aborted attachment");
   });
 });
+
+function createDeferredRecorder(input: UserTurnInput): UserTurnTranscriptRecorder {
+  const unexpectedLifecycle = (): never => {
+    throw new Error("Attachment preparation must not invoke transcript lifecycle operations");
+  };
+  return {
+    message: undefined,
+    resolveMessage: async () => buildPersistedUserTurnMessage({ ...input, timestamp: 1 }),
+    getAdmissionReceipt: unexpectedLifecycle,
+    markRuntimePersistencePending: unexpectedLifecycle,
+    markRuntimePersisted: unexpectedLifecycle,
+    markBlocked: unexpectedLifecycle,
+    hasPersisted: unexpectedLifecycle,
+    isBlocked: unexpectedLifecycle,
+    hasRuntimePersistencePending: unexpectedLifecycle,
+    waitForRuntimePersistence: unexpectedLifecycle,
+    persistApproved: unexpectedLifecycle,
+    persistBlocked: unexpectedLifecycle,
+    persistFallback: unexpectedLifecycle,
+  };
+}

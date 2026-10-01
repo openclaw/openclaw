@@ -36,6 +36,54 @@ afterEach(() => {
   vi.resetModules();
 });
 
+it.each([false, true])(
+  "preserves native argv through the reader, WMIC fallback=%s",
+  async (fallback) => {
+    const { readWindowsProcessArgsResultSync } = await import("./windows-port-pids.js");
+    const command =
+      String.raw`"C:\Program Files\node.exe" "C:\Team Notes\\" "Office \"A\"" "" "%%PATH%% ^!value!"` +
+      ' "first\r\nsecond"';
+    if (fallback) {
+      mocks.spawn.mockReturnValueOnce({ status: 1, stdout: "" });
+    }
+    mocks.spawn.mockReturnValueOnce({
+      status: 0,
+      stdout: fallback ? `CommandLine=${command}\r\n` : command,
+    });
+
+    expect(readWindowsProcessArgsResultSync(424242, 1_000, routing)).toEqual({
+      ok: true,
+      args: [
+        "C:\\Program Files\\node.exe",
+        "C:\\Team Notes\\",
+        'Office "A"',
+        "",
+        "%%PATH%% ^!value!",
+        "first\r\nsecond",
+      ],
+    });
+  },
+);
+
+it.each([false, true])(
+  "keeps malformed native argv unavailable, WMIC fallback=%s",
+  async (fallback) => {
+    const { readWindowsProcessArgsResultSync } = await import("./windows-port-pids.js");
+    if (fallback) {
+      mocks.spawn.mockReturnValueOnce({ status: 1, stdout: "" });
+    }
+    mocks.spawn.mockReturnValueOnce({
+      status: 0,
+      stdout: fallback ? "CommandLine=node\0 gateway\r\n" : "node\0 gateway",
+    });
+
+    expect(readWindowsProcessArgsResultSync(424242, 1_000, routing)).toEqual({
+      ok: false,
+      permanent: false,
+    });
+  },
+);
+
 it("does not start the argv fallback after the ownership inspection deadline", async () => {
   const { readWindowsProcessArgsSync } = await import("./windows-port-pids.js");
   let elapsedMs = 0;

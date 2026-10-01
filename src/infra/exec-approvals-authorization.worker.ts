@@ -1,26 +1,26 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { applyExecAuthorizationCommit } from "./exec-approvals-authorization.kernel.js";
 import { resolveExecApprovalsDisplayPath } from "./exec-approvals-config.js";
 import type {
   ExecAuthorizationCommitInput,
   ExecAuthorizationCommitOutcome,
-  ExecAuthorizationWorkerOperations,
 } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import {
+  snapshotFromExecApprovalsDatabase,
   assertExecApprovalsMutationAllowed,
   ExecApprovalsMutationFencedError,
   serializeExecApprovals,
   snapshotFromExecApprovalsRow,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
-import { snapshotFromExecApprovalsDatabase } from "./exec-approvals-store.js";
 
 function applyAuthorizationBatch(
   db: DatabaseSync,
@@ -55,7 +55,7 @@ function applyAuthorizationBatch(
 }
 
 export function commitExecAuthorizationsInWorker(
-  input: ExecAuthorizationWorkerOperations["execApprovals.commitAuthorizations"]["input"],
+  input: { items: ExecAuthorizationCommitInput[] },
   options: OpenClawStateDatabaseOptions,
 ): ExecAuthorizationCommitOutcome[] {
   assertNoPendingLegacyExecApprovals({ env: options.env });
@@ -85,3 +85,10 @@ export function commitExecAuthorizationsInWorker(
     { operationLabel: "exec-approvals.commit-authorizations" },
   );
 }
+
+export const execAuthorizationOperations = {
+  "execApprovals.commitAuthorizations": (
+    input: { items: ExecAuthorizationCommitInput[] },
+    { open, stateOptions },
+  ) => commitExecAuthorizationsInWorker(input, { ...stateOptions(), database: open() }),
+} satisfies WorkerOperationHandlers;

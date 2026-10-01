@@ -48,7 +48,6 @@ import {
 } from "./shared/installed-plugin-id-recovery.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
-import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import {
@@ -335,7 +334,7 @@ export async function runDoctorRepairSequence(params: {
   );
   appendNotes(warningNotes, emptyAllowlistWarnings);
 
-  await applyRepairStages([maybeRepairLegacyToolsBySenderKeys, maybeRepairExecSafeBinProfiles]);
+  await applyRepairStages([maybeRepairExecSafeBinProfiles]);
   appendRepairNotes(migrateLegacyTailscaleProfileIdentities({ env }));
   appendRepairNotes(repairMergedGatewayOwnerProfile({ env, shouldRepair: true }));
   appendRepairNotes(await removeStalePluginRuntimeSymlinks());

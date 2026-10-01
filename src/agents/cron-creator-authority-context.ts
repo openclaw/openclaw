@@ -394,6 +394,7 @@ function bindCronCreatorAuthorityResolver(params: {
       tools: snapshot.tools,
       provenance: snapshot.provenance,
       grant: mintCronCreatorAuthorityGrant(authority, operationSignal, snapshot.runtimeAuthority),
+      ...(snapshot.runtimeAuthority ? { holdsRuntimeAuthority: true as const } : {}),
     });
   };
 }

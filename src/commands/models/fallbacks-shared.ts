@@ -1,4 +1,3 @@
-/** Shared command implementation for text and image model fallback lists. */
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
@@ -49,7 +48,6 @@ function patchDefaultsFallbacks(
   };
 }
 
-/** Lists fallback model refs for the selected defaults key. */
 export async function listFallbacksCommand(
   params: { label: string; key: DefaultsFallbackKey },
   opts: { json?: boolean; plain?: boolean },
@@ -83,7 +81,6 @@ export async function listFallbacksCommand(
   }
 }
 
-/** Adds a fallback model, creating the canonical model entry when needed. */
 export async function addFallbackCommand(
   params: {
     label: string;
@@ -122,7 +119,6 @@ export async function addFallbackCommand(
   runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
-/** Removes a fallback model by resolving aliases to the canonical provider/model key. */
 export async function removeFallbackCommand(
   params: {
     label: string;
@@ -166,7 +162,6 @@ export async function removeFallbackCommand(
   runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
-/** Clears all fallback model refs for the selected defaults key. */
 export async function clearFallbacksCommand(
   params: { key: DefaultsFallbackKey; clearedMessage: string },
   runtime: RuntimeEnv,

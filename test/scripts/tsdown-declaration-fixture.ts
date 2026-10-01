@@ -12,6 +12,7 @@ import {
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runtimeProcessDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
 
 const sourceRoot = process.cwd();
@@ -65,7 +66,7 @@ export function runFixture(
   privateQa = false,
   env: NodeJS.ProcessEnv = {},
 ) {
-  return command.run(process.execPath, args, fixtureOptions(root, privateQa, env));
+  return command.run(requireNodeTool("node"), args, fixtureOptions(root, privateQa, env));
 }
 
 export function runFixtureModule(
@@ -91,7 +92,7 @@ function readConfigEntries(
   groups: readonly string[],
 ): ConfigEntries {
   const result = spawnSync(
-    process.execPath,
+    requireNodeTool("node"),
     [
       "--input-type=module",
       "--eval",
@@ -179,8 +180,10 @@ export function createFixture(groups: readonly string[], root: string) {
   fs.mkdirSync(path.join(root, "scripts/lib"));
   for (const script of [
     "build-all.mts",
+    "generate-kysely-types.mts",
     "tsdown-build.mts",
     "pnpm-runner.mts",
+    "run-node-watch-paths.mts",
     "windows-cmd-helpers.mjs",
     "write-plugin-sdk-entry-dts.ts",
     "write-unified-entry-dts.ts",
@@ -200,6 +203,7 @@ export function createFixture(groups: readonly string[], root: string) {
     ...Object.values(runtimeProcessDeclarationEntries),
     "scripts/lib/managed-windows-job-launcher.mts",
     "src/process/supervisor/service-child-windows-job-native.ts",
+    "src/process/exec-result.ts",
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
     "src/infra/update-managed-service-handoff-native-loader.ts",
     "src/shared/deferred.ts",
@@ -216,6 +220,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/infra/runtime-dependency-ownership.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
     "src/infra/package-update-activation-runtime-assets.ts",
+    "packages/normalization-core/src/error-coercion.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
     "packages/normalization-core/src/record-coerce.ts",
   ]);

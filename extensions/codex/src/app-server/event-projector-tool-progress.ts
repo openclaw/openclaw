@@ -95,7 +95,6 @@ export class CodexToolProgressProjection {
   private readonly echoesByItem = new Map<string, ToolProgressEchoState>();
   private readonly resultSummaryItemIds = new Set<string>();
   private readonly resultOutputItemIds = new Set<string>();
-  private readonly resultOutputStreamedItemIds = new Set<string>();
   private readonly transcriptProgressSuppressedIds = new Set<string>();
   private readonly resultOutputDeltaState = new Map<
     string,
@@ -249,7 +248,6 @@ export class CodexToolProgressProjection {
       state.truncated = true;
     }
     this.resultOutputDeltaState.set(itemId, state);
-    this.resultOutputStreamedItemIds.add(itemId);
     this.emitToolResultMessage({
       itemId,
       text: formatNativeToolOutput(
@@ -346,7 +344,7 @@ export class CodexToolProgressProjection {
     if (!this.params.onToolResult || !this.shouldEmitToolOutput()) {
       return;
     }
-    if (this.resultOutputItemIds.has(item.id) || this.resultOutputStreamedItemIds.has(item.id)) {
+    if (this.resultOutputItemIds.has(item.id) || this.resultOutputDeltaState.has(item.id)) {
       return;
     }
     const toolName = itemName(item);
@@ -505,7 +503,7 @@ export class CodexToolProgressProjection {
       !this.params.onToolResult ||
       !this.shouldEmitToolResult() ||
       this.resultSummaryItemIds.has(params.id) ||
-      this.resultOutputStreamedItemIds.has(params.id)
+      this.resultOutputDeltaState.has(params.id)
     ) {
       return;
     }
@@ -538,7 +536,7 @@ export class CodexToolProgressProjection {
       !this.params.onToolResult ||
       !this.shouldEmitToolOutput() ||
       this.resultOutputItemIds.has(params.id) ||
-      this.resultOutputStreamedItemIds.has(params.id)
+      this.resultOutputDeltaState.has(params.id)
     ) {
       return;
     }

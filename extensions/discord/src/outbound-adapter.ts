@@ -150,12 +150,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       messageSendingHooks: true,
     },
   },
-  renderPresentation: async ({ payload, presentation }) => {
-    return await buildDiscordPresentationPayload({
-      payload,
-      presentation,
-    });
-  },
+  renderPresentation: buildDiscordPresentationPayload,
   resolveTarget: ({ to, allowFrom }) => normalizeDiscordOutboundTarget(to, allowFrom),
   sendPayload: async (ctx) =>
     await sendDiscordOutboundPayload({

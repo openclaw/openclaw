@@ -65,12 +65,8 @@ export function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command
 
   for (const key of GATEWAY_RUN_VALUE_KEYS) {
     const inherited = inheritOptionFromParent(command, key);
-    if (key === "wsLog") {
-      // wsLog has a child default ("auto"), so prefer inherited parent CLI value when present.
-      resolved[key] = inherited ?? resolved[key];
-      continue;
-    }
-    resolved[key] = resolved[key] ?? inherited;
+    // wsLog has a child default ("auto"), so prefer an explicit parent CLI value.
+    resolved[key] = key === "wsLog" ? (inherited ?? resolved[key]) : (resolved[key] ?? inherited);
   }
 
   for (const key of GATEWAY_RUN_BOOLEAN_KEYS) {

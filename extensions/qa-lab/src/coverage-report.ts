@@ -195,34 +195,23 @@ export function buildQaCoverageInventory(
   const secondaryCoverageIds = new Set<string>();
   const missingCoverage: QaCoverageScenarioSummary[] = [];
 
-  const addFeatureCoverage = (
-    scenario: QaSeedScenarioWithSource,
-    coverageIds: readonly string[] | undefined,
-    intent: QaCoverageIntent,
-  ) => {
-    const summary = summarizeScenario(scenario);
-    for (const coverageId of coverageIds ?? []) {
-      const coverage = byCoverageId.get(coverageId) ?? {
-        id: coverageId,
-        scenarios: [],
-      };
-      coverage.scenarios.push({ ...summary, intent });
-      byCoverageId.set(coverageId, coverage);
-      if (intent === "primary") {
-        primaryCoverageIds.add(coverageId);
-      } else {
-        secondaryCoverageIds.add(coverageId);
-      }
-    }
-  };
-
   for (const scenario of scenarios) {
+    const summary = summarizeScenario(scenario);
     if (!scenario.coverage) {
-      missingCoverage.push(summarizeScenario(scenario));
+      missingCoverage.push(summary);
       continue;
     }
-    addFeatureCoverage(scenario, scenario.coverage.primary, "primary");
-    addFeatureCoverage(scenario, scenario.coverage.secondary, "secondary");
+    for (const [intent, collected] of [
+      ["primary", primaryCoverageIds],
+      ["secondary", secondaryCoverageIds],
+    ] as const) {
+      for (const coverageId of scenario.coverage[intent] ?? []) {
+        const coverage = byCoverageId.get(coverageId) ?? { id: coverageId, scenarios: [] };
+        coverage.scenarios.push({ ...summary, intent });
+        byCoverageId.set(coverageId, coverage);
+        collected.add(coverageId);
+      }
+    }
   }
 
   const coverageIds = sortCoverageIds([...byCoverageId.values()]);

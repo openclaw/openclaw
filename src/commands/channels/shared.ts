@@ -1,4 +1,3 @@
-// Shared config loading and account-line formatting helpers for channel commands.
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -51,7 +50,6 @@ function formatAccountLabel(params: { accountId: string; name?: string }) {
   return base;
 }
 
-/** Format a channel/account label with optional display styles for terminal output. */
 export function formatChannelAccountLabel(params: {
   channel: ChatChannel;
   accountId: string;
@@ -105,7 +103,6 @@ export function appendEnabledConfiguredLinkedBits(
   }
 }
 
-/** Append account mode metadata when present. */
 export function appendModeBit(bits: string[], account: Record<string, unknown>) {
   if (typeof account.mode === "string" && account.mode.length > 0) {
     bits.push(`mode:${account.mode}`);
@@ -130,14 +127,12 @@ export function appendTokenSourceBits(bits: string[], account: Record<string, un
   appendSourceBit("signing", "signingSecretSource", "signingSecretStatus");
 }
 
-/** Append account base URL metadata when present. */
 export function appendBaseUrlBit(bits: string[], account: Record<string, unknown>) {
   if (typeof account.baseUrl === "string" && account.baseUrl) {
     bits.push(`url:${account.baseUrl}`);
   }
 }
 
-/** Build a complete human-readable channel account status line. */
 export function buildChannelAccountLine(
   provider: ChatChannel,
   account: Record<string, unknown>,

@@ -9,7 +9,7 @@ import {
 import { restoreRegisteredAgentHarnesses } from "../../agents/harness/registry.test-support.js";
 import * as completionOwner from "../../agents/subagents/registry/subagent-registry-lifecycle-completion.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
   settleSubagentRegistryPersistenceWork,
@@ -165,7 +165,7 @@ test.each(["unchanged", "reset", "reset-reopen", "reopen-reset-reopen"])(
   async (mode) => {
     const reset = mode !== "unchanged";
     if (mode === "reopen-reset-reopen") {
-      reopen();
+      await reopen();
     }
     if (reset) {
       await request("sessions.reset", { key });
@@ -173,7 +173,7 @@ test.each(["unchanged", "reset", "reset-reopen", "reopen-reset-reopen"])(
     }
     const beforeRetry = loadSessionEntry({ sessionKey: key });
     if (mode.endsWith("reopen")) {
-      reopen();
+      await reopen();
     }
     await testing.sweepOnceForTests();
     expect(loadSessionEntry({ sessionKey: key })).toEqual(reset ? beforeRetry : undefined);
@@ -182,11 +182,11 @@ test.each(["unchanged", "reset", "reset-reopen", "reopen-reset-reopen"])(
   },
 );
 
-function reopen() {
+async function reopen() {
   resetSubagentRegistryForTests({ persist: false });
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  initSubagentRegistry();
+  await initSubagentRegistry();
 }
 
 async function expectResultRetained() {
@@ -222,7 +222,7 @@ test("a real registry write failure blocks reset publication and leaves cleanup 
     true,
   );
   database.db.exec("DROP TRIGGER reject_revocation");
-  reopen();
+  await reopen();
   await testing.sweepOnceForTests();
   expect(loadSessionEntry({ sessionKey: key })).toBeUndefined();
   expect(attempts).toBe(2);
@@ -236,7 +236,7 @@ test("durable revocation survives reset-store failure and reopen without revivin
   const before = loadSessionEntry({ sessionKey: key });
   await expect(request("sessions.reset", { key })).rejects.toThrow("reset store rejected");
   expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(true);
-  reopen();
+  await reopen();
   await testing.sweepOnceForTests();
   expect(loadSessionEntry({ sessionKey: key })).toEqual(before);
   expect(attempts).toBe(1);
@@ -257,7 +257,7 @@ test("postcommit failure cannot restore cleanup authority after a successful res
   ).rejects.toThrow("reset response lost");
   const successor = loadSessionEntry({ sessionKey: key });
   expect(successor?.lifecycleRevision).not.toBe("original");
-  reopen();
+  await reopen();
   await testing.sweepOnceForTests();
   expect(loadSessionEntry({ sessionKey: key })).toEqual(successor);
   expect(attempts).toBe(1);
@@ -308,7 +308,7 @@ async function startAnnouncingSubagent(id: string) {
 async function settleCollectorCleanup(id: string) {
   const cleanupMarked = createDeferredCore();
   const isCleanupMarked = () => typeof subagentRuns.get(id)?.cleanupCompletedAt === "number";
-  const unsubscribe = onSubagentRegistryPersisted(() => {
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
     if (isCleanupMarked()) {
       cleanupMarked.resolve();
     }
@@ -413,7 +413,7 @@ test("revocation rechecks terminal owners after awaited entry planning", async (
   const id = "late-terminal-owner";
   await registerCollector(id);
   let settled = false;
-  const unsubscribe = onSubagentRegistryPersisted(() => {
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
     if (!settled && subagentRuns.get(runId)?.execution.suppressSessionEffects) {
       settled = true;
       queueMicrotask(() => {
@@ -541,7 +541,7 @@ test("a retained kill claim cannot revive durably revoked session cleanup", asyn
   const id = "kill-claim-owner";
   await registerCollector(id);
   expect(
-    claimSubagentRunKill({
+    await claimSubagentRunKill({
       runId: id,
       expected: expectDefined(subagentRuns.get(id), "registered collector"),
       sessionId: "reset-cleanup-session",
@@ -582,7 +582,7 @@ test.each([false, true])(
     }
     const successor = loadSessionEntry({ sessionKey: key });
     expect(successor).toBeDefined();
-    reopen();
+    await reopen();
     await testing.sweepOnceForTests();
     expect(loadSessionEntry({ sessionKey: key })).toEqual(successor);
   },

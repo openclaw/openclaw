@@ -116,6 +116,8 @@ History lives in the shared state database, bounded to 30 days and 50,000 rows. 
 
 Child-run outcomes are recorded asynchronously, so waiting for the shared database does not block Gateway event handling. Completion joins the recording work, and a replaced or provisional run owner cannot claim the run's first terminal event.
 
+Recording rechecks the session's ownership after waiting for write admission. Concurrent metadata updates or writes to other sessions do not discard an otherwise current event.
+
 Current limits:
 
 - Notice delivery assumes one gateway process owns the shared state database. Multiple gateways share the durable log and `changesSince`, but v1 does not push notices across processes.

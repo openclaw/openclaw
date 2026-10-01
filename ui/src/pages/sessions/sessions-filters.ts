@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import {
   normalizeSessionsGroupBy,
@@ -42,22 +42,16 @@ const SESSION_GROUP_MODE_LABELS = {
   date: "sessionsView.groupByDate",
 } as const satisfies Record<SessionsGroupBy, string>;
 
-function groupModeLabel(mode: SessionsGroupBy): string {
-  return t(SESSION_GROUP_MODE_LABELS[mode] ?? SESSION_GROUP_MODE_LABELS.none);
-}
-
 function renderFilterToggle(params: {
   name: string;
   checked: boolean;
   label: string;
   title: string;
-  extraClass?: string;
   onChange: (checked: boolean) => void;
 }) {
   const className = [
     "session-filter-check",
     "session-filter-toggle",
-    params.extraClass ?? "",
     params.checked ? "session-filter-check--active" : "",
   ]
     .filter(Boolean)
@@ -81,12 +75,6 @@ function renderFilterToggle(params: {
       </label>
     </openclaw-tooltip>
   `;
-}
-
-function setPreviousSiblingExpanded(event: Event, expanded: boolean) {
-  if (event.currentTarget instanceof Element) {
-    event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", String(expanded));
-  }
 }
 
 export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
@@ -135,8 +123,8 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
       for="sessions-filter-popover-trigger"
       placement="bottom-end"
       without-arrow
-      @wa-show=${(event: Event) => setPreviousSiblingExpanded(event, true)}
-      @wa-hide=${(event: Event) => setPreviousSiblingExpanded(event, false)}
+      @wa-show=${syncPopoverExpanded}
+      @wa-hide=${syncPopoverExpanded}
     >
       <div class="sessions-filter-popover__panel">
         <div class="sessions-filter-popover__fields">
@@ -191,7 +179,7 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
             ).map(
               (mode) => html`
                 <option value=${mode} ?selected=${props.groupBy === mode}>
-                  ${groupModeLabel(mode)}
+                  ${t(SESSION_GROUP_MODE_LABELS[mode])}
                 </option>
               `,
             )}

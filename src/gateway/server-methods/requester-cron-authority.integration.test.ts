@@ -10,11 +10,12 @@ import {
 import { bindCronManagementGrant } from "../../agents/cron-creator-authority-context.js";
 import * as hostFileWrite from "../../agents/host-file-write.js";
 import { makeSettledChild } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.test-support.js";
+import { settleRequesterTurnAfterSessionSpawns } from "../../agents/subagents/registry/subagent-registry-requester-yield.js";
 import {
-  markRequesterTurnYieldedInRuns,
-  settleRequesterTurnAfterSessionSpawns,
-} from "../../agents/subagents/registry/subagent-registry-requester-yield.js";
-import { saveSubagentRegistryChangesToSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+  createRequesterInitialTransferFixture,
+  markRequesterTurnYieldedWithAuthority,
+} from "../../agents/subagents/registry/subagent-registry-requester-yield.test-support.js";
+import { persistSubagentRunsToDiskAsyncOrThrow } from "../../agents/subagents/registry/subagent-registry-state.js";
 import {
   revokeRequesterCronAuthority,
   withRequesterCronAuthority,
@@ -28,6 +29,7 @@ import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { resolveMcpLoopbackClientGrant, revokeMcpLoopbackClientGrant } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
@@ -68,7 +70,7 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
   });
   const batch = [child];
   const runs = new Map([[child.runId, child]]);
-  const persistOrThrow = (...ids: string[]) => saveSubagentRegistryChangesToSqlite(runs, ids);
+  const transfer = createRequesterInitialTransferFixture(runs);
   const requester = createSyntheticPluginRuntimeClient({
     scopes: admin ? ["operator.admin"] : ["operator.write"],
   });
@@ -95,17 +97,17 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
   }
   await inRun(originalRunId, admitted, async () => {
     expect(
-      markRequesterTurnYieldedInRuns({
+      await markRequesterTurnYieldedWithAuthority({
         requesterSessionKey: SESSION,
         requesterAgentId: "main",
         requesterTurnRunId: originalRunId,
         runs,
-        persistOrThrow,
+        transfer,
       }),
     ).toBe(1);
   });
   expect(
-    settleRequesterTurnAfterSessionSpawns({
+    await settleRequesterTurnAfterSessionSpawns({
       requesterSessionKey: SESSION,
       requesterAgentId: "main",
       requesterTurnRunId: originalRunId,
@@ -118,7 +120,7 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
         },
       ],
       runs,
-      persistOrThrow,
+      transfer,
       schedule: () => {},
     }),
   ).toBe(true);
@@ -147,7 +149,10 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
             expect(() => management?.mint("cron.add")).toThrow("management-only");
           }
           runs.clear();
-          persistOrThrow(child.runId);
+          await persistSubagentRunsToDiskAsyncOrThrow(runs, [child.runId], {
+            context: captureOpenClawStateWorkerContext(),
+            assertCurrent: resolveAdmittedRunActiveAssertion(admittedRun),
+          });
           return await run(identity, admittedRun, creator);
         },
       ),

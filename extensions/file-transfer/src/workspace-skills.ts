@@ -58,7 +58,7 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
     );
   }
   return {
-    loadSkills: (request) => call("discovery", { ...request, ...mapSources(request) }),
+    loadSkills: (request) => call("discovery", mapSources(request)),
     async watchSkills(request, onChange, signal) {
       await runNodeWorkspaceWorker(
         options,
