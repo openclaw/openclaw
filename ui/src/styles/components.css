@@ -5743,6 +5743,7 @@ td.data-table-key-col {
 }
 
 .session-glyph__ring--queued,
+.session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
 }

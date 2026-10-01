@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
 import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 import {
@@ -114,15 +115,8 @@ export async function preflightWorkspaceApplyImpl(
   // Node snapshots may be shared only inside this pass. Separate preflight
   // calls are concurrency fences and must stat paths again.
   const localNodes = new Map<string, Promise<WorkspaceNode>>();
-  const localNode = (entryPath: string): Promise<WorkspaceNode> => {
-    const existing = localNodes.get(entryPath);
-    if (existing) {
-      return existing;
-    }
-    const node = localWorkspaceNode(params.root, entryPath);
-    localNodes.set(entryPath, node);
-    return node;
-  };
+  const localNode = (entryPath: string): Promise<WorkspaceNode> =>
+    getOrCreatePromise(localNodes, entryPath, () => localWorkspaceNode(params.root, entryPath));
   for (const entryPath of paths) {
     if (hasPathAncestor(blockingConflicts, entryPath)) {
       continue;

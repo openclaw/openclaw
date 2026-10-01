@@ -69,9 +69,14 @@ describe("AppSidebar session catalog ownership", () => {
   it.each([
     { owner: "the selected agent", assistantAgentId: null },
     { owner: "the advertised catalog capability", assistantAgentId: "main" },
+    {
+      owner: "catalog read authority",
+      assistantAgentId: "main",
+      scopes: ["operator.sessions.write"],
+    },
   ])(
     "retires catalog rows and creation after reconnect loses $owner",
-    async ({ assistantAgentId }) => {
+    async ({ assistantAgentId, scopes }) => {
       vi.useFakeTimers();
       let provider: HTMLElement | undefined;
       try {
@@ -128,7 +133,9 @@ describe("AppSidebar session catalog ownership", () => {
         gateway.publish({
           phase: "connected",
           assistantAgentId,
-          hello: { ...catalogHello, features: { ...catalogHello.features, methods: [] } },
+          hello: scopes
+            ? { ...catalogHello, auth: { role: "operator", scopes } }
+            : { ...catalogHello, features: { ...catalogHello.features, methods: [] } },
         });
         await sidebar.updateComplete;
         await vi.advanceTimersByTimeAsync(0);

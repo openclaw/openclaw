@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeAll, expect, vi } from "vitest";
 import { parse } from "yaml";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createCommandTest } from "../helpers/command-fixture.js";
 import { readCiCheckoutStep, renderGitTestClock } from "./ci-checkout.test-support.js";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
@@ -625,11 +626,11 @@ it("materializes an executable preflight manifest from the workflow revision", a
     },
   );
   expect(checkout.status, `${checkout.stdout}\n${checkout.stderr}`).toBe(0);
-  // Consume the exported trusted entrypoint against the real target planners.
+  // The workflow's native Node manifest uses registerHooks to forbid runtime dependencies.
   const { result, manifest } = runDependencyFreePreflight(
     pathToFileURL(join(workspace, ".ci-harness/scripts/ci-build-manifest.mjs")),
     root,
-    process.execPath,
+    resolveTestNodeExecPath(),
   );
   expect(result.status, result.stderr).toBe(0);
   expect(manifest).toContain("run_windows=true\n");

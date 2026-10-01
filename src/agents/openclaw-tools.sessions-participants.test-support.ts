@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, it, vi, type Mock } from "vitest";
+import { afterAll, expect, it, vi, type Mock } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
@@ -10,19 +10,18 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 export function registerSessionsSendParticipantTests({
   config,
-  makeTempDir,
   callGatewayMock,
 }: {
   config: OpenClawConfig;
-  makeTempDir: (prefix: string) => string;
   callGatewayMock: Mock;
 }) {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-send-participant-");
   it.each([
     { timeoutSeconds: 1, admitted: true },
     { timeoutSeconds: 0, admitted: false },
@@ -30,7 +29,7 @@ export function registerSessionsSendParticipantTests({
     "records exactly one cross-agent contribution at the original prompt time only after admission (timeoutSeconds: $timeoutSeconds, admitted: $admitted)",
     async ({ timeoutSeconds, admitted }) => {
       const storeTemplate = path.join(
-        makeTempDir("openclaw-session-send-participant-"),
+        sessionDirs.make(),
         "agents/{agentId}/agent/openclaw-agent.sqlite",
       );
       const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "research" });
@@ -91,7 +90,6 @@ export function registerSessionsSendParticipantTests({
         );
       } finally {
         clock.mockRestore();
-        disposeOpenClawAgentDatabaseByPath(storePath);
       }
     },
   );

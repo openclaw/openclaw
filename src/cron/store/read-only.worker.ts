@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { inspectCronRowsForDoctor } from "../../commands/doctor/cron/store-inventory.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { runSqliteReadOnlyWorkerSync } from "../../infra/sqlite-readonly-worker.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
@@ -8,7 +9,6 @@ import {
 } from "../../state/openclaw-state-db-read-connection.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { cronRunRecordStoreKey } from "../run-history-detail.js";
-import { inspectCronRowsForDoctor } from "./doctor-inventory.js";
 import { serializeCronLoadError } from "./load-error.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
 import type { CronReadOnlyResult } from "./read-only.types.js";

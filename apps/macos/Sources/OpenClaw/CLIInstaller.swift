@@ -266,6 +266,13 @@ enum CLIInstaller {
         }
         if usesBundledRuntime, BundledRuntime.isBundledApp { return self.bundledStatus() }
         guard FileManager.default.isExecutableFile(atPath: location) else {
+            if !FileManager.default.fileExists(atPath: location),
+               let authority = try? self.captureCanonicalUpdateAuthority(executable: location),
+               authority.file == nil
+            {
+                return await self.managedStatus(
+                    expectedVersion: expectedVersion, installedCLI: authority.cli, usesBundledRuntime: false)
+            }
             return .missing(location: location)
         }
 
@@ -594,7 +601,7 @@ enum CLIInstaller {
         repair: Bool = false,
         installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
         checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil,
-        onDispatch: (@MainActor @Sendable () -> Void)? = nil,
+        onDispatch: (@MainActor @Sendable () throws -> Void)? = nil,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async
         -> ManagedCLIUpdateOutcome
     {
@@ -616,9 +623,19 @@ enum CLIInstaller {
                 profile: .current,
                 searchPaths: CommandResolver.preferredPaths())
         } ?? self.probeEnvironment(location: executable)
+        let canonicalAuthority: CanonicalUpdateAuthority?
+        do {
+            canonicalAuthority = try installedCLI == nil ? self
+                .captureCanonicalUpdateAuthority(executable: executable) : nil
+        } catch {
+            return .failure(message: String(localized: "Gateway update failed."), details: error.localizedDescription)
+        }
+        if let canonicalAuthority, canonicalAuthority.file == nil {
+            command = canonicalAuthority.cli.prefix + command.dropFirst()
+        }
         let beforeSpawn: @Sendable () -> String? = {
-            guard let installedCLI else { return nil }
-            return GatewayLaunchAgentManager.serviceUpdateAuthorityError(for: installedCLI)
+            if let installedCLI { return GatewayLaunchAgentManager.serviceUpdateAuthorityError(for: installedCLI) }
+            return canonicalAuthority?.currentError()
         }
         do { try await checkCurrent?() } catch {
             let message = String(localized: "Gateway update failed.")
@@ -630,7 +647,11 @@ enum CLIInstaller {
             await statusHandler(message)
             return .failure(message: message, details: error)
         }
-        onDispatch?()
+        do { try onDispatch?() } catch {
+            let message = String(localized: "Gateway update failed.")
+            await statusHandler(message)
+            return .failure(message: message, details: error.localizedDescription)
+        }
         let response = await ShellExecutor.runDetailed(
             command: command,
             cwd: nil,
@@ -707,8 +728,8 @@ enum CLIInstaller {
     }
 
     static func activateLocalGateway(
-        mode: AppState.ConnectionMode = AppStateStore.shared.connectionMode,
-        paused: Bool = AppStateStore.shared.isPaused,
+        mode: @autoclosure () -> AppState.ConnectionMode = AppStateStore.shared.connectionMode,
+        paused: @autoclosure () -> Bool = AppStateStore.shared.isPaused,
         start: @MainActor () -> Void = { GatewayProcessManager.shared.setActive(true) },
         waitUntilReady: @MainActor () async -> Bool = {
             await GatewayProcessManager.shared.waitForGatewayReady(
@@ -717,10 +738,11 @@ enum CLIInstaller {
         failureReason: @MainActor () -> String? = { GatewayProcessManager.shared.lastFailureReason }) async
         -> LocalGatewayActivation
     {
-        guard mode == .local, !paused else { return .deferred }
+        guard mode() == .local, !paused() else { return .deferred }
         start()
-        guard await waitUntilReady() else { return .failed(reason: failureReason()) }
-        return .ready
+        let ready = await waitUntilReady()
+        guard mode() == .local, !paused() else { return .deferred }
+        return ready ? .ready : .failed(reason: failureReason())
     }
 
     private static func parseInstallEvents(_ output: String) -> [InstallEvent] {

@@ -31,7 +31,10 @@ import { setTestEnvValue } from "../../../test-utils/env.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import * as announceCleanup from "./subagent-registry-lifecycle-announce-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { getSubagentRegistryPublicationRevision } from "./subagent-registry-publication.js";
+import {
+  getSubagentRegistryPublicationRevision,
+  subscribeSubagentRunChanges,
+} from "./subagent-registry-publication.js";
 import * as registryState from "./subagent-registry-state.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
@@ -530,7 +533,7 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
       }
       if (change === "yielded") {
         const paused = createDeferredCore();
-        const stop = nativeState.onSubagentRegistryPersisted(() => {
+        const stop = subscribeSubagentRunChanges("persistence", () => {
           if (entry.pauseReason === "sessions_yield") {
             paused.resolve();
           }

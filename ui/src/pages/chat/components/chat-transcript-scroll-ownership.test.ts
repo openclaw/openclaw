@@ -160,7 +160,7 @@ describe("chat transcript scroll ownership", () => {
         { kind: "content", key: "long-run", content: html`<div>Long transcript run</div>` },
       ];
       const commitRequestedUpdate = async () => {
-        // Let queued row and scroll-element refs attach before committing.
+        // TanStack queues its host notification behind updateComplete.
         await Promise.resolve();
         if (updateRequested) {
           updateRequested = false;

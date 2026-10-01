@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { FaceTimeHelperPeer, HelperActionResult } from "../src/helper-rpc.js";
+import type { HelperActionResult } from "../src/helper-results.js";
+import type { FaceTimeHelperPeer } from "../src/helper-rpc.js";
 import {
   createRuntime,
   FaceTimeHelperActionError,

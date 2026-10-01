@@ -372,6 +372,7 @@ describe("AppSidebar catalog session rows", () => {
     const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
     gateway.publish({
       hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["sessions.catalog.list"] },
       } as ApplicationGatewaySnapshot["hello"],
     });
@@ -576,10 +577,11 @@ describe("AppSidebar catalog session rows", () => {
       const items = menu.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-dropdown-item");
       expect([...items].map((item) => item.getAttribute("value"))).toEqual([
         "viewer",
+        "import",
         "terminal",
         "delete",
       ]);
-      expect(items[1]?.disabled).toBe(true);
+      expect(items[2]?.disabled).toBe(true);
       const menuButton = row.querySelector<HTMLElement>("[data-catalog-session-menu]");
       expect(menuButton).not.toBeNull();
 

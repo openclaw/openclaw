@@ -45,6 +45,7 @@ import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import { assertGitHubCliAvailable } from "./github-cli-preflight.js";
 import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
 import {
@@ -638,20 +639,7 @@ export function createGitHubOAuthLifecycle(params: {
           await runMaintenance();
         }
       })();
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          drain,
-          new Promise<void>((resolve) => {
-            timeout = setTimeout(resolve, SHUTDOWN_DRAIN_TIMEOUT_MS);
-            timeout.unref?.();
-          }),
-        ]);
-      } finally {
-        if (timeout) {
-          clearTimeout(timeout);
-        }
-      }
+      await settlesWithin(drain, SHUTDOWN_DRAIN_TIMEOUT_MS);
     },
   };
 }

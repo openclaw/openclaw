@@ -358,12 +358,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       profileId: params.profileId,
       updater: (store) => {
         const existing = store.profiles[params.profileId];
-        if (
-          !isExactOAuthCredential(
-            existing?.type === "oauth" ? existing : undefined,
-            params.settledCredential ?? params.fence,
-          )
-        ) {
+        if (!isExactOAuthCredential(existing, params.settledCredential ?? params.fence)) {
           return false;
         }
         store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);
@@ -387,9 +382,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       profileId: params.profileId,
       updater: (store) => {
         const existing = store.profiles[params.profileId];
-        if (
-          !isExactOAuthCredential(existing?.type === "oauth" ? existing : undefined, params.fence)
-        ) {
+        if (!isExactOAuthCredential(existing, params.fence)) {
           return false;
         }
         store.profiles[params.profileId] = { ...params.original };
@@ -442,6 +435,14 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       : resolveSharedAuthStorePath();
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
     const peerConfig = params.cfg ?? {};
+    const fenceTerminalPeers = (credential: OAuthCredential) =>
+      fenceOAuthRefreshPeers({
+        cfg: peerConfig,
+        ownerDatabasePath: authPath,
+        profileId: params.profileId,
+        generation: credential,
+        fence: credential,
+      });
 
     let observation: ReturnType<typeof beginOAuthRefreshObservation> | undefined;
     let observationTransferred = false;
@@ -593,15 +594,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             if (isPendingOAuthRefreshFence(cred)) {
               return { kind: "observe", ownerAgentDir, generation: cred };
             }
-            const peerClaims = personalProfile
-              ? []
-              : await fenceOAuthRefreshPeers({
-                  cfg: peerConfig,
-                  ownerDatabasePath: authPath,
-                  profileId: params.profileId,
-                  generation: cred,
-                  fence: cred,
-                });
+            const peerClaims = personalProfile ? [] : await fenceTerminalPeers(cred);
             failOAuthRefreshPeerClaims({
               profileId: params.profileId,
               fence: cred,
@@ -646,9 +639,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             updater: (authoritative) => {
               const existing = authoritative.profiles[params.profileId];
               params.signal?.throwIfAborted();
-              if (
-                !isExactOAuthCredential(existing?.type === "oauth" ? existing : undefined, cred)
-              ) {
+              if (!isExactOAuthCredential(existing, cred)) {
                 return false;
               }
               authoritative.profiles[params.profileId] = fence;
@@ -674,15 +665,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               };
             }
             if (isOAuthRefreshFence(current)) {
-              const peerClaims = personalProfile
-                ? []
-                : await fenceOAuthRefreshPeers({
-                    cfg: peerConfig,
-                    ownerDatabasePath: authPath,
-                    profileId: params.profileId,
-                    generation: current,
-                    fence: current,
-                  });
+              const peerClaims = personalProfile ? [] : await fenceTerminalPeers(current);
               failOAuthRefreshPeerClaims({
                 profileId: params.profileId,
                 fence: current,

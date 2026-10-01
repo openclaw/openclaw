@@ -6,7 +6,7 @@ import type {
 } from "../plugins/gateway-access-policy.types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
+import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
@@ -83,25 +83,33 @@ export function resolveGatewayOperatorAccessAuthority(
   if (!hasGatewayOperatorAccessPolicies(config)) {
     return null;
   }
-  const profile = getUserProfileListItem(profileId);
+  const resident = captureResidentUserProfileAccess(profileId);
+  const profile = resident.readCurrentFacts();
   const emails = [...profile.emails];
+  const githubAccountIds = [...(profile.githubAccountIds ?? [])];
   let profileVersion = readUserProfileVersion();
   return resolvePreparedGatewayOperatorAccessAuthority(
     {
-      profileId: profile.id,
+      profileId: profile.profileId,
       emails,
-      role: profile.role ?? null,
+      githubAccountIds,
+      role: profile.assignedRole,
       isCurrent: () => {
-        if (profile.id !== profileId) {
+        resident.assertCurrent();
+        if (profile.profileId !== profileId) {
           return false;
         }
         const currentVersion = readUserProfileVersion();
         if (currentVersion !== profileVersion) {
-          const current = getUserProfileListItem(profileId);
+          const current = resident.readCurrentFacts();
           const currentEmails = new Set(current.emails);
           // A merge or alias replacement cannot transfer a captured grant to its successor.
           // Display/avatar changes preserve admitted work.
-          if (current.id !== profileId || emails.some((email) => !currentEmails.has(email))) {
+          if (
+            current.profileId !== profileId ||
+            emails.some((email) => !currentEmails.has(email)) ||
+            githubAccountIds.some((accountId) => !current.githubAccountIds?.includes(accountId))
+          ) {
             return false;
           }
           profileVersion = currentVersion;
@@ -118,6 +126,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   profile: Readonly<{
     profileId: string;
     emails: readonly string[];
+    githubAccountIds?: readonly number[];
     role: string | null;
     isCurrent: () => boolean;
   }>,
@@ -169,7 +178,12 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     const authorities = policies.flatMap(({ policy, pluginId }) => {
       const authority = policy.authorize({
         config,
-        profile: { profileId: profile.profileId, emails: [...emails], assignedRole: profile.role },
+        profile: {
+          profileId: profile.profileId,
+          emails: [...emails],
+          ...(profile.githubAccountIds ? { githubAccountIds: [...profile.githubAccountIds] } : {}),
+          assignedRole: profile.role,
+        },
         requiredByRole: pluginId === requiredPlugin,
       });
       if (authority && pluginId === requiredPlugin) {

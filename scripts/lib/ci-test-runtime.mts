@@ -11,6 +11,7 @@ import { controlUiE2eTestGlobs, controlUiTestGlobs } from "../../test/vitest/vit
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
+  getUnitFastTestFilesForIncludePatterns,
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import {
@@ -58,6 +59,10 @@ const bunCompatibleConfigs = new Set([
 ]);
 // Measured whole-file admission; the rest of agents-support retains Node.
 const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-recovery.test.ts"];
+const embeddedRunOwner = agentVitestProjectOwners.embeddedRun;
+// src/state/openclaw-state-lease.retention.test.ts stays with its default Node owner:
+// cold fs-safe native initialization roots the caller's ALS through custom_gc.
+// The dependency initialization owner needs a fix; this is not V8-specific proof.
 const runtimePartitions = new Map<
   string,
   {
@@ -86,13 +91,14 @@ const runtimePartitions = new Map<
         // Bun skips a sibling diagnostics subscriber when warm-worker cleanup unsubscribes.
         "src/agents/code-mode-node.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
-        // Native heap accounting, GC, and Worker limits require V8.
+        // Asserts V8 used_heap_size deltas, cachedDataVersionTag stability, explicit GC,
+        // and Worker resourceLimits.maxOldGenerationSizeMb propagation.
         "src/infra/worker-task-pool.memory.test.ts",
-        "src/plugins/runtime.retention.test.ts",
+        // queryObjects collection assertions require Node V8.
+        "src/plugin-sdk/provider-catalog-shared.retention.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",
-        "src/process/spawn-broker/proxy-retention.test.ts",
         "src/process/spawn-broker/relay.test.ts",
         "src/process/spawn-broker/startup.test.ts",
         "src/process/spawn-broker/stdin-handoff.test.ts",
@@ -101,6 +107,25 @@ const runtimePartitions = new Map<
         "test/scripts/bench-session-history.test.ts",
         "test/scripts/update-restart-module-outcome.test.ts",
       ]),
+    },
+  ],
+  [
+    embeddedRunOwner.config,
+    {
+      files: (cwd) =>
+        globSync(embeddedRunOwner.include, {
+          cwd,
+          exclude: [
+            ...sharedVitestExcludePatterns,
+            ...getUnitFastTestFilesForIncludePatterns(embeddedRunOwner.include),
+            ...embeddedRunOwner.exclude,
+          ],
+        })
+          .map((file) => file.replaceAll("\\", "/"))
+          .toSorted(),
+      // Only the runtime-neutral transcript lifecycle contract is qualified here.
+      nodeRequired: (file) =>
+        file !== "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle.test.ts",
     },
   ],
   [
@@ -131,12 +156,7 @@ const runtimePartitions = new Map<
         globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      // Bun GC can retain released chat and overview payloads; keep their retention proof on Node.
-      nodeRequired: new Set([
-        "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
-        "ui/src/pages/chat/chat-thread.test.ts",
-        "ui/src/pages/usage/usage-page-details.test.ts",
-      ]),
+      nodeRequired: new Set(),
       includeAfterShard: true,
     },
   ],

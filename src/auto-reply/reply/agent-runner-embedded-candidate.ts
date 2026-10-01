@@ -62,6 +62,15 @@ export async function runEmbeddedFallbackCandidate(
     ...params.candidateFastMode,
     thinkLevel: params.candidateThinkLevel,
   };
+  const agentHarnessPolicy = params.agentHarnessRuntimeOverride
+    ? ({ runtime: params.agentHarnessRuntimeOverride, runtimeSource: "model" } as const)
+    : resolveAgentHarnessPolicy({
+        provider: params.provider,
+        modelId: params.model,
+        config: params.runtimeConfig,
+        agentId: turn.followupRun.run.agentId,
+        sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
+      });
   const { embeddedContext, senderContext, runBaseParams } = await buildEmbeddedRunExecutionParams({
     run: candidateRun,
     replyRoute: turn.followupRun,
@@ -72,19 +81,11 @@ export async function runEmbeddedFallbackCandidate(
     promptCacheKey: turn.opts?.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     model: params.model,
+    agentRuntime: agentHarnessPolicy.runtime,
   });
   if (sourceReplyDeliveryRuntime) {
     bindSourceReplyDeliveryRuntime(runBaseParams, sourceReplyDeliveryRuntime);
   }
-  const agentHarnessPolicy = params.agentHarnessRuntimeOverride
-    ? ({ runtime: params.agentHarnessRuntimeOverride, runtimeSource: "model" } as const)
-    : resolveAgentHarnessPolicy({
-        provider: params.provider,
-        modelId: params.model,
-        config: params.runtimeConfig,
-        agentId: turn.followupRun.run.agentId,
-        sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
-      });
   const embeddedRunProvider = resolveOpenAIRuntimeProvider({
     provider: params.provider,
     harnessRuntime: agentHarnessPolicy.runtime,

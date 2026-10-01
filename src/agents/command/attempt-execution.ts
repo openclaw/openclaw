@@ -60,7 +60,6 @@ import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runn
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
-import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -82,17 +81,16 @@ import { resolveHarnessAuthProfileSelection } from "./attempt-auth-selection.js"
 import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
 import {
   buildClaudeCliFallbackContextPrelude,
+  resolveCompletionToolPolicy,
+  isClaudeCliProvider,
   claudeCliSessionTranscriptHasContent,
+  resolveCommandReplyExpectation,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-function isClaudeCliProvider(provider: string): boolean {
-  return provider.trim().toLowerCase() === "claude-cli";
-}
 
 export function runAgentAttempt(
   params: Pick<RunEntryCandidateOptions, "isFallbackRetry" | "modelRoutingProvenance"> &
@@ -172,7 +170,6 @@ export function runAgentAttempt(
           ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
           : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
-  const isSubagentLane = params.opts.lane === AGENT_LANE_SUBAGENT;
   // A completion handoff relays frozen child output, so only a verified private
   // capability plus persisted requester lineage may restore its tool surface.
   const isSubagentAnnounceHandoff = isSubagentAnnounceCompletionHandoff({
@@ -298,23 +295,16 @@ export function runAgentAttempt(
         sessionRuntimeOverride,
         pinnedHarnessId,
       });
-  const completionRetainsRequesterTools =
-    trustedSubagentAnnounceHandoff &&
-    !isRawModelRun &&
-    !isCliExecutionProvider &&
-    (!messageToolOwnsVisibleReply(params.opts) || completionNeedsMessageDelivery);
-  // Message-tool-only delivery constrains the visible reply, not the parent
-  // continuation's verified authority. Keep the inherited cap while requiring
-  // message to survive every applicable policy before enabling any tools.
-  // An explicit cap is enforced even when tools are disabled; clear it so a
-  // denied completion can finish tool-free and its owner can relay frozen text.
-  const runtimeToolsAllow = isSubagentAnnounceHandoff
-    ? completionRetainsRequesterTools
-      ? params.opts.toolsAllow
-      : completionNeedsMessageDelivery
-        ? ["message"]
-        : undefined
-    : params.opts.toolsAllow;
+  const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools } =
+    resolveCompletionToolPolicy({
+      run: params,
+      trustedSubagentAnnounceHandoff,
+      isSubagentAnnounceHandoff,
+      isRawModelRun,
+      isCliExecutionProvider,
+      cliExecutionProvider,
+      completionNeedsMessageDelivery,
+    });
   // Collector output is mandatory result transport, even on a narrowed tool
   // surface. The CLI grant is minted from this list and enforced exactly on the
   // loopback server, so a plugin-launched or cron-continued collector needs the
@@ -325,11 +315,6 @@ export function runAgentAttempt(
         ? ["structured_output"]
         : undefined,
   });
-  const disableTools =
-    params.opts.modelRun === true ||
-    (isSubagentAnnounceHandoff &&
-      !completionRetainsRequesterTools &&
-      !completionNeedsMessageDelivery);
   const toolContext = {
     messageChannel: params.messageChannel,
     messageProvider: params.opts.messageProvider ?? params.messageChannel,
@@ -430,6 +415,7 @@ export function runAgentAttempt(
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
+  const replyExpectation = resolveCommandReplyExpectation(params);
   // Read session fields at invocation time, after admitted CLI binding recovery.
   const buildCommonRunParams = () =>
     ({
@@ -478,7 +464,8 @@ export function runAgentAttempt(
       onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
       suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
       disableTools,
-      allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
+      terminalReplyExpectation: replyExpectation,
+      silentReplyPromptMode: replyExpectation === "required" ? "none" : undefined,
       bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature,
     }) satisfies Partial<RunEmbeddedAgentInternalParams>;
@@ -657,6 +644,9 @@ export function runAgentAttempt(
             modelProvider: params.providerOverride,
             requesterModel: { provider: params.providerOverride, model: params.modelOverride },
             provider: cliExecutionProvider,
+            trustedInternalHandoff: completionRetainsRequesterTools
+              ? params.opts.trustedInternalHandoff
+              : undefined,
             abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
             onExecutionStarted: params.opts.onExecutionStarted,
             cronCreatorCallerOrigin: params.opts.cronCreatorAuthorityCapability?.callerOrigin,
@@ -832,8 +822,6 @@ export function runAgentAttempt(
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     ...buildCommonRunParams(),
     sandboxSessionKey: params.sessionKey,
-    // Subagent lifecycle owns the stricter explicit visible/silent/empty evidence check.
-    terminalReplyExpectation: isSubagentLane ? "optional" : undefined,
     ...toolContext,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,

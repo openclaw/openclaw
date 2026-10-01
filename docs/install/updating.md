@@ -182,6 +182,12 @@ stops before spawning and records `candidate-config-read-recursion`.
 Both runtimes use the same result channel for synchronous and asynchronous reads;
 config diagnostics stay separate from the result.
 
+Bun-hosted updates from 2026.9.7 can finish candidate Doctor and restart the
+Gateway after package replacement. Idle candidate workers release their IPC
+references after native work closes, so a completed Doctor does not leave the
+installed updater waiting indefinitely for its exit. This fix runs in the
+updated package; the published updater and its handoff markers are unchanged.
+
 The running Gateway retains its shutdown code before an in-place update can
 replace the package's bundled files. Transcript shutdown drains captures and
 persists deterministic notes without starting optional model inference. This
@@ -391,8 +397,8 @@ read transaction, so a busy Gateway can keep writing while the copy includes
 committed WAL data. Each acquisition makes one copy instead of retrying until
 the database becomes quiet. On rollback-journal volumes, SQLite can delay writer
 commits until the consistent read finishes. Rehearsal records copied pages, bytes, and elapsed
-time in the update ledger, then checks, compacts, and publishes the private
-copy for validation. Source databases and recovery backups retain their existing
+time in the update ledger, then checks and publishes the private copy with row IDs
+preserved for validation. Source databases and recovery backups retain their existing
 protection; the faster preparation takes effect when the newer updater runs.
 
 Package updates also check npm availability for enabled configured plugins before
@@ -424,7 +430,8 @@ checks still prevent completion.
 
 ### Package-publication recovery
 
-Supported POSIX npm updates print an external-Node recovery command before
+Supported POSIX npm updates print a recovery command using the selected external
+Node or Bun executable before
 transferring the staged package into recovery custody. Keep the printed commands;
 each names one operation with required `--anchor` and `--operation` arguments.
 The initial journal and helper are published together in a private control
@@ -437,6 +444,12 @@ directory. `status` reads the operation, `repair` resumes only its recorded
 package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
+
+Bun recovery requires a supported Bun runtime with WAL-reset-safe SQLite and can
+run without Node installed. The installed updater controls the first upgrade:
+older releases may omit the recovery command on Bun or refuse a Bun recovery
+runtime. Installing a newer candidate does not change that first-hop behavior;
+subsequent updates use the candidate's recovery support.
 
 Retirement records removal of the disposable directory before recording the
 helper's final unlink intent. The helper is then removed. The bounded last

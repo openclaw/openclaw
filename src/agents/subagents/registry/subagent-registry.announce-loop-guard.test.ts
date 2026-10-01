@@ -23,7 +23,6 @@ const mocks = vi.hoisted(() => ({
   captureSubagentCompletionReply: vi.fn(),
   loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
   saveSubagentRegistryChangesToSqlite: vi.fn(),
-  saveSubagentRegistryToSqlite: vi.fn(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
 }));
 
@@ -71,7 +70,6 @@ vi.mock("../../../infra/agent-events.js", () => ({
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
   saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
-  saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
 }));
 
 vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({

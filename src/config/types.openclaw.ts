@@ -154,8 +154,6 @@ type BrandedConfigState<TState extends string> = OpenClawConfig & {
   readonly [openClawConfigStateBrand]?: TState;
 };
 
-/** Authored config before include/env resolution and runtime defaults. */
-export type SourceConfig = BrandedConfigState<"source">;
 /** Source config after includes/env substitution, before runtime defaults. */
 export type ResolvedSourceConfig = BrandedConfigState<"resolved-source">;
 /** Runtime-materialized config with defaults/normalization applied. */

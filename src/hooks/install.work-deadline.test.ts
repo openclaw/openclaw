@@ -3,6 +3,7 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -44,12 +45,12 @@ describe("hook update work deadlines", () => {
     runCommand.mockReset();
     runCommand.mockImplementation(async (argv: string[], options: CommandOptions) => {
       let stdout = "";
-      if (argv[1] === "pack") {
+      if (npmCommandArgs(argv)?.[0] === "pack") {
         await fs.copyFile(archivePath, path.join(options.cwd!, "fixture.tgz"));
         stdout = JSON.stringify([
           { name: "deadline-hooks", version: "1.0.0", filename: "fixture.tgz" },
         ]);
-      } else if (argv[1] !== "install") {
+      } else if (npmCommandArgs(argv)?.[0] !== "install") {
         throw new Error(`Unexpected fixture command: ${argv.join(" ")}`);
       }
       return { code: 0, stdout, stderr: "", signal: null, killed: false, termination: "exit" };
@@ -80,7 +81,9 @@ describe("hook update work deadlines", () => {
       expect(
         await fs.readFile(path.join(result.targetDir, "hooks", "deadline", "handler.ts"), "utf8"),
       ).toBe("export default async () => {};\n");
-      expect(runCommand.mock.calls.map(([argv, opts]) => [argv[1], opts.timeoutMs])).toEqual([
+      expect(
+        runCommand.mock.calls.map(([argv, opts]) => [npmCommandArgs(argv)?.[0], opts.timeoutMs]),
+      ).toEqual([
         ["pack", work],
         ["install", work],
       ]);

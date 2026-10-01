@@ -19,7 +19,8 @@ import {
   readUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
 import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
-import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
+import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {

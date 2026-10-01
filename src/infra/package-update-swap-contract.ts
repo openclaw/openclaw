@@ -6,9 +6,17 @@ import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
+export type PackageActivationRuntime = {
+  kind: "node" | "bun";
+  path: string;
+  identity: string;
+  /** Preflight snapshot filtered by the daemon runtime probe owner. */
+  env?: NodeJS.ProcessEnv;
+};
+
 export type PackageActivationOptions = {
   fence: UpdateRecoveryFence;
-  nodeRunner: string;
+  runtime: PackageActivationRuntime;
   onPrepared: (command: string) => void;
   onUnavailable?: (message: string) => void;
 };

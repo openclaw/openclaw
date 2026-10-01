@@ -4,6 +4,7 @@ import { expect, test, vi } from "vitest";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { SessionCatalogProvider } from "../plugins/session-catalog.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
@@ -12,6 +13,7 @@ import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
+import type { GatewaySessionCommitResult } from "./session-create-service.types.js";
 import { agentDiscoveryMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -21,9 +23,46 @@ import {
 
 const { createSessionStoreDir } = setupSessionCreateTestHarness();
 
-test("sessions.create stores dashboard model, thinking, fast mode, and parent linkage", async () => {
+type CreatedSession = Pick<
+  Extract<GatewaySessionCommitResult, { ok: true }>,
+  "key" | "entry" | "resolved"
+> & { sessionId: string };
+
+function installSessionCatalog(
+  resolveCreateSession: NonNullable<SessionCatalogProvider["resolveCreateSession"]>,
+  cli = false,
+) {
+  const registry = createEmptyPluginRegistry();
+  if (cli) {
+    registry.cliBackends.push({
+      pluginId: "anthropic",
+      source: "test",
+      backend: {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+    });
+  }
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession,
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
+}
+
+test("sessions.create persists model selection and parent linkage for a key-derived agent", async () => {
   const { storePath } = await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops-agent" }] };
+  const key = "agent:ops-agent:dashboard:direct:subagent-orchestrator";
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
   await writeSessionStore({
@@ -31,20 +70,8 @@ test("sessions.create stores dashboard model, thinking, fast mode, and parent li
       main: sessionStoreEntry("sess-parent"),
     },
   });
-  const created = await directSessionReq<{
-    key?: string;
-    sessionId?: string;
-    entry?: {
-      label?: string;
-      providerOverride?: string;
-      modelOverride?: string;
-      thinkingLevel?: string;
-      fastMode?: boolean | "auto";
-      parentSessionKey?: string;
-      sessionFile?: string;
-    };
-  }>("sessions.create", {
-    agentId: "ops",
+  const created = await directSessionReq<CreatedSession>("sessions.create", {
+    key,
     label: "Dashboard Chat",
     model: "openai/gpt-test-a",
     thinkingLevel: "high",
@@ -53,7 +80,7 @@ test("sessions.create stores dashboard model, thinking, fast mode, and parent li
   });
 
   expect(created.ok).toBe(true);
-  expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+  expect(created.payload?.key).toBe(key);
   expect(created.payload?.entry?.label).toBe("Dashboard Chat");
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
@@ -65,8 +92,7 @@ test("sessions.create stores dashboard model, thinking, fast mode, and parent li
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
 
-  const key = created.payload?.key as string;
-  const storedEntry = loadSessionEntry({ agentId: "ops", sessionKey: key, storePath });
+  const storedEntry = loadSessionEntry({ agentId: "ops-agent", sessionKey: key, storePath });
   expect(storedEntry?.sessionId).toBe(created.payload?.sessionId);
   expect(storedEntry?.label).toBe("Dashboard Chat");
   expect(storedEntry?.providerOverride).toBe("openai");
@@ -78,7 +104,7 @@ test("sessions.create stores dashboard model, thinking, fast mode, and parent li
 
   await expect(
     loadTranscriptEvents({
-      agentId: "ops",
+      agentId: "ops-agent",
       sessionId: requireNonEmptyString(created.payload?.sessionId, "created session id"),
       sessionKey: key,
       storePath,
@@ -121,43 +147,13 @@ test.each(["cli", "enabled", "disabled"] as const)(
       model: "anthropic/claude-opus-4-8",
       agentRuntime,
     }));
-    const registry = createEmptyPluginRegistry();
-    if (harness === "cli") {
-      registry.cliBackends.push({
-        pluginId: "anthropic",
-        source: "test",
-        backend: {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          config: { command: "claude" },
-          bundleMcp: false,
-        },
-      });
-    }
-    registry.sessionCatalogs.push({
-      pluginId: "anthropic",
-      source: "test",
-      provider: {
-        id: "claude",
-        label: "Claude Code",
-        resolveCreateSession,
-        list: vi.fn(async () => []),
-        read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-      },
-    });
-    setActivePluginRegistry(registry);
+    installSessionCatalog(resolveCreateSession, harness === "cli");
 
     try {
-      const created = await directSessionReq<{
-        entry?: {
-          providerOverride?: string;
-          modelOverride?: string;
-          agentRuntimeOverride?: string;
-          modelSelectionLocked?: boolean;
-          pluginOwnerId?: string;
-        };
-        key?: string;
-      }>("sessions.create", { agentId: "main", catalogId: "claude" });
+      const created = await directSessionReq<CreatedSession>("sessions.create", {
+        agentId: "main",
+        catalogId: "claude",
+      });
 
       if (fixture) {
         expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
@@ -216,45 +212,24 @@ test("sessions.create rejects a caller-supplied key for a catalog target", async
     modelOverride: "gpt-existing",
   });
   await writeSessionStore({ entries: { main: existing } });
-  const registry = createEmptyPluginRegistry();
-  registry.sessionCatalogs.push({
-    pluginId: "anthropic",
-    source: "test",
-    provider: {
-      id: "claude",
-      label: "Claude Code",
-      resolveCreateSession: () => ({
-        model: "anthropic/claude-opus-4-8",
-        agentRuntime: "claude-cli",
-      }),
-      list: vi.fn(async () => []),
-      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    },
+  const created = await directSessionReq("sessions.create", {
+    key: "main",
+    agentId: "main",
+    catalogId: "claude",
   });
-  setActivePluginRegistry(registry);
 
-  try {
-    const created = await directSessionReq("sessions.create", {
-      key: "main",
-      agentId: "main",
-      catalogId: "claude",
-    });
-
-    expect(created.ok).toBe(false);
-    expect(created.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "sessions.create catalogId cannot include key",
-    });
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
-    ).toMatchObject({
-      sessionId: existing.sessionId,
-      providerOverride: "openai",
-      modelOverride: "gpt-existing",
-    });
-  } finally {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  }
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "sessions.create catalogId cannot include key",
+  });
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+  ).toMatchObject({
+    sessionId: existing.sessionId,
+    providerOverride: "openai",
+    modelOverride: "gpt-existing",
+  });
 });
 
 test("sessions.create authorizes a catalog target for the requested agent", async () => {
@@ -270,19 +245,7 @@ test("sessions.create authorizes a catalog target for the requested agent", asyn
           agentRuntime: "claude-cli",
         },
   );
-  const registry = createEmptyPluginRegistry();
-  registry.sessionCatalogs.push({
-    pluginId: "anthropic",
-    source: "test",
-    provider: {
-      id: "claude",
-      label: "Claude Code",
-      resolveCreateSession,
-      list: vi.fn(async () => []),
-      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    },
-  });
-  setActivePluginRegistry(registry);
+  installSessionCatalog(resolveCreateSession);
 
   try {
     const created = await directSessionReq("sessions.create", {
@@ -315,44 +278,13 @@ test("sessions.create bypasses main-session reset for a catalog target", async (
       main: sessionStoreEntry("sess-parent-catalog"),
     },
   });
-  const registry = createEmptyPluginRegistry();
-  registry.cliBackends.push({
-    pluginId: "anthropic",
-    source: "test",
-    backend: {
-      id: "claude-cli",
-      modelProvider: "anthropic",
-      config: { command: "claude" },
-      bundleMcp: false,
-    },
-  });
-  registry.sessionCatalogs.push({
-    pluginId: "anthropic",
-    source: "test",
-    provider: {
-      id: "claude",
-      label: "Claude Code",
-      resolveCreateSession: () => ({
-        model: "anthropic/claude-opus-4-8",
-        agentRuntime: "claude-cli",
-      }),
-      list: vi.fn(async () => []),
-      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    },
-  });
-  setActivePluginRegistry(registry);
+  installSessionCatalog(
+    () => ({ model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" }),
+    true,
+  );
 
   try {
-    const created = await directSessionReq<{
-      key?: string;
-      entry?: {
-        parentSessionKey?: string;
-        providerOverride?: string;
-        modelOverride?: string;
-        agentRuntimeOverride?: string;
-        modelSelectionLocked?: boolean;
-      };
-    }>("sessions.create", {
+    const created = await directSessionReq<CreatedSession>("sessions.create", {
       agentId: "main",
       catalogId: "claude",
       parentSessionKey: "main",
@@ -419,30 +351,7 @@ test("sessions.create inherits explicit selection without runtime model identity
     },
   });
 
-  const created = await directSessionReq<{
-    key?: string;
-    resolved?: { modelProvider?: string; model?: string };
-    entry?: {
-      providerOverride?: string;
-      modelOverride?: string;
-      modelOverrideSource?: string;
-      agentRuntimeOverride?: string;
-      modelProvider?: string;
-      model?: string;
-      contextTokens?: number;
-      inputTokens?: number;
-      outputTokens?: number;
-      totalTokens?: number;
-      totalTokensFresh?: boolean;
-      contextBudgetStatus?: unknown;
-      thinkingLevel?: string;
-      fastMode?: string;
-      traceLevel?: string;
-      authProfileOverride?: string;
-      authProfileOverrideSource?: string;
-      parentSessionKey?: string;
-    };
-  }>("sessions.create", {
+  const created = await directSessionReq<CreatedSession>("sessions.create", {
     agentId: "main",
     label: "Fresh Chat",
     parentSessionKey: "main",
@@ -477,9 +386,7 @@ test("sessions.create inherits explicit selection without runtime model identity
   expect(storedEntry?.model).toBeUndefined();
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
 
-  const overridden = await directSessionReq<{
-    entry?: { fastMode?: boolean | "auto" };
-  }>("sessions.create", {
+  const overridden = await directSessionReq<CreatedSession>("sessions.create", {
     agentId: "main",
     fastMode: false,
     parentSessionKey: "main",
@@ -508,21 +415,7 @@ test("sessions.create skips inherited active auto fallback model overrides", asy
     },
   });
 
-  const created = await directSessionReq<{
-    key?: string;
-    resolved?: { modelProvider?: string; model?: string };
-    entry?: {
-      parentSessionKey?: string;
-      providerOverride?: string;
-      modelOverride?: string;
-      modelOverrideSource?: string;
-      agentRuntimeOverride?: string;
-      contextWindow?: string;
-      authProfileOverride?: string;
-      authProfileOverrideSource?: string;
-      thinkingLevel?: string;
-    };
-  }>("sessions.create", {
+  const created = await directSessionReq<CreatedSession>("sessions.create", {
     agentId: "main",
     parentSessionKey: "main",
   });
@@ -563,11 +456,7 @@ test("sessions.create resolves the current default instead of inherited runtime 
     },
   });
 
-  const created = await directSessionReq<{
-    key?: string;
-    resolved?: { modelProvider?: string; model?: string };
-    entry?: { modelProvider?: string; model?: string };
-  }>("sessions.create", {
+  const created = await directSessionReq<CreatedSession>("sessions.create", {
     agentId: "main",
     parentSessionKey: "main",
   });
@@ -584,30 +473,6 @@ test("sessions.create resolves the current default instead of inherited runtime 
   const storedEntry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
   expect(storedEntry?.modelProvider).toBeUndefined();
   expect(storedEntry?.model).toBeUndefined();
-});
-
-test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
-  await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops-agent" }] };
-
-  const key = "agent:ops-agent:dashboard:direct:subagent-orchestrator";
-  const created = await directSessionReq<{
-    key?: string;
-    sessionId?: string;
-    entry?: {
-      label?: string;
-    };
-  }>("sessions.create", {
-    key,
-    label: "Dashboard Orchestrator",
-  });
-
-  expect(created.ok).toBe(true);
-  expect(created.payload?.key).toBe(key);
-  expect(created.payload?.entry?.label).toBe("Dashboard Orchestrator");
-  expect(created.payload?.sessionId).toMatch(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-  );
 });
 
 test("sessions.create preserves write-scoped fresh selection but gates adopted rows", async () => {
@@ -643,9 +508,7 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
     },
   });
 
-  const fresh = await directSessionReq<{
-    entry?: { fastMode?: boolean; providerOverride?: string; modelOverride?: string };
-  }>(
+  const fresh = await directSessionReq<CreatedSession>(
     "sessions.create",
     { key: freshKey, model: "openai/gpt-test-a", fastMode: true },
     { client: writeClient },
@@ -657,14 +520,7 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
     fastMode: true,
   });
 
-  const sameSelection = await directSessionReq<{
-    entry?: {
-      fastMode?: boolean;
-      providerOverride?: string;
-      modelOverride?: string;
-      thinkingLevel?: string;
-    };
-  }>(
+  const sameSelection = await directSessionReq<CreatedSession>(
     "sessions.create",
     { key: existingKey, model: "openai/gpt-test-a", thinkingLevel: "low", fastMode: false },
     { client: writeClient },
@@ -677,9 +533,7 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
     fastMode: false,
   });
 
-  const sameSubagentSelection = await directSessionReq<{
-    entry?: { providerOverride?: string; modelOverride?: string };
-  }>(
+  const sameSubagentSelection = await directSessionReq<CreatedSession>(
     "sessions.create",
     { key: existingSubagentKey, model: "openai/gpt-test-a" },
     { client: writeClient },
@@ -690,9 +544,7 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
     modelOverride: "gpt-test-a",
   });
 
-  const sameSelectionWithProfile = await directSessionReq<{
-    entry?: { providerOverride?: string; modelOverride?: string; authProfileOverride?: string };
-  }>(
+  const sameSelectionWithProfile = await directSessionReq<CreatedSession>(
     "sessions.create",
     { key: existingProfileKey, model: "openai/gpt-test-a" },
     { client: writeClient },
@@ -788,14 +640,7 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
     message: "missing scope: operator.admin",
   });
 
-  const admin = await directSessionReq<{
-    entry?: {
-      fastMode?: boolean;
-      providerOverride?: string;
-      modelOverride?: string;
-      thinkingLevel?: string;
-    };
-  }>(
+  const admin = await directSessionReq<CreatedSession>(
     "sessions.create",
     { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high", fastMode: true },
     { client: adminClient },
@@ -839,9 +684,11 @@ test("sessions.create model change clears a selection the new model does not sup
 
   // Create-with-key adoption omits contextWindow, so the model change must take
   // the clearing branch for the now-unsupported selection instead of rejecting.
-  const changed = await directSessionReq<{
-    entry?: { modelOverride?: string; contextWindow?: string };
-  }>("sessions.create", { key: existingKey, model: "openai/gpt-test-b" }, { client: adminClient });
+  const changed = await directSessionReq<CreatedSession>(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-b" },
+    { client: adminClient },
+  );
   expect(changed.ok, JSON.stringify(changed.error)).toBe(true);
   expect(changed.payload?.entry?.modelOverride).toBe("gpt-test-b");
   expect(changed.payload?.entry?.contextWindow).toBeUndefined();

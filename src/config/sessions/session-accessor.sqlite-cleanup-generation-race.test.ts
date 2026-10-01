@@ -1,12 +1,9 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -41,25 +38,18 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-generation-cleanup-race-");
 
 describe("SQLite lifecycle generation cleanup races", () => {
   let storePath: string;
 
   beforeEach(() => {
-    storePath = path.join(
-      tempDirs.make("openclaw-session-generation-cleanup-race-"),
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
+    storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
   });
 
   afterEach(() => {
     archiveMaterializationHook.afterMaterialize = undefined;
     archiveMaterializationHook.onMaterialize = undefined;
-    closeOpenClawAgentDatabasesForTest();
   });
 
   function captureGenerationClaims(sessionKey: string) {

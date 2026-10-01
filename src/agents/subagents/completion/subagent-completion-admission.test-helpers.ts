@@ -17,10 +17,8 @@ import { persistSubagentRunsToDiskAsyncOrThrow } from "../registry/subagent-regi
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 /** Admit the actual worker before tests add deliberate runtime write-failure triggers. */

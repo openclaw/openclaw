@@ -431,6 +431,8 @@ it.skipIf(process.platform === "win32").each([true, false])(
     let childPid: number | undefined;
     let writer: CommandProcessIdentity | undefined;
     const steps: UpdateStepResult[] = [];
+    const reportingError = new Error("settlement progress could not be recorded");
+    let reportedFailure: unknown;
     try {
       const execution = withUpdateCommandExecutor(runId, async (executor) => {
         const fence = await executor.enter(root, { serviceRoot });
@@ -462,6 +464,22 @@ it.skipIf(process.platform === "win32").each([true, false])(
         const step = await runPackageUpdateDoctor({
           ...doctorOptions(runId, fence, guards),
           results: steps,
+          progress: {
+            onStepComplete: (step) => {
+              if (identityAvailable || step.name !== "doctor process settlement") {
+                return;
+              }
+              const reporting = Promise.resolve().then(() => {
+                throw reportingError;
+              });
+              // Observe the expected rejection without changing the Promise returned to its owner.
+              void reporting.catch(() => {});
+              return reporting;
+            },
+          },
+        }).catch((error: unknown) => {
+          reportedFailure = error;
+          throw error;
         });
         expect(step).toMatchObject({
           termination: "timeout",
@@ -489,6 +507,11 @@ it.skipIf(process.platform === "win32").each([true, false])(
         expect(readCommandClaims()).toEqual([]);
       } else {
         const failure = await execution.catch((error: unknown) => error);
+        assert(reportedFailure instanceof AggregateError);
+        expect(reportedFailure.message).toBe("Doctor settlement recording failed");
+        expect(reportedFailure.cause).toBe(reportingError);
+        expect(reportedFailure.errors).toContain(reportingError);
+        expect(reportedFailure.errors.some(hasCommandProcessCleanupError)).toBe(true);
         expect(hasCommandProcessCleanupError(failure)).toBe(true);
         assert(writer);
         expect(isChildProcessTreeAlive(writer)).toBe(true);

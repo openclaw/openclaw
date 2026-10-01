@@ -16,12 +16,7 @@ type Job = {
   id: string;
   name: string;
   schedule: { kind: string; at?: string; everyMs?: number };
-  payload: {
-    kind: string;
-    message: string;
-    toolsAllow?: string[];
-    toolsAllowIsDefault?: boolean;
-  };
+  payload: { kind: string; message: string; toolsAllow?: string[] };
   sessionTarget: string;
   delivery: { mode: string };
   enabled: boolean;
@@ -66,7 +61,7 @@ function job(name: string, index: number): Job {
     id: `job-${index}`,
     name,
     schedule: { kind: "every", everyMs: 3_600_000 },
-    payload: { kind: "agentTurn", message: "", toolsAllow: ["automations", "read"] },
+    payload: { kind: "agentTurn", message: "", toolsAllow: ["*"] },
     sessionTarget: "isolated",
     delivery: { mode: "none" },
     enabled: false,
@@ -96,7 +91,6 @@ async function runSchedulingFixture(
           entry.payload.message = `${policy} authority`;
           if (index < 2) {
             entry.schedule = { kind: "at", at: new Date(now + 86_400_000).toISOString() };
-            entry.payload.toolsAllowIsDefault = true;
           } else {
             entry.payload.toolsAllow = index === 2 ? ["read"] : [];
           }
@@ -110,12 +104,10 @@ async function runSchedulingFixture(
               ? { kind: "at", at: new Date(now + 240_000).toISOString() }
               : { kind: "every", everyMs: 20_000 };
           entry.deleteAfterRun = index === 0;
-          entry.payload.toolsAllowIsDefault = true;
           entry.payload.message = `Reply exactly QA-MODEL-${schedule.toUpperCase()}-PAYLOAD-${suffix}`;
           return entry;
         });
   const calls: ToolCall[] = structuredClone(jobs).map((entry, index) => {
-    delete entry.payload.toolsAllowIsDefault;
     if (kind === "recurring" || index === 0) {
       delete entry.payload.toolsAllow;
     } else {
@@ -378,25 +370,21 @@ describe("scheduling YAML canonical tool proof", () => {
   });
 
   it.each([
-    ["omitted", 0, ["automations", "read", "exec"], true, /omitted policy/],
-    ["wildcard", 1, ["automations", "read"], false, /wildcard policy/],
-    ["overbroad", 2, ["read", "exec"], false, /overbroad policy/],
-    ["empty", 3, ["read"], false, /empty policy/],
-  ] as const)(
-    "rejects incorrect persisted %s authority",
-    async (_label, index, tools, marker, message) => {
-      await expect(
-        runSchedulingFixture("authority", "nested", {
-          mutateJobs: (jobs) => {
-            const target = jobs[index];
-            assert.ok(target);
-            target.payload.toolsAllow = [...tools];
-            target.payload.toolsAllowIsDefault = marker;
-          },
-        }),
-      ).rejects.toThrow(message);
-    },
-  );
+    ["omitted", 0, ["automations", "read"], /omitted policy/],
+    ["wildcard", 1, ["automations", "read"], /wildcard policy/],
+    ["overbroad", 2, ["read", "exec"], /overbroad policy/],
+    ["empty", 3, ["read"], /empty policy/],
+  ] as const)("rejects incorrect persisted %s authority", async (_label, index, tools, message) => {
+    await expect(
+      runSchedulingFixture("authority", "nested", {
+        mutateJobs: (jobs) => {
+          const target = jobs[index];
+          assert.ok(target);
+          target.payload.toolsAllow = [...tools];
+        },
+      }),
+    ).rejects.toThrow(message);
+  });
 
   it.each(["authority", "recurring"] as const)("rejects extra %s add calls", async (kind) => {
     await expect(
@@ -453,7 +441,7 @@ describe("scheduling YAML canonical tool proof", () => {
         runSchedulingFixture(kind, "nested", {
           mutateRestartedJobs: (jobs) => {
             assert.ok(jobs[0]);
-            jobs[0].payload.toolsAllow = ["*"];
+            jobs[0].payload.toolsAllow = ["read"];
           },
         }),
       ).rejects.toThrow(/authority changed across restart/);

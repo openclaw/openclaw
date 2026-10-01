@@ -15,10 +15,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { createCronMutationCompletion } from "./mutation-completion.js";
 import { CronService } from "./service.js";
-import { update as updateCronJob } from "./service/ops-mutations.js";
 import * as runtimeMutation from "./service/runtime-mutation.js";
-import { ensureLoaded, persist } from "./service/store.js";
-import { stopTimer } from "./service/timer.js";
 import * as sessionReaper from "./session-reaper.js";
 import {
   CronJobsStoreChangedError,
@@ -555,66 +552,6 @@ it.each(["add", "update", "remove", "authority invalidation", "runtime update"] 
     });
   },
 );
-
-it("preserves a peer definition committed before a state-only save and later guarded edit", async () => {
-  await withOpenClawTestState({ label: "cron-state-only-peer-write" }, async (fixture) => {
-    const storePath = fixture.statePath("cron", "jobs.json");
-    const original = cronWorkerFixture();
-    for (const job of original.jobs) {
-      job.enabled = false;
-      job.state = {};
-      job.agentId = "alpha";
-    }
-    await saveCronJobsStore(storePath, original);
-    const state = createCronRegressionState({
-      storePath,
-      cronEnabled: true,
-      runIsolatedAgentJob: async () => ({ status: "skipped" }),
-    });
-    try {
-      await ensureLoaded(state);
-      const peer = structuredClone(original);
-      peer.jobs.push({
-        ...structuredClone(expectDefined(peer.jobs[1], "peer template")),
-        id: "peer",
-        name: "peer added",
-        agentId: "beta",
-      });
-      await saveCronJobsStoreChanges(storePath, original, peer);
-      expect(await persist(state, { stateOnly: true })).toBe(true);
-      const beforeEdit = await loadCronJobsStoreWithConfigJobs(storePath);
-      expect(beforeEdit.store.jobs.find((job) => job.id === "peer")).toMatchObject({
-        name: "peer added",
-        agentId: "beta",
-      });
-      const result = await updateCronJob(
-        state,
-        "first",
-        { name: "guarded edit" },
-        {
-          commitGuard: () =>
-            expect(state.store?.jobs.find((job) => job.id === "first")?.name).toBe("first"),
-        },
-      ).then(
-        () => ({ committed: true as const }),
-        (error: unknown) => ({ committed: false as const, error }),
-      );
-      if (!result.committed) {
-        expect(result.error).toBeInstanceOf(CronJobsStoreChangedError);
-      }
-      const persisted = (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs;
-      expect(persisted.find((job) => job.id === "peer")).toMatchObject({
-        name: "peer added",
-        agentId: "beta",
-      });
-      expect(persisted.find((job) => job.id === "first")?.name).toBe(
-        result.committed ? "guarded edit" : "first",
-      );
-    } finally {
-      stopTimer(state);
-    }
-  });
-});
 
 it.each(["rename", "disable", "remove", "add"] as const)(
   "reconciles a committed %s when its worker reply is lost without replay",

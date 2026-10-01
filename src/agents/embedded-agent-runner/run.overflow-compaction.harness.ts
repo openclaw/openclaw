@@ -28,6 +28,7 @@ import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarnessAttemptParams } from "../harness/types.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
+import { preparedModelRuntimeConfigsMatch } from "../prepared-model-runtime.owner.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLeaseOptions,
@@ -940,6 +941,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../prepared-model-runtime.js", () => ({
+    preparedModelRuntimeConfigsMatch,
     // Standalone runner fixtures have no configured Gateway publication.
     loadPublishedGatewayReplyDispatchRuntime: vi.fn(async () => undefined),
     activateStandalonePreparedModelRuntime: vi.fn(async () => {}),

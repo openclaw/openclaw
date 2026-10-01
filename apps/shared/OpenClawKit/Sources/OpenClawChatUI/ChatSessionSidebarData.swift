@@ -290,7 +290,7 @@ public final class OpenClawChatSessionSidebarData {
     }
 
     private static func same(_ field: Field, _ lhs: OpenClawChatSessionEntry, _ rhs: OpenClawChatSessionEntry) -> Bool {
-        var left = OpenClawChatSessionEntry.placeholder(key: "")
+        var left = OpenClawChatSessionEntry(key: "")
         var right = left
         self.copy(field, from: lhs, to: &left)
         self.copy(field, from: rhs, to: &right)

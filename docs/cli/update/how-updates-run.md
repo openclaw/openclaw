@@ -205,6 +205,22 @@ database ownership, schema, and migration checks still run before readiness;
 plugin runtime loading remains part of validation. The serving Gateway prepares
 its session catalogs and maintenance normally after activation.
 
+Before copying state, the updater admits its existing-schema progress writer and
+retains that connection through validation. Progress writes therefore keep the
+shared database's WAL files available while SQLite takes a consistent snapshot.
+The connection reuses its admitted schema facts while each write still checks
+current authority, source identity, and schema changes. This prevents progress
+recording itself from interrupting the copy; integrity and replacement checks
+remain enabled. The installed updater must contain this fix. A new candidate
+cannot change an older driver's initial snapshot behavior.
+
+An initial progress receipt refusal stops validation before state copying or child
+startup. If saving a completed check fails, the updater preserves the reporting
+error; that check keeps its successful result and is not reported again. The
+updater still settles owned child processes and temporary-copy cleanup.
+Progress errors while a stage is active retain that stage's existing failure and
+cleanup handling.
+
 After the canary passes, the updater records temporary-copy cleanup and previous-Gateway
 readiness verification as active steps. `openclaw update status`, including `--json`,
 shows the recorded operation, wait reason, start time, and budget. Readiness observations
@@ -569,8 +585,14 @@ refuses automatic restoration. Gateway maintenance ownership does not exclude
 independent SQLite writers, and these observations cannot distinguish Doctor's
 own writes from foreign commits. Changed databases require manual recovery.
 Rollback checks those facts again while holding database file exclusions. The
-fingerprints cover database, WAL, and rollback-journal identity, timestamps,
-sizes, and content digests; they reuse the snapshot inventory.
+fingerprints cover database identity, committed page content, and the retained
+WAL transaction counter and commit checksum; they reuse the snapshot inventory.
+Checkpointing already-captured WAL pages into the same database does not
+invalidate rollback while that write evidence remains available. New commits,
+replacement of a database, or loss of the captured WAL write evidence still
+refuse restoration.
+An exact write reversal that leaves both committed bytes and retained write
+evidence unchanged is admitted: it leaves no later data for rollback to discard.
 
 When that evidence matches, the updater restores the databases before restoring
 the package. It holds the
@@ -1013,6 +1035,11 @@ version order from their `beta` and `latest` dist-tags, using the same policy as
 the core updater. This includes official plugins with a default/latest catalog
 target and managed `@beta` selectors. OpenClaw installs the exact inspected
 version while keeping the selected tag or restored catalog default for future updates.
+
+Npm plugin updates reuse the registry metadata already selected for the same
+installation attempt, avoiding a second lookup before download. Compatibility,
+integrity, install-policy, and capability-consent checks still apply to the
+selected package. A fallback to another target resolves that target separately.
 
 ClawHub plugins on the beta channel try their own `@beta` tag. If that release
 is unavailable, OpenClaw falls back to the default/latest spec and reports a

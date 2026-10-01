@@ -1,12 +1,6 @@
 // Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
-import { resolveStaticSessionMcpServerNames } from "../../../agents/agent-bundle-mcp-runtime-config.js";
-import {
-  resolveAgentWorkspaceDir,
-  tryResolveAmbientOwnerAgentId,
-} from "../../../agents/agent-scope.js";
-import { resolveCodexMcpToolOverridesForAgent } from "../../../agents/cli-runner/bundle-mcp-codex.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadCronQuarantinedJobs, resolveCronJobsStorePath } from "../../../cron/store.js";
@@ -22,10 +16,8 @@ import {
   type LegacyCronRepairResult,
   type LegacyCronRepairState,
 } from "./legacy-repair.js";
-import { collectCronNativeToolAdvisories } from "./native-tool-advisory.js";
 import {
   formatLegacyIssuePreview,
-  formatIncompleteInheritedAuthorityAdvisory,
   formatLegacyGatewayExecAdvisory,
   formatScheduledToolPolicyAdvisory,
   formatUnresolvedCommandPromptAdvisory,
@@ -234,17 +226,6 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     return findings;
   }
 
-  for (const message of collectCronNativeToolAdvisories({ cfg: params.cfg, jobs: rawJobs })) {
-    findings.push(
-      legacyCronStoreFinding({
-        message,
-        path: sqliteStorePath,
-        requirement: "cron-native-tool-cap-review",
-        fixHint:
-          "Review the job's tools from an authorized session; Doctor will not add native tools.",
-      }),
-    );
-  }
   const normalized = normalizeStoredCronJobs(rawJobs);
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     findings.push(
@@ -252,6 +233,16 @@ export async function collectLegacyCronStoreHealthFindings(params: {
         message: line.replace(/^- /u, ""),
         path: sqliteStorePath,
         requirement: "legacy-cron-store-shape",
+      }),
+    );
+  }
+  for (const job of normalized.unsupportedDeliveryModeJobs) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `Cron job ${job} has an unsupported delivery mode; Doctor left it unchanged.`,
+        path: sqliteStorePath,
+        requirement: "cron-delivery-mode-valid",
+        fixHint: 'Review its intended delivery and set mode to "none", "announce", or "webhook".',
       }),
     );
   }
@@ -458,9 +449,6 @@ export async function maybeRepairLegacyCronStore(params: {
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
   noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
-  for (const message of collectCronNativeToolAdvisories({ cfg: params.cfg, jobs: rawJobs })) {
-    note(message, "Cron");
-  }
 
   const inFlightCount = countInFlightCronJobs(rawJobs);
   if (inFlightCount > 0) {
@@ -502,6 +490,12 @@ export async function maybeRepairLegacyCronStore(params: {
   }
 
   const normalized = normalizeStoredCronJobs(rawJobs);
+  if (normalized.unsupportedDeliveryModeJobs.length > 0) {
+    note(
+      `Unsupported cron delivery modes were left unchanged: ${normalized.unsupportedDeliveryModeJobs.join(", ")}. Review their intended delivery and set mode to "none", "announce", or "webhook".`,
+      "Cron",
+    );
+  }
   if (normalized.unsupportedLegacyTriggerScriptJobs.length > 0) {
     note(
       [
@@ -527,55 +521,6 @@ export async function maybeRepairLegacyCronStore(params: {
     if (advisory) {
       note(advisory, "Cron");
     }
-  }
-  const staticMcpByAgentWorkspace = new Map<string, boolean>();
-  const incompleteInheritedAuthorityAdvisory = formatIncompleteInheritedAuthorityAdvisory(
-    rawJobs
-      .filter((job) => {
-        const payload = isRecord(job.payload) ? job.payload : undefined;
-        const provenance = isRecord(job.toolsAllowProvenance)
-          ? job.toolsAllowProvenance
-          : undefined;
-        if (
-          payload?.toolsAllowIsDefault !== true ||
-          (provenance?.version === 1 && provenance.source === "final-executable-surface")
-        ) {
-          return false;
-        }
-        const agentId =
-          typeof job.agentId === "string" && job.agentId.trim()
-            ? job.agentId.trim()
-            : tryResolveAmbientOwnerAgentId(params.cfg);
-        if (!agentId) {
-          return false;
-        }
-        const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-        const cacheKey = `${agentId}\0${workspaceDir}`;
-        let hasStaticMcp = staticMcpByAgentWorkspace.get(cacheKey);
-        if (hasStaticMcp === undefined) {
-          hasStaticMcp =
-            resolveStaticSessionMcpServerNames({
-              workspaceDir,
-              cfg: params.cfg,
-              toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
-                agentId,
-                toolOverrides: undefined,
-              }),
-            }).length > 0;
-          staticMcpByAgentWorkspace.set(cacheKey, hasStaticMcp);
-        }
-        return hasStaticMcp;
-      })
-      .map((job) =>
-        typeof job.name === "string" && job.name.trim()
-          ? job.name.trim()
-          : typeof job.id === "string"
-            ? job.id
-            : "unknown automation",
-      ),
-  );
-  if (incompleteInheritedAuthorityAdvisory) {
-    note(incompleteInheritedAuthorityAdvisory, "Cron");
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (normalized.legacyTriggerScriptJobs.length > 0) {

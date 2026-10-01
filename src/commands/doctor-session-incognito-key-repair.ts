@@ -1,9 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  listSessionEntryKeysReadOnly,
-  rewriteDoctorSessionEntries,
-} from "../config/sessions/session-accessor.js";
+import { listSessionEntryKeysReadOnly } from "../config/sessions/session-accessor.js";
 import { publishSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import {
   attachSessionEntrySnapshots,
@@ -43,6 +40,7 @@ import {
   type ReservedKeyRename,
   writeRepairJournal,
 } from "./doctor-session-incognito-key-repair-state.js";
+import { rewriteDoctorSessionEntries } from "./doctor/shared/session-entry-rewrite.js";
 
 export type ReservedIncognitoKeyRepairReport = {
   found: number;

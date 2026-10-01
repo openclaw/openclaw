@@ -62,13 +62,13 @@ import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
-  clearSessionQueues,
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { clearFollowupQueueForTest } from "./queue.test-helpers.js";
 import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -327,7 +327,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  clearSessionQueues(["main"]);
+  clearFollowupQueueForTest("main");
   replyRunTesting.resetReplyRunRegistry();
   state.compactEmbeddedAgentSessionMock.mockReset();
   state.compactEmbeddedAgentSessionMock.mockResolvedValue({
