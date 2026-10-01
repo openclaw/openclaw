@@ -69,22 +69,38 @@ describe("Agents API input attachment custody", () => {
     ]);
   });
 
-  it("reads staged bytes only from a directory established by the staging owner", async () => {
-    const fixture = await createStagedInputOwnershipFixture(workspaceDir);
-    const stagedPath = path.join(workspaceDir, fixture.ownedFiles[0]!);
-    const bytes = Buffer.from("name,value\nfixture,42\n");
-    await fs.writeFile(stagedPath, bytes);
+  it.each(["staged bytes", "managed original"])(
+    "uploads %s for an attachment in an owned staging directory",
+    async (source) => {
+      const fixture = await createStagedInputOwnershipFixture(workspaceDir);
+      const stagedPath = path.join(workspaceDir, fixture.ownedFiles[0]!);
+      const stagedBytes = Buffer.from("name,value\nstaged,42\n");
+      const originalBytes = Buffer.from("name,value\noriginal,73\n");
+      await fs.writeFile(stagedPath, stagedBytes);
+      const managed =
+        source === "managed original"
+          ? await saveMediaBuffer(originalBytes, undefined, "inbound")
+          : undefined;
 
-    const prepared = await prepareInputs(
-      [{ path: stagedPath, workspaceDir }],
-      workspaceDir,
-      () => {},
-      signal,
-    );
+      const prepared = await prepareInputs(
+        [
+          {
+            path: stagedPath,
+            workspaceDir,
+            ...(managed ? { url: `media://inbound/${managed.id}` } : {}),
+          },
+        ],
+        workspaceDir,
+        () => {},
+        signal,
+      );
 
-    expect(prepared.files).toHaveLength(1);
-    expect(Buffer.from(prepared.files[0]!.data, "base64")).toEqual(bytes);
-  });
+      expect(prepared.files).toHaveLength(1);
+      expect(Buffer.from(prepared.files[0]!.data, "base64")).toEqual(
+        managed ? originalBytes : stagedBytes,
+      );
+    },
+  );
 
   it.each(["project file", "unowned staging directory", "different workspace"])(
     "rejects a %s without granting custody from attachment metadata",
@@ -121,7 +137,7 @@ describe("Agents API input attachment custody", () => {
     },
   );
 
-  it("rejects a foreign absolute path even when it names an existing managed media ID", async () => {
+  it("rejects a foreign absolute path despite a managed URL and matching workspace metadata", async () => {
     const saved = await saveMediaBuffer(Buffer.from("managed bytes"), undefined, "inbound");
     const foreignPath = path.join(workspaceDir, "inbound", saved.id);
     await fs.mkdir(path.dirname(foreignPath));
@@ -129,7 +145,7 @@ describe("Agents API input attachment custody", () => {
 
     await expect(
       prepareInputs(
-        [{ path: foreignPath, url: `media://inbound/${saved.id}` }],
+        [{ path: foreignPath, url: `media://inbound/${saved.id}`, workspaceDir }],
         workspaceDir,
         () => {},
         signal,

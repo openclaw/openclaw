@@ -70,7 +70,20 @@ export async function prepareInputs(
       assertCurrent();
       signal.throwIfAborted();
       if (fact.path && path.isAbsolute(fact.path) && path.resolve(fact.path) !== resolved) {
-        throw new Error("Agents API input attachment does not match its managed media identity");
+        // Staging preserves the original managed URL for transcript previews.
+        // Its owned workspace path does not replace that URL's byte authority.
+        let ownedStagedPath = false;
+        if (fact.workspaceDir && path.resolve(fact.workspaceDir) === path.resolve(workspaceDir)) {
+          staged ??= await preparedWorkspaceReader(workspaceDir);
+          assertCurrent();
+          signal.throwIfAborted();
+          ownedStagedPath = await staged.owns(path.relative(workspaceDir, fact.path));
+          assertCurrent();
+          signal.throwIfAborted();
+        }
+        if (!ownedStagedPath) {
+          throw new Error("Agents API input attachment does not match its managed media identity");
+        }
       }
       saved = await readMediaBuffer(managed.id, managed.subdir, maxBytes);
     } else {
