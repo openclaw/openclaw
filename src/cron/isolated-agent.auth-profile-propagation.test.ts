@@ -20,6 +20,7 @@ import {
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
+  resolveCliRuntimeExecutionProviderMock,
   resolveConfiguredModelRefMock,
   resolveSessionAuthSelectionMock,
   runCliAgentMock,
@@ -56,6 +57,9 @@ function getCliAgentParams(): {
 }
 
 function setupClaudeCliBackend(): void {
+  resolveCliRuntimeExecutionProviderMock.mockImplementation(({ modelId }: { modelId: string }) =>
+    modelId === "claude-sonnet-4-6" ? "claude-cli" : undefined,
+  );
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [
       {
