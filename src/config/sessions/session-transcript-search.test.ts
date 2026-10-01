@@ -19,6 +19,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { readSessionTranscriptWatermark, type TranscriptEvent } from "./session-accessor.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
+import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -252,6 +253,35 @@ describe("searchSessionTranscripts", () => {
     });
     expect(search("needle", { sessionKeys: [sessionKey] })).not.toHaveProperty(
       "archivedTranscriptsExcluded",
+    );
+  });
+
+  it("reports retained deleted transcripts within the requested scope", async () => {
+    const sessionKey = "agent:main:deleted";
+    await appendUserMessage("old", sessionKey, "deleted needle");
+    await replaceSessionEntry(transcriptScope("old", sessionKey), {
+      sessionId: "old",
+      updatedAt: Date.now(),
+    });
+    const deletion = await deleteSessionEntryLifecycle({
+      agentId: "main",
+      archiveTranscript: true,
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: env() }),
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+    expect(deletion.archivedTranscripts).toHaveLength(1);
+    // The next inbound message reopens the same key with a fresh window.
+    await appendUserMessage("new", sessionKey, "live needle");
+
+    expect(search("needle", { sessionKeys: [sessionKey] })).toEqual({
+      hits: [expect.objectContaining({ sessionId: "new", sessionKey })],
+      indexing: false,
+      truncated: false,
+      deletedTranscriptsExcluded: 1,
+    });
+    expect(search("needle")).toMatchObject({ deletedTranscriptsExcluded: 1 });
+    expect(search("needle", { sessionKeys: ["agent:main:other"] })).not.toHaveProperty(
+      "deletedTranscriptsExcluded",
     );
   });
 

@@ -71,6 +71,8 @@ export const SessionsSearchResultSchema = closedObject({
   sessions: Type.Optional(Type.Array(SessionRowSchema, { maxItems: 25 })),
   indexing: Type.Optional(Type.Boolean()),
   archivedTranscriptsExcluded: Type.Optional(Type.Integer({ minimum: 0 })),
+  /** Transcripts retained after session deletion or reset; their text is no longer searchable. */
+  deletedTranscriptsExcluded: Type.Optional(Type.Integer({ minimum: 0 })),
   truncated: Type.Optional(Type.Boolean()),
 });
 

@@ -171,11 +171,16 @@ export async function searchProjectedSessionTranscripts(params: {
           (count, { page }) => count + (page.archivedTranscriptsExcluded ?? 0),
           0,
         );
+        const deletedTranscriptsExcluded = pages.reduce(
+          (count, { page }) => count + (page.deletedTranscriptsExcluded ?? 0),
+          0,
+        );
         params.onResult({
           results: matches.map((match) => match.hit),
           sessions,
           ...(pages.some(({ page }) => page.indexing) ? { indexing: true } : {}),
           ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),
+          ...(deletedTranscriptsExcluded ? { deletedTranscriptsExcluded } : {}),
           ...(hits.length > limit || pages.some(({ page }) => page.truncated)
             ? { truncated: true }
             : {}),

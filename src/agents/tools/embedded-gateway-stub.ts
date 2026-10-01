@@ -144,6 +144,9 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
     ...(result.archivedTranscriptsExcluded
       ? { archivedTranscriptsExcluded: result.archivedTranscriptsExcluded }
       : {}),
+    ...(result.deletedTranscriptsExcluded
+      ? { deletedTranscriptsExcluded: result.deletedTranscriptsExcluded }
+      : {}),
     ...(result.indexing ? { indexing: true } : {}),
     ...(result.truncated ? { truncated: true } : {}),
   };

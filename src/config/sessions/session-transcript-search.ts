@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -18,6 +19,7 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
   captureLifecycleDatabaseScope,
@@ -150,6 +152,47 @@ export function searchSessionTranscriptsReadOnlySync(
                   builder.where("window.session_id", "=", params.sessionId!),
                 ),
             )?.count ?? 0;
+          // Deletion and reset keep a recovery archive but drop the window and its
+          // index rows, so those transcripts can never match. Count them in the same
+          // key scope so an empty result is not read as "never happened". The archive
+          // table is optional until the first archive write; its presence comes from the
+          // read handle's admitted schema facts, never from a per-search catalog query.
+          const deletedTranscriptsExcluded = getAdmittedSqliteSchemaFacts(database.db)?.tables.has(
+            SESSION_TRANSCRIPT_ARCHIVES_TABLE,
+          )
+            ? (executeSqliteQueryTakeFirstSync(
+                database.db,
+                db
+                  .selectFrom("session_transcript_archives as archive")
+                  .select((eb) => eb.fn.count<number>("archive.session_id").distinct().as("count"))
+                  .where((eb) =>
+                    eb.not(
+                      eb.exists(
+                        eb
+                          .selectFrom("session_windows as window")
+                          .select("window.session_id")
+                          .whereRef("window.session_id", "=", "archive.session_id"),
+                      ),
+                    ),
+                  )
+                  .$if(params.sessionKeys === undefined, (builder) =>
+                    builder.where((eb) =>
+                      eb.or([
+                        /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */
+                        sql<boolean>`${eb.ref("archive.session_key")} GLOB ${sessionFilterValues[0]}`,
+                        eb("archive.session_key", "in", ["global", "unknown"]),
+                      ]),
+                    ),
+                  )
+                  .$if(
+                    params.sessionKeys !== undefined && sessionFilterValues.length > 0,
+                    (builder) => builder.where("archive.session_key", "in", sessionKeySet),
+                  )
+                  .$if(params.sessionId !== undefined, (builder) =>
+                    builder.where("archive.session_id", "=", params.sessionId!),
+                  ),
+              )?.count ?? 0)
+            : 0;
           // MATCH, snippet(), and bm25() are FTS5 primitives without a Kysely
           // representation. session_key lives on the window row so key renames
           // never leave stale keys inside the index. Sessions flagged needs_rebuild
@@ -254,6 +297,7 @@ export function searchSessionTranscriptsReadOnlySync(
             indexing,
             truncated: hits.length > limit,
             ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
+            ...(deletedTranscriptsExcluded > 0 ? { deletedTranscriptsExcluded } : {}),
           };
         },
         { databaseLabel: database.path, operationLabel: "session transcript search" },

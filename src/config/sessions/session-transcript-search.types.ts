@@ -13,6 +13,8 @@ export type SessionTranscriptSearchResult = {
   indexing: boolean;
   truncated: boolean;
   archivedTranscriptsExcluded?: number;
+  /** Retained deleted or reset transcripts whose window and index rows are gone. */
+  deletedTranscriptsExcluded?: number;
 };
 
 export type SessionTranscriptSearchParams = {

@@ -81,6 +81,7 @@ const SessionsSearchOutputSchema = Type.Union([
       ),
       indexing: Type.Optional(Type.Literal(true)),
       archivedTranscriptsExcluded: Type.Optional(Type.Integer({ minimum: 1 })),
+      deletedTranscriptsExcluded: Type.Optional(Type.Integer({ minimum: 1 })),
       warning: Type.Optional(Type.String()),
       truncated: Type.Optional(Type.Literal(true)),
     },
@@ -483,6 +484,7 @@ export function createSessionsSearchTool(opts?: {
       const visibleHits: SanitizedSearchHit[] = [];
       let indexing = false;
       let archivedTranscriptsExcluded = 0;
+      let deletedTranscriptsExcluded = 0;
       let backendTruncated = false;
       const sessionsByAgent = new Map<string, SearchSessionCandidate[]>();
       for (const candidate of searchSessions) {
@@ -510,6 +512,7 @@ export function createSessionsSearchTool(opts?: {
               results?: GatewaySearchHit[];
               indexing?: boolean;
               archivedTranscriptsExcluded?: number;
+              deletedTranscriptsExcluded?: number;
               truncated?: boolean;
             }>({
               method: "sessions.search",
@@ -532,6 +535,7 @@ export function createSessionsSearchTool(opts?: {
             : await runSearch();
           indexing ||= result.indexing === true;
           archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
+          deletedTranscriptsExcluded += result.deletedTranscriptsExcluded ?? 0;
           backendTruncated ||= result.truncated === true;
           const hits = Array.isArray(result.results) ? result.results : [];
           if (hits.length === 0) {
@@ -574,13 +578,19 @@ export function createSessionsSearchTool(opts?: {
           : {}),
         ...(indexing ? { indexing: true } : {}),
         ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
-        ...(indexing || archivedTranscriptsExcluded > 0
+        ...(deletedTranscriptsExcluded > 0 ? { deletedTranscriptsExcluded } : {}),
+        ...(indexing || archivedTranscriptsExcluded > 0 || deletedTranscriptsExcluded > 0
           ? {
               warning: [
                 ...(indexing ? [SESSIONS_SEARCH_INDEXING_WARNING] : []),
                 ...(archivedTranscriptsExcluded > 0
                   ? [
                       `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`,
+                    ]
+                  : []),
+                ...(deletedTranscriptsExcluded > 0
+                  ? [
+                      `Search excludes ${deletedTranscriptsExcluded} transcripts retained from deleted or reset sessions. Session tools cannot read them, so a missing match does not mean the conversation never happened.`,
                     ]
                   : []),
               ].join(" "),
