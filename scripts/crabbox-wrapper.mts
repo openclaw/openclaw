@@ -1236,7 +1236,7 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs: string[]) {
     console.error(
       [
         `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
-        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 15m",
         "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
       ].join("\n"),
     );

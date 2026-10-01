@@ -1,43 +1,18 @@
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { find } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { matchesWorkerPlacementTarget } from "./placement-target.js";
+import {
+  PERSONAL_SCOPE,
+  SessionWorkspaceReservationBusyError,
+  workspaceReservationQuery,
+} from "./placement-workspace-reservation.kernel.js";
 
 const SCOPE = "session-workspace-action";
-const PERSONAL_SCOPE = "session-workspace-personal-publication";
-export class SessionWorkspaceReservationBusyError extends Error {}
-const query = (db: DatabaseSync) =>
-  getNodeSqliteKysely<
-    Pick<
-      DB,
-      "state_leases" | "worker_workspace_pending_results" | "worker_workspace_reconciliations"
-    >
-  >(db);
-
-/** Run admission and placement movement consult the same SQLite exclusion as publishers. */
-export function assertSessionWorkspaceUnreserved(db: DatabaseSync, sessionId: string): void {
-  if (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      query(db)
-        .selectFrom("state_leases")
-        .select("owner")
-        .where("scope", "=", PERSONAL_SCOPE)
-        .where("lease_key", "=", sessionId)
-        .where("expires_at", ">", Date.now()),
-    )
-  ) {
-    throw new SessionWorkspaceReservationBusyError(
-      "The session workspace is being published; wait for publication to finish and retry.",
-    );
-  }
-}
-
 function assertReconciled(
   db: DatabaseSync,
   identity: WorkerSessionPlacementIdentity,
@@ -68,14 +43,14 @@ function assertReconciled(
   }
   const pending = executeSqliteQueryTakeFirstSync(
     db,
-    query(db)
+    workspaceReservationQuery(db)
       .selectFrom("worker_workspace_pending_results")
       .select("session_id")
       .where("session_id", "=", identity.sessionId),
   );
   const reconciliation = executeSqliteQueryTakeFirstSync(
     db,
-    query(db)
+    workspaceReservationQuery(db)
       .selectFrom("worker_workspace_reconciliations")
       .select("session_id")
       .where("session_id", "=", identity.sessionId),

@@ -1,5 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 // Channel legacy config migration tests cover doctor repair of old channel config shapes.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 
 const { applyPluginDoctorCompatibilityMigrations, collectRelevantDoctorPluginIds } = vi.hoisted(

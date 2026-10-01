@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import {
   createSandbox,
   expectOnlyCanonicalPathCommands,

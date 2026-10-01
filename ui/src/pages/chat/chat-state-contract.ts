@@ -93,4 +93,6 @@ export type ChatState = StreamCausalBoundaryState & {
   requestUpdate?: () => void;
   /** Reports transcript loading edges; see CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT. */
   transcriptLoadingChanged?: () => void;
+  /** Reports transient read recovery to the shell connection indicator. */
+  historyRecoveryChanged?: () => void;
 };

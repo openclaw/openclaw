@@ -1,6 +1,13 @@
 // Covers approval initiating-surface detection.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalKind } from "./approval-types.js";
+import {
+  describeNativeExecApprovalClientSetup,
+  describeNativePluginApprovalClientSetup,
+  resolveApprovalInitiatingSurfaceState,
+  resolveExecApprovalInitiatingSurfaceState,
+  supportsNativeExecApprovalClient,
+} from "./exec-approval-surface.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
@@ -33,25 +40,7 @@ vi.mock("../utils/message-channel.js", () => ({
   normalizeMessageChannel: (...args: unknown[]) => normalizeMessageChannelMock(...args),
 }));
 
-type ExecApprovalSurfaceModule = typeof import("./exec-approval-surface.js");
-
-let resolveExecApprovalInitiatingSurfaceState: ExecApprovalSurfaceModule["resolveExecApprovalInitiatingSurfaceState"];
-let resolveApprovalInitiatingSurfaceState: ExecApprovalSurfaceModule["resolveApprovalInitiatingSurfaceState"];
-let supportsNativeExecApprovalClient: ExecApprovalSurfaceModule["supportsNativeExecApprovalClient"];
-let describeNativeExecApprovalClientSetup: ExecApprovalSurfaceModule["describeNativeExecApprovalClientSetup"];
-let describeNativePluginApprovalClientSetup: ExecApprovalSurfaceModule["describeNativePluginApprovalClientSetup"];
-
 describe("resolveExecApprovalInitiatingSurfaceState", () => {
-  beforeAll(async () => {
-    ({
-      describeNativeExecApprovalClientSetup,
-      describeNativePluginApprovalClientSetup,
-      resolveApprovalInitiatingSurfaceState,
-      resolveExecApprovalInitiatingSurfaceState,
-      supportsNativeExecApprovalClient,
-    } = await import("./exec-approval-surface.js"));
-  });
-
   beforeEach(() => {
     loadConfigMock.mockReset();
     getChannelPluginMock.mockReset();

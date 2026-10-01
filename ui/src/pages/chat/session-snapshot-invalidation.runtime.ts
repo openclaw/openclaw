@@ -7,16 +7,10 @@ export function deleteStoredChatSessionSnapshots(
   host: Parameters<typeof resolveChatSnapshotKey>[0],
   sessions: readonly Pick<SessionDeleteTarget, "agentId" | "key">[],
 ): Promise<void> {
+  const keys = sessions.map(({ key, agentId }) =>
+    resolveChatSnapshotKey(host, { sessionKey: key, agentId }),
+  );
   return import("./session-snapshot-invalidation.ts").then(({ deleteStoredChatSnapshot }) =>
-    Promise.all(
-      sessions.map(({ key, agentId }) =>
-        deleteStoredChatSnapshot(
-          resolveChatSnapshotKey(
-            { ...host, assistantAgentId: agentId ?? host.assistantAgentId },
-            { sessionKey: key, agentId },
-          ),
-        ),
-      ),
-    ).then(() => undefined),
+    Promise.all(keys.map((key) => deleteStoredChatSnapshot(key))).then(() => undefined),
   );
 }

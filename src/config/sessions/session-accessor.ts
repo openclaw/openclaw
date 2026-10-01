@@ -205,10 +205,6 @@ export {
   type CanonicalSessionRepairFact,
 } from "./session-accessor.sqlite-canonical-inventory.js";
 export {
-  iterateDoctorSessionKeyBatches,
-  rewriteDoctorSessionEntries,
-} from "./session-accessor.sqlite-doctor-rewrite.js";
-export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionPatchProjection,
@@ -221,7 +217,7 @@ export {
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
 } from "./session-accessor.lifecycle.js";
-export { listSessionBranches } from "./session-accessor.sqlite-branches.js";
+export { listSessionBranches } from "./session-accessor.sqlite-branch-list.js";
 export {
   forkSessionAtMessage,
   rewindSessionToMessage,

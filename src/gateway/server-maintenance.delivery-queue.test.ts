@@ -5,6 +5,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { waitForMediaCleanupDrainsToSettle } from "./server-media-cleanup-lifecycle.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
@@ -63,7 +64,6 @@ describe("delivery queue maintenance", () => {
   });
 
   it("runs tombstone expiry with default queue media cleanup at startup and hourly", async () => {
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const timers = startGatewayMaintenanceTimers(deps);
 
@@ -83,7 +83,6 @@ describe("delivery queue maintenance", () => {
     const media = createDeferredCore();
     pruneExpiredDeliveryQueueTombstonesMock.mockReturnValueOnce(expiry.promise);
     pruneOrphanedDeliveryQueueMediaMock.mockReturnValueOnce(media.promise);
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const timers = startGatewayMaintenanceTimers(deps);
     let stopped = false;

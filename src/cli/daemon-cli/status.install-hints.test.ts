@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";

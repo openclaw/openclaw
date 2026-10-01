@@ -497,6 +497,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     const composerPresentation = new ChatPaneComposerHandoff(this.context, {
       state: () => this.state,
       owner: () => this.stagedAttachmentGatewayOwner,
+      presentationOwner: () => this.chatState.composerPersistence.presentationOwner,
       region: () => this.inputRegion,
       presented: () => this.selected && this.presented,
       pause: () => this.chatState.composerPersistence.stop(),
@@ -659,6 +660,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           this.state,
           this.stagedAttachmentGatewayOwner,
           this.chatState.composerPersistence.draftRevision,
+          this.chatState.composerPersistence.presentationOwner,
         );
       }
     }

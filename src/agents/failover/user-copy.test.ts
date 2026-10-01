@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy,
@@ -15,18 +14,24 @@ import {
 
 describe("failover user copy", () => {
   it.each([
-    [undefined, HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT],
-    ["", HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT],
+    [undefined, "Troubleshooting: run `openclaw logs --follow` in a terminal."],
+    ["", "Troubleshooting: run `openclaw logs --follow` in a terminal."],
     [
       "Codex session became active in another runner; wait for it to finish before continuing",
-      "⚠️ Heartbeat check failed before it could produce an update: Codex session became active in another runner; wait for it to finish before continuing. The main chat session remains available.",
+      "Details: Codex session became active in another runner; wait for it to finish before continuing.\nTroubleshooting: run `openclaw logs --follow` in a terminal.",
     ],
     [
       "Codex session became active in another runner; wait for it to finish before continuing.",
-      "⚠️ Heartbeat check failed before it could produce an update: Codex session became active in another runner; wait for it to finish before continuing. The main chat session remains available.",
+      "Details: Codex session became active in another runner; wait for it to finish before continuing.\nTroubleshooting: run `openclaw logs --follow` in a terminal.",
     ],
-  ])("renders heartbeat failure copy for %j", (reason, expected) => {
-    expect(renderHeartbeatRunFailureCopy(reason)).toBe(expected);
+    [
+      "Gateway SDK resource host is not bound",
+      "Details: Gateway SDK resource host is not bound.\nTroubleshooting: run `openclaw logs --follow` in a terminal.",
+    ],
+  ])("keeps heartbeat diagnostics separate from the primary message for %j", (reason, details) => {
+    expect(renderHeartbeatRunFailureCopy(reason)).toBe(
+      `⚠️ The background check did not complete.\n\n${details}`,
+    );
   });
 
   const tokenLimitCopy =

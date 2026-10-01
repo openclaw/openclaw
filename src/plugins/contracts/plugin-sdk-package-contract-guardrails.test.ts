@@ -13,6 +13,7 @@ import {
   publicPluginSdkEntrypoints,
   supportedBundledFacadeSdkEntrypoints,
 } from "../../../scripts/lib/plugin-sdk-entries.mts";
+import * as memoryCoreRuntime from "../../plugin-sdk/memory-core-host-runtime-core.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -582,9 +583,7 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(ssrfRuntime).not.toHaveProperty("fetchConfiguredLocalOriginWithSsrFGuard");
   });
 
-  it("keeps memory provenance mutation out of the packaged Memory Core facade", async () => {
-    const memoryCoreRuntime = await import("../../plugin-sdk/memory-core-host-runtime-core.js");
-
+  it("keeps memory provenance mutation out of the packaged Memory Core facade", () => {
     expect(memoryCoreRuntime).not.toHaveProperty("recordMemoryArtifactWriteProvenance");
   });
 

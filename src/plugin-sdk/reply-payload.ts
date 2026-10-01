@@ -422,12 +422,11 @@ export async function sendTextMediaPayload(params: {
   };
   if (urls.length > 0) {
     const audioAsVoice = params.ctx.payload.audioAsVoice ?? params.ctx.audioAsVoice;
-    let hasSent = false;
-    const lastResult = await sendPayloadMediaSequence({
+    return (await sendPayloadMediaSequence({
       text,
       mediaUrls: urls,
-      send: async ({ text: textLocal, mediaUrl }) => {
-        const result = await sendAndReport((onDeliveryResult) =>
+      send: ({ text: textLocal, mediaUrl }) =>
+        sendAndReport((onDeliveryResult) =>
           params.adapter.sendMedia!({
             ...params.ctx,
             text: textLocal,
@@ -436,14 +435,8 @@ export async function sendTextMediaPayload(params: {
             replyToId: nextReplyToId(),
             onDeliveryResult,
           }),
-        );
-        hasSent = true;
-        return result;
-      },
-    });
-    if (hasSent) {
-      return lastResult!;
-    }
+        ),
+    }))!;
   }
   if (!text) {
     return { channel: params.channel, messageId: "" };

@@ -39,6 +39,7 @@ type NativeRuntime = NativeWorkerRuntime & {
 };
 
 export type RetainedNativeWorkerSource = {
+  readonly hasActiveWorkers: boolean;
   create(
     filename: string | URL,
     options?: WorkerOptions,
@@ -52,6 +53,8 @@ export type RetainedNativeWorkerSource = {
   ): NativeWorkerResourceDescriptor;
   /** The domain joins admitted work and its resources before shared native cleanup. */
   retain(owner: object, closeOwner: () => Promise<void>): void;
+  /** Join an idle broker without closing registered domains or their independent work. */
+  retireIdleBroker(): Promise<boolean>;
 };
 
 type NativeSource = RetainedNativeWorkerSource & {
@@ -59,6 +62,7 @@ type NativeSource = RetainedNativeWorkerSource & {
   runtimeGeneration?: RuntimeWorkerGeneration;
   runtime?: NativeRuntime;
   broker?: SpawnBrokerHost;
+  retiringBrokers: Set<Promise<void>>;
   automaticBrokerClose?: Promise<void>;
   brokerModuleUrl: URL;
   closing: boolean;
@@ -91,12 +95,29 @@ function forgetNativeSource(source: NativeSource): void {
 }
 
 function closeNativeBroker(source: NativeSource): Promise<void> {
+  let closing: Promise<void>;
   try {
-    return source.broker?.close() ?? Promise.resolve();
+    closing = source.broker?.close() ?? Promise.resolve();
   } catch (error) {
     const failed = createDeferredCore();
     failed.reject(error);
-    return failed.promise;
+    closing = failed.promise;
+  }
+  return source.retiringBrokers.size
+    ? joinNativeBrokerCloses([...source.retiringBrokers, closing])
+    : closing;
+}
+
+async function joinNativeBrokerCloses(attempts: readonly Promise<void>[]): Promise<void> {
+  const results = await Promise.allSettled(attempts);
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Native broker retirement failed");
   }
 }
 
@@ -137,7 +158,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         return;
       }
       source.runtime = undefined;
-      if (!source.broker) {
+      if (!source.broker && source.retiringBrokers.size === 0) {
         forgetNativeSource(source);
         return;
       }
@@ -313,6 +334,30 @@ export function captureRetainedNativeWorkerSource(options?: {
       ? captured.runtimeGeneration.resolve(resolveRuntimeProcessEntrypointUrl("spawnBroker"))
       : resolveRuntimeProcessEntrypointUrl("spawnBroker"),
     closing: false,
+    retiringBrokers: new Set(),
+    get hasActiveWorkers() {
+      return Boolean(source.runtime?.handles.size);
+    },
+    async retireIdleBroker() {
+      // Handles remain until their native execution and resource close receipts join.
+      if (source.hasActiveWorkers) {
+        return false;
+      }
+      if (source.broker) {
+        const closing = source.broker.close();
+        // New work retains this source but must never attach to a closing broker.
+        source.broker = undefined;
+        source.retiringBrokers.add(closing);
+        void closing.then(
+          () => source.retiringBrokers.delete(closing),
+          () => {
+            // Keep the original failed receipt reachable through source finalization.
+          },
+        );
+      }
+      await joinNativeBrokerCloses([...source.retiringBrokers]);
+      return true;
+    },
     close() {
       return (closingOwners ??= Promise.resolve().then(async () => {
         const closing = [...owners.values()].map((owner) => owner.close());

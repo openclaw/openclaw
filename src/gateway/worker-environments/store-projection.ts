@@ -13,10 +13,7 @@ import {
   encodeWorkerEnvironmentTransferAuthority,
 } from "./store-commit-authority.js";
 import { assertShape } from "./store-validation.js";
-import type {
-  WorkerEnvironmentCommitAdmission,
-  WorkerEnvironmentFacts,
-} from "./store-worker-contract.js";
+import type { WorkerEnvironmentCommitAdmission, WorkerEnvironmentFacts } from "./store.types.js";
 
 export type WorkerEnvironmentNativePatch = Partial<
   Pick<

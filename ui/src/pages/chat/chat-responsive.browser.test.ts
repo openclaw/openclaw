@@ -3865,7 +3865,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           "",
           "chat-queue__item--failed",
           "",
-          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn\'t arrive.</span></span>',
+          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Delivery has not been confirmed. Check the conversation — retry only if your message didn\'t arrive.</span></span>',
         ),
         queueExceptionCellHtml(
           "applying-settings",

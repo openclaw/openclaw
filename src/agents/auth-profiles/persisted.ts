@@ -1,7 +1,5 @@
 /**
- * Persisted auth profile store loading and migration.
- * Normalizes legacy JSON stores, SQLite/raw payloads, runtime state metadata,
- * legacy OAuth files, and merged main/agent stores.
+ * Canonical persisted auth profile loading, runtime metadata, and store merging.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -44,9 +42,6 @@ import type {
   OAuthCredential,
   SavedSetupCredential,
 } from "./types.js";
-
-/** Legacy auth.json store shape before auth-profiles.json/SQLite. */
-type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
 type LoadPersistedAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
@@ -110,24 +105,6 @@ function normalizeSavedSetupCredential(value: unknown): SavedSetupCredential | u
   };
 }
 
-// Secret-backed key/token fields may have been stored in the value field by old
-// writers. Move them to the ref field so secret values are not treated as text.
-function normalizeSecretBackedField(params: {
-  entry: Record<string, unknown>;
-  valueField: "key" | "token";
-  refField: "keyRef" | "tokenRef";
-}): void {
-  const value = params.entry[params.valueField];
-  if (value == null || typeof value === "string") {
-    return;
-  }
-  const ref = coerceSecretRef(value);
-  if (ref && !coerceSecretRef(params.entry[params.refField])) {
-    params.entry[params.refField] = ref;
-  }
-  delete params.entry[params.valueField];
-}
-
 function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record<string, unknown> {
   const normalized: Record<string, unknown> = {
     provider: typeof entry.provider === "string" ? normalizeProviderId(entry.provider) : "",
@@ -152,22 +129,7 @@ function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record
 }
 
 function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<AuthProfileCredential> {
-  const entry = { ...raw };
-  if (!("type" in entry) && typeof entry["mode"] === "string") {
-    entry["type"] = entry["mode"];
-  }
-  if (entry.type === "apiKey") {
-    entry.type = "api_key";
-  }
-  if (
-    !("key" in entry) &&
-    !coerceSecretRef(entry["keyRef"]) &&
-    typeof entry["apiKey"] === "string"
-  ) {
-    entry["key"] = entry["apiKey"];
-  }
-  normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
-  normalizeSecretBackedField({ entry, valueField: "token", refField: "tokenRef" });
+  const entry = raw;
   if (entry.type === "api_key") {
     const normalized: Record<string, unknown> = {
       type: "api_key",
@@ -258,8 +220,8 @@ function parseCredentialEntry(
   };
 }
 
-/** Normalizes a single legacy credential entry into a canonical credential. */
-export function parseLegacyCredentialEntry(
+/** Parses canonical credential fields without importing retired encodings. */
+export function parseAuthProfileCredential(
   raw: unknown,
   fallbackProvider?: string,
 ): AuthProfileCredential | null {
@@ -287,28 +249,6 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
   });
 }
 
-export function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
-  if (!isRecord(raw)) {
-    return null;
-  }
-  const record = raw;
-  if ("profiles" in record) {
-    return null;
-  }
-  const entries: LegacyAuthStore = {};
-  const rejected: RejectedCredentialEntry[] = [];
-  for (const [key, value] of Object.entries(record)) {
-    const parsed = parseCredentialEntry(value, key);
-    if (!parsed.ok) {
-      rejected.push({ key, reason: parsed.reason });
-      continue;
-    }
-    entries[key] = parsed.credential;
-  }
-  warnRejectedCredentialEntries("auth.json", rejected);
-  return Object.keys(entries).length > 0 ? entries : null;
-}
-
 /** Coerces a persisted auth profile store payload into the current store shape. */
 export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore | null {
   if (!isRecord(raw)) {
@@ -322,6 +262,41 @@ export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore 
   const normalized: Record<string, AuthProfileCredential> = {};
   const rejected: RejectedCredentialEntry[] = [];
   for (const [key, value] of Object.entries(profiles)) {
+    const declaredType = isRecord(value)
+      ? Object.hasOwn(value, "type")
+        ? value.type
+        : value.mode
+      : undefined;
+    const supportedType =
+      declaredType === "apiKey" ||
+      declaredType === "api_key" ||
+      declaredType === "token" ||
+      declaredType === "oauth";
+    if (
+      supportedType &&
+      isRecord(value) &&
+      typeof value.provider === "string" &&
+      normalizeProviderId(value.provider) &&
+      (!Object.hasOwn(value, "type") ||
+        value.type === "apiKey" ||
+        (declaredType === "api_key" &&
+          !coerceSecretRef(value.keyRef) &&
+          ((isRecord(value.key) && coerceSecretRef(value.key) !== null) ||
+            (!readNonBlankString(value.key) &&
+              !coerceSecretRef(value.key) &&
+              (readNonBlankString(value.apiKey) !== undefined ||
+                coerceSecretRef(value.apiKey) !== null ||
+                readNonBlankString(value.api_key) !== undefined ||
+                coerceSecretRef(value.api_key) !== null)))) ||
+        (declaredType === "token" &&
+          !coerceSecretRef(value.tokenRef) &&
+          isRecord(value.token) &&
+          coerceSecretRef(value.token) !== null))
+    ) {
+      throw new Error(
+        "Auth profile credential fields require migration; run openclaw doctor --fix.",
+      );
+    }
     const parsed = parseCredentialEntry(value);
     if (!parsed.ok) {
       rejected.push({ key, reason: parsed.reason });
@@ -798,16 +773,6 @@ export function buildPersistedAuthProfileSecretsStore(
     version: AUTH_STORE_VERSION,
     profiles,
   };
-}
-
-/** Applies legacy auth.json credentials into an auth profile store. */
-export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuthStore): void {
-  for (const [provider, cred] of Object.entries(legacy)) {
-    store.profiles[`${provider}:default`] = {
-      ...cred,
-      provider: cred.provider ?? provider,
-    };
-  }
 }
 
 export function mergePersistedAuthProfileState(
