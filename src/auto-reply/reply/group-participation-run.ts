@@ -31,7 +31,7 @@ import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.
 import { readSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
 
 type GroupParticipationMode = "ordinary" | "observe" | "engagement" | "opportunity";
-export type GroupParticipationSnapshot = {
+type GroupParticipationSnapshot = {
   revision: number;
   evidence: GroupParticipationEvidence;
   concerns: GroupParticipationConcern[];
