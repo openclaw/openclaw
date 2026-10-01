@@ -26,9 +26,12 @@ const manifestNormalizationSnapshot = createPluginMetadataSnapshotFixture({
   plugins: [
     {
       id: "model-selection-test-normalizers",
-      providers: ["nvidia"],
+      providers: ["nvidia", "fixture-route"],
       modelIdNormalization: {
-        providers: { nvidia: { aliases: { "llama-fast": "nvidia/canonical-fast" } } },
+        providers: {
+          nvidia: { aliases: { "llama-fast": "nvidia/canonical-fast" } },
+          "fixture-route": { aliases: { raw: "canonical" } },
+        },
       },
     },
   ],
@@ -642,22 +645,23 @@ it.each([
       ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
     },
   },
-  {
-    name: "preserves provider identity with manifest model-ID normalization disabled",
-    params: {
-      cfg: createConfiguredModelRefConfig({
-        modelEntries: { "openai/gpt-4o-mini": { alias: "nvidia/llama-fast" } },
-      }),
-      catalog: [],
-      raw: "nvidia/llama-fast",
-      defaultProvider: "openai",
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-    },
-    expected: { key: "nvidia/llama-fast", ref: { provider: "nvidia", model: "llama-fast" } },
-  },
 ])("$name", ({ params, expected }) => {
   expect(resolveAllowedModelRef(params)).toEqual(expected);
+});
+
+it.each([false, true])("preserves provider identity with manifest normalization %s", (enabled) => {
+  const params = {
+    cfg: createConfiguredModelRefConfig({
+      modelEntries: { "openai/gpt-4o-mini": { alias: "fixture-route/raw" } },
+    }),
+    defaultProvider: "openai",
+    allowManifestNormalization: enabled,
+    allowPluginNormalization: false,
+  };
+  const aliasIndex = buildModelAliasIndex(params);
+  expect(resolveModelRefFromString({ ...params, raw: "fixture-route/raw", aliasIndex })).toEqual({
+    ref: { provider: "fixture-route", model: enabled ? "canonical" : "raw" },
+  });
 });
 
 it("strips profile suffix before alias resolution", () => {
