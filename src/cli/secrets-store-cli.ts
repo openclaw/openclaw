@@ -77,6 +77,7 @@ function mapStoreError(error: unknown): SecretStoreCliFailure {
     validation?.name === "SecretStoreValidationError" &&
     (validation.code === "SECRET_STORE_INVALID_NAME" ||
       validation.code === "SECRET_STORE_VALUE_TOO_LARGE" ||
+      validation.code === "SECRET_STORE_VALUE_IN_ARGV" ||
       validation.code === "SECRET_STORE_VALUE_EMPTY" ||
       validation.code === "SECRET_STORE_VALUE_REDACTED" ||
       validation.code === "SECRET_STORE_INVALID_ALLOWED_HOST")
@@ -190,7 +191,7 @@ export function registerSecretStoreCli(secrets: Command): void {
     .description("Create or update one store entry")
     .option("--value <value>", "Literal value (env kind only)")
     .option("--value-file <path>", "Read value from a file; use - for stdin")
-    .option("--kind <secret|env>", "Entry kind (defaults from NAME)")
+    .option("--kind <secret|env>", "Entry kind (defaults to existing kind, then NAME)")
     .option(
       "--allow-host <host>",
       "Allow substitution only for this exact host (repeatable)",
@@ -287,6 +288,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           kind,
           ...(allowedHosts !== undefined ? { allowedHosts } : {}),
           inheritExistingKind: options.kind === undefined,
+          ...(options.value !== undefined ? { valueSource: "argv" as const } : {}),
           updatedBy: "cli",
         });
         await storeModule.purgeExpiredSecretStoreEntries();

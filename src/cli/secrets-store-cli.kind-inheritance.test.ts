@@ -12,6 +12,7 @@ const mocks = await vi.hoisted(async () => {
     ...createCliRuntimeMock(vi),
     database: { path: "" } as { path: string },
     interleave: { run: undefined as (() => Promise<void>) | undefined },
+    beforeWrite: { run: undefined as (() => void) | undefined },
   };
 });
 
@@ -59,8 +60,12 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
     ...actual,
     listSecretStoreEntries: (p: Parameters<typeof actual.listSecretStoreEntries>[0]) =>
       actual.listSecretStoreEntries(withDb(p)),
-    writeSecretStoreEntry: (p: Parameters<typeof actual.writeSecretStoreEntry>[0]) =>
-      actual.writeSecretStoreEntry(withDb(p)),
+    writeSecretStoreEntry: (p: Parameters<typeof actual.writeSecretStoreEntry>[0]) => {
+      const pending = mocks.beforeWrite.run;
+      mocks.beforeWrite.run = undefined;
+      pending?.();
+      return actual.writeSecretStoreEntry(withDb(p));
+    },
     writeSecretStoreEntries: (p: Parameters<typeof actual.writeSecretStoreEntries>[0]) =>
       actual.writeSecretStoreEntries(withDb(p)),
     updateSecretStoreAllowedHosts: (
@@ -77,8 +82,12 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
   };
 });
 
-const { listSecretStoreEntries, readSecretStoreExecEnvironment } =
-  await import("../secrets/store/secret-store.js");
+const {
+  listSecretStoreEntries,
+  readSecretStoreExecEnvironment,
+  readSecretStoreValue,
+  writeSecretStoreEntry,
+} = await import("../secrets/store/secret-store.js");
 
 const scope = { kind: "team" } as const;
 const roots: string[] = [];
@@ -144,6 +153,7 @@ function exposureFor(name: string) {
 
 afterEach(() => {
   mocks.interleave.run = undefined;
+  mocks.beforeWrite.run = undefined;
   closeOpenClawStateDatabaseForTest();
   mocks.runtimeLogs.length = 0;
   mocks.runtimeErrors.length = 0;
@@ -201,6 +211,10 @@ describe("secrets store kind inheritance", () => {
       plaintextInSubprocessEnv: undefined,
       sealedSentinel: true,
       egressBindings: 1,
+    });
+    expect(readSecretStoreValue({ scope, name: "OPENAI_KEY" })).toEqual({
+      ok: true,
+      value: "sk-rotated-credential",
     });
   });
 
@@ -276,6 +290,10 @@ describe("secrets store kind inheritance", () => {
     });
     expect(entryFor("OPENAI_KEY")?.valuePreview).toBeUndefined();
     expect(entryFor("SERVICE_MODE")?.kind).toBe("env");
+    expect(readSecretStoreValue({ scope, name: "OPENAI_KEY" })).toEqual({
+      ok: true,
+      value: "sk-rotated-credential",
+    });
   });
 
   it("applies a protection change made while set is waiting for its value", async () => {
@@ -290,7 +308,10 @@ describe("secrets store kind inheritance", () => {
     );
     expect(entryFor("SERVICE_API_KEY")?.kind).toBe("env");
 
-    mocks.interleave.run = () => protectEntry("SERVICE_API_KEY", protectedValue, "api.example.com");
+    mocks.interleave.run = async () => {
+      await protectEntry("SERVICE_API_KEY", protectedValue, "api.example.com");
+      mocks.runtimeLogs.length = 0;
+    };
     await createProgram().parseAsync(
       ["secrets", "store", "set", "SERVICE_API_KEY", "--value-file", rotated],
       { from: "user" },
@@ -304,7 +325,69 @@ describe("secrets store kind inheritance", () => {
       sealedSentinel: true,
       egressBindings: 1,
     });
+    expect(readSecretStoreValue({ scope, name: "SERVICE_API_KEY" })).toEqual({
+      ok: true,
+      value: "sk-rotated-credential",
+    });
+    expect(mocks.runtimeLogs).toContain("Stored SERVICE_API_KEY (secret).");
   });
+
+  it.each([false, true])(
+    "checks literal input against the transaction-resolved kind (explicit env: %s)",
+    async (explicitEnv) => {
+      createStoreRoot();
+      await createProgram().parseAsync(
+        ["secrets", "store", "set", "MY_APP_CRED", "--value", "initial-value"],
+        { from: "user" },
+      );
+      // Models another process committing after metadata preflight, before this writer enters SQLite.
+      mocks.beforeWrite.run = () => {
+        writeSecretStoreEntry({
+          scope,
+          name: "MY_APP_CRED",
+          value: "protected-value",
+          kind: "secret",
+          allowedHosts: ["api.example.com"],
+          updatedBy: "competing-writer",
+        });
+      };
+      const result = createProgram().parseAsync(
+        [
+          "secrets",
+          "store",
+          "set",
+          "MY_APP_CRED",
+          "--value",
+          "literal-value",
+          ...(explicitEnv ? ["--kind", "env"] : []),
+        ],
+        { from: "user" },
+      );
+      if (explicitEnv) {
+        await result;
+        expect(entryFor("MY_APP_CRED")).toMatchObject({ kind: "env" });
+        expect(entryFor("MY_APP_CRED")?.allowedHosts ?? []).toEqual([]);
+      } else {
+        await expect(result).rejects.toThrow("__exit__:2");
+        expect(mocks.runtimeErrors.join("\n")).toContain("--value is refused for secret entries");
+        expect(exposureFor("MY_APP_CRED")).toEqual({
+          kind: "secret",
+          allowedHosts: ["api.example.com"],
+          valuePreview: undefined,
+          plaintextInSubprocessEnv: undefined,
+          sealedSentinel: true,
+          egressBindings: 1,
+        });
+      }
+      expect(readSecretStoreValue({ scope, name: "MY_APP_CRED" })).toEqual({
+        ok: true,
+        value: explicitEnv ? "literal-value" : "protected-value",
+      });
+      expect([...mocks.runtimeLogs, ...mocks.runtimeErrors].join("\n")).not.toContain(
+        "literal-value",
+      );
+    },
+  );
 
   it("applies a protection change made while import is waiting for confirmation", async () => {
     const root = createStoreRoot();

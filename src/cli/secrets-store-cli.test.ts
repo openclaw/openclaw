@@ -103,6 +103,7 @@ describe("secrets store CLI", () => {
         { from: "user" },
       );
       expect(mocks.write).not.toHaveBeenCalled();
+      expect(mocks.writeBatch).not.toHaveBeenCalled();
       expect(mocks.runtimeLogs.join("\n")).toContain(
         "Skipped redacted value for OPENCLAW_GATEWAY_TOKEN; existing entry unchanged.",
       );
@@ -120,6 +121,7 @@ describe("secrets store CLI", () => {
       }),
     ).rejects.toThrow("__exit__:2");
     expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.writeBatch).not.toHaveBeenCalled();
     expect(mocks.runtimeErrors.join("\n")).toContain("OPENCLAW_GATEWAY_TOKEN");
   });
   it("writes JSON results for list and get", async () => {

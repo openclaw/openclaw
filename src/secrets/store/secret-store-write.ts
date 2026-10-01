@@ -25,14 +25,8 @@ import {
 
 type SecretStoreDatabase = Pick<OpenClawStateKyselyDatabase, "secret_store_entries">;
 
-export type SecretStoreWriteParams = {
+export type SecretStoreWriteParams = SecretStoreWriteEntry & {
   scope: SecretStoreScope;
-  name: string;
-  value: string;
-  /** Replace only the matching value during repair, preserving the current kind and host policy. */
-  expectedValue?: string;
-  kind: SecretStoreKind;
-  allowedHosts?: readonly string[];
   inheritExistingKind?: boolean;
   updatedBy: string | null;
   database?: OpenClawStateDatabaseOptions;
@@ -49,6 +43,8 @@ export type SecretStoreWriteEntry = {
   name: string;
   value: string;
   kind: SecretStoreKind;
+  /** Literal command-line values may only be committed as env entries. */
+  valueSource?: "argv";
   /** Replace only the matching value during repair, preserving the current kind and host policy. */
   expectedValue?: string;
   allowedHosts?: readonly string[];
@@ -115,6 +111,12 @@ function writeSecretStoreEntriesInternal(
           : inheritExistingKind && storedKind !== undefined
             ? storedKind
             : entry.kind;
+        if (entry.valueSource === "argv" && kind === "secret") {
+          throw new SecretStoreValidationError(
+            "SECRET_STORE_VALUE_IN_ARGV",
+            "--value is refused for secret entries. Use a stdin pipe, --value-file, or the interactive no-echo prompt.",
+          );
+        }
         if (inheritExistingKind || repair) {
           assertSecretStoreWriteShape(entry.value, kind, entry.name, entry.allowedHosts);
         }
@@ -191,6 +193,7 @@ function writeSecretStoreEntryInternal(
           name: params.name,
           value: params.value,
           kind: params.kind,
+          valueSource: params.valueSource,
           allowedHosts: params.allowedHosts,
           ...(params.expectedValue !== undefined ? { expectedValue: params.expectedValue } : {}),
         },
