@@ -295,8 +295,9 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
           throw new Error(`unexpected command: ${command}`);
         };
         const runStep = vi.fn(
-          async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
+          async ({ name, argv, cwd, env, input }): Promise<PackageUpdateStepResult> => {
             if (name === "global update") {
+              expect(input).toBe("");
               expect(cwd).toBe(globalRoot);
               expect(env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
               expect(env).toMatchObject({

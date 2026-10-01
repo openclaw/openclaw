@@ -121,6 +121,20 @@ describe("update CLI shared helpers", () => {
     );
   });
 
+  it("can close a package install's stdin without interactive approval", async () => {
+    await runUpdateStep({
+      name: "package-install",
+      argv: ["pnpm", "add", "-g", "openclaw@2.0.0"],
+      input: "",
+      timeoutMs: 1_000,
+    });
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["pnpm", "add", "-g", "openclaw@2.0.0"],
+      expect.objectContaining({ input: "" }),
+    );
+  });
+
   it("parses complete positive integer timeout values as milliseconds", () => {
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);

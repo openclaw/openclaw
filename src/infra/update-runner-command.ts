@@ -26,13 +26,19 @@ function mergeCommandEnvironments(
 }
 
 export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
-  const { runCommand, name, argv, cwd, timeoutMs, env, progress, stepIndex, totalSteps } = opts;
+  const { runCommand, name, argv, cwd, timeoutMs, env, input, progress, stepIndex, totalSteps } =
+    opts;
   const command = argv.join(" ");
   const stepInfo: UpdateStepInfo = { name, command, index: stepIndex, total: totalSteps };
   progress?.onStepStart?.(stepInfo);
 
   const started = Date.now();
-  const result = await runCommand(argv, { cwd, timeoutMs, env });
+  const result = await runCommand(argv, {
+    cwd,
+    timeoutMs,
+    env,
+    ...(input !== undefined ? { input } : {}),
+  });
   const durationMs = Date.now() - started;
   const stdoutTail = trimLogTail(result.stdout, MAX_LOG_CHARS);
   const stderrTail = trimLogTail(result.stderr, MAX_LOG_CHARS);

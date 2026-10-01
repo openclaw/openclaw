@@ -63,6 +63,7 @@ type PackageUpdateStepRunner = (params: {
   cwd?: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
+  input?: string;
 }) => Promise<PackageUpdateStepResult>;
 
 type StagedNpmInstall = {
@@ -1037,6 +1038,8 @@ export async function runGlobalPackageUpdateSteps(params: {
       ...(updateCwd ? { cwd: updateCwd } : {}),
       ...installEnv,
       timeoutMs: params.timeoutMs,
+      // Captured output makes pnpm's build-approval prompt unable to use the terminal.
+      ...(installCommandTarget.manager === "pnpm" ? { input: "" } : {}),
     });
 
     steps.push(updateStep);

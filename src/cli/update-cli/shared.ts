@@ -222,6 +222,7 @@ export async function runUpdateStep(params: {
   timeoutMs: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
+  input?: string;
 }): Promise<UpdateStepResult> {
   return await runStep({
     ...params,
