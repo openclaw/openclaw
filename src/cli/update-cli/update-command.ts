@@ -6,6 +6,7 @@ import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalizat
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -458,9 +459,11 @@ async function runResolvedUpdate(
     inspectActivatedUpdateState,
     restoreFailedUpdateDatabases,
     createUpdateCommandFinalizationFence,
+    createUpdateCommandExecutionGuards,
   } = await import("./update-execution.runtime.js");
 
-  const progress = createUpdateRunProgress(run, presentation.progress);
+  const executionGuards = createUpdateCommandExecutionGuards(opts, root);
+  const progress = createUpdateRunProgress(run, presentation.progress, executionGuards.recordStep);
   let preUpdatePluginInstallRecords: Awaited<ReturnType<typeof prepareMutableUpdateRuntime>> = {};
   let mutableUpdatePrepared = false;
   const prepareMutableUpdate: Parameters<
@@ -494,7 +497,7 @@ async function runResolvedUpdate(
       total: 0,
     };
     const retentionStartedAt = Date.now();
-    progress.onStepStart?.(retentionStep);
+    await progress.onStepStart?.(retentionStep);
     const retention = await retainRuntime({
       mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
       installTarget,
@@ -502,7 +505,7 @@ async function runResolvedUpdate(
       timeoutMs: updateStepTimeoutMs,
       assertCurrent: () => fence.assertCurrent(),
     });
-    progress.onStepComplete?.({
+    await reportUpdateStepCompletion(progress, {
       ...retentionStep,
       durationMs: Date.now() - retentionStartedAt,
       exitCode: 0,
@@ -519,6 +522,7 @@ async function runResolvedUpdate(
     updateStepTimeoutMs,
     startedAt,
     progress,
+    executionGuards,
     stop: presentation.stop,
     opts,
     shouldRestart,
@@ -617,10 +621,16 @@ async function runResolvedUpdate(
           continued.result.steps.at(-1)?.stderrTail ?? undefined,
         );
       }
-      progress.flushLedgerWrites();
-      recoveryState.ledgerHandoffOwned = false;
-      presentation.resume();
-      await finishUpdate({ ...finalization, result: continued.result });
+      await finishUpdate(
+        { ...finalization, result: continued.result },
+        {
+          beforeFinalization: async () => {
+            await progress.flushLedgerWrites();
+            recoveryState.ledgerHandoffOwned = false;
+            presentation.resume();
+          },
+        },
+      );
       return;
     }
     recoveryState.ledgerHandoffCompleted = true;
@@ -632,7 +642,10 @@ async function runResolvedUpdate(
     }
     return;
   }
-  progress.flushLedgerWrites();
-  presentation.resume();
-  await finishUpdate(finalization);
+  await finishUpdate(finalization, {
+    beforeFinalization: async () => {
+      await progress.flushLedgerWrites();
+      presentation.resume();
+    },
+  });
 }

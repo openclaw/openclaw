@@ -57,12 +57,20 @@ Skill collection review runs every 7 days. It is enabled when `skills.workshop.a
   Restrict which tools the job can use, for example `--tools exec,read`. Pass `--tools ""` for an empty allowlist that disables all agent tools, including tools used by a condition trigger.
 </ParamField>
 
-New jobs that can run tools always store an explicit tool policy. Jobs created by an agent
-are capped to the tools available to that creating turn, and the agent cannot widen the
-stored list. Jobs created by an authenticated operator without `--tools` store an
-unrestricted `*` policy; `automations edit --clear-tools` restores that explicit unrestricted
-policy. Existing jobs that predate an explicit tool policy retain their current behavior
-until their tool policy is explicitly edited or the job is recreated.
+New jobs that can run tools always store an explicit tool policy. A job created without
+`--tools` (or with `*`) stores `*`: each run uses the owner session's current tool policy,
+including its group, agent, sandbox, and runtime restrictions. An agent that requests a
+finite list is capped to the tools available to its creating turn and cannot widen the
+stored list. `automations edit --clear-tools` restores `*`. Existing jobs that predate an
+explicit tool policy retain their current behavior until their tool policy is explicitly
+edited or the job is recreated. Agent-created script payloads, condition triggers, and jobs
+whose creator captured Codex app authority store the creating turn's tools instead: scripts
+reach MCP only through servers their list names, and app authority is bound to that list.
+
+Earlier releases saved a copy of the creating turn's tool list on agent-created agent turns.
+That copy could miss tools the creator had, such as the native shell. Those jobs now run with
+their owner conversation's tools, like a `*` job; the stored copy is left as it is. Jobs whose
+creator captured Codex app authority keep using their copy.
 
 Changing an account-bound job to a payload that does not run tools and later back
 to an agent turn preserves its account restriction. A payload conversion does not
@@ -301,7 +309,7 @@ Agent-turn jobs default to the creating conversation when the create request car
 
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
-    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation.
+    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. A child that deliberately stays silent (`NO_REPLY`) leaves a quiet successful run; a child that times out or ends without a reply fails the run.
 
     For text-only Discord announce targets, OpenClaw sends the canonical final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
 

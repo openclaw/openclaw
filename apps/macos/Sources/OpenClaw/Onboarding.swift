@@ -699,6 +699,8 @@ struct OnboardingView: View {
     @State var installingCLI = false
     @State var cliInstallPhase: CLIInstallPhase = .idle
     @State var cliStatus: String?
+    @State var updatingGatewayHosting = false
+    @State var gatewayHostingError: String?
     @State var monitoringDiscovery = false
     @State var cliExecutableReady = false
     @State var cliInstalled = false
@@ -826,7 +828,7 @@ struct OnboardingView: View {
     }
 
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isAISetupBlocking
+        !self.isCLIBlocking && !self.isAISetupBlocking && !self.updatingGatewayHosting
     }
 
     static func remoteGatewayAdvanceDecision(

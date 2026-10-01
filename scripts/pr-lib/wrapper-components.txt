@@ -81,6 +81,7 @@ packages/normalization-core/src/code-points.ts
 packages/normalization-core/src/error-coercion.ts
 packages/normalization-core/src/expect.ts
 packages/normalization-core/src/format.ts
+packages/normalization-core/src/grapheme.ts
 packages/normalization-core/src/home-dir.ts
 packages/normalization-core/src/index.ts
 packages/normalization-core/src/json-coercion.ts

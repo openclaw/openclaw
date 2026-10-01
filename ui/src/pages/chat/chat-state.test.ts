@@ -2585,37 +2585,35 @@ describe("canonical session message recovery", () => {
     expect(state.chatStream).toBe("Current partial reply");
   });
 
-  it("coalesces distinct live peers into one frame and their stale history into one load", async () => {
+  it("coalesces live peers into one frame and one fresh read after stale history", async () => {
     let renderFrame: FrameRequestCallback | undefined;
     vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
       renderFrame = callback;
       return 1;
     });
-    const { promise: history, resolve: resolveHistory } = createDeferred<{
-      messages: unknown[];
-      sessionId: string;
-      thinkingLevel: null;
-    }>();
+    const { promise: history, resolve: resolveHistory } = createDeferred<ChatHistoryResult>();
+    const messages = ["web", "tui", "cli"].map((client, index) => ({
+      role: "user",
+      content: [{ type: "text", text: "shared prompt" }],
+      __openclaw: {
+        id: `canonical-${client}-same-text`,
+        idempotencyKey: `${client}-same-text-run:user`,
+        seq: index + 1,
+      },
+    }));
+    const snapshot: ChatHistoryResult = { messages, sessionId: "selected-session" };
     const { request, state } = createSessionEventState({ chatDisplayedLeafEntryId: undefined });
-    request.mockReturnValue(history);
+    request.mockReturnValueOnce(history).mockResolvedValue(snapshot);
 
-    for (const [index, client] of ["web", "tui"].entries()) {
+    for (const [index, message] of messages.entries()) {
       handlePageGatewayEvent(state, {
         type: "event",
         event: "session.message",
         payload: {
           sessionKey: state.sessionKey,
-          messageId: `conflicting-${client}-envelope`,
+          messageId: `conflicting-envelope-${index}`,
           messageSeq: 100 + index,
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "shared prompt" }],
-            __openclaw: {
-              id: `canonical-${client}-same-text`,
-              idempotencyKey: `${client}-same-text-run:user`,
-              seq: index + 1,
-            },
-          },
+          message,
         },
       });
 
@@ -2626,18 +2624,16 @@ describe("canonical session message recovery", () => {
     expect(state.requestUpdate).toHaveBeenCalledOnce();
 
     expect(request).toHaveBeenCalledOnce();
-    resolveHistory({
-      messages: [],
-      sessionId: "selected-session",
-      thinkingLevel: null,
-    });
+    const refreshed = loadChatHistory(state);
+    resolveHistory({ ...snapshot, messages: [] });
+    await refreshed;
 
-    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
-
-    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatLoading).toBe(false);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(state.chatMessages).toMatchObject([
       { __openclaw: { id: "canonical-web-same-text", seq: 1 } },
       { __openclaw: { id: "canonical-tui-same-text", seq: 2 } },
+      { __openclaw: { id: "canonical-cli-same-text", seq: 3 } },
     ]);
   });
 

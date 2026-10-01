@@ -11,6 +11,7 @@ import * as packageRoot from "../../infra/openclaw-root.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
+import * as devUpdateTarget from "../../infra/update-dev-target.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as history from "../../infra/update-run-reader.js";
@@ -124,7 +125,7 @@ describe("update command admission with fresh state", () => {
         openOpenClawStateDatabase();
         await closeOpenClawStateDatabaseAsync();
       }
-      vi.spyOn(commandRun, "readDevUpdateTarget").mockImplementation(() => {
+      vi.spyOn(devUpdateTarget, "readDevUpdateTarget").mockImplementation(() => {
         throw new Error("fixture invalid dev target");
       });
       const triage = vi.spyOn(commandTriage, "prepareUpdateCommandFailureTriage");

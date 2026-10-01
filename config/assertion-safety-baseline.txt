@@ -1139,7 +1139,7 @@ packages/ai/src/providers/clean-for-gemini.ts	8
 packages/ai/src/providers/google-shared.ts	2
 packages/ai/src/providers/mistral.ts	5
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
-packages/ai/src/providers/openai-chatgpt-responses.ts	20
+packages/ai/src/providers/openai-chatgpt-responses.ts	19
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
 packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	6
@@ -1168,7 +1168,7 @@ packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
 packages/ai/src/transports/openai-responses-debug.ts	11
-packages/ai/src/transports/openai-responses-params-internal.ts	8
+packages/ai/src/transports/openai-responses-params-internal.ts	5
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	10
@@ -1785,7 +1785,7 @@ src/claws/package-update.ts	1
 src/claws/packages.ts	1
 src/claws/project-build.ts	4
 src/claws/project.ts	2
-src/claws/provenance.ts	6
+src/claws/provenance.ts	5
 src/claws/reader.ts	3
 src/claws/schema.ts	2
 src/claws/update-capability-changes.ts	7

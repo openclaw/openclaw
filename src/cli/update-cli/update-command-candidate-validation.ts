@@ -4,10 +4,10 @@ import { validateUpdateCandidateCanary } from "../../infra/update-candidate-cana
 import { createUpdateDoctorConfigWarningStep } from "../../infra/update-doctor-config.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import { recordUpdateRunStepAsync } from "../../infra/update-run-write.async.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
+import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { prepareOpenClawStateReadSource } from "../../state/openclaw-state-worker-context.js";
-import type { UpdateDisplayProgress } from "./progress.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { readUpdateCandidateSource } from "./update-command-managed-context.js";
@@ -26,7 +26,7 @@ export async function validateUpdateCandidateWithProgress(
     packageUpdateNodeRunner?: string;
     timeoutMs?: number;
     opts: Pick<UpdateCommandOptions, "json">;
-    progress: UpdateDisplayProgress;
+    progress: UpdateStepProgress;
   },
   run: UpdateCommandOptions["run"],
 ) {
@@ -70,14 +70,16 @@ export async function validateUpdateCandidateWithProgress(
         `${step.step}: ${step.detail ?? step.status}`,
       );
     },
-    onStep: (step) => execution.progress?.onStepComplete?.({ ...step, index: 0, total: 0 }),
+    onStep: (step) =>
+      reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 }),
   });
   assertCurrent();
   const changes = validation.doctorConfigChanges ?? [];
   if (validation.status === "ok" && validation.doctorConfigWrites !== true && changes.length) {
     const warning = createUpdateDoctorConfigWarningStep(params.root, changes);
     validation.steps.push(warning);
-    execution.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+    await reportUpdateStepCompletion(execution.progress, { ...warning, index: 0, total: 0 });
+    assertCurrent();
   }
   return validation;
 }

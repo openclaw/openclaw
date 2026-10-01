@@ -473,6 +473,7 @@ describe("Gateway admitted Discord transcript capture", () => {
       resetConfigOverrides();
       const token = "synthetic-gateway-capture-token";
       const cfg: OpenClawConfig = {
+        skills: { load: { watch: false } },
         agents: {
           list: [
             { id: "main", default: true, workspace },

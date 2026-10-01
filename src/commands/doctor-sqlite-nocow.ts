@@ -155,9 +155,21 @@ function assertNoOpenFiles(paths: readonly string[]) {
       timeout: TOOL_TIMEOUT_MS,
     },
   );
-  if (result.error || result.status !== 1 || result.stdout.trim() || result.stderr.trim()) {
+  const stdout = result.stdout?.trim() ?? "";
+  const stderr = result.stderr?.trim() ?? "";
+  if (result.status === 0 && /^\d+(?:\s+\d+)*$/u.test(stdout)) {
+    const pids = [...new Set(stdout.split(/\s+/u))].join(", ");
     throw new Error(
-      "store files are open, or fuser could not establish that all handles are closed; stop processes using this store and ensure fuser is installed",
+      `store files are open (pids: ${pids}); stop processes using this store before retrying`,
+    );
+  }
+  if (result.error || result.status !== 1 || stdout || stderr) {
+    const detail =
+      stderr ||
+      result.error?.message ||
+      (result.signal ? `signal ${result.signal}` : stdout || `exit status ${result.status}`);
+    throw new Error(
+      `fuser could not establish that all handles are closed: ${detail}; ensure fuser is installed and can inspect processes using this store`,
     );
   }
 }
@@ -312,21 +324,25 @@ export async function repairDoctorSqliteNoCow(params: {
         .readdirSync(directory, { recursive: true, withFileTypes: true })
         .map((entry) => path.join(entry.parentPath, entry.name));
       assertNoOpenFiles(observedFiles.filter((pathname) => fs.lstatSync(pathname).isFile()));
-      const currentFiles = observedFiles.filter((pathname) => {
-        if (sharedMemoryPaths.has(pathname)) {
-          return false;
-        }
-        // Reading a cleanly closed WAL database can create an empty WAL beside the source.
-        if (
-          pathname.endsWith("-wal") &&
-          sqlitePaths.has(pathname.slice(0, -4)) &&
-          !sourceFiles.has(pathname)
-        ) {
-          const stat = fs.lstatSync(pathname);
-          return !stat.isFile() || stat.size !== 0;
-        }
-        return true;
-      });
+      // A file can appear while fuser checks the previously observed inventory.
+      const currentFiles = fs
+        .readdirSync(directory, { recursive: true, withFileTypes: true })
+        .map((entry) => path.join(entry.parentPath, entry.name))
+        .filter((pathname) => {
+          if (sharedMemoryPaths.has(pathname)) {
+            return false;
+          }
+          // Reading a cleanly closed WAL database can create an empty WAL beside the source.
+          if (
+            pathname.endsWith("-wal") &&
+            sqlitePaths.has(pathname.slice(0, -4)) &&
+            !sourceFiles.has(pathname)
+          ) {
+            const stat = fs.lstatSync(pathname);
+            return !stat.isFile() || stat.size !== 0;
+          }
+          return true;
+        });
       if (
         currentIdentity.dev !== sourceIdentity.dev ||
         currentIdentity.ino !== sourceIdentity.ino ||

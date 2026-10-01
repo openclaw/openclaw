@@ -53,6 +53,7 @@ export type UserChannelIdentityAuthorityFacts = {
   displayName: string | null;
   role: string | null;
   emails: string[];
+  githubAccountIds?: readonly number[];
   loginIdentities: string[];
 };
 
@@ -91,6 +92,7 @@ export type UserProfileEmailBinding = {
 export type UserProfileAccessFacts = Readonly<{
   profileId: string;
   emails: readonly string[];
+  githubAccountIds?: readonly number[];
   assignedRole: string | null;
 }>;
 
@@ -98,6 +100,7 @@ export type PreparedUserProfileIdentity = {
   readCurrentProfile(
     this: void,
     requiredEmailBindingIds?: readonly string[],
+    requiredGithubAccountIds?: readonly number[],
   ): Pick<UserProfileAccessFacts, "profileId" | "assignedRole">;
   readonly emailBindingIds: readonly string[];
   readCurrentFacts(
@@ -138,4 +141,4 @@ export type UserProfilesDatabase = {
 export type ProfileDisplayRow = Pick<
   UserProfilesDatabase["user_profiles"],
   "id" | "display_name" | "avatar_mime" | "avatar_sha256" | "merged_into" | "updated_at" | "role"
-> & { has_avatar: SqlBool };
+> & { has_avatar: SqlBool; githubAccountIds?: readonly number[] };

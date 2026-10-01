@@ -68,8 +68,26 @@ export const UserProfileSchema = closedObject({
   role: Type.Optional(UserProfileRoleSchema),
 });
 
-export const UsersListParamsSchema = closedObject({});
-export const UsersListResultSchema = closedObject({ profiles: Type.Array(UserProfileSchema) });
+export const UsersListParamsSchema = closedObject({
+  githubAccountIds: Type.Optional(
+    Type.Array(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }), {
+      maxItems: 500,
+      uniqueItems: true,
+    }),
+  ),
+});
+export const UsersListResultSchema = closedObject({
+  profiles: Type.Array(UserProfileSchema),
+  githubProfiles: Type.Optional(
+    Type.Array(
+      closedObject({
+        accountId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+        profileId: UserProfileIdSchema,
+      }),
+      { maxItems: 500 },
+    ),
+  ),
+});
 
 // The profile and relative path are derived from the authenticated connection.
 export const UsersPersonalFileGetParamsSchema = closedObject({ agentId: NonEmptyString });

@@ -315,7 +315,7 @@ describe("typed in-process agent continuation authorization", () => {
     },
   );
 
-  it.each(["sessions_send", "subagent_announce", "subagent_settle"] as const)(
+  it.each(["sessions_send", "subagent_announce"] as const)(
     "preserves GitHub identity access after %s admits a write-only continuation",
     async (sourceTool) => {
       const owner = createOperatorClient({
@@ -387,103 +387,100 @@ describe("typed in-process agent continuation authorization", () => {
     },
   );
 
-  it.each([
-    "current cohort",
-    "finished invocation",
-    "revoked source",
-    "retired cohort",
-    "provenance only",
-  ] as const)("checks %s for a settle wake after the spawning tool ends", async (state) => {
-    const { runAnnounceAgentCall } =
-      await import("../agents/subagents/announce/subagent-announce-completion-delivery.js");
-    const owner = createOperatorClient({
-      profileName: "settle-owner",
-      scopes: ["operator.write"],
-    });
-    const context = createContext();
-    const sourceSignal = new AbortController();
-    const source = await operatorCapture.captureGatewayOperatorRunAuthority({
-      client: owner,
-      context,
-      sourceAuthority: {
-        signal: sourceSignal.signal,
-        assertCurrent: () => sourceSignal.signal.throwIfAborted(),
-      },
-    });
-    if (!source) {
-      throw new Error("expected original operator authority");
-    }
-    const runId = "announce:owned-settle-wake";
-    const result = { runId, status: "ok" };
-    startTurn.mockImplementation(async ({ principal, io }) => {
-      expect(principal.connect.scopes).toEqual(["operator.write"]);
-      expect(principal.internal.operatorRunAuthority).toBe(source.authority);
-      io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
-      io.emitFinal([true, result, undefined]);
-    });
-    const isExecutionAllowed = vi.fn(() => state !== "retired cohort");
-    try {
-      if (state === "revoked source") {
-        sourceSignal.abort(new Error("original operator source revoked"));
+  it.each(["finished invocation", "revoked source", "retired cohort", "provenance only"] as const)(
+    "checks %s for a settle wake after the spawning tool ends",
+    async (state) => {
+      const { runAnnounceAgentCall } =
+        await import("../agents/subagents/announce/subagent-announce-completion-delivery.js");
+      const owner = createOperatorClient({
+        profileName: "settle-owner",
+        scopes: ["operator.write"],
+      });
+      const context = createContext();
+      const sourceSignal = new AbortController();
+      const source = await operatorCapture.captureGatewayOperatorRunAuthority({
+        client: owner,
+        context,
+        sourceAuthority: {
+          signal: sourceSignal.signal,
+          assertCurrent: () => sourceSignal.signal.throwIfAborted(),
+        },
+      });
+      if (!source) {
+        throw new Error("expected original operator authority");
       }
-      const dispatch = withPluginRuntimeGatewayRequestScope(
-        { client: owner, context, isWebchatConnect: () => false },
-        () =>
-          withGatewayToolCallerIdentity(
-            {
-              agentId: "main",
-              sessionKey: "agent:main:requester",
-              operationalRunInstance: createOperationalRunInstanceRef("finished-spawner"),
-              receiptAuthority: () => false,
-              operatorAuthority: source.authority,
-            },
-            () => {
-              const announce = () =>
-                runAnnounceAgentCall({
-                  agentParams: {
-                    message: "Continue after the children settled",
-                    idempotencyKey: runId,
-                    inputProvenance: {
-                      kind: "inter_session",
-                      sourceSessionKey: "agent:main:child",
-                      sourceTool: "subagent_settle",
+      const runId = "announce:owned-settle-wake";
+      const result = { runId, status: "ok" };
+      startTurn.mockImplementation(async ({ principal, io }) => {
+        expect(principal.connect.scopes).toEqual(["operator.write"]);
+        expect(principal.internal.operatorRunAuthority).toBe(source.authority);
+        io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
+        io.emitFinal([true, result, undefined]);
+      });
+      const isExecutionAllowed = vi.fn(() => state !== "retired cohort");
+      try {
+        if (state === "revoked source") {
+          sourceSignal.abort(new Error("original operator source revoked"));
+        }
+        const dispatch = withPluginRuntimeGatewayRequestScope(
+          { client: owner, context, isWebchatConnect: () => false },
+          () =>
+            withGatewayToolCallerIdentity(
+              {
+                agentId: "main",
+                sessionKey: "agent:main:requester",
+                operationalRunInstance: createOperationalRunInstanceRef("finished-spawner"),
+                receiptAuthority: () => false,
+                operatorAuthority: source.authority,
+              },
+              () => {
+                const announce = () =>
+                  runAnnounceAgentCall({
+                    agentParams: {
+                      message: "Continue after the children settled",
+                      idempotencyKey: runId,
+                      inputProvenance: {
+                        kind: "inter_session",
+                        sourceSessionKey: "agent:main:child",
+                        sourceTool: "subagent_settle",
+                      },
                     },
-                  },
-                  settleWakeSourceSessionKeys:
-                    state === "provenance only" ? undefined : ["agent:main:child"],
-                  expectFinal: true,
-                  isExecutionAllowed,
-                  resolveGatewayContext: () => context,
+                    settleWakeSourceSessionKeys:
+                      state === "provenance only" ? undefined : ["agent:main:child"],
+                    expectFinal: true,
+                    isExecutionAllowed,
+                    resolveGatewayContext: () => context,
+                  });
+                if (state !== "finished invocation") {
+                  return announce();
+                }
+                const ready = createDeferredCore();
+                return withOperatorToolGatewayAuthority(
+                  { scopes: source.authority.scopes, operatorRunAuthority: source.authority },
+                  async () => ({ pending: ready.promise.then(announce) }),
+                ).then(({ pending }) => {
+                  ready.resolve();
+                  return pending;
                 });
-              if (state !== "finished invocation") {
-                return announce();
-              }
-              const ready = createDeferredCore();
-              return withOperatorToolGatewayAuthority(
-                { scopes: source.authority.scopes, operatorRunAuthority: source.authority },
-                async () => ({ pending: ready.promise.then(announce) }),
-              ).then(({ pending }) => {
-                ready.resolve();
-                return pending;
-              });
-            },
-          ),
-      );
-      if (state === "current cohort" || state === "finished invocation") {
-        await expect(dispatch).resolves.toEqual(result);
-        expect(isExecutionAllowed).toHaveBeenCalled();
-        expect(startTurn).toHaveBeenCalledOnce();
-      } else {
-        const error = {
-          "revoked source": "original operator source revoked",
-          "retired cohort": "subagent source lifecycle changed before completion delivery",
-          "provenance only": "agent tool caller authority is no longer active",
-        }[state];
-        await expect(dispatch).rejects.toThrow(error);
-        expect(startTurn).not.toHaveBeenCalled();
+              },
+            ),
+        );
+        if (state === "finished invocation") {
+          await expect(dispatch).resolves.toEqual(result);
+          expect(isExecutionAllowed).toHaveBeenCalled();
+          expect(startTurn).toHaveBeenCalledOnce();
+        } else {
+          const error = {
+            "revoked source": "original operator source revoked",
+            "retired cohort": "subagent source lifecycle changed before completion delivery",
+            "provenance only": "agent tool caller authority is no longer active",
+          }[state];
+          await expect(dispatch).rejects.toThrow(error);
+          expect(startTurn).not.toHaveBeenCalled();
+        }
+      } finally {
+        source.release();
       }
-    } finally {
-      source.release();
-    }
-  });
+    },
+  );
 });

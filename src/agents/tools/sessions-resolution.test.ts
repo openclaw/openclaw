@@ -97,12 +97,10 @@ describe("session key display/internal mapping", () => {
   });
 
   it("maps input main to alias for internal routing", () => {
-    expect(resolveInternalSessionKey({ key: "main", alias: "global", mainKey: "main" })).toBe(
-      "global",
+    expect(resolveInternalSessionKey({ key: "main", alias: "global" })).toBe("global");
+    expect(resolveInternalSessionKey({ key: "agent:ops:main", alias: "global" })).toBe(
+      "agent:ops:main",
     );
-    expect(
-      resolveInternalSessionKey({ key: "agent:ops:main", alias: "global", mainKey: "main" }),
-    ).toBe("agent:ops:main");
   });
 
   it("maps current to requester session key", () => {
@@ -110,16 +108,13 @@ describe("session key display/internal mapping", () => {
       resolveInternalSessionKey({
         key: "current",
         alias: "global",
-        mainKey: "main",
         requesterInternalKey: "agent:support:main",
       }),
     ).toBe("agent:support:main");
   });
 
   it("preserves literal current when no requester key is provided", () => {
-    expect(resolveInternalSessionKey({ key: "current", alias: "global", mainKey: "main" })).toBe(
-      "current",
-    );
+    expect(resolveInternalSessionKey({ key: "current", alias: "global" })).toBe("current");
   });
 
   it("maps interactive client ids to the requester session", () => {

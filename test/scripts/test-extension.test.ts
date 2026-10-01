@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { parseCLI } from "vitest/node";
 import {
   detectChangedExtensionIds,
@@ -50,7 +50,13 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
@@ -76,6 +82,8 @@ const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mts");
 const posixIt = process.platform === "win32" ? it.skip : it;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const fixture = createFixtureLifetime();
+afterEach(() => fixture.cleanup());
 
 type RunGroupParams = VitestBatchRunParams;
 
@@ -150,6 +158,13 @@ function expectPositiveIntegerMetric(value: number) {
 }
 
 describe("scripts/test-extension.mts", () => {
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts?.close();
+  });
   let balancedExtensionShards: ReturnType<typeof createExtensionTestShards>;
   let balancedExpectedExtensionIds: string[];
 
@@ -960,65 +975,91 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
 
   posixIt(
     "preserves wrapper termination when native Vitest exits cleanly after SIGTERM",
-    async () => {
-      const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-signal-"));
-      const config = path.join(root, "vitest.config.mjs");
-      const entry = path.join(root, "batch.mts");
-      const childPidPath = path.join(root, "child.pid");
-      const descendantPidPath = path.join(root, "descendant.pid");
-      const signaledPath = path.join(root, "signaled");
+    ({ signal }) =>
+      fixture.run(async () => {
+        const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-signal-"));
+        const config = path.join(root, "vitest.config.mjs");
+        const entry = path.join(root, "batch.mts");
+        const childPidPath = path.join(root, "child.pid");
+        const descendantPidPath = path.join(root, "descendant.pid");
+        const signaledPath = path.join(root, "signaled");
 
-      writeFileSync(
-        config,
-        `import {spawn} from 'node:child_process';import fs from 'node:fs';
+        writeFileSync(
+          config,
+          `import {spawn} from 'node:child_process';import fs from 'node:fs';
+${fixtureReceiptClientSource(receipts.endpoint)}
 process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(signaledPath)},'SIGTERM');process.exit(0)});
 const descendant=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.stdout.write('ready');"],{stdio:['ignore','pipe','ignore']});
 await new Promise(resolve=>descendant.stdout.once('data',resolve));
 fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(descendant.pid));
 fs.writeFileSync(${JSON.stringify(childPidPath)},String(process.pid));
+sendReceipt(${JSON.stringify(childPidPath)}, "ready");
 await new Promise(()=>{});export default {};`,
-      );
-      const batchRunnerUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.vitestBatchRunner);
-      writeFileSync(
-        entry,
-        `import {runVitestBatch} from ${JSON.stringify(batchRunnerUrl.href)};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
-      );
-      const runner = spawn(
-        process.execPath,
-        [...resolveRuntimeWorkerArgv(batchRunnerUrl).slice(0, -1), entry],
-        { cwd: process.cwd(), stdio: "ignore" },
-      );
-      let childPid = 0;
-      let descendantPid = 0;
+        );
+        const batchRunnerUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.vitestBatchRunner);
+        writeFileSync(
+          entry,
+          `import {runVitestBatch} from ${JSON.stringify(batchRunnerUrl.href)};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
+        );
+        const runner = spawn(
+          process.execPath,
+          [...resolveRuntimeWorkerArgv(batchRunnerUrl).slice(0, -1), entry],
+          { cwd: process.cwd(), stdio: "ignore" },
+        );
+        const runnerClosed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+          (resolve) => {
+            runner.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
+          },
+        );
+        let childPid = 0;
+        let descendantPid = 0;
 
-      try {
-        childPid = await waitForPidFile(childPidPath, 5_000);
-        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
-        expect(Number.isInteger(childPid)).toBe(true);
-        expect(Number.isInteger(descendantPid)).toBe(true);
+        try {
+          // The native config publishes both PIDs before the receipt. Its exit can
+          // overtake that separate socket, so durable records decide an early close.
+          await withinTest(
+            Promise.race([
+              receipts.waitFor(childPidPath, "ready"),
+              runnerClosed.then(() => {
+                if (!fileExists(childPidPath) || !fileExists(descendantPidPath)) {
+                  throw new Error(`timeout waiting for pid in ${childPidPath}`);
+                }
+              }),
+            ]),
+            signal,
+          );
+          childPid = Number(readFileSync(childPidPath, "utf8"));
+          descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+          expect(Number.isInteger(childPid)).toBe(true);
+          expect(Number.isInteger(descendantPid)).toBe(true);
 
-        expect(runner.pid).toBeGreaterThan(0);
-        process.kill(runner.pid!, "SIGTERM");
-        const result = await waitForClose(runner);
+          expect(runner.pid).toBeGreaterThan(0);
+          process.kill(runner.pid!, "SIGTERM");
+          const result = await withinTest(runnerClosed, signal);
 
-        expect(result).toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => fileExists(signaledPath), 5_000);
-        expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
-        await waitFor(() => !isProcessAlive(childPid), 5_000);
-        await waitFor(() => !isProcessAlive(descendantPid), 5_000);
-      } finally {
-        if (runner.pid && isProcessAlive(runner.pid)) {
-          process.kill(runner.pid, "SIGKILL");
+          expect(result).toEqual({ code: null, signal: "SIGTERM" });
+          // The config writes this synchronously before exiting, and the batch
+          // runner joins the native process before re-raising its signal.
+          expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
+          await waitForProcessesExit([childPid, descendantPid], signal);
+        } finally {
+          if (runner.pid && isProcessAlive(runner.pid)) {
+            process.kill(runner.pid, "SIGTERM");
+          }
+          await runnerClosed;
+          childPid ||= fileExists(childPidPath) ? Number(readFileSync(childPidPath, "utf8")) : 0;
+          descendantPid ||= fileExists(descendantPidPath)
+            ? Number(readFileSync(descendantPidPath, "utf8"))
+            : 0;
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+          }
+          if (descendantPid && isProcessAlive(descendantPid)) {
+            process.kill(descendantPid, "SIGKILL");
+          }
+          rmSync(root, { force: true, recursive: true });
         }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-        rmSync(root, { force: true, recursive: true });
-      }
-    },
+      }),
   );
 
   it.each([
@@ -1446,28 +1487,18 @@ await new Promise(()=>{});export default {};`,
   });
 });
 
-async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
-  const startedAt = Date.now();
-  while (!condition()) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
+// Native Vitest owns these handles and its group join accepts terminal zombies.
+// Preserve the stronger absent-PID assertion until reaping, bounded only by cancellation.
+async function waitForProcessesExit(pids: number[], signal: AbortSignal): Promise<void> {
+  while (pids.some(isProcessAlive)) {
+    try {
+      await delay(5, undefined, { signal });
+    } catch (cause) {
+      throw new Error(`timed out waiting for condition: processes ${pids.join(", ")} exited`, {
+        cause,
+      });
     }
-    await delay(5);
   }
-}
-
-async function waitForClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await Promise.race([
-    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    }),
-    delay(timeoutMs, undefined, { ref: false }).then(() => {
-      throw new Error("timed out waiting for child close");
-    }),
-  ]);
 }
 
 function fileExists(filePath: string): boolean {

@@ -80,12 +80,8 @@ export async function buildActiveSubagentRuntimeContext(params: {
   if (!rawControllerSessionKey) {
     return undefined;
   }
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  const controllerSessionKey = resolveInternalSessionKey({
-    key: rawControllerSessionKey,
-    alias,
-    mainKey,
-  });
+  const { alias } = resolveMainSessionAlias(params.cfg);
+  const controllerSessionKey = resolveInternalSessionKey({ key: rawControllerSessionKey, alias });
   const agentId = params.controllerAgentId ?? parseAgentSessionKey(controllerSessionKey)?.agentId;
   if (!agentId) {
     return undefined;

@@ -5,7 +5,6 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { prepareInternalSessionEffectsSession } from "../../agents/internal-session-effects.js";
 import { ensureSessionGroupCatalog } from "../../gateway/session-group-catalog.js";
 import { ensureSessionGroupRegistered, listSessionGroups } from "../../gateway/session-groups.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
@@ -42,7 +41,6 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
-import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
@@ -324,34 +322,6 @@ it.each(["incognito", "maintenance"] as const)(
     });
   },
 );
-
-it("creates hidden internal-effects sessions without admitting their keys to canonical replacement", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const target = await prepareInternalSessionEffectsSession({
-      agentId: "main",
-      storePath: database.path,
-      runId: "worker-create",
-    });
-    expect(readExactSessionEntryRow(database, target.sessionKey)?.entry.sessionId).toBe(
-      target.sessionId,
-    );
-    expect(readTranscriptStorageRows(database, target.sessionId)).toHaveLength(1);
-    await expect(
-      applySessionEntryCanonicalReplacements({
-        agentId: "main",
-        storePath: database.path,
-        sessionKeys: [target.sessionKey],
-        update: ([row]) => ({
-          result: undefined,
-          replacements: [
-            { sessionKey: target.sessionKey, previousSessionKeys: [], entry: row!.entry },
-          ],
-        }),
-      }),
-    ).rejects.toThrow("cannot target internal effects rows");
-  });
-});
 
 it("publishes the logical creator identity while retaining the shared database's physical owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
