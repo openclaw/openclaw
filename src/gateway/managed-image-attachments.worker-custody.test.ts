@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
+import type { SqliteWorkerRequest } from "../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { withChannelReadAuthority } from "../shared/channel-read-authority.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -147,6 +149,25 @@ describe("managed media worker custody", () => {
               },
             });
           });
+        const commands = new WeakMap<object, Map<number, string>>();
+        // Reply faults need pre-transfer facts from the same worker and request.
+        // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker.
+        const nativePost = Worker.prototype.postMessage;
+        using _ = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+          this: Worker,
+          request: SqliteWorkerRequest,
+          transferList,
+        ) {
+          if (request.type === "execute") {
+            const command: unknown = deserialize(request.input);
+            if (isRecord(command) && typeof command.type === "string") {
+              const pending = commands.get(this) ?? new Map<number, string>();
+              pending.set(request.id, command.type);
+              commands.set(this, pending);
+            }
+          }
+          return nativePost.call(this, request, transferList);
+        });
         const receive = brokerReply.receiveSqliteWorkerReply;
         const replySpy = vi
           .spyOn(brokerReply, "receiveSqliteWorkerReply")
@@ -157,8 +178,7 @@ describe("managed media worker custody", () => {
               !reply.transfer &&
               !reply.input
             ) {
-              const command: unknown = deserialize(slot.current.request.input);
-              if (isRecord(command) && command.type === "managedImages.insert") {
+              if (commands.get(slot.worker)?.get(reply.id) === "managedImages.insert") {
                 nativeReplies++;
                 if (failure === "revoked after commit") {
                   active = false;

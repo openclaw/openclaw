@@ -169,37 +169,40 @@ describe("action-bound plugin state", () => {
               throw new Error("Visitor Access did not create its invitation tool");
             }
             providerConfirmed = false;
-            const posting = vi.spyOn(Worker.prototype, "postMessage");
-            const submittedRenewals = () => {
-              const submitted: unknown[] = [];
-              for (const [message] of posting.mock.calls) {
-                const request = asOptionalRecord(message);
-                if (request?.type === "execute" && request.input instanceof Uint8Array) {
-                  const operation = asOptionalRecord(deserialize(request.input));
-                  const input = asOptionalRecord(operation?.input);
-                  if (
-                    operation?.type === "pluginState.register" &&
-                    input?.pluginId === "visitor-access" &&
-                    input.namespace === "visitor-grants"
-                  ) {
-                    expect(providerConfirmed).toBe(true);
-                    expect(input.key).toBe(email);
-                    if (typeof input.valueJson !== "string") {
-                      throw new Error("Expected the native visitor grant submission");
-                    }
-                    submitted.push(JSON.parse(input.valueJson));
+            const submittedRenewals: unknown[] = [];
+            // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker.
+            const nativePost = Worker.prototype.postMessage;
+            const posting = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+              this: Worker,
+              message,
+              transferList,
+            ) {
+              const request = asOptionalRecord(message);
+              if (request?.type === "execute" && request.input instanceof Uint8Array) {
+                const operation = asOptionalRecord(deserialize(request.input));
+                const input = asOptionalRecord(operation?.input);
+                if (
+                  operation?.type === "pluginState.register" &&
+                  input?.pluginId === "visitor-access" &&
+                  input.namespace === "visitor-grants"
+                ) {
+                  expect(providerConfirmed).toBe(true);
+                  expect(input.key).toBe(email);
+                  if (typeof input.valueJson !== "string") {
+                    throw new Error("Expected the native visitor grant submission");
                   }
+                  submittedRenewals.push(JSON.parse(input.valueJson));
                 }
               }
-              return submitted;
-            };
+              return nativePost.call(this, message, transferList);
+            });
             let heldCommit = false;
             const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
             const admission = vi
               .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
               .mockImplementation((admit, attachment) =>
                 createAdmission((request, grant) => {
-                  if (request.stage === "commit" && !heldCommit && submittedRenewals().length > 0) {
+                  if (request.stage === "commit" && !heldCommit && submittedRenewals.length > 0) {
                     heldCommit = true;
                     // The native transaction already wrote its candidate; only its real commit guard remains.
                     vi.setSystemTime(previous.expiresAt + 1);
@@ -210,7 +213,7 @@ describe("action-bound plugin state", () => {
             try {
               const renewal = await invite.execute("renew", { email, days: 2 });
               expect(heldCommit).toBe(true);
-              expect(submittedRenewals()).toEqual([
+              expect(submittedRenewals).toEqual([
                 { ...previous, expiresAt: previous.createdAt + 2 * 86_400_000 },
               ]);
               expect(renewal).toMatchObject({ isError: true, details: { error: true } });

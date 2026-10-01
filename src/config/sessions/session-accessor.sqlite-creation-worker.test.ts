@@ -49,11 +49,31 @@ import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcrip
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
+function observeSessionCommands(commands: string[]) {
+  // Capture command facts before native dispatch transfers the private snapshot.
+  // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker.
+  const nativePost = Worker.prototype.postMessage;
+  return vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    request,
+    transferList,
+  ) {
+    if (isRecord(request) && request.type === "execute" && request.input instanceof Uint8Array) {
+      const command: unknown = deserialize(request.input);
+      if (isRecord(command) && typeof command.type === "string") {
+        commands.push(command.type);
+      }
+    }
+    return nativePost.call(this, request, transferList);
+  });
+}
+
 it("creates with prepared label facts, header and atomic owner without host data SQL, then registers under the captured environment", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const key = "agent:main:creation-worker";
-    using post = vi.spyOn(Worker.prototype, "postMessage");
+    const commands: string[] = [];
+    using _ = observeSessionCommands(commands);
     const alias = state.path("agent-alias");
     await fs.symlink(path.dirname(database.path), alias, "junction");
     const storePath = path.join(alias, path.basename(database.path));
@@ -151,21 +171,7 @@ it("creates with prepared label facts, header and atomic owner without host data
         ok: true,
         entry: { sessionId: "created", label: "available" },
       });
-      const writes = post.mock.calls.flatMap(([request]) => {
-        if (
-          !isRecord(request) ||
-          request.type !== "execute" ||
-          !(request.input instanceof Uint8Array)
-        ) {
-          return [];
-        }
-        const command: unknown = deserialize(request.input);
-        return isRecord(command) &&
-          typeof command.type === "string" &&
-          command.type.startsWith("session.")
-          ? [command.type]
-          : [];
-      });
+      const writes = commands.filter((type) => type.startsWith("session."));
       expect(writes).toEqual(["session.entries.replace"]);
       expect(assertCreation).toThrow("Session creation publication owner is no longer current");
       const firstUse = await createSessionEntryWithTranscript(
@@ -387,7 +393,8 @@ it("publishes the logical creator identity while retaining the shared database's
 it("adopts admitted Signal history and collaboration without host SQL, preserving a case-distinct Matrix sibling", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    using post = vi.spyOn(Worker.prototype, "postMessage");
+    const commands: string[] = [];
+    using _ = observeSessionCommands(commands);
     const sessionKey = "agent:main:signal:group:AbC";
     const alias = sessionKey.toLowerCase();
     const scope = { agentId: "main", storePath: database.path, sessionKey: alias };
@@ -509,17 +516,6 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
       ).ok,
     ).toBe(true);
     expect(readExactSessionEntryRow(database, sibling)?.entry.sessionId).toBe("matrix-sibling");
-    const commands = post.mock.calls.flatMap(([request]) => {
-      if (
-        !isRecord(request) ||
-        request.type !== "execute" ||
-        !(request.input instanceof Uint8Array)
-      ) {
-        return [];
-      }
-      const command: unknown = deserialize(request.input);
-      return isRecord(command) ? [command.type] : [];
-    });
     expect(commands).toContain("session.entries.replace");
     expect(commands).not.toContain("session.archives.preparePublication");
   });

@@ -57,6 +57,7 @@ type Receipt = {
 };
 export type FixtureOperations = {
   append: { input: { value: string }; output: Receipt };
+  appendBytes: { input: { value: Uint8Array }; output: Receipt };
   read: { input: undefined; output: string[] };
   takeReplyOwnership: { input: undefined; output: ReplyOwnership[] };
   commitThenExit: { input: { value: string }; output: never };
@@ -197,7 +198,11 @@ function createFixtureBackend(
           query.selectFrom("entries").select("value").orderBy("id"),
         ).rows.map((row) => row.value);
       }
-      const receipt = append(command.input.value);
+      const receipt = append(
+        command.type === "appendBytes"
+          ? Buffer.from(command.input.value).toString("hex")
+          : command.input.value,
+      );
       if (command.type === "commitThenExit") {
         // Leave an outstanding native lock as well as a committed write when the worker exits.
         db.exec("BEGIN IMMEDIATE");

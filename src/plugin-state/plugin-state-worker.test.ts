@@ -207,12 +207,12 @@ describe("worker plugin state", () => {
           .spyOn(worker, "postMessage")
           .mockImplementation((message, transferList) => {
             const request = asOptionalRecord(message);
-            nativePost(message, transferList);
-            if (
+            const matches =
               request?.type === "execute" &&
               request.input instanceof Uint8Array &&
-              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
-            ) {
+              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation;
+            nativePost(message, transferList);
+            if (matches) {
               posted.resolve();
             }
           });

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -15,6 +16,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
+import type { SqliteWorkerRequest } from "../infra/sqlite-worker-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -269,22 +271,40 @@ describe("managed image record SQLite store", () => {
 
   it("recovers exact native mutation receipts after ordinary replies are lost", async () => {
     const initial = record();
+    const commands = new WeakMap<object, Map<number, string>>();
+    // Reply faults need pre-transfer facts from the same worker and request.
+    // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker.
+    const nativePost = Worker.prototype.postMessage;
+    using _ = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      request: SqliteWorkerRequest,
+      transferList,
+    ) {
+      if (request.type === "execute") {
+        const command: unknown = deserialize(request.input);
+        if (isRecord(command) && typeof command.type === "string") {
+          const pending = commands.get(this) ?? new Map<number, string>();
+          pending.set(request.id, command.type);
+          commands.set(this, pending);
+        }
+      }
+      return nativePost.call(this, request, transferList);
+    });
     const receive = brokerReply.receiveSqliteWorkerReply;
     const corrupted: string[] = [];
     vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
       if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
-        const command: unknown = deserialize(slot.current.request.input);
+        const command = commands.get(slot.worker)?.get(reply.id);
         if (
-          isRecord(command) &&
-          typeof command.type === "string" &&
+          command &&
           [
             "managedImages.insert",
             "managedImages.attach",
             "managedImages.claimCleanup",
             "managedImages.deleteClaimed",
-          ].includes(command.type)
+          ].includes(command)
         ) {
-          corrupted.push(command.type);
+          corrupted.push(command);
           return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
         }
       }

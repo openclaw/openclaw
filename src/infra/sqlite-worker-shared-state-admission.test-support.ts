@@ -357,7 +357,25 @@ export function registerSharedStateWorkerAdmissionTests(
     const foreign = holdForeignWriter(captured);
     const canceled = new AbortController();
     const stopped = new Error("synthetic queued write canceled");
-    const posts = vi.spyOn(Worker.prototype, "postMessage");
+    const dispatched: number[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker.
+    const nativePost = Worker.prototype.postMessage;
+    const posts = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      request,
+      transferList,
+    ) {
+      if (request.type === "execute") {
+        const command = deserialize(request.input) as {
+          type: string;
+          input: { record: NativeHookRelayBridgeRecord };
+        };
+        if (command.type === "nativeHookRelay.write") {
+          dispatched.push(command.input.record.pid);
+        }
+      }
+      return nativePost.call(this, request, transferList);
+    });
     let factories = 0;
     try {
       await runOpenClawStateWorkerOperation(
@@ -428,16 +446,6 @@ export function registerSharedStateWorkerAdmissionTests(
           },
         },
       );
-      const dispatched = posts.mock.calls.flatMap(([request]) => {
-        if (request.type !== "execute") {
-          return [];
-        }
-        const command = deserialize(request.input) as {
-          type: string;
-          input: { record: NativeHookRelayBridgeRecord };
-        };
-        return command.type === "nativeHookRelay.write" ? [command.input.record.pid] : [];
-      });
       expect(dispatched).toEqual([0, ...Array.from({ length: 255 }, (_, index) => index + 2)]);
       expect(factories).toBe(256);
       expect(

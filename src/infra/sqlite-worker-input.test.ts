@@ -22,6 +22,7 @@ import {
   SQLITE_WORKER_TRANSFER_FRAME_BYTES,
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
+import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 const { stores, databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-input-", () => {
   vi.restoreAllMocks();
@@ -72,11 +73,58 @@ function holdFirstStagedChunk() {
 }
 
 describe("SQLite worker staged input", () => {
+  it("transfers private inline snapshots while full, sliced and pooled caller bytes stay attached", async () => {
+    const store = await open(databasePath());
+    const inputs = [
+      Uint8Array.from([1, 2, 3, 4]),
+      Uint8Array.from([0, 5, 6, 7, 8, 0]).subarray(1, 5),
+      Buffer.from([9, 10, 11, 12]),
+    ];
+    const expected = inputs.map((input) => Buffer.from(input).toString("hex"));
+    const sent: Array<{ before: number; after: number; transferred: boolean }> = [];
+    // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker.
+    const nativePost = Worker.prototype.postMessage;
+    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      request: SqliteWorkerRequest,
+      transferList,
+    ) {
+      if (request.type !== "execute") {
+        return nativePost.call(this, request, transferList);
+      }
+      const bytes = request.input;
+      const before = bytes.byteLength;
+      const transferred = transferList?.some((value) => value === bytes.buffer) ?? false;
+      nativePost.call(this, request, transferList);
+      sent.push({ before, after: bytes.byteLength, transferred });
+    });
+    for (const [index, input] of inputs.entries()) {
+      const backingLength = input.buffer.byteLength;
+      const writing = store.execute({ type: "appendBytes", input: { value: input } });
+      input.fill(255);
+      expect(input.byteLength).toBe(4);
+      expect(input.buffer.byteLength).toBe(backingLength);
+      expect(await writing).toMatchObject({ writes: index + 1 });
+      expect([...input]).toEqual([255, 255, 255, 255]);
+    }
+    expect(sent).toHaveLength(inputs.length);
+    for (const message of sent) {
+      expect(message.before).toBeGreaterThan(0);
+      expect(message).toMatchObject({ after: 0, transferred: true });
+    }
+    await expectRows(store, expected);
+  });
+
   it.each([40, 72])("snapshots and persists one %s MiB append across reopening", async (mib) => {
     const file = databasePath();
     const store = await open(file);
     const value = payload(mib);
-    const inputFrames: Array<{ visible: number; backing: number }> = [];
+    const inputFrames: Array<{
+      visible: number;
+      backing: number;
+      after: number;
+      transferred: boolean;
+    }> = [];
     const receivedFrames: Array<{ visible: number; backing: number; framed: boolean }> = [];
     const commands: SqliteWorkerRequest["type"][] = [];
     // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker below.
@@ -88,10 +136,17 @@ describe("SQLite worker staged input", () => {
     ) {
       commands.push(request.type);
       if (request.type === "execute-frame") {
+        const visible = request.input.byteLength;
+        const backing = request.input.buffer.byteLength;
+        const transferred = transferList?.some((entry) => entry === request.input.buffer) ?? false;
+        originalPost.call(this, request, transferList);
         inputFrames.push({
-          visible: request.input.byteLength,
-          backing: request.input.buffer.byteLength,
+          visible,
+          backing,
+          after: request.input.byteLength,
+          transferred,
         });
+        return;
       }
       return originalPost.call(this, request, transferList);
     });
@@ -124,6 +179,7 @@ describe("SQLite worker staged input", () => {
     for (const frame of inputFrames) {
       expect(frame.visible).toBeLessThanOrEqual(SQLITE_WORKER_TRANSFER_FRAME_BYTES + 1024);
       expect(frame.backing).toBeLessThanOrEqual(SQLITE_WORKER_TRANSFER_FRAME_BYTES + 1024);
+      expect(frame).toMatchObject({ after: 0, transferred: true });
     }
     for (const frame of receivedFrames) {
       const limit = frame.framed
@@ -225,11 +281,8 @@ describe("SQLite worker staged input", () => {
       if (request.type === "execute-frame") {
         post.mockRestore();
         const frame = deserialize(request.input) as SqliteWorkerTransferFrame;
-        return original.call(
-          this,
-          { ...request, input: serialize({ ...frame, sequence: frame.sequence + 1 }) },
-          transferList,
-        );
+        const input = ownedWorkerBytes(serialize({ ...frame, sequence: frame.sequence + 1 }));
+        return original.call(this, { ...request, input }, [input.buffer]);
       }
       return original.call(this, request, transferList);
     });
@@ -250,6 +303,71 @@ describe("SQLite worker staged input", () => {
     } finally {
       post.mockRestore();
       await Promise.allSettled([staged, queued, store.close()]);
+      stores.delete(store);
+    }
+  });
+
+  it("joins retirement after an injected continuation-post failure without replaying queued writes", async () => {
+    const file = databasePath();
+    const store = await open(file);
+    const failed = new Error("Injected continuation post failed");
+    let exited = false;
+    let failures = 0;
+    const posted: SqliteWorkerRequest["type"][] = [];
+    const hold = holdReply(() => true);
+    const ahead = append(store, "ahead");
+    let writing: Promise<unknown> | undefined;
+    let queued: Promise<unknown> | undefined;
+    let restorePost: (() => void) | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker.
+    const nativePost = Worker.prototype.postMessage;
+    try {
+      await Promise.race([hold.held, ahead]);
+      const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+        this: Worker,
+        request: SqliteWorkerRequest,
+        transferList,
+      ) {
+        posted.push(request.type);
+        if (request.type === "execute-frame") {
+          failures += 1;
+          this.once("exit", () => {
+            exited = true;
+          });
+          nativePost.call(this, request, transferList);
+          expect(request.input.byteLength).toBe(0);
+          throw failed;
+        }
+        return nativePost.call(this, request, transferList);
+      });
+      restorePost = () => post.mockRestore();
+      writing = append(store, payload(40));
+      queued = append(store, "must not replay");
+      const outcomes = Promise.allSettled([writing, queued]);
+      hold.release();
+      expect(await ahead).toMatchObject({ writes: 1 });
+      expect(await outcomes).toEqual([
+        {
+          status: "rejected",
+          reason: expect.objectContaining({ code: "outcome-unknown", cause: failed }),
+        },
+        { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
+      ]);
+      expect(exited).toBe(true);
+      expect(failures).toBe(1);
+      expect(posted).toEqual(["execute-start", "execute-frame"]);
+      post.mockRestore();
+      await expect(store.close()).resolves.toBeUndefined();
+      stores.delete(store);
+      const recovered = await open(file);
+      const retained = await recovered.execute({ type: "read", input: undefined });
+      expect(retained).toEqual(["ahead"]);
+      expect(await append(recovered, "recovered")).toMatchObject({ writes: 1 });
+      await expectRows(recovered, [...retained, "recovered"]);
+    } finally {
+      hold.release();
+      restorePost?.();
+      await Promise.allSettled([ahead, writing, queued, store.close()]);
       stores.delete(store);
     }
   });

@@ -30,6 +30,7 @@ import {
   type SqliteWorkerTransferFrame,
   type SqliteWorkerTransferHandle,
 } from "./sqlite-worker-transfer.js";
+import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 export function dispatchSqliteWorkerJob(
   slot: Slot,
@@ -61,6 +62,8 @@ export function dispatchSqliteWorkerJob(
       assertCurrentJob,
     );
     const request = prepareSqliteWorkerRequest(job);
+    // Opening input remains owned by admission/reopening; only command snapshots are private.
+    const input = request.type === "execute" ? ownedWorkerBytes(request.input) : undefined;
     assertDispatchable();
     job.nativeDispatched = true;
     job.detach();
@@ -68,10 +71,10 @@ export function dispatchSqliteWorkerJob(
       job.dispatchState.dispatched = true;
     }
     job.requestPosted = true;
-    slot.worker.postMessage(
-      request,
-      request.operationAdmission ? [request.operationAdmission] : [],
-    );
+    slot.worker.postMessage(input ? { ...request, input } : request, [
+      ...(input ? [input.buffer] : []),
+      ...(request.operationAdmission ? [request.operationAdmission] : []),
+    ]);
   } catch (error) {
     onRejected(error, job.requestPosted === true);
   }
@@ -349,7 +352,9 @@ export function receiveSqliteWorkerReply(
     const result = decodeSqliteWorkerReplyValue(job, reply);
     if (result.type === "continue") {
       // Continuations retain the current job and its reserved transport credits through drain.
-      slot.worker.postMessage(result.request, []);
+      const request = result.request;
+      const input = request.type === "execute-frame" ? ownedWorkerBytes(request.input) : undefined;
+      slot.worker.postMessage(input ? { ...request, input } : request, input ? [input.buffer] : []);
       return;
     }
     value = result.value;
