@@ -323,6 +323,7 @@ it("searches and reads eligible skills through the worker bridge and normal tool
           { name: "demo", description: demo.skill.description, location: "/skills/demo/SKILL.md" },
         ],
         hasMore: false,
+        coverage: { bodyIndexed: 0, metadataOnly: 1, truncatedBodies: 0 },
       },
       body,
       unknown: 'Unknown installed skill "missing".',

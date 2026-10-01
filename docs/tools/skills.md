@@ -836,10 +836,11 @@ The prompt contains a bounded skill directory. Skills omitted by the prompt
 budget remain discoverable through `skills_search` when that tool is enabled.
 Small catalogs continue to appear in full.
 
-- `skills_search({ query, limit? })` searches eligible installed names and
-  descriptions. The default limit is 5; the maximum is 20. Queries must contain
-  1-1,000 characters. Results contain names, locations, and shortened descriptions, not
-  instructions. `hasMore` indicates that additional matches exist.
+- `skills_search({ query, limit? })` searches eligible installed names,
+  descriptions, and bounded instruction text. The default limit is 5; the maximum
+  is 20. Queries must contain 1-1,000 characters. Results contain names, locations,
+  and shortened descriptions, not instructions. `hasMore` indicates that additional
+  matches exist.
 - `skills_read({ name })` loads the complete `SKILL.md` for an exact name.
   Search is not required when the name is already known. Instructions omitted
   from the prompt directory are limited to 256 KiB and rejected if larger, not
@@ -864,6 +865,24 @@ An existing `read` policy grant also permits `skills_read`. An explicit
 Search uses an in-memory lexical index of the prepared catalog. It follows the
 existing [snapshot and refresh rules](/tools/skills#snapshots-and-refresh), with
 no embedding service or persistent search index.
+The first search reads bodies through the admitted filesystem owner.
+Concurrent first searches share one build; cancelling a waiter does not cancel
+its owner. Later searches reuse the completed index for that prepared catalog
+and still check current run authority. Names and descriptions have twice the lexical
+weight of body text; exact names rank first.
+
+Body indexing reads at most 1,024 skills in name order, four at a time. Each body
+contributes at most 16 KiB, reduced equally across the selected skills
+to keep their total at most 4 MiB. File readers enforce this budget before reading;
+oversized files and owners without bounded search reads retain metadata only.
+Remote workspace owners with whole-skill reads only do not use their document
+bridge for indexing. Already-delivered inline bodies can contribute a bounded
+prefix. Metadata remains searchable for the full eligible catalog.
+If bodies are unreadable, omitted, or shortened,
+`coverage` reports `bodyIndexed`, `metadataOnly`, and `truncatedBodies`.
+An empty result with partial coverage does not prove that no applicable skill exists.
+Indexing never executes skill content, and index limits do not truncate `skills_read`.
+
 Sandbox search includes only readable, delivered skills. Discovery does not
 expand the existing worker transfer selection or its 8 MiB total resource limit.
 Dedicated remote workers retain their existing tool protocol; the new search

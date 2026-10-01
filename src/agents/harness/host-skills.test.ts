@@ -82,6 +82,9 @@ it("binds skill reads to a late sandbox and refuses reads after host closure", a
       skills: [],
       hasMore: false,
     });
+    expect(readFile).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: runtimePath, maxBytes: 16 * 1024 }),
+    );
     const result = await read.execute("read-guide", { name: "guide" });
     expect(result.content).toEqual([{ type: "text", text: "Complete sandbox instructions" }]);
     expect(readFile).toHaveBeenCalledWith(
@@ -89,7 +92,8 @@ it("binds skill reads to a late sandbox and refuses reads after host closure", a
     );
     host.closeHost();
     await expect(read.execute("closed", { name: "guide" })).rejects.toThrow();
-    expect(readFile).toHaveBeenCalledOnce();
+    await expect(search.execute("closed-search", { query: "sandbox" })).rejects.toThrow();
+    expect(readFile).toHaveBeenCalledTimes(2);
   } finally {
     host.closeHost();
     host.closeAdmission();

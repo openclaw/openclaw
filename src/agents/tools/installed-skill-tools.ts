@@ -21,7 +21,7 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
       name: "skills_search",
       label: "Search Installed Skills",
       description:
-        "Find relevant installed, eligible skills by task or exact name, including skills omitted from the prompt directory. Returns metadata only. Does not search ClawHub or install anything.",
+        "Find relevant installed, eligible skills by task or exact name, including skills omitted from the prompt directory. Searches names, descriptions, and bounded instruction text. Returns metadata only; coverage reports any incomplete body indexing. Read the selected skill's whole instructions before applying it. Does not search ClawHub or install anything.",
       parameters: Type.Object({
         query: Type.String({ minLength: 1, maxLength: 1000 }),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
@@ -30,10 +30,11 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
         signal?.throwIfAborted();
         const params = asToolParamsRecord(args);
         return jsonResult(
-          searchInstalledSkills(
+          await searchInstalledSkills(
             skills,
             readToolStringParam(params, "query", { required: true }),
             readNumberParam(params, "limit"),
+            signal,
           ),
         );
       },

@@ -40,21 +40,28 @@ export function prepareInstalledSkillCatalog(params: {
     )
     .map((skill) => {
       let reader: CodeModeSkillReader | undefined;
+      let readSearchContent: InstalledSkill["readSearchContent"];
       if (sandbox?.enabled) {
-        reader = async ({ location, signal }) => {
+        const readInstructions = async (maxBytes: number | undefined, signal?: AbortSignal) => {
           params.assertCurrent?.();
           if (!sandbox.fsBridge) {
             throw new Error("Sandbox filesystem bridge is unavailable for skill reads.");
           }
           const content = await sandbox.fsBridge.readFile({
-            filePath: location,
+            filePath: skill.filePath,
             cwd: sandbox.containerWorkdir,
             signal,
-            maxBytes: promptListed.has(skill.name) ? undefined : MAX_SKILL_INSTRUCTION_BYTES,
+            maxBytes,
           });
           params.assertCurrent?.();
           return content.toString("utf8");
         };
+        reader = ({ signal }) =>
+          readInstructions(
+            promptListed.has(skill.name) ? undefined : MAX_SKILL_INSTRUCTION_BYTES,
+            signal,
+          );
+        readSearchContent = readInstructions;
       } else if (
         workspace?.loadSkills &&
         (skill.fileHost === "workspace" ||
@@ -72,6 +79,8 @@ export function prepareInstalledSkillCatalog(params: {
           params.assertCurrent?.();
           return content;
         };
+        // This resource owner supports whole reads only. Its document bridge
+        // is not a substitute for bounded skill-resource authority.
       }
       return {
         name: skill.name,
@@ -83,6 +92,8 @@ export function prepareInstalledSkillCatalog(params: {
           readContent: sandbox?.enabled ? undefined : skill.readContent,
         },
         reader,
+        assertCurrent: params.assertCurrent,
+        readSearchContent,
       };
     });
 }
