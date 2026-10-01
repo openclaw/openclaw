@@ -76,6 +76,22 @@ describe("outbound message planning", () => {
     );
   });
 
+  it("preserves fenced blocks for newline chunk mode so the adapter can balance fences", () => {
+    const text = ```ts
+const value1 = compute(1);\nconst value2 = compute(2);\nconst value3 = compute(3);\nconst value4 = compute(4);\nconst value5 = compute(5);\nconst value6 = compute(6);\nconst value7 = compute(7);\nconst value8 = compute(8);\nconst value9 = compute(9);\nconst value10 = compute(10);\nconst value11 = compute(11);\nconst value12 = compute(12);\nconst value13 = compute(13);\nconst value14 = compute(14);\nconst value15 = compute(15);\nconst value16 = compute(16);\nconst value17 = compute(17);\nconst value18 = compute(18);\nconst value19 = compute(19);\nconst value20 = compute(20);\nconst value21 = compute(21);\nconst value22 = compute(22);\nconst value23 = compute(23);\nconst value24 = compute(24);\nconst value25 = compute(25);\nconst value26 = compute(26);\nconst value27 = compute(27);\nconst value28 = compute(28);\nconst value29 = compute(29);\nconst value30 = compute(30);\nconst value31 = compute(31);\nconst value32 = compute(32);\nconst value33 = compute(33);\nconst value34 = compute(34);\nconst value35 = compute(35);\nconst value36 = compute(36);\nconst value37 = compute(37);\nconst value38 = compute(38);\nconst value39 = compute(39);\nconst value40 = compute(40);\nconst value41 = compute(41);\nconst value42 = compute(42);\nconst value43 = compute(43);\nconst value44 = compute(44);\nconst value45 = compute(45);\nconst value46 = compute(46);\nconst value47 = compute(47);\nconst value48 = compute(48);\nconst value49 = compute(49);\nconst value50 = compute(50);\nconst value51 = compute(51);\nconst value52 = compute(52);\nconst value53 = compute(53);\nconst value54 = compute(54);\nconst value55 = compute(55);\nconst value56 = compute(56);\nconst value57 = compute(57);\nconst value58 = compute(58);\nconst value59 = compute(59);\nconst value60 = compute(60);
+```;
+    const units = planOutboundTextMessageUnits({
+      text,
+      textLimit: 2000,
+      chunker: (value) => [value],
+      chunkMode: "newline",
+      overrides: {},
+    });
+
+    expect(units).toHaveLength(1);
+    expect(units[0]?.text).toBe(text);
+  });
+
   it.each([
     { label: "default", chunkMode: undefined },
     { label: "length", chunkMode: "length" as const },
