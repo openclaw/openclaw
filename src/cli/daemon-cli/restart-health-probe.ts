@@ -254,23 +254,28 @@ function readChannelProbeFailures(health: unknown) {
           account?.lifecycle === "stopped"
             ? account.lifecycle
             : undefined;
-        const startupGrace =
-          evaluateChannelHealth(
-            {
-              lifecycle,
-              running: account?.running === true,
-              terminalDisconnect: account?.terminalDisconnect === true,
-              ingressUnavailable: account?.ingressUnavailable === true ? true : undefined,
-              lastStartAt:
-                typeof account?.lastStartAt === "number" ? account.lastStartAt : undefined,
-            },
-            {
-              channelId,
-              now: Date.now(),
-              channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
-              staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-            },
-          ).reason === "startup-connect-grace";
+        const lastDisconnect = asOptionalRecord(account?.lastDisconnect);
+        const recoveryReason = evaluateChannelHealth(
+          {
+            lifecycle,
+            running: account?.running === true,
+            connected:
+              account?.connected === true ? true : account?.connected === false ? false : undefined,
+            lastDisconnect:
+              typeof lastDisconnect?.at === "number" ? { at: lastDisconnect.at } : undefined,
+            terminalDisconnect: account?.terminalDisconnect === true,
+            ingressUnavailable: account?.ingressUnavailable === true ? true : undefined,
+            lastStartAt: typeof account?.lastStartAt === "number" ? account.lastStartAt : undefined,
+          },
+          {
+            channelId,
+            now: Date.now(),
+            channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+            staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+          },
+        ).reason;
+        const recoveryGrace =
+          recoveryReason === "startup-connect-grace" || recoveryReason === "reconnect-grace";
         const restartHandoff =
           (healthState === "not-running" || healthState === "ingress-unavailable") &&
           isChannelHealthRestartHandoff(
@@ -284,7 +289,7 @@ function readChannelProbeFailures(health: unknown) {
           {
             id,
             error: lastError || healthState,
-            ...(startupGrace || restartHandoff ? { retryable: true } : {}),
+            ...(recoveryGrace || restartHandoff ? { retryable: true } : {}),
           },
         ];
       }

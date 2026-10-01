@@ -684,6 +684,14 @@ describe("restart health", () => {
     { healthState: "starting", lifecycle: "starting", running: true },
     { healthState: "starting", running: true },
     { healthState: "reconnecting", lifecycle: "recovering", running: false },
+    {
+      healthState: "reconnecting",
+      lifecycle: "recovering",
+      running: true,
+      connected: false,
+      lastStartAt: Date.now() - 120_001,
+      lastDisconnect: { at: Date.now(), error: "socket closed" },
+    },
     { healthState: "not-running", running: false, restartPending: true },
   ])(
     "waits for channel recovery rather than reporting failure or early success: %j",
@@ -706,8 +714,10 @@ describe("restart health", () => {
             },
           },
         });
+      const firstObservation =
+        "lastStartAt" in runtime ? runtime : { ...runtime, lastStartAt: Date.now() };
       callGateway
-        .mockImplementationOnce(response({ ...runtime, lastStartAt: Date.now() }))
+        .mockImplementationOnce(response(firstObservation))
         .mockImplementation(
           response({ running: true, healthState: "healthy", lifecycle: "ready" }),
         );
