@@ -11,11 +11,11 @@ import {
   type StateLeaseProcessOwner,
 } from "../infra/state-lease-process-owner.js";
 import type { DB } from "./openclaw-state-db.generated.js";
+import type {
+  OpenClawStateLeaseIdentity,
+  OpenClawStateLeaseAcquisition,
+} from "./openclaw-state-lease.types.js";
 
-export type OpenClawStateLeaseIdentity = { scope: string; key: string; owner: string };
-export type OpenClawStateLeaseAcquisition =
-  | { kind: "acquired"; expiresAt: number }
-  | { kind: "held"; holder: { owner: string; epoch: number; expiresAt: number | null } };
 type LeaseDatabase = Pick<DB, "state_leases">;
 
 /** The caller owns the write transaction; only absent or expired leases can be acquired. */

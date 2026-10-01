@@ -1,4 +1,4 @@
-import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type {
   ProjectRegistryIdentity,
   ProjectRegistryInsert,

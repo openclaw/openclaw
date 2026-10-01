@@ -109,6 +109,7 @@ export async function searchProjectedSessionTranscripts(params: {
             ...target,
             sessionKeys: [...rows.keys()],
             query: params.query,
+            match: "prefix",
             limit,
           },
           { agentId: target.agentId, path: target.storePath },

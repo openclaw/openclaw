@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import {
   createChangedNodeTestShards,
   hasControlUiPerformanceAffectingChange,
+  resolveChangedNodeTestTargets,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
   createNodeTestShardBundles,
@@ -30,6 +31,32 @@ function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
     ),
   );
 }
+
+it("keeps the aggressive fixed smoke within two Node rows", () => {
+  let smoke: string[] = [];
+  resolveChangedNodeTestTargets(["src/infra/new-unlisted-module.ts"], {
+    selectionMode: "aggressive",
+    onSelection: ({ rule, targets }) => {
+      if (rule === "fixed-smoke") {
+        smoke = targets;
+      }
+    },
+  });
+  expect(smoke).toEqual([
+    "src/config/io.load-async.test.ts",
+    "src/plugins/loader.runtime-registry.test.ts",
+  ]);
+  const rows = createChangedNodeTestShards(["src/infra/new-unlisted-module.ts"], {
+    selectedTestTargets: smoke,
+    selectionMode: "aggressive",
+    runnerBackend: "hybrid",
+    dedicatedBuildArtifacts: false,
+    dedicatedUiTests: true,
+    dedicatedUiE2e: true,
+  });
+  expect(selectedFiles(rows).toSorted()).toEqual(smoke.toSorted());
+  expect(rows?.filter((row) => !row.requiresDist).length).toBeLessThanOrEqual(2);
+});
 
 it("keeps the hybrid hourly plan within the main-tier cap", () => {
   const hourly = createNodeTestShardBundles({

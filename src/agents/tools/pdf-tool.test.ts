@@ -155,7 +155,7 @@ it("admits managed inbound refs under workspace-only policy", async () => {
     const result = await pdf.execute("pdf", { pdf: "media://inbound/claim.pdf" });
     expect(loadSpy).toHaveBeenCalledWith(
       "media://inbound/claim.pdf",
-      expect.objectContaining({ localRoots: [] }),
+      expect.objectContaining({ localRoots: [path.join(stateDir, "media")] }),
     );
     expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
   });

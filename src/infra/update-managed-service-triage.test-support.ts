@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { vi } from "vitest";
 import type { FixtureAcquisitionRollback } from "../../test/helpers/fixture-lifetime.js";
 import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveSystemdUnitPath } from "../daemon/systemd-service-files.js";
 import { buildCliRespawnPlan } from "../entry.respawn.js";
@@ -19,7 +20,7 @@ import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { cleanupTriageBoundary } from "./triage-boundary-cleanup.test-support.js";
 import {
   triageLeaseFixtureLifetime,
-  triageRuntimeNodeOptions,
+  triageRuntimePreloadEnv,
 } from "./triage-lease-fixture.test-support.js";
 import {
   triageTestRuntimeEntrypoints,
@@ -311,7 +312,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META: metaPath,
     PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
     TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
-    NODE_OPTIONS: [triageRuntimeNodeOptions(), `--require ${preload}`].filter(Boolean).join(" "),
+    ...withRuntimePreload(triageRuntimePreloadEnv(), preload),
   };
   const commandArgv = [
     testNodeExecPath,

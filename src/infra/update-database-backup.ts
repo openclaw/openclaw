@@ -4,6 +4,12 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { z } from "zod";
 import type { DoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  maintenanceOwnerHasSourceCustody,
+  maintenanceOwnerMayCopySourcesInProcess,
+} from "../state/openclaw-state-maintenance-context.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   ensureDurableDirectory,
@@ -28,8 +34,12 @@ import {
   discoverUpdateStateSchemaInspectionInProcess,
   UpdateStateSchemaInspectionPlanSchema,
 } from "./update-candidate-state.js";
-import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
+import {
+  readUpdateStateDatabaseSizes,
+  readUpdateStateDatabaseSizesInProcess,
+} from "./update-candidate-state.sizes.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
+import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
 const UpdateDatabaseBackupSchema = z.object({
   directory: z.string(),
@@ -242,11 +252,10 @@ export async function createUpdateDatabaseBackupInProcess(
   const directory = await fs.realpath(`${input.backupRoot}.databases`);
   // Older parents strip owners from discovery before calling the candidate worker.
   // Compare the same admitted dialect; absent metadata must not become an inventory change.
-  const includeOwners = input.inspectionPlan.files.some(
-    ([, database]) => database.owners !== undefined,
-  );
+  const inspectionPlan = input.inspectionPlan;
+  const includeOwners = inspectionPlan.files.some(([, database]) => database.owners !== undefined);
   const inventory = await canonicalDatabaseInventory(
-    input.inspectionPlan,
+    inspectionPlan,
     includeOwners,
     input.additionalPaths,
     input.additionalFiles,
@@ -331,12 +340,14 @@ export async function createUpdateDatabaseBackupInProcess(
 
 /** Retain raw, verified database files separately from the old package fingerprint. */
 export async function createUpdateDatabaseBackup({
+  acquisition,
   nodeRunner = process.execPath,
   timeoutMs,
   signal: callerSignal,
   rehearsal,
   ...input
 }: BackupInput & {
+  acquisition?: UpdateRecoveryCaptureAcquisition;
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -366,14 +377,28 @@ export async function createUpdateDatabaseBackup({
         stagingRoot: directory,
       };
       const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
-      const inspectionPlan = parseUpdateStateInspectionWorker(
-        await runUpdateStateInspectionWorker({
-          ...worker,
-          input: { ...workerInput, mode: "discover" },
-          databases: await readUpdateStateDatabaseSizes([shared], worker),
-        }),
-        UpdateStateSchemaInspectionPlanSchema,
-      );
+      const scope = getOpenClawDatabaseMaintenanceScope();
+      const custody =
+        acquisition?.mode === "maintenance-owner" &&
+        maintenanceOwnerHasSourceCustody(scope, shared) &&
+        !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(shared);
+      const inspectionPlan =
+        custody && maintenanceOwnerMayCopySourcesInProcess(scope, shared)
+          ? await discoverUpdateStateSchemaInspectionInProcess({
+              ...workerInput,
+              stagingRoot: directory,
+              preserveSourceArtifacts: true,
+            })
+          : parseUpdateStateInspectionWorker(
+              await runUpdateStateInspectionWorker({
+                ...worker,
+                input: { ...workerInput, mode: "discover" },
+                databases: custody
+                  ? await readUpdateStateDatabaseSizesInProcess([shared], signal)
+                  : await readUpdateStateDatabaseSizes([shared], worker),
+              }),
+              UpdateStateSchemaInspectionPlanSchema,
+            );
       rehearsal?.assertCurrent();
       const excludedDatabasePaths = rehearsal?.admit(
         inspectionPlan.files.flatMap(([, database]) => database.spellings),
@@ -389,7 +414,10 @@ export async function createUpdateDatabaseBackup({
         await runUpdateStateInspectionWorker({
           ...worker,
           input: { ...capturedInput, mode: "database-backup", inspectionPlan },
-          databases: await readUpdateStateDatabaseSizes(files, worker),
+          ...(custody ? { ioBudget: "deadline" as const } : {}),
+          databases: custody
+            ? await readUpdateStateDatabaseSizesInProcess(files, signal)
+            : await readUpdateStateDatabaseSizes(files, worker),
         }),
         UpdateDatabaseBackupSchema,
       );

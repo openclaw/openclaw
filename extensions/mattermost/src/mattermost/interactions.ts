@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { isWildcardBindHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
@@ -155,28 +156,19 @@ export function resolveInteractionCallbackUrl(
 // Secret is derived from the bot token so it's stable across CLI and gateway processes.
 
 const interactionSecrets = new Map<string, string>();
-let defaultInteractionSecret: string | undefined;
 
 function deriveInteractionSecret(botToken: string): string {
   return createHmac("sha256", "openclaw-mattermost-interactions").update(botToken).digest("hex");
 }
 
-export function setInteractionSecret(accountIdOrBotToken: string, botToken?: string): void {
-  if (typeof botToken === "string") {
-    interactionSecrets.set(accountIdOrBotToken, deriveInteractionSecret(botToken));
-    return;
-  }
-  // Backward-compatible fallback for call sites/tests that only pass botToken.
-  defaultInteractionSecret = deriveInteractionSecret(accountIdOrBotToken);
+export function setInteractionSecret(accountId: string, botToken: string): void {
+  interactionSecrets.set(accountId, deriveInteractionSecret(botToken));
 }
 
 function getInteractionSecret(accountId?: string): string {
   const scoped = accountId ? interactionSecrets.get(accountId) : undefined;
   if (scoped) {
     return scoped;
-  }
-  if (defaultInteractionSecret) {
-    return defaultInteractionSecret;
   }
   // Fallback for single-account runtimes that only registered scoped secrets.
   if (interactionSecrets.size === 1) {
@@ -367,11 +359,11 @@ export function createMattermostInteractionHandler(params: {
   const core = getMattermostRuntime();
 
   function parseInteractionPayload(raw: string): MattermostInteractionPayload {
-    try {
-      return JSON.parse(raw) as MattermostInteractionPayload;
-    } catch {
+    const payload = safeParseJson<MattermostInteractionPayload>(raw);
+    if (payload === null) {
       throw new Error("Mattermost interaction body was malformed JSON");
     }
+    return payload;
   }
 
   return async (req: IncomingMessage, res: ServerResponse) => {

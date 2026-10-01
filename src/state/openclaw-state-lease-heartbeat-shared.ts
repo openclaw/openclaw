@@ -1,5 +1,5 @@
 import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 
 // Allow headroom over observed 38 s cold Gateway boots under load; committed lease expiry still bounds startup.

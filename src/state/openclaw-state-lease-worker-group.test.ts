@@ -5,13 +5,13 @@ import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-ope
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateAsyncLeaseContext } from "./openclaw-state-lease-context.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import { runWithOpenClawStateLeasesWorker } from "./openclaw-state-lease-worker-operation.js";
 import {
   createOpenClawStateLeaseWorkerOwner,
   withOpenClawStateLeaseWorkerAdmission,
   withOpenClawStateLeasesWorkerAdmission,
 } from "./openclaw-state-lease-worker-owner.js";
-import { runWithOpenClawStateLeasesWorker } from "./openclaw-state-lease-worker-storage.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 const runWorkerOperation = vi.hoisted(() => vi.fn());
