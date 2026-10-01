@@ -20,6 +20,7 @@ import {
   makeTempDir,
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
@@ -499,8 +500,8 @@ async function fixtureEventBeforeSettlement(
   count = 1,
 ): Promise<void> {
   const readLog = () =>
-    fs.readFile(logPath, "utf8").catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") {
+    fs.readFile(logPath, "utf8").catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
         return "";
       }
       throw error;
