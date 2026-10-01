@@ -391,8 +391,8 @@ describe("diagnostic memory", () => {
       heapSizeLimitBytes: 432 * 1024 ** 2,
       processMemoryLimitBytes: 0,
       physicalMemoryBytes: 0,
-      samples: [{ rssGiB: 330 / 1024 }, { rssGiB: 1537 / 1024 }, { rssGiB: 3073 / 1024 }],
-      expectedThresholdsGiB: { warning: 1.5, critical: 3 },
+      samples: [{ rssGiB: 330 / 1024 }, { rssGiB: 1537 / 1024 }, { rssGiB: 5223 / 1024 }],
+      expectedThresholdsGiB: { warning: 1.5, critical: 5 },
     },
     {
       name: "an enlarged V8 limit",
@@ -472,8 +472,8 @@ describe("diagnostic memory", () => {
       heapSizeLimitBytes,
       processMemoryLimitBytes: 0,
       physicalMemoryBytes: 0,
-      samples: [{ rssGiB: 1.4 }, { rssGiB: 1.6 }, { rssGiB: 3.1 }],
-      expectedThresholdsGiB: { warning: 1.5, critical: 3 },
+      samples: [{ rssGiB: 1.4 }, { rssGiB: 1.6 }, { rssGiB: 5.1 }],
+      expectedThresholdsGiB: { warning: 1.5, critical: 5 },
     })),
     {
       name: "Bun compatibility heap statistics",
@@ -490,8 +490,8 @@ describe("diagnostic memory", () => {
       heapSizeLimitBytes: 280_657_920,
       processMemoryLimitBytes: 0,
       physicalMemoryBytes: 512 * 1024 ** 3,
-      samples: [{ rssGiB: 1.4 }, { rssGiB: 1.6 }, { rssGiB: 3.1 }],
-      expectedThresholdsGiB: { warning: 1.5, critical: 3 },
+      samples: [{ rssGiB: 1.4 }, { rssGiB: 1.6 }, { rssGiB: 5.1 }],
+      expectedThresholdsGiB: { warning: 1.5, critical: 5 },
     },
   ])("scales default RSS pressure thresholds with $name", (testCase) => {
     const events: DiagnosticEventPayload[] = [];

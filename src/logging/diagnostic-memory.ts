@@ -12,7 +12,7 @@ import { createSubsystemLogger } from "./subsystem.js";
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;
-const DEFAULT_RSS_CRITICAL_BYTES = 3072 * MB;
+const DEFAULT_RSS_CRITICAL_BYTES = 5120 * MB; // raised 2026-10-01: 3 GiB -> 5 GiB (workboard 5451254e-09b0-4907-a178-e70a81e08127)
 const DEFAULT_HEAP_WARNING_BYTES = 1024 * MB;
 const DEFAULT_HEAP_CRITICAL_BYTES = 2048 * MB;
 const DEFAULT_HEAP_WARNING_RATIO = 0.5;
