@@ -141,22 +141,44 @@ describe("explicit managed handoff test binding", () => {
     },
   );
 
-  it("binds a separately resolved consumer package's CommonJS dependency", () => {
+  it("preserves a separately resolved consumer package's import and require conditions", () => {
     const { root, binding, program } = fixture();
     const consumer = path.join(root, "consumer-package");
     const dependency = path.join(consumer, "node_modules", "@openclaw", "fs-safe");
-    fs.mkdirSync(path.dirname(dependency), { recursive: true });
-    const packageRoot = path.dirname(path.dirname(require.resolve("@openclaw/fs-safe/temp")));
-    fs.symlinkSync(packageRoot, dependency, process.platform === "win32" ? "junction" : "dir");
+    fs.mkdirSync(dependency, { recursive: true });
+    const original = require.resolve("@openclaw/fs-safe/temp");
+    fs.writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/fs-safe",
+        exports: { "./temp": { import: "./temp.mjs", require: "./temp-require.mjs" } },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(dependency, "temp.mjs"),
+      `export * from ${JSON.stringify(pathToFileURL(original).href)};\n` +
+        'export const fixtureConsumer = "esm";\n',
+    );
+    fs.writeFileSync(
+      path.join(dependency, "temp-require.mjs"),
+      `export * from ${JSON.stringify(pathToFileURL(original).href)};\n` +
+        'export const fixtureConsumer = "commonjs";\n',
+    );
     const manifest = path.join(consumer, "package.json");
     fs.writeFileSync(manifest, '{"name":"handoff-consumer","private":true,"type":"module"}');
+    const esmConsumer = path.join(consumer, "consumer.mjs");
+    fs.writeFileSync(esmConsumer, 'export * from "@openclaw/fs-safe/temp";\n');
     fs.writeFileSync(
       program,
       [
         'import { createRequire } from "node:module";',
         `const require = createRequire(${JSON.stringify(manifest)});`,
-        'const { resolveSecureTempRoot } = require("@openclaw/fs-safe/temp");',
-        'process.stdout.write(resolveSecureTempRoot({ preferredDir: "/tmp/openclaw", fallbackPrefix: "openclaw", skipPreferredOnWindows: true }));',
+        'const required = require("@openclaw/fs-safe/temp");',
+        `const imported = await import(${JSON.stringify(pathToFileURL(esmConsumer).href)});`,
+        "process.stdout.write(JSON.stringify([required, imported].map((temp) => ({",
+        '  root: temp.resolveSecureTempRoot({ preferredDir: "/tmp/openclaw", fallbackPrefix: "openclaw", skipPreferredOnWindows: true }),',
+        "  consumer: temp.fixtureConsumer,",
+        "}))));",
       ].join("\n"),
     );
     const child = spawnSync(process.execPath, [binding.nodeOption, program], {
@@ -166,7 +188,10 @@ describe("explicit managed handoff test binding", () => {
     });
     expect(child.error).toBeUndefined();
     expect(child.status, child.stderr).toBe(0);
-    expect(child.stdout).toBe(root);
+    expect(JSON.parse(child.stdout)).toEqual([
+      { root, consumer: "commonjs" },
+      { root, consumer: "esm" },
+    ]);
     assertManagedHandoffTestConsumer(binding, child.pid, root);
   });
 

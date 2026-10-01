@@ -94,6 +94,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   portals: () => import("./portals.js").then((module) => module.portalHandlers),
   "progress-card": () => import("./progress-card.js").then((module) => module.progressCardHandlers),
   migrations: () => import("./migrations.js").then((module) => module.migrationsHandlers),
+  backup: () => import("./backup.js").then((module) => module.backupHandlers),
+  storage: () => import("./storage.js").then((module) => module.storageHandlers),
   push: () => import("./push.js").then((module) => module.pushHandlers),
   restart: () => import("./restart.js").then((module) => module.restartHandlers),
   suspend: () => import("./suspend.js").then((module) => module.suspendHandlers),

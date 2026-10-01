@@ -23,6 +23,7 @@ import {
 } from "../../media/media-reference.js";
 import { getMediaDir } from "../../media/store.js";
 import type { WebMediaResult } from "../../media/web-media.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import {
   listAvailableManifestContractValues,
   loadManifestContractSnapshot,
@@ -39,6 +40,7 @@ import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { normalizeWorkspaceDir } from "../workspace-dir.js";
 import {
   ToolInputError,
+  readNumberParam,
   readPositiveIntegerParam,
   readStringArrayParam,
   readToolStringParam,
@@ -74,6 +76,22 @@ type TextToolResult = {
 type ParseGenerationModelRef = (raw: string | undefined) => CapabilityModelRef | null;
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
+
+export const MEDIA_GENERATE_DESCRIPTIONS = {
+  action: '"generate" default, "status" active task, "list" providers/models.',
+  filename: "Output filename hint; basename preserved in managed media dir.",
+} as const;
+
+export function readGenerationDurationSeconds(args: Record<string, unknown>): number | undefined {
+  const value = readNumberParam(args, "durationSeconds", {
+    positiveInteger: true,
+    strict: true,
+  });
+  if (value === undefined && readSnakeCaseParamRaw(args, "durationSeconds") !== undefined) {
+    throw new ToolInputError("durationSeconds must be a positive integer");
+  }
+  return value;
+}
 
 export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
   return readPositiveIntegerParam(args, "timeoutMs", {

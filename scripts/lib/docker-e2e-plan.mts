@@ -805,6 +805,7 @@ export function requiredPrepublishPluginPackagesForLanes(
     if (
       !scenario ||
       scenario === "abandoned-update" ||
+      scenario === "backup-schedule" ||
       scenario === "custom-plugin-siblings" ||
       scenario === "projects-doctor" ||
       scenario === "channel-owner-policy" ||

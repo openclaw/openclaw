@@ -324,6 +324,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         <openclaw-chat-comment-controller
           .paneId=${`side-chat:${this.sessionKey}`}
           .props=${attachmentProps}
+          .disabled=${attachmentProps.disabled}
           .sessionKey=${this.sessionKey}
           .presented=${this.presented}
         ></openclaw-chat-comment-controller>

@@ -23,7 +23,11 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   adopt<T>(value: T): T;
   retainWork(): () => void;
   readonly retainedWorkCount: number;
-  waitForRetainedWork(signal: AbortSignal, includeConsumers?: boolean): Promise<void>;
+  readonly ordinaryCallCount: number;
+  waitForRetainedWork(
+    signal: AbortSignal,
+    options?: { includeConsumers?: boolean; includeCalls?: boolean },
+  ): Promise<void>;
   reserveReplacement(): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
@@ -45,6 +49,7 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
+  assertCurrent?: (instance: PluginInstanceHandle) => void;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
 

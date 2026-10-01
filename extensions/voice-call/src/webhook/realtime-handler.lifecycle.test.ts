@@ -3,8 +3,8 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import type { CallManager } from "../manager.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import type { ResolveRealtimeCallRegistration } from "./realtime-handler.js";

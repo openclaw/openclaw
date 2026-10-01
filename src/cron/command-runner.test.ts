@@ -19,9 +19,11 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { isPidAlive } from "../shared/pid-alive.js";
 import { readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { SCHEDULED_BACKUP_COMMAND, SCHEDULED_BACKUP_DECLARATION_KEY } from "./backup-command.js";
 import { runCronCommandJob } from "./command-runner.js";
 import type { CronJob } from "./types.js";
+
+const SCHEDULED_BACKUP_COMMAND = ["openclaw", "backup", "git", "create"];
+const SCHEDULED_BACKUP_DECLARATION_KEY = "openclaw-backup-scheduled";
 
 function makeCommandJob(payload: Extract<CronJob["payload"], { kind: "command" }>): CronJob {
   const now = Date.now();
@@ -40,7 +42,7 @@ function makeCommandJob(payload: Extract<CronJob["payload"], { kind: "command" }
 }
 
 describe("runCronCommandJob", () => {
-  it.each(["owned", "display-only", "retargeted"])(
+  it.each(["owned", "offsite", "display-only", "retargeted"])(
     "records only declared backup command custody through native settlement: %s",
     async (mode) => {
       const settled = createDeferred<SpawnResult>();
@@ -49,11 +51,19 @@ describe("runCronCommandJob", () => {
         .mockReturnValue(settled.promise);
       const job = makeCommandJob({
         kind: "command",
-        argv: mode === "retargeted" ? ["echo", "backup"] : [...SCHEDULED_BACKUP_COMMAND],
+        argv:
+          mode === "retargeted"
+            ? ["echo", "backup"]
+            : mode === "offsite"
+              ? ["openclaw", "backup", "create", "--to", "archive"]
+              : [...SCHEDULED_BACKUP_COMMAND],
       });
       job.name = SCHEDULED_BACKUP_DECLARATION_KEY;
       if (mode !== "display-only") {
-        job.declarationKey = SCHEDULED_BACKUP_DECLARATION_KEY;
+        job.declarationKey =
+          mode === "offsite"
+            ? "openclaw-backup-offsite-scheduled"
+            : SCHEDULED_BACKUP_DECLARATION_KEY;
       }
       const ownsBackup = mode !== "display-only" && mode !== "retargeted";
       const running = runCronCommandJob({ job });

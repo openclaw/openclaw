@@ -92,6 +92,59 @@ async function register(id: string, collect = false, expectsCompletionMessage = 
   return subagentRuns.get(id)!;
 }
 
+it("admits new work at the child cap when finished descendants have suspended delivery", () => {
+  const now = Date.now();
+  const completed = Array.from({ length: 5 }, (_, index) => ({
+    runId: `completed-orchestrator-${index}`,
+    childSessionKey: `agent:main:subagent:completed-orchestrator-${index}`,
+    requesterSessionKey: parent,
+    requesterAgentId: "main",
+    requesterDisplayKey: parent,
+    task: "completed orchestration",
+    cleanup: "keep" as const,
+    createdAt: now - 120_000,
+    execution: { status: "terminal" as const, endedAt: now - 60_000 },
+  }));
+  for (const entry of completed) {
+    addSubagentRunForTests(entry);
+    addSubagentRunForTests({
+      ...entry,
+      runId: `${entry.runId}-child`,
+      childSessionKey: `${entry.childSessionKey}:subagent:child`,
+      requesterSessionKey: entry.childSessionKey,
+      delivery: { status: "suspended", suspendedAt: now, suspendedReason: "expiry" },
+    });
+  }
+  const admission = () =>
+    resolveSpawnAdmission({
+      cfg: { agents: { defaults: { subagents: { maxChildrenPerAgent: 5 } } } },
+      requesterSessionKey: parent,
+      requesterAgentId: "main",
+      targetAgentId: "main",
+      configuredAgentIds: ["main"],
+    });
+
+  expect(admission().ok).toBe(true);
+  expect(countActiveRunsForSession(parent)).toBe(0);
+  expect(subagentRuns.size).toBe(10);
+
+  for (const entry of completed) {
+    addSubagentRunForTests({
+      ...entry,
+      runId: `${entry.runId}-grandchild`,
+      childSessionKey: `${entry.childSessionKey}:subagent:grandchild`,
+      requesterSessionKey: `${entry.childSessionKey}:subagent:child`,
+      createdAt: now,
+      execution: { status: "running", startedAt: now },
+    });
+  }
+  expect(admission()).toMatchObject({
+    ok: false,
+    governingCap: "subagents.maxChildrenPerAgent",
+  });
+  expect(countActiveRunsForSession(parent)).toBe(5);
+});
+
 it("retains quiet admitted execution in listing, admission count, and requester settlement after two hours", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(start);
   const entry = await register("quiet-owned");

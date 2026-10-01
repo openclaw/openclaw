@@ -24,20 +24,6 @@ import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export {
-  augmentChatHistoryWithCanvasBlocks,
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  dropPreSessionStartAnnouncePairs,
-  resolveEffectiveChatHistoryMaxChars,
-  sanitizeChatHistoryMessages,
-} from "../chat-display-projection.js";
-export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
-export {
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  replaceOversizedChatHistoryMessages,
-  reportOmittedChatHistory,
-} from "./chat-history-budget.js";
-
 export const chatHandlers: GatewayRequestHandlers = {
   ...chatHistoryHandlers,
   ...chatMessageGetHandlers,

@@ -222,7 +222,7 @@ export function isTransientSqliteError(err: unknown): boolean {
 }
 
 /** Requires watcher evidence so ordinary ENOSPC storage failures remain fatal. */
-export function isTransientFileWatchError(err: unknown): boolean {
+function isTransientFileWatchError(err: unknown): boolean {
   if (!err) {
     return false;
   }
