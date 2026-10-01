@@ -224,7 +224,7 @@ export function buildDiscordComponentMessage(params: {
     }
     if (block.type === "section") {
       const displays = (block.texts?.length ? block.texts : block.text ? [block.text] : []).map(
-        (text) => new TextDisplay(text),
+        (entry) => new TextDisplay(entry),
       );
       if (displays.length > 3) {
         throw new Error("Section blocks support up to 3 text displays");
