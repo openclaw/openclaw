@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createLocalBashOperations } from "./bash.js";
 
 const {
   completionMock,
@@ -93,7 +94,6 @@ describe("local bash process-tree termination", () => {
     spawnMock.mockReturnValue(child);
     completionMock.mockReturnValue(completion.promise);
     settleTerminationMock.mockReturnValue(cleanup.promise);
-    const { createLocalBashOperations } = await import("./bash.js");
 
     const resultPromise = createLocalBashOperations().exec("echo late", process.cwd(), {
       onData: () => {},

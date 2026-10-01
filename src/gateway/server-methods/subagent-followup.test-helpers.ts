@@ -20,7 +20,6 @@ export function expectSubagentFollowupReactivation(params: {
     nextRunId: "run-new",
     fallback: params.completedRun,
     runTimeoutSeconds: 0,
-    persistenceFailure: "throw",
     ...(params.task ? { task: params.task } : {}),
   });
   expect(params.broadcastToConnIds).toHaveBeenNthCalledWith(

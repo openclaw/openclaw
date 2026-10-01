@@ -2627,6 +2627,9 @@ importers:
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   packages/llm-core:
     dependencies:

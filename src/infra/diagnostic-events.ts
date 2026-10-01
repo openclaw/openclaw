@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { notifyListeners } from "../shared/listeners.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
   isInternalDiagnosticEventInterested,
@@ -1385,15 +1386,11 @@ function dispatchTrustedToolExecutionEvent(
     );
     return;
   }
-  for (const listener of state.toolExecutionListeners) {
-    try {
-      listener(enriched);
-    } catch (error) {
-      console.error(
-        `[diagnostic-events] tool execution listener error type=${enriched.type} seq=${enriched.seq}: ${String(error)}`,
-      );
-    }
-  }
+  notifyListeners(state.toolExecutionListeners, enriched, (error) => {
+    console.error(
+      `[diagnostic-events] tool execution listener error type=${enriched.type} seq=${enriched.seq}: ${String(error)}`,
+    );
+  });
 }
 
 /** Emits an untrusted diagnostic event from external/plugin-facing code. */

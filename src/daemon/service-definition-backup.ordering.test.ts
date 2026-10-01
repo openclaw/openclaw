@@ -226,7 +226,12 @@ it.each(["publication", "activation"])(
         loaded = false;
       }
       if (args[0] !== "print" || loaded) {
-        return { code: 0, stdout: "state = running\npid = 42", stderr: "", termination: "exit" };
+        return {
+          code: 0,
+          stdout: `${args[1]} = {\n\tstate = running\n\tpid = 42\n}`,
+          stderr: "",
+          termination: "exit",
+        };
       }
       return { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
     });

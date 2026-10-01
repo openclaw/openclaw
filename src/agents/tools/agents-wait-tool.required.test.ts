@@ -16,12 +16,21 @@ const registryEvents = vi.hoisted(() => ({
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
   prepareSubagentRunsByRunIds: registryEvents.read,
 }));
-vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
-  onSubagentRegistryPersisted: (listener: () => void) => {
-    registryEvents.listeners.add(listener);
-    return () => registryEvents.listeners.delete(listener);
-  },
-}));
+vi.mock("../subagents/registry/subagent-registry-publication.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../subagents/registry/subagent-registry-publication.js")>();
+  return {
+    ...actual,
+    subscribeSubagentRunChanges: ((phase, listener) => {
+      if (phase === "projection") {
+        return actual.subscribeSubagentRunChanges(phase, listener);
+      }
+      const wake = () => listener({ runIds: undefined, sessionKeys: undefined });
+      registryEvents.listeners.add(wake);
+      return () => registryEvents.listeners.delete(wake);
+    }) satisfies typeof actual.subscribeSubagentRunChanges,
+  };
+});
 function selectRuns(ids: readonly string[]) {
   return new Map(
     ids.flatMap((id) => {

@@ -37,12 +37,18 @@ it.skipIf(process.platform !== "linux")(
   "joins Doctor's inspection child and database handles before rewriting both stores",
   async () => {
     await withOpenClawTestState(
-      { scenario: "external-service", label: "doctor-health-nocow" },
+      {
+        scenario: "external-service",
+        label: "doctor-health-nocow",
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR: "1",
+        },
+      },
       async (state) => {
         const native =
           await vi.importActual<typeof import("node:child_process")>("node:child_process");
         const tools = createDoctorNoCowToolFixture(state.root, native.spawnSync);
-        vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
         const cfg = {
           agents: {
             ownership: "explicit" as const,

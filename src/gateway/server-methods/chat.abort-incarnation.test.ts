@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
@@ -310,7 +310,7 @@ it.each(["child", "ancestor"])(
     expect(database).toBeDefined();
     let original: Buffer | undefined;
     let fault: unknown;
-    const unsubscribe = onSubagentRegistryPersisted(() => {
+    const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
       if (original || !subagentRuns.get("bad")?.killIntent) {
         return;
       }

@@ -205,6 +205,8 @@ const workerModules = new Set([
   "src/plugins/conversation-binding-state.kernel.ts", // Shared-state worker binding-approval commands only.
   "src/plugins/official-external-plugin-catalog-snapshot-store.kernel.ts", // Shared-state worker catalog-snapshot commands only.
 
+  "src/projects/project-registry.kernel.ts", // Project registry handler table is the only runtime caller of its SQL kernels.
+
   "src/secrets/store/secret-store-config-ref.kernel.ts", // Config-ref writes are called only by the shared-state worker runtime.
   "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
 

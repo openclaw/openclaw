@@ -180,9 +180,7 @@ export function validateExplicitPluginConfig(params: {
       if (
         resolvedLoadPath &&
         normalizePluginId(path.basename(resolvedLoadPath)) === normalizedPluginId &&
-        (sourcePath === resolvedLoadPath ||
-          isPathInside(resolvedLoadPath, sourcePath) ||
-          isPathInside(sourcePath, resolvedLoadPath))
+        (isPathInside(resolvedLoadPath, sourcePath) || isPathInside(sourcePath, resolvedLoadPath))
       ) {
         return true;
       }

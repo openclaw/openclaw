@@ -16,10 +16,8 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { loadPendingFinalDeliveryPayload } from "../registry/subagent-delivery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { assertSubagentRegistryWriteOutcomeKnown } from "../registry/subagent-registry-persistence.js";
-import {
-  onSubagentRegistryPersisted,
-  restoreSubagentRunsFromDisk,
-} from "../registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
+import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-state.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
@@ -351,7 +349,7 @@ describe("persisted subagent requester wakes", () => {
           structuredClone(subagentRuns.get(subagent.runId)?.requesterSettleWake),
         ),
       );
-      const unsubscribe = onSubagentRegistryPersisted(observed);
+      const unsubscribe = subscribeSubagentRunChanges("persistence", observed);
       try {
         await driver.run();
         await expect(

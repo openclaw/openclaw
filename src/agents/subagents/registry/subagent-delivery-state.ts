@@ -211,14 +211,12 @@ export function ensureDeliveryState(entry: SubagentRunRecord): SubagentCompletio
   return entry.delivery;
 }
 
-/** Resets delivery state to its initial status for the run's completion requirement. */
 export function clearDeliveryState(entry: SubagentRunRecord): void {
   entry.delivery = {
     status: entry.expectsCompletionMessage === false ? "not_required" : "pending",
   };
 }
 
-/** Returns true when delivery is suspended with a durable timestamp. */
 export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
@@ -263,10 +261,6 @@ export function hasRetainedRequiredCompletionDelivery(
     delivery.disposition !== "intentional_non_delivery" &&
     delivery.disposition !== "permanent_failure"
   );
-}
-
-export function getDeliveryAttemptCount(entry: SubagentRunRecord): number {
-  return entry.delivery?.attemptCount ?? 0;
 }
 
 export function getDeliveryLastError(entry: SubagentRunRecord): string | undefined {
@@ -343,7 +337,6 @@ export function transitionRequesterSettleWakeState(
   };
 }
 
-/** Clear this wake and return its existing row-retirement decision. */
 export function completeRequesterSettleWakeState(entry: SubagentRunRecord): boolean {
   let retire = false;
   if (entry.pauseReason !== "sessions_yield") {

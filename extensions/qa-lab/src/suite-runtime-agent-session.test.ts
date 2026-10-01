@@ -2,16 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  appendSqliteSessionTranscriptEventForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSession,
   readEffectiveTools,
@@ -24,17 +22,16 @@ import {
 } from "./suite-runtime-agent-session.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const { cleanup, makeTempDir } = createTempDirHarness();
-
-afterEach(async () => {
-  vi.useRealTimers();
-  // Fixtures point a state dir at these temp workspaces, so the shared and per-agent
-  // SQLite handles stay cached and Windows fails the removal with EBUSY. The agent close
-  // releases its leases through shared state and reopens it, so the store is released second.
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await cleanup();
+const { cleanup, makeTempDir } = createTempDirHarness({
+  beforeCleanup: closeQaRuntimeStores,
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+  resetPluginStateStoreForTests({ closeDatabase: false });
+});
+
+afterAll(cleanup);
 
 describe("qa suite runtime agent session helpers", () => {
   const gatewayCall = vi.fn();

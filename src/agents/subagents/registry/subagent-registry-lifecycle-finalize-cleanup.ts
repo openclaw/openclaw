@@ -7,26 +7,26 @@ import {
   loadPendingFinalDeliveryPayload,
 } from "./subagent-delivery-state.js";
 import {
-  resolveCleanupCompletionReason,
-  resolveDeferredCleanupDecision,
-} from "./subagent-registry-cleanup.js";
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  type SubagentLifecycleEndedReason,
+} from "./subagent-lifecycle-events.js";
+import { resolveDeferredCleanupDecision } from "./subagent-registry-cleanup.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
   MIN_ANNOUNCE_RETRY_DELAY_MS,
   resolveAnnounceRetryDelayMs,
-  safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import {
   retireSupersededCleanupIfNeeded,
   scheduleResumeSubagentRun,
 } from "./subagent-registry-lifecycle-attempt.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
+import { markPendingFinalDelivery } from "./subagent-registry-lifecycle-delivery.js";
 import {
-  emitCompletionEndedHookIfNeeded,
-  markPendingFinalDelivery,
-} from "./subagent-registry-lifecycle-delivery.js";
-import { finalizeResumedAnnounceGiveUp } from "./subagent-registry-lifecycle-give-up.js";
+  finalizeResumedAnnounceGiveUp,
+  finishSubagentCleanup,
+} from "./subagent-registry-lifecycle-give-up.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -78,48 +78,20 @@ export const finalizeSubagentCleanup = async (
   assertCurrent();
   const skipRequesterDelivery =
     options?.skipRequesterDelivery === true || entry.suppressCompletionDelivery === true;
-  const finishCleanup = async (
+  const finishCleanup = (
     skipRequesterSettleWake: boolean,
-    completionReason?: ReturnType<typeof resolveCleanupCompletionReason>,
-  ) => {
-    if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
-      await safeRemoveAttachmentsDir(entry, isCurrent);
-    }
-    if (!isCurrent()) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
-      return;
-    }
-    await context.completeCleanupBookkeeping({
+    completionReason?: SubagentLifecycleEndedReason,
+  ) =>
+    finishSubagentCleanup(context, {
       runId,
       entry,
       cleanup,
-      completedAt: Date.now(),
-      skipRequesterSettleWake,
+      cleanupGeneration,
       stateContext,
-      isCurrent: () =>
-        context.isCleanupGeneration(entry, cleanupGeneration) &&
-        context.isEndedHookOwnerCurrent(runId, entry),
+      isCurrent,
+      skipRequesterSettleWake,
+      completionReason,
     });
-    // Hook loading is best-effort; durable delivery and cleanup must already
-    // be terminal before plugin code can fail or stall.
-    const endedHookOwnerCurrent = () => {
-      assertSubagentRegistryWriteSourceCurrent(stateContext);
-      return (
-        context.isCleanupGeneration(entry, cleanupGeneration) &&
-        context.isEndedHookOwnerCurrent(runId, entry) &&
-        context.sessionEffectsHostCurrent(entry)
-      );
-    };
-    if (!(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent()) {
-      await emitCompletionEndedHookIfNeeded(
-        params,
-        entry,
-        completionReason ?? resolveCleanupCompletionReason(entry),
-        endedHookOwnerCurrent,
-        async () => !(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent(),
-      );
-    }
-  };
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
     const intentionalNonDelivery = entry.delivery?.disposition === "intentional_non_delivery";
     await commit(() => {
@@ -167,7 +139,7 @@ export const finalizeSubagentCleanup = async (
       completion.fallbackResultText = undefined;
       completion.fallbackCapturedAt = undefined;
     });
-    await finishCleanup(terminalNonDelivery, resolveCleanupCompletionReason(entry));
+    await finishCleanup(terminalNonDelivery, entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE);
     return;
   }
 

@@ -32,7 +32,6 @@ import type {
   CodexSessionCatalogHost,
   CodexSessionCatalogPage,
   CodexSessionCatalogParams,
-  CodexSessionCatalogResult,
 } from "./session-catalog-types.js";
 import { CodexCatalogVisiblePage } from "./session-catalog-visible-page.js";
 
@@ -660,10 +659,4 @@ export async function runCatalogListInline<THost>(
   } finally {
     operation.close();
   }
-}
-
-export async function listCodexSessionCatalog(
-  params: ListParams,
-): Promise<CodexSessionCatalogResult> {
-  return { hosts: await runCatalogListInline(createCodexSessionCatalogListOperation(params)) };
 }

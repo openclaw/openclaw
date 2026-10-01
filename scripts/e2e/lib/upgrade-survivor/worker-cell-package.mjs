@@ -155,20 +155,34 @@ function inspectTarball(tarball, runtimeRoot) {
 }
 
 async function main() {
-  const [mode, packageRoot, candidateTarball] = process.argv.slice(2);
+  const [mode, packageRoot, candidateTarball, baselineIdentityPath] = process.argv.slice(2);
   const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
   const runtimeRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
   assert(artifacts && runtimeRoot && packageRoot, "Missing isolated worker-cell paths");
   if (mode === "baseline") {
-    const response = await fetch(baselineUrl);
+    const installedVersion = readJson(path.join(packageRoot, "package.json")).version;
+    const currentCronBaseline =
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "cron-owner-doctor" &&
+      installedVersion === "2026.9.7";
+    const published = currentCronBaseline
+      ? {
+          version: "2026.9.7",
+          url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.9.7.tgz",
+          integrity:
+            "sha512-/8N2LnfTFQPvnZizi8qKSFfnLQaPvSG3Cb4xo1YV7b4JhYiUc43ZNRpXJ01bWghLK0Ezk3HVeo/DGHcIRQwRWA==",
+        }
+      : { version: baselineVersion, url: baselineUrl, integrity: baselineIntegrity };
+    const response = await fetch(published.url);
     assert(response.ok, `Published baseline download failed: ${response.status}`);
     const bytes = Buffer.from(await response.arrayBuffer());
-    assert.equal(`sha512-${hash(bytes, "sha512", "base64")}`, baselineIntegrity);
+    assert.equal(`sha512-${hash(bytes, "sha512", "base64")}`, published.integrity);
     const tarball = path.join(runtimeRoot, "published-driver.tgz");
     fs.writeFileSync(tarball, bytes, { flag: "wx" });
     const expected = inspectTarball(tarball, runtimeRoot);
-    assert.equal(expected.version, baselineVersion);
-    assert.equal(expected.buildInfo.commit, baselineCommit);
+    assert.equal(expected.version, published.version);
+    if (!currentCronBaseline) {
+      assert.equal(expected.buildInfo.commit, baselineCommit);
+    }
     const actual = readWorkerCellPackageIdentity(packageRoot);
     assertWorkerCellPackageIdentity(actual, {
       version: expected.version,
@@ -176,7 +190,7 @@ async function main() {
       files: expected.files,
     });
     writeJson(path.join(artifacts, "baseline-package-identity.json"), {
-      url: baselineUrl,
+      url: published.url,
       cli: fs.realpathSync(path.join(packageRoot, "openclaw.mjs")),
       ...expected,
     });
@@ -188,11 +202,16 @@ async function main() {
       process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA,
       "Candidate build commit must equal the selected source SHA",
     );
-    assert.notEqual(
-      expected.buildInfo.commit,
-      baselineCommit,
-      "Candidate still contains published bytes",
-    );
+    // Only audited baseline flows produce this receipt; generic survivor flows
+    // verify the selected source and installed payload without a baseline audit.
+    if (baselineIdentityPath) {
+      const baseline = readJson(baselineIdentityPath);
+      assert.notEqual(
+        expected.buildInfo.commit,
+        baseline.buildInfo.commit,
+        "Candidate still contains published bytes",
+      );
+    }
     writeJson(path.join(artifacts, "candidate-package-identity.json"), expected);
   } else if (mode === "installed") {
     const expected = readJson(path.join(artifacts, "candidate-package-identity.json"));

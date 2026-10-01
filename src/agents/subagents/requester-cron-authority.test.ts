@@ -26,11 +26,11 @@ import {
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import { consumeSubagentPauseNotice } from "./registry/subagent-delivery-state.js";
+import { settleRequesterTurnAfterSessionSpawns } from "./registry/subagent-registry-requester-yield.js";
 import {
-  markRequesterTurnYieldedInRuns,
-  settleRequesterTurnAfterSessionSpawns,
-} from "./registry/subagent-registry-requester-yield.js";
-import { createRequesterInitialTransferFixture } from "./registry/subagent-registry-requester-yield.test-support.js";
+  createRequesterInitialTransferFixture,
+  markRequesterTurnYieldedWithAuthority,
+} from "./registry/subagent-registry-requester-yield.test-support.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
   consumeRequesterCronAuthorityAdmission,
@@ -164,8 +164,8 @@ async function inAdminRun<T>(
   }
 }
 
-function mark(batch: SubagentRunRecord[], persistOrThrow: () => void = () => {}) {
-  return markRequesterTurnYieldedInRuns({
+async function mark(batch: SubagentRunRecord[], persistOrThrow: () => void = () => {}) {
+  return await markRequesterTurnYieldedWithAuthority({
     requesterSessionKey: SESSION,
     requesterAgentId: "main",
     requesterTurnRunId: batch[0]!.requesterTurnRunId!,

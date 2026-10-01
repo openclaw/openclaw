@@ -20,6 +20,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import * as durability from "./directory-durability.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import * as sqliteCopy from "./sqlite-file-copy.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateDatabaseGenerationsIsolated,
@@ -39,6 +40,8 @@ async function createRestoreFixture(
   state: OpenClawTestState,
   linked: boolean | "existing" = false,
 ) {
+  expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+  expect(process.env.HOME).toBe(state.home);
   const shared = openOpenClawStateDatabase({ env: state.env });
   let agentDirectory = state.agentDir();
   const canonicalAgent =
@@ -67,9 +70,9 @@ async function createRestoreFixture(
     { env: state.env },
   );
   const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
-  for (const owner of [shared, agent]) {
+  for (const [index, owner] of [shared, agent].entries()) {
     owner.db.exec(
-      "CREATE TABLE restore_witness(value TEXT); INSERT INTO restore_witness VALUES ('baseline');",
+      `CREATE TABLE restore_witness(value TEXT); INSERT INTO restore_witness(rowid,value) VALUES (${index === 0 ? 71 : 8191},'baseline');`,
     );
   }
   const input = {
@@ -115,23 +118,42 @@ function withFixture(
   linked: boolean | "existing" = false,
 ) {
   return withOpenClawTestState(
-    { layout: "state-only", prefix: "update-database-restore-", scenario: "minimal" },
+    { layout: "split", prefix: "update-database-restore-", scenario: "minimal" },
     async (state) => run(await createRestoreFixture(state, linked)),
   );
 }
 
 async function unchangedFiles(fixture: RestoreFixture) {
+  expect(process.env.OPENCLAW_STATE_DIR).toBe(fixture.state.stateDir);
   const before = await Promise.all(
-    fixture.backup.databases.map(async ({ path: pathname }) => ({
-      pathname,
-      identity: await fs.stat(pathname),
-      bytes: await fs.readFile(pathname),
-    })),
+    fixture.backup.databases.flatMap(({ path: pathname }) =>
+      ["", "-wal", "-shm", "-journal"].map(async (suffix) => {
+        const file = `${pathname}${suffix}`;
+        const identity = await fs.lstat(file).catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
+          return undefined;
+        });
+        return { file, identity, bytes: identity ? await fs.readFile(file) : undefined };
+      }),
+    ),
   );
   return async () => {
-    for (const { pathname, identity, bytes } of before) {
-      expect((await fs.stat(pathname)).ino).toBe(identity.ino);
-      expect(await fs.readFile(pathname)).toEqual(bytes);
+    for (const { file, identity, bytes } of before) {
+      if (identity) {
+        const current = await fs.lstat(file);
+        expect([current.dev, current.ino, current.nlink]).toEqual([
+          identity.dev,
+          identity.ino,
+          identity.nlink,
+        ]);
+        expect(await fs.readFile(file)).toEqual(bytes);
+      } else {
+        await expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    }
+    for (const { path: pathname } of fixture.backup.databases) {
       for (const suffix of ["", "-wal", "-shm", "-journal"]) {
         await expect(
           fs.lstat(`${pathname}.migrated-${fixture.run.runId}${suffix}`),
@@ -176,7 +198,7 @@ it.each([false, true, "existing"] as const)(
         .prepare("DELETE FROM update_runs WHERE run_id = ?")
         .run(fixture.removedRun.runId);
       const currentHistory = fixture.shared.db
-        .prepare("SELECT * FROM update_runs ORDER BY run_id")
+        .prepare("SELECT rowid,* FROM update_runs ORDER BY run_id")
         .all();
       expect(currentHistory).toHaveLength(2);
       await recordBackupRunOutcome({
@@ -207,9 +229,9 @@ it.each([false, true, "existing"] as const)(
         expect(await fs.readFile(snapshotPath)).toEqual(bytes);
       }
       const restoredShared = openOpenClawStateDatabase({ env: fixture.state.env });
-      expect(restoredShared.db.prepare("SELECT * FROM update_runs ORDER BY run_id").all()).toEqual(
-        currentHistory,
-      );
+      expect(
+        restoredShared.db.prepare("SELECT rowid,* FROM update_runs ORDER BY run_id").all(),
+      ).toEqual(currentHistory);
       expect(getUpdateRun(fixture.run.runId, options)).toMatchObject({
         phase: "staging",
         reason: "doctor-failed",
@@ -223,6 +245,10 @@ it.each([false, true, "existing"] as const)(
         env: fixture.state.env,
       });
       for (const owner of [restoredShared, restoredAgent]) {
+        expect(owner.db.prepare("SELECT rowid FROM restore_witness").get()).toEqual({
+          rowid: owner === restoredShared ? 71 : 8191,
+        });
+        expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
         expect(owner.db.prepare("SELECT value FROM restore_witness").all()).toEqual([
           { value: "baseline" },
         ]);
@@ -255,6 +281,103 @@ it.each([false, true, "existing"] as const)(
   },
 );
 
+it.each([
+  { failureAt: 1, cleanupFails: false },
+  { failureAt: 2, cleanupFails: false },
+  { failureAt: 1, cleanupFails: true },
+])(
+  "leaves every current family unchanged when output $failureAt cannot allocate (cleanup failure=$cleanupFails)",
+  async ({ failureAt, cleanupFails }) => {
+    await withFixture(async (fixture) => {
+      const options = { env: fixture.state.env };
+      const origin = JSON.stringify({ growth: "x".repeat(8 * 1024) });
+      for (let index = 0; index < 64; index++) {
+        const historyRun = createUpdateRun({ trigger: "cli" }, options);
+        finishUpdateRun(historyRun.runId, { status: "failed", reason: "history-growth" }, options);
+        fixture.shared.db
+          .prepare("UPDATE update_runs SET origin_json=? WHERE run_id=?")
+          .run(origin, historyRun.runId);
+      }
+      await fixture.close();
+      const assertUnchanged = await unchangedFiles(fixture);
+      const snapshots = await Promise.all(
+        fixture.backup.databases.map(async (entry) => ({
+          path: entry.snapshotPath,
+          bytes: await fs.readFile(entry.snapshotPath),
+          identity: await fs.stat(entry.snapshotPath),
+        })),
+      );
+      const directories = [
+        ...new Set(fixture.backup.databases.map((entry) => path.dirname(entry.path))),
+        fixture.backup.directory,
+      ];
+      const entries = await Promise.all(directories.map((directory) => fs.readdir(directory)));
+      const copy = sqliteCopy.copySqliteFile;
+      let attempted = 0;
+      const failure = Object.assign(new Error("writable output allocation exhausted"), {
+        code: "ENOSPC",
+      });
+      const cleanupFailure = Object.assign(new Error("prepared directory cleanup refused"), {
+        code: "EACCES",
+      });
+      const rmdir = fs.rmdir;
+      let retainedDirectory:
+        | { path: string; identity: Awaited<ReturnType<typeof fs.lstat>> }
+        | undefined;
+      const cleanup = vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+        const directory = String(args[0]);
+        if (cleanupFails && path.basename(directory).startsWith(".sqlite-publish-prepared-")) {
+          retainedDirectory = { path: directory, identity: await fs.lstat(directory) };
+          throw cleanupFailure;
+        }
+        return rmdir(...args);
+      });
+      const allocation = vi
+        .spyOn(sqliteCopy, "copySqliteFile")
+        .mockImplementation(async (...args) => {
+          if (args[1].includes(`${path.sep}.sqlite-publish-`) && ++attempted === failureAt) {
+            throw failure;
+          }
+          return copy(...args);
+        });
+      try {
+        if (cleanupFails) {
+          await expect(fixture.restore()).rejects.toMatchObject({
+            cause: failure,
+            errors: [failure, cleanupFailure],
+          });
+        } else {
+          await expect(fixture.restore()).rejects.toBe(failure);
+        }
+      } finally {
+        allocation.mockRestore();
+        cleanup.mockRestore();
+      }
+      expect(attempted).toBe(failureAt);
+      await assertUnchanged();
+      for (const snapshot of snapshots) {
+        expect((await fs.stat(snapshot.path)).ino).toBe(snapshot.identity.ino);
+        expect(await fs.readFile(snapshot.path)).toEqual(snapshot.bytes);
+      }
+      if (cleanupFails) {
+        expect(retainedDirectory).toBeDefined();
+        const retained = retainedDirectory!;
+        expect(directories).toContain(path.dirname(retained.path));
+        const identity = await fs.lstat(retained.path);
+        expect([identity.dev, identity.ino]).toEqual([
+          retained.identity.dev,
+          retained.identity.ino,
+        ]);
+        expect(await fs.readdir(retained.path)).toEqual([]);
+        await fs.rmdir(retained.path);
+      }
+      expect(await Promise.all(directories.map((directory) => fs.readdir(directory)))).toEqual(
+        entries,
+      );
+    });
+  },
+);
+
 it.each(["a changed snapshot", "missing current update history"] as const)(
   "refuses %s before moving either live database",
   async (failure) => {
@@ -283,7 +406,7 @@ it.each(["a changed snapshot", "missing current update history"] as const)(
   },
 );
 
-it.each(["collision", "after-rename"] as const)(
+it.each(["collision", "after-rename", "final-publication"] as const)(
   "retains prepared recovery bytes only after the first move takes effect (%s)",
   async (failure) => {
     await withFixture(async (fixture) => {
@@ -299,7 +422,14 @@ it.each(["collision", "after-rename"] as const)(
       let attempted: { sourcePath: string; targetPath: string } | undefined;
       const publication = vi
         .spyOn(durability, "publishFileExclusive")
-        .mockImplementationOnce(async (params) => {
+        .mockImplementation(async (params) => {
+          const selected =
+            failure === "final-publication"
+              ? sources.some((source) => source.path === params.targetPath)
+              : params.targetPath.includes(`.migrated-${fixture.run.runId}`);
+          if (attempted || !selected) {
+            return publish(params);
+          }
           attempted = params;
           if (failure === "collision") {
             await fs.writeFile(params.targetPath, "foreign recovery file", { flag: "wx" });
@@ -307,7 +437,7 @@ it.each(["collision", "after-rename"] as const)(
             __setFsSafeTestHooksForTest({
               afterPublishTargetCreated: (_method, targetPath) => {
                 if (targetPath === params.targetPath) {
-                  throw new Error("First move completed before publication failed");
+                  throw new Error("Publication target created before metadata failed");
                 }
               },
             });
@@ -322,10 +452,11 @@ it.each(["collision", "after-rename"] as const)(
       }
       expect(attempted).toBeDefined();
       for (const source of sources) {
-        const moved = failure === "after-rename" && source.path === attempted!.sourcePath;
-        expect(await fs.readFile(moved ? attempted!.targetPath : source.path)).toEqual(
-          source.bytes,
-        );
+        const moved =
+          failure === "final-publication" ||
+          (failure === "after-rename" && source.path === attempted!.sourcePath);
+        const movedPath = `${source.path}.migrated-${fixture.run.runId}`;
+        expect(await fs.readFile(moved ? movedPath : source.path)).toEqual(source.bytes);
         if (moved) {
           await expect(fs.stat(source.path)).rejects.toMatchObject({ code: "ENOENT" });
         }
@@ -336,6 +467,26 @@ it.each(["collision", "after-rename"] as const)(
         expect(retained).toEqual(backupEntries);
       } else {
         expect(retained).toHaveLength(backupEntries.length + 1);
+        for (const source of sources) {
+          const parent = path.dirname(source.path);
+          const prepared = (await fs.readdir(parent)).filter((name) =>
+            name.startsWith(".sqlite-publish-prepared-"),
+          );
+          expect(prepared).toHaveLength(1);
+          const database = new DatabaseSync(path.join(parent, prepared[0]!, "database.sqlite"), {
+            readOnly: true,
+          });
+          try {
+            expect(database.prepare("SELECT value FROM restore_witness").get()).toEqual({
+              value: "baseline",
+            });
+            expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
+              integrity_check: "ok",
+            });
+          } finally {
+            database.close();
+          }
+        }
       }
     });
   },
@@ -489,11 +640,11 @@ it("rechecks authority after awaited snapshot verification before moving files",
 it("refuses replacement while a competing native SQLite reader owns exclusion", async () => {
   await withFixture(async (fixture) => {
     await fixture.close();
-    const assertUnchanged = await unchangedFiles(fixture);
     const native = new DatabaseSync(fixture.agent.path, { readOnly: true });
     try {
       native.exec("BEGIN");
       native.prepare("SELECT value FROM restore_witness").all();
+      const assertUnchanged = await unchangedFiles(fixture);
       await expect(fixture.restore()).rejects.toThrow("another SQLite connection is active");
       await assertUnchanged();
       expect(native.prepare("SELECT value FROM restore_witness").all()).toEqual([

@@ -43,7 +43,7 @@ import { installFreshUpdateFixture, targetMetadata } from "./update-command-fres
 import * as initialization from "./update-command-initialization.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
-import * as servicePlan from "./update-command-service-plan.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import {
   deferUpdateCommandTerminalResult,
   publishUpdateCommandTerminalResult,
@@ -566,7 +566,7 @@ describe("update command admission with fresh state", () => {
       OPENCLAW_CONFIG_PATH: serviceConfigPath,
     };
     vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv").mockResolvedValue(serviceEnv);
-    vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+    vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
       ok: false,
       error: "fixture-stop",
     });
@@ -603,7 +603,7 @@ describe("update command admission with fresh state", () => {
         writeStoredChannel("beta");
         return targetMetadata;
       });
-      const runtime = vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+      const runtime = vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
         ok: false,
         error: "fixture-stop",
       });
@@ -733,7 +733,7 @@ it.each([
       return staged;
     });
     const runtime = vi
-      .spyOn(servicePlan, "resolvePackageRuntimePreflight")
+      .spyOn(runtimePlan, "resolvePackageRuntimePreflight")
       .mockResolvedValue({ ok: true, value: {} });
     const doctor = vi
       .spyOn(initialization, "initializeUpdateStateFromTarget")
@@ -828,7 +828,7 @@ it.each(["node", "concurrent-state"] as const)(
       }
       return stage;
     });
-    vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+    vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
       ok: false,
       error: "selected artifact requires a newer Node",
     });

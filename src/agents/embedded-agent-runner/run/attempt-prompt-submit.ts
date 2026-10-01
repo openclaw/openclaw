@@ -332,9 +332,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
       if (input.yieldMessage) {
         await input.activeSession.sendCustomMessage(
           buildSessionsYieldContextMessage(input.yieldMessage),
-          {
-            triggerTurn: false,
-          },
+          { triggerTurn: false },
         );
       }
       const target = transcriptRewritten && input.activeSession.sessionManager.getSessionTarget();

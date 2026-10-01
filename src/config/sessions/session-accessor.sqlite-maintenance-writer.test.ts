@@ -1,7 +1,6 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
@@ -11,10 +10,10 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
@@ -49,16 +48,15 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-maintenance-planner-");
 
 afterEach(() => {
   vi.restoreAllMocks();
   archiveMaterializationHook.beforeMaterialize = undefined;
-  closeOpenClawAgentDatabasesForTest();
 });
 
 function createPlannerStore(entryCount: number, updatedAt?: number) {
-  const tempDir = tempDirs.make("openclaw-session-maintenance-planner-");
+  const tempDir = sessionDirs.make();
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   for (let index = 0; index < entryCount; index += 1) {
     replaceSessionEntrySync(
@@ -321,7 +319,7 @@ it("does not rescan unrelated rows when a requested lifecycle removal does not m
 });
 
 it("does not hold channel recording behind automatic session maintenance", async ({ signal }) => {
-  const tempDir = tempDirs.make("openclaw-session-maintenance-ingress-");
+  const tempDir = sessionDirs.make();
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
   const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";

@@ -1,9 +1,15 @@
 // Telegram tests cover bot message plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
+import { createTelegramMessageProcessor } from "./bot-message.js";
+import {
+  createTelegramSpooledReplayDeferredParticipant,
+  runWithTelegramUpdateProcessingFrame,
+  runWithTelegramSpooledReplayUpdate,
+  type TelegramMessageProcessingResult,
+} from "./bot-processing-outcome.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
@@ -40,24 +46,11 @@ vi.mock("./bot-message-dispatch.js", () => ({
   dispatchTelegramMessage,
 }));
 
-let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
 type TelegramMessageProcessorTurnContext = Parameters<
   ReturnType<typeof createTelegramMessageProcessor>
 >[0]["turnContext"];
-let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
-let runWithTelegramUpdateProcessingFrame: typeof import("./bot-processing-outcome.js").runWithTelegramUpdateProcessingFrame;
-let runWithTelegramSpooledReplayUpdate: typeof import("./bot-processing-outcome.js").runWithTelegramSpooledReplayUpdate;
 
 describe("telegram bot message processor", () => {
-  beforeAll(async () => {
-    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
-    ({
-      createTelegramSpooledReplayDeferredParticipant,
-      runWithTelegramUpdateProcessingFrame,
-      runWithTelegramSpooledReplayUpdate,
-    } = await import("./bot-processing-outcome.js"));
-  });
-
   beforeEach(() => {
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();

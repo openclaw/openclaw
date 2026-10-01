@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  withGatewayPersonalToolUser,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { createGitHubIdentityStatusTool } from "../agents/tools/github-identity-status-tool.js";
 import {
   callAgentToolGatewayRequest,
   runWithGatewayToolContinuationContext,
 } from "../agents/tools/in-process-gateway.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
+import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -32,8 +36,8 @@ const startTurn = vi.hoisted(() => vi.fn());
 const waitForTurn = vi.hoisted(() => vi.fn());
 
 vi.mock("./agent-turn/agent-turn-service.js", () => ({
-  createAgentTurnService: () => ({
-    startTurn,
+  createAgentTurnService: (_params: unknown, assertContextCurrent?: () => void) => ({
+    startTurn: (input: unknown) => startTurn(input, assertContextCurrent),
     waitForTurn,
   }),
 }));
@@ -216,13 +220,28 @@ describe("typed in-process agent continuation authorization", () => {
         undefined,
         { isCurrent: () => true, subscribe: () => () => {} },
       );
+      const operator = await operatorCapture.captureGatewayOperatorRunAuthority({
+        client: owner,
+        context,
+        hasCurrentClientAuthority: source.isCurrent,
+      });
+      if (!operator) {
+        throw new Error("Expected operator source");
+      }
+      const participants = createReplyTurnParticipants({ operatorAuthority: operator.authority });
+      let receiptCurrent = true;
       const dispatchErrors: string[] = [];
       const waitStarted = createDeferredCore();
       const targetFinished = createDeferredCore();
+      const targetSettled = createDeferredCore();
+      let targetError: string | undefined;
       waitForTurn.mockImplementation(async ({ runId }) => {
         if (runId === "target-followup") {
           waitStarted.resolve();
-          await targetFinished.promise;
+          await targetSettled.promise;
+          if (targetError) {
+            return { result: { status: "error", error: targetError } };
+          }
         }
         return {
           result: {
@@ -231,14 +250,31 @@ describe("typed in-process agent continuation authorization", () => {
           },
         };
       });
-      startTurn.mockImplementation(async ({ principal, io, preflight: { request } }) => {
-        expect(principal.connect.scopes).toEqual(["operator.write"]);
-        expect(principal.authenticatedUserProfile?.profileId).toBe(
-          owner.authenticatedUserProfile!.profileId,
-        );
-        io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }, undefined]);
-        io.emitFinal([true, { runId: request.idempotencyKey, status: "ok" }, undefined]);
-      });
+      startTurn.mockImplementation(
+        async ({ principal, io, preflight: { request } }, assertCurrent) => {
+          expect(principal.connect.scopes).toEqual(["operator.write"]);
+          expect(principal.authenticatedUserProfile?.profileId).toBe(
+            owner.authenticatedUserProfile!.profileId,
+          );
+          io.emitAcceptance([
+            true,
+            { runId: request.idempotencyKey, status: "accepted" },
+            undefined,
+          ]);
+          if (request.idempotencyKey === "target-followup") {
+            await targetFinished.promise;
+            try {
+              assertCurrent();
+            } catch (error) {
+              targetError = String(error);
+              dispatchErrors.push(targetError);
+            } finally {
+              targetSettled.resolve();
+            }
+          }
+          io.emitFinal([true, { runId: request.idempotencyKey, status: "ok" }, undefined]);
+        },
+      );
       try {
         const { pending: replyFlow } = await withPluginRuntimeGatewayRequestScope(
           {
@@ -254,35 +290,58 @@ describe("typed in-process agent continuation authorization", () => {
                 authenticatedUserProfile: owner.authenticatedUserProfile,
                 scopes: owner.connect.scopes ?? [],
               },
-              async () => {
-                const pending = runWithGatewayToolContinuationContext(() =>
-                  runSessionsSendA2AFlow({
-                    targetAgentId: "main",
-                    targetSessionKey: "agent:main:child",
-                    displayKey: "agent:main:child",
-                    requesterAgentId: "main",
-                    requesterSessionKey: "agent:main:requester",
-                    requesterChannel: "webchat",
-                    replyMode: "one-way",
-                    message: "Finish the task",
-                    waitRunId: "target-followup",
-                    announceTimeoutMs: 10_000,
-                    maxPingPongTurns: 0,
-                    callGateway: async (request) => {
-                      try {
-                        return await callAgentToolGatewayRequest(request);
-                      } catch (error) {
-                        dispatchErrors.push(String(error));
-                        throw error;
-                      }
-                    },
-                  }),
-                );
-                await waitStarted.promise;
-                return { pending };
-              },
+              () =>
+                withGatewayToolCallerIdentity(
+                  {
+                    agentId: "main",
+                    sessionKey: "agent:main:requester",
+                    operationalRunInstance: createOperationalRunInstanceRef("reply-requester"),
+                    receiptAuthority: () => receiptCurrent,
+                    operatorAuthority: operator.authority,
+                    personalToolParticipants: participants,
+                  },
+                  () =>
+                    withGatewayPersonalToolUser(undefined, async () => {
+                      await callAgentToolGatewayRequest({
+                        method: "agent",
+                        params: {
+                          agentId: "main",
+                          sessionKey: "agent:main:child",
+                          message: "Finish the task",
+                          idempotencyKey: "target-followup",
+                        },
+                      });
+                      startTurn.mockClear();
+                      const pending = runWithGatewayToolContinuationContext(() =>
+                        runSessionsSendA2AFlow({
+                          targetAgentId: "main",
+                          targetSessionKey: "agent:main:child",
+                          displayKey: "agent:main:child",
+                          requesterAgentId: "main",
+                          requesterSessionKey: "agent:main:requester",
+                          requesterChannel: "webchat",
+                          replyMode: "one-way",
+                          runId: "target-followup",
+                          replyTimeoutMs: 10_000,
+                          callGateway: async (request) => {
+                            try {
+                              return await callAgentToolGatewayRequest(request);
+                            } catch (error) {
+                              dispatchErrors.push(String(error));
+                              throw error;
+                            }
+                          },
+                        }),
+                      );
+                      await waitStarted.promise;
+                      return { pending };
+                    }),
+                ),
             ),
         );
+        participants.close();
+        receiptCurrent = false;
+        operator.release();
         connected = false;
         source.release();
         if (boundary === "device revoked") {
@@ -303,12 +362,17 @@ describe("typed in-process agent continuation authorization", () => {
         expect(startTurn).toHaveBeenCalledOnce();
         expect(startTurn.mock.calls[0]?.[0].preflight.request).toMatchObject({
           sessionKey: "agent:main:requester",
+          deliver: false,
+          sourceReplyDeliveryMode: "message_tool_only",
           inputProvenance: {
             sourceTool: "subagent_announce",
             sourceSessionKey: "agent:main:child",
+            sourceRole: "subagent",
           },
         });
       } finally {
+        participants.close();
+        operator.release();
         source.release();
         targetFinished.resolve();
       }

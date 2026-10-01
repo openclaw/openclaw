@@ -8,9 +8,16 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const selectedSha = "a".repeat(40);
 const version = "2026.9.6";
-type Change = "valid" | "stale" | "tarball-changed" | "wrong-source";
+type Change =
+  | "valid"
+  | "stale"
+  | "tarball-changed"
+  | "wrong-source"
+  | "published"
+  | "missing-baseline";
+type Scenario = "base" | "sqlite-volume" | "projects-doctor" | "workshop-doctor-recovery";
 
-function runCandidateFlow(scenario: "base" | "sqlite-volume", change: Change) {
+function runCandidateFlow(scenario: Scenario, change: Change) {
   const root = tempDirs.make("upgrade-survivor-candidate-identity-");
   const candidate = path.join(root, "candidate", "package");
   const installed = path.join(root, "installed");
@@ -37,13 +44,35 @@ function runCandidateFlow(scenario: "base" | "sqlite-volume", change: Change) {
   execFileSync("tar", ["-czf", tarball, "-C", path.dirname(candidate), "package"]);
 
   const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-  const start = source.indexOf("phase resolve-candidate resolve_candidate_version\n");
-  const following = "run_missing_load_path_fixture post-update\n";
+  const audited = scenario === "projects-doctor" || scenario === "workshop-doctor-recovery";
+  if (audited && change !== "missing-baseline") {
+    writeFileSync(
+      path.join(artifacts, "baseline-package-identity.json"),
+      JSON.stringify({
+        buildInfo: { commit: change === "published" ? selectedSha : "c".repeat(40) },
+      }),
+    );
+  }
+  const startMarker =
+    scenario === "projects-doctor"
+      ? "  phase worker-candidate-identity prepare_worker_cell_package\n"
+      : scenario === "workshop-doctor-recovery"
+        ? "  phase capture-workshop-candidate-package "
+        : "phase resolve-candidate resolve_candidate_version\n";
+  const following =
+    scenario === "projects-doctor"
+      ? "  phase update-worker-candidate "
+      : scenario === "workshop-doctor-recovery"
+        ? "  phase seed-physical-baseline-index "
+        : "run_missing_load_path_fixture post-update\n";
+  const start = source.indexOf(startMarker);
   const end = source.indexOf(following, start);
-  if (start < 0 || end < start) {
+  const helperStart = source.indexOf("prepare_worker_cell_package() {\n");
+  const helperEnd = source.indexOf("\nassert_worker_cell_update() {", helperStart);
+  if (start < 0 || end < start || helperStart < 0 || helperEnd < helperStart) {
     throw new Error("Survivor candidate flow boundaries are unavailable");
   }
-  const flow = source.slice(start, end + following.length);
+  const flow = source.slice(start, audited ? end : end + following.length);
   // Execute the registered scenario flow and real identity CLI; only installation
   // and unrelated fixture phases are replaced by this small package fixture.
   const result = spawnSync(
@@ -63,6 +92,8 @@ native_assignment_enabled=0
 UPDATE_RESTART_MODE=manual
 export OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT="$ARTIFACT_ROOT"
 export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="$RUNTIME_ROOT"
+node() { "$UNIT_NODE" "$@"; }
+${source.slice(helperStart, helperEnd)}
 package_root() { printf '%s\\n' "$UNIT_ROOT/installed"; }
 companion_survivor_scenario() { return 1; }
 run_plugin_fixture_phase() { :; }
@@ -88,7 +119,7 @@ phase() {
         shift
         "$UNIT_NODE" "$@"
       fi ;;
-    update_candidate_for_install_mode) "$@" ;;
+    update_candidate_for_install_mode|prepare_worker_cell_package) "$@" ;;
     *) : ;;
   esac
 }
@@ -158,5 +189,29 @@ describe.skipIf(process.platform === "win32")(
         false,
       );
     });
+
+    it.each(["projects-doctor", "workshop-doctor-recovery"] as const)(
+      "%s requires its audited baseline and refuses published candidate bytes",
+      (scenario) => {
+        const valid = runCandidateFlow(scenario, "valid");
+        expect(valid.result.status, valid.result.stdout + valid.result.stderr).toBe(0);
+        expect(existsSync(path.join(valid.artifacts, "candidate-package-identity.json"))).toBe(
+          true,
+        );
+
+        for (const [change, error] of [
+          ["published", "Candidate still contains published bytes"],
+          ["missing-baseline", "ENOENT"],
+        ] as const) {
+          const refused = runCandidateFlow(scenario, change);
+          expect(refused.result.status).not.toBe(0);
+          expect(refused.result.stderr).toContain(error);
+          expect(refused.events).toEqual([]);
+          expect(existsSync(path.join(refused.artifacts, "candidate-package-identity.json"))).toBe(
+            false,
+          );
+        }
+      },
+    );
   },
 );

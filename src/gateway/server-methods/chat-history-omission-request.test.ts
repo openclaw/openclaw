@@ -1,11 +1,10 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "../test-helpers.js";
 import { installConnectedControlUiServerSuite } from "../test-with-server.js";
@@ -18,13 +17,14 @@ installConnectedControlUiServerSuite((started) => {
 });
 
 describe("chat.history request truncation diagnostic", () => {
+  const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-chat-history-omit-");
   test("a real request reports older history omitted by the production budget", async () => {
     const sessionId = "sess-omission-proof";
     const sessionKey = "agent:main:main";
     const messageCount = 70;
     const textBytes = 100_000;
     const budgetBytes = getMaxChatHistoryMessagesBytes();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-history-omit-"));
+    const dir = tempDirs.make();
     const captured: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];
     const unsubscribe = onDiagnosticEvent((event) => {
       if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
@@ -79,7 +79,6 @@ describe("chat.history request truncation diagnostic", () => {
     } finally {
       unsubscribe();
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

@@ -873,9 +873,26 @@ AFTER_CD
       ]);
       expect(workflow.on.pull_request.paths).toContain(workflowPath);
       expect(workflow.on.pull_request.paths).not.toContain(".github/workflows/**");
-      expect(workflow.jobs[jobName].if).toBe(
-        "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
-      );
+      for (const [eventName, draft, result, cancelled, admitted] of [
+        ["pull_request", false, "skipped", false, true],
+        ["pull_request", true, "skipped", false, false],
+        ["pull_request", false, "skipped", true, false],
+        ["workflow_dispatch", false, "success", false, true],
+        ["workflow_dispatch", false, "failure", false, false],
+        ["workflow_dispatch", false, "success", true, false],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(workflow.jobs[jobName].if, {
+            eventName,
+            draft,
+            cancelled,
+            additionalNeeds: { admission: { outputs: {}, result } },
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+          }),
+          `${workflowPath}: ${eventName}, admission=${result}, cancelled=${cancelled}`,
+        ).toBe(admitted);
+      }
     }
   });
 
@@ -4982,7 +4999,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
   });
 
-  it.skipIf(process.platform === "win32").each([
+  it.skipIf(process.platform === "win32").for([
     { task: "bundled-protocol", eventName: "pull_request" },
     { task: "bundled-protocol", eventName: "workflow_dispatch" },
     { task: "guards", eventName: "pull_request" },
@@ -4991,7 +5008,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     { task: "npm-lock", eventName: "workflow_dispatch" },
   ] as const)(
     "uses prefetched CI base without later network access ($task, $eventName)",
-    async ({ task, eventName }) => {
+    { timeout: 55_000 },
+    async ({ task, eventName }, { signal }) => {
       const base = "c".repeat(40);
       const baseRef = "refs/remotes/origin/ci-ratchet-base";
       const jobName = task === "bundled-protocol" ? "checks-fast-core" : "check-shard";
@@ -5007,6 +5025,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         preflightOutputs: { diff_base_revision: base },
       });
       const report = await runCiGitStep({
+        signal,
         job: jobName,
         step:
           task === "bundled-protocol"
@@ -5069,7 +5088,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ]);
       }
     },
-    55_000,
   );
 
   it.each([

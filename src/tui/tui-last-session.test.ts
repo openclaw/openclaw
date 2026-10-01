@@ -295,6 +295,7 @@ describe("tui last session state", () => {
           { type: "tui.lastSession.clear", input: { retiredSessionKeys: ["agent:main:retired"] } },
           { databasePath: context.admission.databasePath },
           open,
+          open,
         ),
       ),
     ).toBe(0);

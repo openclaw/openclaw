@@ -1885,10 +1885,8 @@ internal fun wearSessionRequestIsCurrent(
   currentSession: WearSession?,
   responsePhoneNodeId: String,
 ): Boolean =
-  currentSession?.key == requestedSession.key &&
-    currentSession.phoneNodeId == requestedSession.phoneNodeId &&
-    responsePhoneNodeId == requestedSession.phoneNodeId &&
-    currentSession.modelRef == requestedSession.modelRef
+  wearTranscriptRequestIsCurrent(requestedSession, currentSession, responsePhoneNodeId) &&
+    currentSession?.modelRef == requestedSession.modelRef
 
 internal fun wearTranscriptRequestIsCurrent(
   requestedSession: WearSession,

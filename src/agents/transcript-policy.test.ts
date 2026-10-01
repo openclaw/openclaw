@@ -2,7 +2,7 @@
  * Regression coverage for transcript replay policy resolution.
  * Exercises provider-family fallbacks, plugin replay hooks, and policy caching.
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
@@ -11,6 +11,7 @@ import {
   validateAnthropicTurns,
 } from "./embedded-agent-helpers/turns.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { resolveTranscriptPolicy } from "./transcript-policy.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
   const replayHelpers = await vi.importActual<
@@ -126,12 +127,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
   };
 });
 
-let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 describe("resolveTranscriptPolicy", () => {
-  beforeAll(async () => {
-    ({ resolveTranscriptPolicy } = await import("./transcript-policy.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });

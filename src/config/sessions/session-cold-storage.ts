@@ -428,17 +428,16 @@ export async function restoreSessionColdTranscript(
     resolved = target;
     const options = toDatabaseOptions(target);
     if (!isIncognitoOpenClawAgentSqlitePath(target.path, options)) {
+      // Synchronous inspection stays within the admission check above.
       try {
         statSync(target.path);
       } catch (error) {
         if (!hasErrnoCode(error, "ENOENT")) {
           throw error;
         }
-        assertPreparedCurrent();
         // First writers may create this store; there is no cold transcript to restore yet.
         return;
       }
-      assertPreparedCurrent();
       const source = createOpenClawAgentDatabasePathMatcher();
       source(target.path, target.path);
       return await withSessionHistoryWorkerDatabase(options, async (owner) => {
