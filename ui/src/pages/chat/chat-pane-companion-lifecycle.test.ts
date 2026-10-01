@@ -25,6 +25,11 @@ describe("chat pane companion connection lifecycle", () => {
     const models: ModelCatalogEntry[] = [
       { id: "fixture-model", name: "Fixture model", provider: "test", available: true },
     ];
+    let releaseHistory!: () => void;
+    const historyReady = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+    onTestFinished(() => releaseHistory());
     const request = createGatewayRequestMock(async (method) => {
       switch (method) {
         case "agents.list":
@@ -41,6 +46,7 @@ describe("chat pane companion connection lifecycle", () => {
         case "sessions.messages.unsubscribe":
           return { subscribed: false, key: "agent:main:current" };
         case "chat.startup":
+          await historyReady;
           return { messages: [], sessionId: "session-current", hasMore: false, totalMessages: 0 };
         case "models.authStatus":
           return { ts: 1, providers: [] };
@@ -127,6 +133,12 @@ describe("chat pane companion connection lifecycle", () => {
     expect(consoleError).not.toHaveBeenCalled();
     expect(state.chatModelCatalog).toEqual(models);
     expect(state.chatModelCatalogError).toBeNull();
+    const history = getChatHistoryLoadState(state);
+    expect(history.phase).toBe("in-flight");
+    releaseHistory();
+    if (history.phase === "in-flight") {
+      await history.promise;
+    }
     expect(getChatHistoryLoadState(state).phase).toBe("committed");
     expect(state.chatError).toBeNull();
   });

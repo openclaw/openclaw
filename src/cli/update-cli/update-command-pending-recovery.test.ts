@@ -48,6 +48,7 @@ import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 import { updateCommand } from "./update-command.js";
+import { updateRepairCommand } from "./update-repair-command.js";
 
 const dirs = new Set<string>();
 afterEach(() => cleanupTempDirs(dirs));
@@ -404,20 +405,23 @@ async function fixture() {
 }
 
 describe("pending recovery finalizer", () => {
-  it("refuses standalone finalization before recreating a displaced canonical database", async () => {
+  it.each([
+    { command: "finalize", invoke: updateFinalizeCommand },
+    { command: "repair", invoke: updateRepairCommand },
+  ])("refuses $command before recreating a displaced canonical database", async ({ invoke }) => {
     const f = await fixture();
     const before = fs.readFileSync(f.displaced);
     const configPath = path.join(f.root, "openclaw.json");
     const originalConfig = fs.readFileSync(configPath);
     const resolveRoot = vi
       .spyOn(updateShared, "resolveUpdateRoot")
-      .mockRejectedValue(new Error("ordinary finalization reached root discovery"));
+      .mockRejectedValue(new Error("ordinary maintenance reached root discovery"));
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     await expect(
       withOwnedManagedUpdateEnv(
         { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
-        () => updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+        () => invoke({ json: true, yes: true, deferCompletionCache: true }),
       ),
     ).rejects.toThrow("full-state recovery is deferred");
     expect(resolveRoot).not.toHaveBeenCalled();

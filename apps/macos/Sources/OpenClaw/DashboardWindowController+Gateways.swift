@@ -16,10 +16,6 @@ enum DashboardGatewaysRequest: Equatable {
 extension DashboardWindowController {
     static let gatewaysMessageHandlerName = "openclawGateways"
 
-    func hasTLSParams(_ params: GatewayTLSParams?) -> Bool {
-        self.tlsParams == params
-    }
-
     func webView(
         _ webView: WKWebView,
         didReceive challenge: URLAuthenticationChallenge,

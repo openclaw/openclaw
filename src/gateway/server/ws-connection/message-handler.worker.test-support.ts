@@ -11,13 +11,10 @@ import {
   type WorkerLiveEventErrorDetails,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  WORKER_PRESENCE_PROTOCOL_FEATURE,
-  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-  type WorkerSessionToolResult,
   type WorkerTranscriptCommitErrorReason,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   type WorkerInferenceEventFrame,
   type WorkerInferenceStartParams,
@@ -41,11 +38,9 @@ export const HANDSHAKE = {
     "worker-heartbeat-v1",
     WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
     WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
-    WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-    WORKER_PORTAL_PROTOCOL_FEATURE,
-    WORKER_PRESENCE_PROTOCOL_FEATURE,
     WORKER_INFERENCE_PROTOCOL_FEATURE,
     WORKER_COMPUTER_PROTOCOL_FEATURE,
+    WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   ],
 };
 const WORKER_CONNECT: WorkerConnectParams = {
@@ -172,7 +167,6 @@ export function attachHarness(
     omitPublicAdmission?: boolean;
     rateLimiter?: AuthRateLimiter;
     onInferenceLaunch?: (sink: InferenceSink) => void;
-    onSessionTool?: (signal: AbortSignal | undefined) => Promise<WorkerSessionToolResult>;
     startupPending?: () => boolean;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
   } = {},
@@ -220,12 +214,26 @@ export function attachHarness(
       ok: true as const,
       result: { status: "cancelled" as const },
     })),
-    executeSessionTool: vi.fn(async (_identity, _toolName, _request, signal) => ({
-      ok: true as const,
-      result: options.onSessionTool
-        ? await options.onSessionTool(signal)
-        : { resultJson: JSON.stringify({ content: [] }) },
+    getToolSurface: vi.fn<NonNullable<WorkerConnectionService["getToolSurface"]>>(async () => ({
+      ok: true,
+      result: {
+        generation: "generation-1",
+        tools: [],
+        policy: {
+          workspaceOnly: true,
+          readOnly: false,
+          applyPatchEnabled: true,
+          applyPatchWorkspaceOnly: true,
+          imageSanitization: {},
+        },
+      },
     })),
+    invokeGatewayTool: vi.fn<NonNullable<WorkerConnectionService["invokeGatewayTool"]>>(
+      async () => ({ ok: true, result: { content: [] } }),
+    ),
+    cancelGatewayTool: vi.fn<NonNullable<WorkerConnectionService["cancelGatewayTool"]>>(
+      async () => ({ ok: true, result: { cancelled: true } }),
+    ),
     executeComputer: vi.fn<NonNullable<WorkerConnectionService["executeComputer"]>>(async () => ({
       ok: true,
       result: { resultJson: JSON.stringify({ format: "png", base64: "a".repeat(128 * 1024) }) },

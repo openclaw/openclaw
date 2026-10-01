@@ -1,7 +1,7 @@
 // Preinstall Package Manager Warning tests cover preinstall package manager warning script behavior.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -245,11 +245,9 @@ describe("install runtime enforcement", () => {
         accepted: false,
         error: "detected Node missing",
       },
-    ].map((testCase) => ({
-      shimDirectory: "bun-node-ddfce5d01",
-      shimMatchesBun: true,
-      ...testCase,
-    })),
+    ].map((testCase) =>
+      Object.assign({ shimDirectory: "bun-node-ddfce5d01", shimMatchesBun: true }, testCase),
+    ),
   )(
     "enforces the explicit Bun launcher contract: $name",
     ({ launcher, bun, persistent, shimDirectory, shimMatchesBun, accepted, error }) => {
@@ -285,6 +283,7 @@ describe("install runtime enforcement", () => {
           probeNodeRuntime: () =>
             probePackageCliNodeRuntime({
               cwd: "/work/openclaw",
+              access: () => {},
               execPath: "/opt/bun/bin/bun",
               realpath: (candidate) =>
                 (candidate === `/tmp/${shimDirectory}/node` && shimMatchesBun) ||
@@ -333,10 +332,86 @@ describe("install runtime enforcement", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32").each([
+    { name: "explicit Bun launcher", nodeVersion: null, marker: true, accepted: true },
+    { name: "missing launcher marker", nodeVersion: null, marker: false, accepted: false },
+    { name: "persistent old Node", nodeVersion: "24.14.1", marker: true, accepted: false },
+    { name: "persistent supported Node", nodeVersion: "24.16.0", marker: true, accepted: true },
+  ])(
+    "never spawns absent or nonexecutable Node candidates: $name",
+    ({ nodeVersion, marker, accepted }) => {
+      const cwd = tempDirs.make("openclaw-preinstall-path-");
+      const noExecute = join(cwd, "no-execute");
+      const dangling = join(cwd, "dangling");
+      const notDirectory = join(cwd, "not-a-directory");
+      const nodeDir = join(cwd, "persistent");
+      const launcher = join(cwd, "bun");
+      for (const directory of [noExecute, dangling, nodeDir]) {
+        mkdirSync(directory);
+      }
+      writeFileSync(join(noExecute, "node"), "not executable", { mode: 0o644 });
+      writeFileSync(notDirectory, "not a directory");
+      symlinkSync(join(cwd, "missing-node"), join(dangling, "node"));
+      writeFileSync(launcher, "Bun fixture", { mode: 0o755 });
+      const executable = nodeVersion ? join(nodeDir, "node") : launcher;
+      if (nodeVersion) {
+        writeFileSync(executable, "Node fixture", { mode: 0o755 });
+      }
+      const prefix: string[] = [];
+      for (let directory = cwd; ; directory = dirname(directory)) {
+        prefix.push(join(directory, "node_modules", ".bin"));
+        if (dirname(directory) === directory) {
+          break;
+        }
+      }
+      const run = vi.fn((command: string) =>
+        command === executable
+          ? {
+              status: 0,
+              stdout: JSON.stringify({
+                version: nodeVersion ?? "24.3.0",
+                bunVersion: nodeVersion ? null : "1.4.3",
+                execPath: executable,
+              }),
+            }
+          : { error: Object.assign(new Error("absent executable"), { code: "ENOENT" }) },
+      );
+      const reportError = vi.fn();
+      expect(
+        enforceSupportedNodeRuntime(
+          {
+            bunVersion: "1.4.3",
+            engine: EXPECTED_NODE_ENGINE_RANGE,
+            probeNodeRuntime: () =>
+              probePackageCliNodeRuntime({
+                cwd,
+                env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: marker ? launcher : undefined },
+                pathEnv: [
+                  ...prefix,
+                  join(cwd, "missing"),
+                  noExecute,
+                  notDirectory,
+                  dangling,
+                  nodeDir,
+                ].join(":"),
+                run,
+              }),
+          },
+          reportError,
+        ),
+      ).toBe(accepted);
+      expect(run.mock.calls.map(([command]) => command)).toEqual(marker ? [executable] : []);
+      if (nodeVersion === "24.14.1") {
+        expect(reportError).toHaveBeenCalledWith(expect.stringContaining("detected Node 24.14.1"));
+      }
+    },
+  );
+
   it("strips only Bun's cwd-to-root lifecycle PATH prefix", () => {
     const candidates: string[] = [];
     const runtime = probePackageCliNodeRuntime({
       cwd: "/work/openclaw",
+      access: () => {},
       pathEnv: [
         "/work/openclaw/node_modules/.bin",
         "/work/node_modules/.bin",
@@ -369,6 +444,7 @@ describe("install runtime enforcement", () => {
     const candidates: string[] = [];
     const runtime = probePackageCliNodeRuntime({
       cwd: "/work/openclaw",
+      access: () => {},
       pathEnv: [
         "/work/openclaw/node_modules/.bin",
         "/work/node_modules/.bin",
@@ -398,6 +474,7 @@ describe("install runtime enforcement", () => {
     const candidates: string[] = [];
     const runtime = probePackageCliNodeRuntime({
       cwd: "/work/openclaw",
+      access: () => {},
       pathEnv: [
         "/work/openclaw/node_modules/.bin",
         "/work/node_modules/.bin",
@@ -428,6 +505,7 @@ describe("install runtime enforcement", () => {
     expect(
       probePackageCliNodeRuntime({
         cwd: "/work/openclaw",
+        access: () => {},
         pathEnv: ["/unproven/node_modules/.bin", "/opt/node/bin"].join(":"),
         platform: "linux",
         run,
@@ -441,6 +519,7 @@ describe("install runtime enforcement", () => {
     expect(
       probePackageCliNodeRuntime({
         cwd: "/work/openclaw",
+        access: () => {},
         pathEnv: [
           "/work/openclaw/node_modules/.bin",
           "/work/node_modules/.bin",
@@ -472,6 +551,7 @@ describe("install runtime enforcement", () => {
       expect(
         probePackageCliNodeRuntime({
           cwd: "/work/openclaw",
+          access: () => {},
           pathEnv: [
             "/work/openclaw/node_modules/.bin",
             "/work/node_modules/.bin",
@@ -494,6 +574,7 @@ describe("install runtime enforcement", () => {
       expect(
         probePackageCliNodeRuntime({
           cwd: "C:\\work\\openclaw",
+          access: () => {},
           pathEnv: [
             "C:\\work\\openclaw\\node_modules\\.bin",
             "C:\\work\\node_modules\\.bin",
@@ -514,6 +595,7 @@ describe("install runtime enforcement", () => {
     expect(
       probePackageCliNodeRuntime({
         cwd: "C:\\work\\openclaw",
+        access: () => {},
         env: {
           PATH: [
             "C:\\work\\openclaw\\node_modules\\.bin",

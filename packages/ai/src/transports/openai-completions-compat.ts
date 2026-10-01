@@ -94,28 +94,21 @@ export function isOpenAICodexResponsesModel(model: {
 
 function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {
   const trimmed = typeof baseUrl === "string" ? baseUrl.trim() : "";
-  if (!trimmed) {
+  const url = URL.parse(trimmed);
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
     return false;
   }
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return false;
-    }
-    if (url.hostname.toLowerCase() !== "chatgpt.com") {
-      return false;
-    }
-    const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
-    return [
-      "/backend-api",
-      "/backend-api/v1",
-      "/backend-api/codex",
-      "/backend-api/codex/v1",
-      "/backend-api/codex/responses",
-    ].includes(pathname);
-  } catch {
+  if (url.hostname.toLowerCase() !== "chatgpt.com") {
     return false;
   }
+  const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
+  return [
+    "/backend-api",
+    "/backend-api/v1",
+    "/backend-api/codex",
+    "/backend-api/codex/v1",
+    "/backend-api/codex/responses",
+  ].includes(pathname);
 }
 
 export function usesNativeOpenAICodexResponsesBackend(model: {

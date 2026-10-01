@@ -326,11 +326,7 @@ async function waitForSlackStoredMessages(params: {
 }) {
   const startedAt = Date.now();
   while (true) {
-    const messages = await listSlackMessages({
-      channelId: params.channelId,
-      client: params.client,
-      oldestTs: params.oldestTs,
-    });
+    const messages = await listSlackMessages(params);
     const messagesById = new Map(
       messages
         .filter((message) => message.ts && isSutSlackMessage(message, params.sutIdentity))

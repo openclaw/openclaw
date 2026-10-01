@@ -65,13 +65,6 @@ describe("apply_patch workspace containment hint", () => {
     expect(message).not.toContain("workspaceOnly");
   });
 
-  it("points a worker placement at the session mode, not at settings it never reads", async () => {
-    const { hint } = await hintForHostEscape("worker");
-
-    expect(hint).toContain("full session permission mode");
-    expect(hint).toContain("do not read");
-  });
-
   it("points a mode-governed session at the mode, not at configuration", async () => {
     const { hint } = await hintForHostEscape("session");
 

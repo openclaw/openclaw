@@ -1,4 +1,3 @@
-// Provides shared replay-policy helpers for provider plugins.
 import {
   bindsClaudeThinkingPrefix,
   resolveClaudeModelIdentity,

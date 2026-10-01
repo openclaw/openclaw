@@ -10,6 +10,7 @@ import {
   listChannelIngressQueueAccountIdsReadOnly,
   type ChannelIngressQueue,
 } from "../channels/message/ingress-queue.js";
+import { importLegacyChannelIngressEntries } from "../channels/message/ingress-queue.migration.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionIdentityEvidenceBatch } from "../config/sessions/session-accessor.js";
@@ -272,6 +273,9 @@ function buildChannelIngressQueueAccess(
     };
     if (mutation) {
       const assertCurrent = () => mutation.assertCurrent();
+      access.assertCurrent = assertCurrent;
+      access.importLegacyEntries = (input) =>
+        importLegacyChannelIngressEntries({ ...input, channelId, stateDir, assertCurrent });
       access.openChannelIngressQueue = (openOptions) =>
         open(openOptions, "read-write", assertCurrent);
     }
@@ -340,7 +344,7 @@ export function createPluginDoctorStateMigrationContext(params: {
   if (params.trustedForDurableStores) {
     context.inspectCronJobs = async () => {
       params.repairAuthority?.assertCurrent();
-      const { inspectCronJobsForDoctor } = await import("../cron/store/doctor.js");
+      const { inspectCronJobsForDoctor } = await import("../commands/doctor/cron/store-repair.js");
       params.repairAuthority?.assertCurrent();
       const inventory = await inspectCronJobsForDoctor(params);
       params.repairAuthority?.assertCurrent();
@@ -350,7 +354,7 @@ export function createPluginDoctorStateMigrationContext(params: {
       const authority = params.repairAuthority;
       context.repairCronJobs = async (inventory, changes) => {
         authority.assertCurrent();
-        const { repairCronJobsForDoctor } = await import("../cron/store/doctor.js");
+        const { repairCronJobsForDoctor } = await import("../commands/doctor/cron/store-repair.js");
         authority.assertCurrent();
         return repairCronJobsForDoctor(params, authority, inventory, changes);
       };

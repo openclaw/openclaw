@@ -69,28 +69,21 @@ function pruneResolvedSessionSuggestions(
   sessionKey: string,
 ): void {
   const db = suggestionDb(database);
-  const resolvedRows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_suggestions")
-      .select("id")
-      .where("session_key", "=", sessionKey)
-      .where("state", "!=", "pending")
-      .orderBy("created_at", "desc")
-      .orderBy("id", "desc")
-      // SQLite requires LIMIT for OFFSET; -1 preserves the unbounded deletion tail.
-      .limit((eb) => eb.lit(-1))
-      .offset((eb) => eb.lit(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS)),
-  ).rows;
-  if (resolvedRows.length === 0) {
-    return;
-  }
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("session_suggestions").where(
       "id",
       "in",
-      resolvedRows.map((row) => row.id),
+      db
+        .selectFrom("session_suggestions")
+        .select("id")
+        .where("session_key", "=", sessionKey)
+        .where("state", "!=", "pending")
+        .orderBy("created_at", "desc")
+        .orderBy("id", "desc")
+        // SQLite requires LIMIT for OFFSET; -1 preserves the unbounded deletion tail.
+        .limit((eb) => eb.lit(-1))
+        .offset((eb) => eb.lit(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS)),
     ),
   );
 }

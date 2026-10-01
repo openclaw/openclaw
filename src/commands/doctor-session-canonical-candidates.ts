@@ -33,15 +33,17 @@ export type CanonicalSessionCandidate = {
   entry: SessionEntry;
   expectedEntry: SessionEntry;
   ownerEvidenceOnly: boolean;
-  rawEntryJson?: string;
   sessionKey: string;
   sqlitePath: string;
   storePath: string;
-};
+} & (
+  | { rawEntryJson: string; rawSnapshotRevision: number }
+  | { rawEntryJson?: never; rawSnapshotRevision?: never }
+);
 
 export type CanonicalSessionCandidateFact = Omit<
   CanonicalSessionCandidate,
-  "entry" | "expectedEntry" | "rawEntryJson"
+  "entry" | "expectedEntry" | "rawEntryJson" | "rawSnapshotRevision"
 > & {
   inventoryFact: CanonicalSessionRepairFact;
   lineageRepairRequired: boolean;

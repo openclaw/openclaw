@@ -31,17 +31,20 @@ describe("resolveFastModeState", () => {
     expect(state.source).toBe("session");
   });
 
-  it("keeps auto as the persisted mode and starts enabled", () => {
-    const state = resolveFastModeState({
-      cfg: {} as OpenClawConfig,
-      provider: "openai",
-      model: "gpt-5.5",
-      sessionEntry: { fastMode: "auto" },
-    });
+  it.each(["auto", "ultrafast"] as const)(
+    "keeps %s as the persisted mode and starts enabled",
+    (mode) => {
+      const state = resolveFastModeState({
+        cfg: {} as OpenClawConfig,
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionEntry: { fastMode: mode },
+      });
 
-    expect(state.mode).toBe("auto");
-    expect(state.enabled).toBe(true);
-  });
+      expect(state.mode).toBe(mode);
+      expect(state.enabled).toBe(true);
+    },
+  );
 
   it.each([
     [true, false],
@@ -106,8 +109,9 @@ describe("resolveFastModeState", () => {
       "auto (30 sec)",
     );
     expect(formatFastModeStatusValue({ mode: true })).toBe("on");
+    expect(formatFastModeStatusValue({ mode: "ultrafast" })).toBe("ultrafast");
     expect(formatFastModeCommandOptions({ fastAutoOnSeconds: 30 })).toBe(
-      "on, off, auto (30 sec), default, status",
+      "on, off, ultrafast, auto (30 sec), default, status",
     );
     expect(
       formatFastModeCurrentStatus({

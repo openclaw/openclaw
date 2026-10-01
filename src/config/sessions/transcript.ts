@@ -58,7 +58,10 @@ import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
 } from "./transcript-assistant-message.js";
-import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
+import {
+  resolveMirroredTranscriptText,
+  type SessionTranscriptDeliveryMirror,
+} from "./transcript-mirror.js";
 import {
   isWithinTranscriptWindow,
   normalizeRecentTranscriptLimit,
@@ -89,17 +92,6 @@ export type SessionTranscriptAppendResult =
     };
 
 export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
-export type SessionTranscriptDeliveryMirror =
-  | {
-      kind: "channel-final";
-      sourceMessageId?: string;
-    }
-  | {
-      kind: "channel-final-suppressed";
-      reason: "stale-foreground";
-      sourceMessageId?: string;
-    };
-
 type InternalSessionTranscriptDeliveryMirror =
   | SessionTranscriptDeliveryMirror
   | {
@@ -411,25 +403,9 @@ export async function appendAssistantMessageToSessionTranscript(
   }
 
   return appendExactAssistantMessageToSessionTranscript({
-    agentId: params.agentId,
+    ...params,
     sessionKey,
-    ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-    ...(params.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
-      : {}),
-    ...(params.expectedWriterRunId ? { expectedWriterRunId: params.expectedWriterRunId } : {}),
-    ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
-    ...(params.sessionLifecyclePatch
-      ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
-      : {}),
-    storePath: params.storePath,
-    ...(params.eventId ? { eventId: params.eventId } : {}),
-    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...(params.runId ? { runId: params.runId } : {}),
-    updateMode: params.updateMode,
-    onMessageCommitted: params.onMessageCommitted,
-    config: params.config,
-    ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
+    expectedWriterRunId: params.expectedWriterRunId || undefined,
     message: {
       ...recordAssistantManagedMediaUrls(
         { role: "assistant" as const, openclawDelivery: { mediaUrls: [] } },

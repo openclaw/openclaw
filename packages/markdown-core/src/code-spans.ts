@@ -36,13 +36,10 @@ export function buildCodeSpanIndex(
   fenceState?: FenceScanState,
 ): CodeSpanIndex {
   const { spans: fenceSpans, state: nextFenceState } = scanFenceSpans(text, fenceState);
-  const startState = inlineState
-    ? { open: inlineState.open, ticks: inlineState.ticks }
-    : createInlineCodeState();
   const { spans: inlineSpans, state: nextInlineState } = parseInlineCodeSpans(
     text,
     fenceSpans,
-    startState,
+    inlineState ?? createInlineCodeState(),
   );
 
   return {

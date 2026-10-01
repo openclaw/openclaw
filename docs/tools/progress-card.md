@@ -77,6 +77,25 @@ do not request a check. Cancellation, approval waits, accepted child/media compl
 status-only refreshes, and explicit plugin finalization retain their
 existing behavior. Other agent harnesses retain their own finalization policies.
 
+## Pause without marking work complete
+
+If no authorized step can proceed because of an explicit pause, required approval,
+or an external dependency, replace the checklist with a Markdown-only card. Keep
+the unfinished work, blocker, responsible owner, and resume condition visible.
+Do not mark blocked steps completed or imply that the request is finished.
+
+```json
+{
+  "markdown": "Update remains open and paused. Waiting for the source owner to publish the reviewed repair. No deployment is authorized; reconcile the new packet and current instructions before resuming."
+}
+```
+
+Omitting `plan` removes the checklist, not the note or the task’s unresolved work.
+A note-only replacement does not request a completion self-check. Re-saving an
+unfinished checklist during a later ordinary turn can request another check, even
+when the same blocker remains. Restore a checklist when authorized work can
+proceed; keep any other unresolved dependencies in the note.
+
 ## Format the note
 
 For eligible multi-step work with a known total, prefer a leading progress bar using observed completed/total counts: PRs reviewed, tests finished, files processed, or other meaningful work units. Prefer those counts over coarse phase counts such as "1 of 3 steps." Label exactly what the count measures: reviewed PRs are not merged PRs, and finished tests are not necessarily passing tests. Never invent percentages or infer completion from elapsed time. When the total is unknown, use a compact status note or table instead.
@@ -115,7 +134,7 @@ Call `progress_card` with both parts absent or empty to remove the current card:
 
 An empty plan plus empty or whitespace-only Markdown also clears it. A successful clear returns `Progress card cleared`. Channel previews remove the checklist and its status, keep other activity, and delete an otherwise empty draft. A later card update can create a new draft.
 
-In the Control UI, users with write access can clear the current card with **Dismiss progress card** (×), whether it is expanded or collapsed. The button is available for unfinished, paused, completed, and note-only cards. Dismissal clears the saved card, not the conversation or active agent run; a later progress update can create a new card.
+In the Control UI, users with write access can clear the current card with **Dismiss progress card** (×), whether it is expanded or collapsed. The button is available for unfinished, paused, completed, and note-only cards. Dismissal clears the saved card, not the conversation or active agent run; a later progress update can create a new card. Dismissal clears only the revision the user saw; if the agent has written a newer revision, the newer card is kept and shown instead.
 
 A full in-place conversation reset (`/reset` without `soft`, or `sessions.reset`) also clears the previous task’s card. The clear commits with the reset boundary and refreshes subscribed clients; a fresh page load also sees no old card. Writes admitted before that reset cannot restore it. Reset preserves transcript history and dashboard layout. Automatic continuity resets that preserve prior context do not clear the card.
 

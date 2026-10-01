@@ -357,7 +357,6 @@ function matchesPromotionSelector(
     return false;
   }
   return (
-    candidate.key.toLowerCase() === trimmed ||
     candidate.key.toLowerCase().includes(trimmed) ||
     candidate.path.toLowerCase().includes(trimmed) ||
     candidate.snippet.toLowerCase().includes(trimmed)

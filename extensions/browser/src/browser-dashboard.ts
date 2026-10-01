@@ -1,3 +1,4 @@
+import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   readBrowserDashboardDefinition,
@@ -24,6 +25,7 @@ import {
   isBrowserStateRuntimeCurrent,
   readCurrentBrowserState,
   type BrowserDashboardOperation,
+  type BrowserSessionTabAuthority,
   type BrowserStateRuntime,
 } from "./browser-runtime-state.js";
 import { resolveCdpControlPolicy } from "./browser/cdp-reachability-policy.js";
@@ -36,6 +38,7 @@ import {
   type ResolvedBrowserProfile,
 } from "./browser/config.js";
 import { withBrowserRequestScope } from "./browser/request-scope.js";
+import type { CloseParams } from "./browser/session-tab-cleanup-claim.js";
 import { trackSessionBrowserTab } from "./browser/session-tab-registry.js";
 import {
   deleteBrowserDashboardStopIntent,
@@ -43,7 +46,6 @@ import {
   readBrowserDashboardStopIntent,
   readBrowserDashboardStopIntents,
   readBrowserDashboardTabs,
-  type BrowserSessionTabAuthority,
 } from "./browser/session-tab-store.js";
 import { withBrowserDashboardRegistration } from "./browser/session-tab-tracking.js";
 
@@ -581,9 +583,9 @@ async function stopMaterializedDashboard(
 export async function reconcileBrowserDashboards(
   params: {
     sessionKeys?: Array<string | undefined>;
-    isCurrent?: () => boolean;
     onWarn?: (message: string) => void;
-  } = {},
+  } & Pick<CloseParams, "isCurrent"> &
+    SessionEntryCurrentPreparation = {},
 ): Promise<number> {
   const runtime = getOptionalBrowserStateRuntime();
   if (!runtime?.gateway) {
@@ -593,7 +595,7 @@ export async function reconcileBrowserDashboards(
   const authority: BrowserSessionTabAuthority = {
     runtime,
     assertCurrent: () => {
-      if (!isCurrent()) {
+      if (!isBrowserStateRuntimeCurrent(runtime)) {
         throw new Error("Browser dashboard cleanup is no longer current");
       }
     },
@@ -674,7 +676,19 @@ export async function reconcileBrowserDashboards(
             (tab) => tab.dashboard?.state === "active" && definitionOwnsTab(definition, tab),
           ))
       ) {
-        await deleteBrowserDashboardStopIntent(intent, authority);
+        if ((params.prepareCurrent && !(await params.prepareCurrent())) || !isCurrent()) {
+          return closed;
+        }
+        await deleteBrowserDashboardStopIntent(intent, {
+          ...authority,
+          sessionEntryCurrent: params.sessionEntryCurrent,
+          assertCurrent: () => {
+            authority.assertCurrent?.();
+            if (!isCurrent()) {
+              throw new Error("Browser dashboard cleanup caller changed");
+            }
+          },
+        });
       }
     } catch (error) {
       if (!isCurrent()) {

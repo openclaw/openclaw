@@ -28,11 +28,8 @@ import { openOpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js"
 import { openClawStateDatabaseCache } from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import * as githubIdentities from "../../src/state/user-profile-github-identity.js";
-import {
-  ensureProfileForEmail,
-  linkEmail,
-  syncGitHubIdentity,
-} from "../../src/state/user-profiles.js";
+import { linkEmail, syncGitHubIdentity } from "../../src/state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { trackSqliteStatementExecutions } from "../helpers/sqlite-statement-execution-counter.js";
 
 afterEach(() => vi.restoreAllMocks());

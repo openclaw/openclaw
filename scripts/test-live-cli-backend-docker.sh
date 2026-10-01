@@ -289,14 +289,7 @@ WRAP
   fi
 fi
 tmp_dir="$(mktemp -d)"
-openclaw_live_stage_source_tree "$tmp_dir"
-# Use a writable node_modules overlay in the temp repo. Vite writes bundled
-# config artifacts under the nearest node_modules/.vite-temp path, and the
-# build-stage /app/node_modules tree is root-owned in this Docker lane.
-openclaw_live_stage_node_modules "$tmp_dir"
-openclaw_live_link_runtime_tree "$tmp_dir"
-openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
-openclaw_live_prepare_staged_config
+openclaw_live_stage_workspace "$tmp_dir"
 cd "$tmp_dir"
 openclaw_live_run_staged_script scripts/test-live -- src/gateway/gateway-cli-backend.live.test.ts
 EOF

@@ -1,6 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { getChildLogger } from "../../logging/logger.js";
+import {
+  GatewayDrainingError,
+  getGatewayRestartDrainSignal,
+  isGatewayRestartDrainError,
+} from "../../process/gateway-work-admission.js";
+import { AgentDatabaseAdmissionError } from "../../state/agent-database-admission.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -15,11 +21,9 @@ import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
-import {
-  createSessionMaintenancePlanningOperation,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { createSessionMaintenancePlanningOperation } from "./session-accessor.sqlite-reclamation.js";
 import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -60,15 +64,21 @@ const MAX_MAINTENANCE_REJECTIONS = 3;
 export function kickSessionEntryMaintenanceAfterWrite(
   params: SessionEntryMaintenanceRequest,
 ): void {
+  const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(params.scope));
+  const owner = maintenanceByStore.get(databasePath);
+  if (getGatewayRestartDrainSignal().aborted) {
+    if (owner) {
+      retireMaintenanceOwner(databasePath, owner);
+    }
+    return;
+  }
   if (params.skipMaintenance) {
     return;
   }
-  const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(params.scope));
   const database = getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(params.scope));
   if (!database) {
     return;
   }
-  const owner = maintenanceByStore.get(databasePath);
   if (owner?.database === database) {
     owner.activeSessionKeys.add(params.activeSessionKey);
     Object.assign(owner, params, { generation: owner.generation + 1 });
@@ -148,16 +158,28 @@ async function runPendingMaintenance(
   databasePath: string,
   owner: SessionEntryMaintenanceOwner,
 ): Promise<void> {
-  const isCurrent = () =>
-    maintenanceByStore.get(databasePath) === owner &&
-    owner.database.db.isOpen &&
-    getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(owner.scope)) === owner.database;
+  const isCurrent = () => {
+    try {
+      return (
+        !getGatewayRestartDrainSignal().aborted &&
+        maintenanceByStore.get(databasePath) === owner &&
+        owner.database.db.isOpen &&
+        getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(owner.scope)) === owner.database
+      );
+    } catch (error) {
+      // Refused admission retires discretionary work, including callbacks outside the writer.
+      if (error instanceof AgentDatabaseAdmissionError) {
+        return false;
+      }
+      throw error;
+    }
+  };
   if (!isCurrent()) {
     retireMaintenanceOwner(databasePath, owner);
     return;
   }
   const generation = owner.generation;
-  const activeSessionKeys = [...owner.activeSessionKeys];
+  let activeSessionKeys = [...owner.activeSessionKeys];
   owner.activeSessionKeys.clear();
   let nextMaintenanceAt: number | undefined = Infinity;
   let planningChanged = false;
@@ -206,19 +228,24 @@ async function runPendingMaintenance(
       return;
     }
     let { ageCapture } = prepared;
+    let admitted = false;
     const assertInputsCurrent = () => {
       if (!isCurrent()) {
-        throw new Error("SQLite automatic maintenance owner retired");
+        throw getGatewayRestartDrainSignal().aborted
+          ? new GatewayDrainingError()
+          : new Error("SQLite automatic maintenance owner retired");
       }
       if (
-        [...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key)) ||
+        (admitted &&
+          [...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key))) ||
         !isDeepStrictEqual(
           maintenance,
           owner.maintenanceConfig
             ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
             : resolveMaintenanceConfig(),
         ) ||
-        (operation.input.preservation !== null &&
+        (admitted &&
+          operation.input.preservation !== null &&
           !isDeepStrictEqual(
             operation.input.preservation,
             captureSessionMaintenancePreservation(operation.input.storePath),
@@ -238,6 +265,20 @@ async function runPendingMaintenance(
       return runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-plan" },
         assertCommitAllowed: assertInputsCurrent,
+        refreshMaintenanceProtection: () => {
+          // Refresh only at writer admission; commit still checks this exact live capture.
+          admitted = false;
+          assertInputsCurrent();
+          activeSessionKeys = [...new Set([...activeSessionKeys, ...owner.activeSessionKeys])];
+          operation.input.activeSessionKeys = activeSessionKeys;
+          if (operation.input.preservation !== null) {
+            operation.input.preservation = captureSessionMaintenancePreservation(
+              operation.input.storePath,
+            );
+          }
+          admitted = true;
+          return { activeSessionKeys, preservation: operation.input.preservation };
+        },
         onWorkerResult: (result) => {
           if (result.kind === "maintenance-plan" && isCurrent()) {
             adoptSessionEntryMaintenanceAgeFact(owner.database.db, ageCapture, result.ageFact);
@@ -322,10 +363,16 @@ async function runPendingMaintenance(
       }
       return;
     }
-    getChildLogger({ subsystem: "session-sqlite" }).warn(
-      "SQLite automatic session maintenance failed",
-      { error, path: databasePath },
-    );
+    // Drain cancels discretionary work; independent failures stay visible.
+    if (
+      !isGatewayRestartDrainError(error) &&
+      !(planningChanged && getGatewayRestartDrainSignal().aborted)
+    ) {
+      getChildLogger({ subsystem: "session-sqlite" }).warn(
+        "SQLite automatic session maintenance failed",
+        { error, path: databasePath },
+      );
+    }
   }
   // Writes during finalization also coalesce behind the next quiet window.
   if (!isCurrent()) {

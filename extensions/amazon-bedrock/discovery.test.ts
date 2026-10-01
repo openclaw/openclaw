@@ -2,11 +2,7 @@
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  discoverBedrockModels,
-  mergeImplicitBedrockProvider,
-  resolveImplicitBedrockProvider,
-} from "./api.js";
+import { discoverBedrockModels, resolveImplicitBedrockProvider } from "./api.js";
 
 const sendMock = vi.fn();
 const destroyMock = vi.fn();
@@ -669,34 +665,6 @@ describe("bedrock discovery", () => {
       params: { canonicalModelId: "claude-opus-4-6-v1" },
       thinkingLevelMap: { xhigh: null, max: "max" },
     });
-  });
-
-  it("merges implicit Bedrock models into explicit provider overrides", () => {
-    expect(
-      mergeImplicitBedrockProvider({
-        existing: {
-          baseUrl: "https://override.example.com",
-          headers: { "x-test-header": "1" },
-          models: [],
-        },
-        implicit: {
-          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-          api: "bedrock-converse-stream",
-          auth: "aws-sdk",
-          models: [
-            {
-              id: "amazon.nova-micro-v1:0",
-              name: "Nova",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 1,
-              maxTokens: 1,
-            },
-          ],
-        },
-      }).models?.map((model) => model.id),
-    ).toEqual(["amazon.nova-micro-v1:0"]);
   });
 
   it.each([

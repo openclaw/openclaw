@@ -6,12 +6,11 @@ import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
-import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import {
   analyzeArgvCommand,
   commitExecAuthorizationLocked,
-  commandRequiresSecurityAuditSuppressionApproval,
   createExecApprovalPolicySnapshot,
   hasDurableExecApproval,
   isExecApprovalPolicySnapshotCurrent,
@@ -546,7 +545,7 @@ async function evaluateSystemRunPolicyPhase(
   let { analysisOk, allowlistSatisfied } = allowlistEvaluation;
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
-  const inlineEvalHit = strictInlineEval ? detectPolicyInlineEval(segments) : null;
+  const inlineEvalHit = strictInlineEval ? detectInlineEvalInSegments(segments) : null;
   const isWindows = process.platform === "win32";
   // Detect Windows wrapper transport from the same shell-wrapper view used to
   // derive the inner payload. That keeps `cmd.exe /c` approval-gated even when
@@ -583,34 +582,6 @@ async function evaluateSystemRunPolicyPhase(
     // Env sanitization uses broader shell-wrapper detection in parse phase.
     shellWrapperInvocation: parsed.shellPayload !== null,
   });
-  const requiresSecurityAuditSuppressionApproval =
-    commandRequiresSecurityAuditSuppressionApproval({
-      command: parsed.commandText,
-      cwd: parsed.cwd,
-      env: parsed.env,
-      segments,
-    }) && !(baseSecurity === "full" && baseAsk === "off" && !fallbackRequest);
-  if (forwardedAutoReview && requiresSecurityAuditSuppressionApproval) {
-    await sendSystemRunDenied(opts, parsed.execution, {
-      reason: "approval-required",
-      message: "SYSTEM_RUN_DENIED: explicit approval required",
-    });
-    return null;
-  }
-  if (requiresSecurityAuditSuppressionApproval && !policy.approvedByAsk) {
-    policy = {
-      allowed: false,
-      eventReason: "approval-required",
-      errorMessage: "SYSTEM_RUN_DENIED: approval required",
-      analysisOk: policy.analysisOk,
-      allowlistSatisfied: policy.allowlistSatisfied,
-      shellWrapperBlocked: policy.shellWrapperBlocked,
-      windowsShellWrapperBlocked: policy.windowsShellWrapperBlocked,
-      requiresAsk: true,
-      approvalDecision: policy.approvalDecision,
-      approvedByAsk: policy.approvedByAsk,
-    };
-  }
   let autoReviewDeferredMessage: string | undefined;
   analysisOk = policy.analysisOk;
   allowlistSatisfied = policy.allowlistSatisfied;
@@ -697,7 +668,6 @@ async function evaluateSystemRunPolicyPhase(
       inlineEvalHit === null &&
       !autoReviewBlockedByShellStartup &&
       autoReviewEligibility.eligible &&
-      !requiresSecurityAuditSuppressionApproval &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
       const reviewer = await resolveSystemRunAutoReviewer({

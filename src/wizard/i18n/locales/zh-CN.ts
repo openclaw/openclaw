@@ -271,6 +271,46 @@ export const zh_CN = {
       validWebSocketUrl: "URL 必须以 ws:// 或 wss:// 开头",
       websocketUrl: "Gateway WebSocket URL",
     },
+    onboardingWelcome: {
+      nextStep: "下一步",
+      firstAction: "你想先做什么？",
+      talkToAgent: "和我的智能体聊天",
+      meetAgent: "就在这里认识你的智能体。",
+      connectWhatsApp: "连接 WhatsApp",
+      connectTelegram: "连接 Telegram",
+      allChannels: "查看所有频道",
+      readyWhenYouAre: "准备好就开始",
+      applyQuestion: "现在为你完成这些设置吗？",
+      applyYes: "是的 — 开始设置",
+      inspectChanges: "你会更改什么？",
+      askBeforeWriting: "写入任何内容前先问清楚。",
+      hatchIntro: "你好，我是 OpenClaw — 我们来孵化你的智能体吧。",
+      setupIntro: "你好，我是 OpenClaw — 我们开始设置吧。",
+      machineIntro: "这里没有菜单：告诉我你的需求，我来完成配置。我查看了这台机器：",
+      verifiedAi: "AI：{model} — 已通过真实回复验证；以后想切换只需一句话。",
+      verifiedSetupAi: "设置用 AI：{model} — 已通过真实回复验证。",
+      workspace: "工作区：{workspace}",
+      localGateway: "Gateway：在本地运行，仅供这台机器使用（token 认证）。",
+      applyPrompt: "回复 **yes**，我就会为你完成这些设置。",
+      security:
+        "请注意：你的智能体将获得这台机器的实际访问权限 — https://docs.openclaw.ai/security",
+      afterSetup:
+        "完成后：输入 `talk to agent`，就在这里认识你的智能体。频道是可选的：如果想从其他服务聊天，可以使用 `connect discord`、`connect slack`、`connect telegram`、`connect whatsapp`（或用 `channels` 查看完整列表）。",
+      setupModelNext:
+        "此模型用于设置和辅助任务。开始常规智能体聊天前，请在模型设置中选择主模型，或运行 `openclaw onboard`。你可以在这里继续设置，并在准备好后连接频道。",
+      inferenceReady: "推理已就绪。",
+      verifiedModel: "已验证模型：{model}。",
+      verifiedSetupModel: "已验证设置模型：{model}。",
+      notConfigured: "未配置",
+      gatewayRunning: "Gateway：正在 {url} 运行。",
+      gatewayUnavailable: "Gateway：尚未配置或暂时不可达。",
+      optionalSetup: "现在我可以完成工作区、Gateway、频道、智能体、插件及其他可选设置。",
+      channelCommands:
+        "选择你喜欢的聊天方式：输入 `connect whatsapp`、`connect telegram`、`connect slack`、`connect discord`，或用 `channels` 查看完整列表。",
+      readyNext: "输入 `talk to agent`，就在这里认识你的智能体；输入 `help` 查看我能做的所有事情。",
+      readySetupNext:
+        "你的设置模型仍可在这里使用。打开常规智能体聊天前，请在模型设置中选择主模型，或运行 `openclaw onboard`。",
+    },
     guided: {
       laneQuestion: "你想如何开始？",
       laneSecurityLine:

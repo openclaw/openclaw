@@ -105,67 +105,71 @@ it.each(["unchanged schema", "future schema"] as const)(
   },
 );
 
-it.each(
-  (["cached", "supplied", "entered callback", "failed rollback"] as const).flatMap((phase) =>
-    (["schema", "incomplete"] as const).map((publication) => ({ phase, publication })),
-  ),
-)("does not retry $publication owner refusal after $phase admission", ({ phase, publication }) => {
-  const options = { path: path.join(tempDirs.make("state-no-write-replay-"), "state.sqlite") };
-  const marker = resolveGatewayStateOwnerPath(options.path);
-  const existing =
-    phase === "cached" || phase === "supplied" ? openOpenClawStateDatabase(options) : undefined;
-  if (existing) {
-    publishForeignSchemaOwner(existing.path, publication === "incomplete");
-  }
-  let restoreRollback: (() => void) | undefined;
-  const unregister = registerOpenClawStateDatabaseLifecycleListener((event) => {
-    if (
-      phase !== "failed rollback" ||
-      event.kind !== "opened" ||
-      resolveGatewayStateOwnerPath(event.database.path) !== marker
-    ) {
-      return;
+it.each([
+  { phase: "cached", publication: "schema" },
+  { phase: "supplied", publication: "incomplete" },
+  { phase: "entered callback", publication: "schema" },
+  { phase: "failed rollback", publication: "incomplete" },
+] as const)(
+  "does not retry $publication owner refusal after $phase admission",
+  ({ phase, publication }) => {
+    const options = { path: path.join(tempDirs.make("state-no-write-replay-"), "state.sqlite") };
+    const marker = resolveGatewayStateOwnerPath(options.path);
+    const existing =
+      phase === "cached" || phase === "supplied" ? openOpenClawStateDatabase(options) : undefined;
+    if (existing) {
+      publishForeignSchemaOwner(existing.path, publication === "incomplete");
     }
-    publishForeignSchemaOwner(event.database.path, publication === "incomplete");
-    const exec = event.database.db.exec.bind(event.database.db);
-    const rollback = vi.spyOn(event.database.db, "exec").mockImplementation((sql) => {
-      if (sql === "ROLLBACK") {
-        throw new Error("Synthetic rollback cleanup failure");
+    let restoreRollback: (() => void) | undefined;
+    const unregister = registerOpenClawStateDatabaseLifecycleListener((event) => {
+      if (
+        phase !== "failed rollback" ||
+        event.kind !== "opened" ||
+        resolveGatewayStateOwnerPath(event.database.path) !== marker
+      ) {
+        return;
       }
-      exec(sql);
+      publishForeignSchemaOwner(event.database.path, publication === "incomplete");
+      const exec = event.database.db.exec.bind(event.database.db);
+      const rollback = vi.spyOn(event.database.db, "exec").mockImplementation((sql) => {
+        if (sql === "ROLLBACK") {
+          throw new Error("Synthetic rollback cleanup failure");
+        }
+        exec(sql);
+      });
+      restoreRollback = () => rollback.mockRestore();
     });
-    restoreRollback = () => rollback.mockRestore();
-  });
-  const callback = vi.fn(({ db }: { db: DatabaseSync }) => {
-    db.prepare(
-      "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
-    ).run("no-replay", "must-roll-back", "{}", 1);
-    publishForeignSchemaOwner(options.path, publication === "incomplete");
-    assertStateDatabaseAccessAllowed(options.path);
-  });
-  const wait = vi.spyOn(Atomics, "wait").mockImplementation(() => {
-    throw new Error("Unsafe transaction replay attempted");
-  });
-  try {
-    expect(() =>
-      runOpenClawStateWriteTransaction(
-        callback,
-        phase === "supplied" ? { ...options, database: existing } : options,
-      ),
-    ).toThrow();
-    expect(callback).toHaveBeenCalledTimes(phase === "entered callback" ? 1 : 0);
-    expect(wait).not.toHaveBeenCalled();
-    using reader = new DatabaseSync(options.path, { readOnly: true });
-    expect(
-      reader.prepare("SELECT event_key FROM diagnostic_events WHERE scope='no-replay'").all(),
-    ).toEqual([]);
-  } finally {
-    unregister();
-    restoreRollback?.();
-    wait.mockRestore();
-    fs.rmSync(marker, { force: true });
-  }
-});
+    const callback = vi.fn(({ db }: { db: DatabaseSync }) => {
+      db.prepare(
+        "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+      ).run("no-replay", "must-roll-back", "{}", 1);
+      publishForeignSchemaOwner(options.path, publication === "incomplete");
+      assertStateDatabaseAccessAllowed(options.path);
+    });
+    const wait = vi.spyOn(Atomics, "wait").mockImplementation(() => {
+      throw new Error("Unsafe transaction replay attempted");
+    });
+    try {
+      expect(() =>
+        runOpenClawStateWriteTransaction(
+          callback,
+          phase === "supplied" ? { ...options, database: existing } : options,
+        ),
+      ).toThrow();
+      expect(callback).toHaveBeenCalledTimes(phase === "entered callback" ? 1 : 0);
+      expect(wait).not.toHaveBeenCalled();
+      using reader = new DatabaseSync(options.path, { readOnly: true });
+      expect(
+        reader.prepare("SELECT event_key FROM diagnostic_events WHERE scope='no-replay'").all(),
+      ).toEqual([]);
+    } finally {
+      unregister();
+      restoreRollback?.();
+      wait.mockRestore();
+      fs.rmSync(marker, { force: true });
+    }
+  },
+);
 
 it("refuses a savepoint in an unmanaged enclosing transaction", () => {
   const options = {

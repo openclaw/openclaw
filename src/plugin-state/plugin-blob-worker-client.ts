@@ -9,9 +9,9 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { wrapPluginBlobError } from "./plugin-blob-store.sqlite.js";
 import type { PluginBlobEntry, PluginBlobEntryInfo } from "./plugin-blob-store.types.js";
+import type { PluginBlobWorkerOperations } from "./plugin-blob-store.worker.js";
 import {
   pluginBlobWorkerOperations,
-  type PluginBlobWorkerOperations,
   type PluginBlobReadCommand,
 } from "./plugin-blob-worker-contract.js";
 

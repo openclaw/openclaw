@@ -5,14 +5,15 @@ import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import { resolvePromptCacheKey } from "../transports/openai-transport-shared.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
 import {
   isOpenAICompatibleAzureResponsesBaseUrl,
   isTraditionalAzureOpenAIHost,
 } from "./azure-openai-responses-client-compat.js";
-import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   resolveOpenAISimpleReasoningEffort,
   type OpenAIRequestReasoningEffort,
@@ -91,10 +92,7 @@ export const streamSimpleAzureOpenAIResponses: StreamFunction<
   "azure-openai-responses",
   SimpleStreamOptions
 > = (model: Model<"azure-openai-responses">, context: Context, options?: SimpleStreamOptions) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
   const authProfileId = (options as (SimpleStreamOptions & { authProfileId?: string }) | undefined)
@@ -108,10 +106,8 @@ export const streamSimpleAzureOpenAIResponses: StreamFunction<
 
 function normalizeAzureBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
+  const url = URL.parse(trimmed);
+  if (!url) {
     throw new Error(`Invalid Azure OpenAI base URL: ${baseUrl}`);
   }
 
@@ -205,10 +201,7 @@ function buildParams(
     model: deploymentName,
     input: messages,
     stream: true,
-    prompt_cache_key:
-      options?.cacheRetention === "none"
-        ? undefined
-        : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+    prompt_cache_key: resolvePromptCacheKey(options, options?.cacheRetention ?? "short"),
     store: false,
   };
 

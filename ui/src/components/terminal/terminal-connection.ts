@@ -3,7 +3,11 @@
 import type {
   EventFrame,
   SessionsCatalogStartTerminalParams,
+  TerminalAttachResult,
+  TerminalDataEvent,
+  TerminalExitEvent,
   TerminalOpenParams,
+  TerminalSessionInfo,
 } from "@openclaw/gateway-protocol";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
@@ -23,27 +27,8 @@ export interface TerminalGatewayClient {
   forceReconnect(reason: string): void;
 }
 
-export type TerminalOpenResult = {
-  sessionId: string;
-  agentId: string;
-  shell: string;
-  cwd: string;
-  confined: boolean;
-  title?: string;
-  owner?: "conn" | `agent:${string}`;
-};
-
-type TerminalAttachResult = TerminalOpenResult & {
-  /** Recent output replayed into the emulator before live data resumes. */
-  buffer: string;
-  /** Cumulative UTF-16 output offset at the end of the replay snapshot. */
-  seq?: number;
-};
-
-export type TerminalSessionInfo = TerminalOpenResult & {
-  attached: boolean;
-  createdAtMs: number;
-};
+export type TerminalOpenResult = Omit<TerminalAttachResult, "buffer" | "seq">;
+export type { TerminalSessionInfo } from "@openclaw/gateway-protocol";
 
 type TerminalExitInfo = {
   exitCode: number | null;
@@ -162,9 +147,7 @@ export class TerminalConnection {
     this.unsubscribe = this.client.addEventListener((evt) => {
       if (evt.event === "terminal.data") {
         this.noteTerminalActivity();
-        const payload = evt.payload as
-          | { sessionId?: string; seq?: number; data?: string }
-          | undefined;
+        const payload = evt.payload as Partial<TerminalDataEvent> | undefined;
         if (
           payload?.sessionId &&
           typeof payload.seq === "number" &&
@@ -182,15 +165,7 @@ export class TerminalConnection {
       }
       if (evt.event === "terminal.exit") {
         this.noteTerminalActivity();
-        const payload = evt.payload as
-          | {
-              sessionId?: string;
-              exitCode?: number | null;
-              signal?: number | null;
-              reason?: string;
-              error?: string;
-            }
-          | undefined;
+        const payload = evt.payload as Partial<TerminalExitEvent> | undefined;
         if (payload?.sessionId) {
           const info: TerminalExitInfo = {
             exitCode: payload.exitCode ?? null,

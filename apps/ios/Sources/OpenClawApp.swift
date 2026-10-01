@@ -626,12 +626,7 @@ enum WatchPromptNotificationBridge {
         notificationCenter: NotificationCentering) async -> Bool
     {
         guard NotificationServingPreference.isEnabled() else { return false }
-        switch await notificationCenter.authorizationStatus() {
-        case .authorized, .provisional, .ephemeral:
-            return true
-        case .denied, .notDetermined:
-            return false
-        }
+        return await notificationCenter.authorizationStatus().allowsNotifications
     }
 
     private static func upsertNotificationCategory(

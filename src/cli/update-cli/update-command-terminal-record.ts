@@ -34,10 +34,8 @@ function matchesResult(record: UpdateRunRecord, result: UpdateRunResult): boolea
   for (const key of ["version", "sha", "buildId"] as const) {
     const expected = result.after?.[key];
     const actual = record.after[key];
-    if (expected && actual) {
-      if (expected !== actual) {
-        return false;
-      }
+    if (expected && actual && expected !== actual) {
+      return false;
     }
   }
   const observedVersion = verification.runningVersion;

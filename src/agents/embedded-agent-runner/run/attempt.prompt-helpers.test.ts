@@ -16,7 +16,6 @@ import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 it("keeps structured media and JSON summaries on UTF-16 boundaries", () => {
   const result = mergeOrphanedTrailingUserPrompt({
     prompt: "Continue.",
-    trigger: "user",
     leafMessage: {
       content: [
         { type: "image_url", image_url: { url: `${"u".repeat(299)}😀tail` } },
@@ -90,6 +89,33 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
     expect(result.toolsAllow).toEqual([]);
     expect(runBeforePromptBuild).toHaveBeenCalledOnce();
+  });
+
+  it("separates verbatim ordinary prompt-build fields from other pending context", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
+    });
+    const promptFields = {
+      systemPrompt: "  system  ",
+      prependContext: "prefix\n",
+      appendContext: " suffix",
+      prependSystemContext: "system prefix",
+      appendSystemContext: "system suffix",
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hello",
+      messages: [],
+      hookCtx: { sessionKey: "agent:main:main" },
+      hookRunner: {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => promptFields),
+      },
+    });
+
+    expect(result.decisionPromptBuildFields).toEqual(promptFields);
+    expect(result.hasPendingNonPromptBuildContext).toBe(false);
   });
 
   it("reuses drained injections across retries and releases them when the run ends", async () => {

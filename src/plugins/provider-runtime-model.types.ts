@@ -1,4 +1,3 @@
-// Defines runtime model metadata supplied by provider plugins.
 import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";

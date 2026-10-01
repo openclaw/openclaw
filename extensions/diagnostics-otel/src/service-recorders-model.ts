@@ -3,6 +3,7 @@ import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
+  DiagnosticModelCallContent,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
@@ -17,7 +18,6 @@ import {
   modelCallObservationUnit,
 } from "./service-genai-attributes.js";
 import { assignOtelModelContentAttributes } from "./service-genai-content.js";
-import type { OtelModelCallContent } from "./service-genai-content.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { ModelCallLifecycleDiagnosticEvent } from "./service-types.js";
 
@@ -102,7 +102,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
   const recordModelCallFinished = (
     evt: ModelCallLifecycleDiagnosticEvent,
     metadata: DiagnosticEventMetadata,
-    modelContent?: OtelModelCallContent,
+    modelContent?: DiagnosticModelCallContent,
   ) => {
     const errorType =
       evt.type === "model.call.error"

@@ -98,13 +98,7 @@ type AccessorAdapter = {
     scope: SessionAccessScope,
     update: (entry: SessionEntry) => Partial<SessionEntry> | null,
   ): Promise<SessionEntry | null>;
-  cleanupSessionLifecycleArtifactsCore(params: {
-    storePath: string;
-    sessionKeySegmentPrefix: string;
-    transcriptContentMarker: string;
-    orphanTranscriptMinAgeMs: number;
-    nowMs?: number;
-  }): Promise<{ removedEntries: number; archivedTranscriptArtifacts: number }>;
+  cleanupSessionLifecycleArtifactsCore: typeof cleanupSessionLifecycleArtifactsCore;
   loadTranscriptEvents(scope: SessionTranscriptReadScope): Promise<TranscriptEvent[]>;
   appendTranscriptEvent(scope: SessionTranscriptAccessScope, event: TranscriptEvent): Promise<void>;
   appendTranscriptMessage<TMessage>(
@@ -403,6 +397,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
 
       await expect(
         adapter.cleanupSessionLifecycleArtifactsCore({
+          env: adapter.entryScope(paths).env,
           storePath: cleanupStorePath,
           sessionKeySegmentPrefix: "lifecycle-cleanup-",
           transcriptContentMarker: "lifecycle-marker-",

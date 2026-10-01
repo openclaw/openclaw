@@ -13,6 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MSTeamsMonitorLogger } from "../monitor-types.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
 
@@ -145,23 +146,6 @@ export function tryBuildGraphSharesUrlForSharedLink(url: string): string | undef
     return undefined;
   }
   return `${GRAPH_ROOT}/shares/${encodeGraphShareId(url)}/driveItem/content`;
-}
-
-export function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
-    return input.url;
-  }
-  try {
-    return JSON.stringify(input);
-  } catch {
-    return "";
-  }
 }
 
 export function normalizeContentType(value: unknown): string | undefined {
@@ -337,11 +321,9 @@ export type MSTeamsAttachmentFetchPolicy = {
   authAllowHosts: string[];
 };
 
-export type MSTeamsAttachmentDownloadLogger = {
-  debug?: (message: string, meta?: Record<string, unknown>) => void;
-  warn?: (message: string, meta?: Record<string, unknown>) => void;
-  error?: (message: string, meta?: Record<string, unknown>) => void;
-};
+export type MSTeamsAttachmentDownloadLogger = Partial<
+  Pick<MSTeamsMonitorLogger, "debug" | "warn" | "error">
+>;
 
 export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
 
@@ -401,21 +383,17 @@ export function applyAuthorizationHeaderForUrl(params: {
   authAllowHosts: string[];
   bearerToken?: string;
 }): void {
-  if (!params.bearerToken) {
-    params.headers.delete("Authorization");
-    return;
-  }
-  if (isUrlAllowed(params.url, params.authAllowHosts)) {
+  if (params.bearerToken && isUrlAllowed(params.url, params.authAllowHosts)) {
     params.headers.set("Authorization", `Bearer ${params.bearerToken}`);
-    return;
+  } else {
+    params.headers.delete("Authorization");
   }
-  params.headers.delete("Authorization");
 }
 
 async function resolveAndValidateIP(
   hostname: string,
   resolveFn?: MSTeamsAttachmentResolveFn,
-): Promise<string> {
+): Promise<void> {
   const resolve = resolveFn ?? lookup;
   let resolved: { address: string };
   try {
@@ -426,7 +404,6 @@ async function resolveAndValidateIP(
   if (isPrivateIpAddress(resolved.address)) {
     throw new Error(`Hostname "${hostname}" resolves to private/reserved IP (${resolved.address})`);
   }
-  return resolved.address;
 }
 
 const MAX_SAFE_REDIRECTS = 5;
@@ -453,11 +430,7 @@ export async function safeFetchWithPolicy(params: {
 }): Promise<Response> {
   const { allowHosts, authAllowHosts } = params.policy;
   const resolveFn = params.resolveFn ?? lookup;
-  const hasDispatcher = Boolean(
-    params.requestInit &&
-    typeof params.requestInit === "object" &&
-    "dispatcher" in (params.requestInit as Record<string, unknown>),
-  );
+  const hasDispatcher = params.requestInit && "dispatcher" in params.requestInit;
   const currentHeaders = new Headers(params.requestInit?.headers);
   const currentUrl = params.url;
 

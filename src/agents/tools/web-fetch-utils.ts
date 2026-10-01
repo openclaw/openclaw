@@ -146,6 +146,8 @@ function closeContext(
     return;
   }
   switch (context.kind) {
+    case "root":
+      return;
     case "anchor":
       parent.parts.push(
         context.href && label ? `[${label}](${context.href})` : label || context.href || "",
@@ -164,9 +166,6 @@ function closeContext(
         parent.hasText ||= Boolean(label);
       }
       parent.parts.push(`\n- ${label}`);
-      return;
-    case "root":
-      parent.parts.push(label);
   }
 }
 

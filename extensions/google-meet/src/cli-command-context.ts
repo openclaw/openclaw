@@ -1,6 +1,11 @@
 import type { Command } from "commander";
 import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import type { CreateOptions, MeetArtifactOptions, ResolveSpaceOptions } from "./cli-shared.js";
+import {
+  callGoogleMeetGateway,
+  type CreateOptions,
+  type MeetArtifactOptions,
+  type ResolveSpaceOptions,
+} from "./cli-shared.js";
 import type { GoogleMeetConfig } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
@@ -50,3 +55,20 @@ export type GoogleMeetCliCommandContext = {
   resolveCliArtifactParams: (options: MeetArtifactOptions) => GoogleMeetCliArtifactParams;
   hasCreateOAuth: (config: GoogleMeetConfig, options: CreateOptions) => boolean;
 };
+
+export async function callGoogleMeetRuntime<Result>(
+  context: GoogleMeetCliCommandContext,
+  method: Parameters<typeof callGoogleMeetGateway>[0]["method"],
+  payload: Record<string, unknown>,
+  local: (runtime: GoogleMeetRuntime) => Promise<Result>,
+  timeoutMs?: number,
+): Promise<Result> {
+  const delegated = await callGoogleMeetGateway({
+    callGateway: context.callGateway,
+    method,
+    payload,
+    timeoutMs,
+  });
+  // SAFETY: Each method's gateway handler returns the same Result as the paired local runtime call.
+  return delegated.ok ? (delegated.payload as Result) : local(await context.ensureRuntime());
+}

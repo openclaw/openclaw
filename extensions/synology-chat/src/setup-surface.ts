@@ -19,6 +19,8 @@ import {
 import {
   normalizeOptionalString,
   normalizeStringEntries,
+  normalizeStringifiedEntries,
+  normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { resolveSynologyHostedMediaRoute } from "./hosted-media-route.js";
@@ -129,24 +131,12 @@ function parseSynologyUserId(value: string): string | null {
   return /^\d+$/.test(cleaned) ? cleaned : null;
 }
 
-function normalizeSynologyAllowedUserId(value: unknown): string {
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
-    return `${value}`.trim();
-  }
-  return "";
-}
-
 function resolveExistingAllowedUserIds(cfg: OpenClawConfig, accountId: string): string[] {
   const raw = getRawAccountConfig(cfg, accountId).allowedUserIds;
   if (Array.isArray(raw)) {
-    return raw.map(normalizeSynologyAllowedUserId).filter(Boolean);
+    return normalizeStringifiedEntries(raw);
   }
-  return normalizeStringEntries(normalizeSynologyAllowedUserId(raw).split(","));
+  return normalizeStringEntries((normalizeStringifiedOptionalString(raw) ?? "").split(","));
 }
 
 export const synologyChatSetupAdapter: ChannelSetupAdapter = {

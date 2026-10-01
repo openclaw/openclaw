@@ -5,6 +5,7 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
 import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
+import { isPreparedModelRuntimePluginLifecycleFailure } from "./prepared-model-runtime.errors.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
@@ -363,6 +364,9 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       admission.release();
       if (error instanceof PreparedModelRuntimePublicationSupersededError) {
         supersededPublication = error;
+        continue;
+      }
+      if (context.getPendingReplacement() && isPreparedModelRuntimePluginLifecycleFailure(error)) {
         continue;
       }
       throw error;

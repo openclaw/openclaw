@@ -12,6 +12,7 @@ import {
   resolvePackageActivationControl,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import {
   preparePackageActivation,
   runPackageActivationRecovery,
@@ -84,7 +85,7 @@ it.skipIf(process.platform === "win32").each([
         const fence = await executor.enter(f.packageRoot);
         const reader = integrity.createPackageIntegrityReader();
         const prepared = await preparePackageActivation({
-          options: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           installTarget: f.params.installTarget,
           liveRoot: f.packageRoot,
           stageRoot: f.params.stage.packageRoot,
@@ -164,7 +165,7 @@ it.skipIf(process.platform === "win32").each(["anchor", "installation", "launche
         let transaction: PackageUpdateTransaction | undefined;
         const result = await swapStagedPackageInstall({
           ...f.params,
-          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           onTransaction: (issued) => {
             transaction = issued;
           },
@@ -279,7 +280,7 @@ it.skipIf(process.platform === "win32").each([
         const fence = await executor.enter(f.packageRoot);
         const reader = integrity.createPackageIntegrityReader();
         const prepared = await preparePackageActivation({
-          options: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           installTarget: f.params.installTarget,
           liveRoot: f.packageRoot,
           stageRoot: f.params.stage.packageRoot,
@@ -385,7 +386,7 @@ it.skipIf(process.platform === "win32")(
             };
           });
           preparing = preparePackageActivation({
-            options: { fence, nodeRunner: process.execPath, onPrepared },
+            options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared },
             installTarget: f.params.installTarget,
             liveRoot: f.packageRoot,
             stageRoot: f.params.stage.packageRoot,

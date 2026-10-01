@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { NODE_WORKER_CAPACITY_MAX } from "../shared/node-list-parse.js";
+import { NODE_WORKER_CAPACITY_MAX } from "../../packages/gateway-protocol/src/worker-capacity.js";
 
 export const NODE_HOST_FIELD_LABELS: Record<string, string> = {
   nodeHost: "Node Host",
@@ -23,31 +23,27 @@ export const NODE_HOST_FIELD_LABELS: Record<string, string> = {
 };
 
 export const BrowserSnapshotDefaultsSchema = z
-  .object({
+  .strictObject({
     /** Default snapshot mode (applies when mode is not provided). */
     mode: z.literal("efficient").optional(),
   })
-  .strict()
   .optional();
 
 export const NodeHostAgentRunsSchema = z
-  .object({
+  .strictObject({
     claude: z
-      .object({
+      .strictObject({
         enabled: z.boolean().optional(),
       })
-      .strict()
       .optional(),
   })
-  .strict()
   .optional();
 
 export const NodeHostWorkerRunsSchema = z
-  .object({
+  .strictObject({
     enabled: z.boolean().optional(),
     capacity: z.number().int().min(1).max(NODE_WORKER_CAPACITY_MAX).optional(),
     isolation: z.enum(["none", "container"]).optional(),
     containerImage: z.string().trim().min(1).optional(),
   })
-  .strict()
   .optional();

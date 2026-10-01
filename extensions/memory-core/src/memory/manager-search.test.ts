@@ -26,6 +26,15 @@ function searchKeywordFixture(
   });
 }
 
+function supportsFts(): boolean {
+  const { db, schema } = createMemorySearchDb();
+  try {
+    return schema.ftsAvailable;
+  } finally {
+    db.close();
+  }
+}
+
 describe("searchKeyword trigram fallback", () => {
   function supportsTrigramFts(): boolean {
     const { db, schema } = createMemorySearchDb({ ftsTokenizer: "trigram" });
@@ -211,15 +220,6 @@ describe("searchKeyword trigram fallback", () => {
 });
 
 describe("searchKeyword FTS MATCH fallback", () => {
-  function supportsFts(): boolean {
-    const { db, schema } = createMemorySearchDb();
-    try {
-      return schema.ftsAvailable;
-    } finally {
-      db.close();
-    }
-  }
-
   function createFtsDb() {
     const { db, schema } = createMemorySearchDb();
     if (!schema.ftsAvailable) {
@@ -396,15 +396,6 @@ describe("searchKeyword ranked limits", () => {
 });
 
 describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
-  function supportsFts(): boolean {
-    const { db, schema } = createMemorySearchDb();
-    try {
-      return schema.ftsAvailable;
-    } finally {
-      db.close();
-    }
-  }
-
   const itWithFts = supportsFts() ? it : it.skip;
 
   itWithFts("returns FTS hits indexed under a different embedding model", async () => {

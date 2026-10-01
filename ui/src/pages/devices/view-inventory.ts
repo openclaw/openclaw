@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Devices page renders the unified paired-device / node inventory sections.
 import { html, nothing, type TemplateResult } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
@@ -192,7 +191,6 @@ function resolveNodeCoreVersion(entry: DeviceInventoryEntry): string | undefined
   return legacyHeadless ? normalizeOptionalString(entry.node?.version) : undefined;
 }
 
-/** Warn statuses (dot + text) replacing the former warning chips. */
 function entryWarnStatuses(
   entry: DeviceInventoryEntry,
   gatewayVersion: string | null,

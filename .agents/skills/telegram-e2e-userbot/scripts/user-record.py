@@ -304,7 +304,7 @@ class EventRecorder:
                         "botApiMessageId", "textLen", "contentType", "senderId", "isSut",
                         "isOutgoing", "replyToMessageId", "quoteText", "topicType", "topicId",
                         "reactionText", "reactionCount", "actionType", "status", "buttonText",
-                        "durationMs", "error",
+                        "durationMs", "error", "actionIndex", "sentMessageId", "replyToChatId",
                     )},
                 }
                 for e in self.events
@@ -336,6 +336,49 @@ def scenario_barriers_ready(actions, action_index, barrier_dir):
     )
 
 
+def await_scenario_reply(recorder, action, sent, known_ids, deadline):
+    sent_id = sent.get("id")
+    context = recorder._reply_fields(sent)
+    if (not isinstance(sent_id, int) or sent_id <= 0 or sent_id in known_ids
+            or sent.get("chat_id") != recorder.chat_id
+            or (action.get("forumTopicId") is not None
+                and (context["topicType"] != "messageTopicForum"
+                     or context["topicId"] != action["forumTopicId"]))):
+        raise driver.DriverError("Cannot bind visible reply to an invalid native send receipt")
+    expected = action["awaitReply"]
+    while time.time() < deadline:
+        update = recorder.client.next_update(timeout=min(0.2, max(0, deadline - time.time())))
+        if not update:
+            continue
+        cursor = len(recorder.events)
+        recorder.ingest(update)
+        if time.time() >= deadline:
+            break
+        for event in recorder.events[cursor:]:
+            reply_id = event.get("replyToMessageId")
+            if (event["kind"] not in {"message", "edit"}
+                    or event.get("isSut") is not True or event.get("isOutgoing")
+                    or not isinstance(event["messageId"], int) or event["messageId"] <= 0
+                    or event["messageId"] == sent_id or event["messageId"] in known_ids
+                    or event.get("text") != expected["text"]
+                    or event.get("richMessageIsFull") is False
+                    or (event.get("topicType"), event.get("topicId")) != (context["topicType"], context["topicId"])
+                    or (reply_id is not None and reply_id != sent_id)
+                    or event.get("replyToChatId") not in (None, 0, recorder.chat_id)
+                    or (expected.get("requireQuote") and reply_id != sent_id)):
+                continue
+            return event
+    raise driver.DriverError("No matching visible reply before the recording deadline")
+
+
+def fail_reply_barrier(recorder, action_index, barrier_dir, error, sent_id=None):
+    failure = recorder._append("action", None, actionType="awaitReply", actionIndex=action_index,
+                               sentMessageId=sent_id, status="failed", error=str(error))
+    if barrier_dir:
+        publish_recorder_state(Path(barrier_dir) / "action-failure.json", failure)
+    raise error
+
+
 def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
     telegram_actions = sorted(
         (
@@ -356,6 +399,7 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
                 actions, action_index, barrier_dir
             ):
                 if action["type"] == "send":
+                    known_ids = set(recorder.messages).union(sent_ids) if action.get("awaitReply") else set()
                     text, _run = driver.apply_template(action["text"], sut)
                     # replyToPrevious targets the newest message this scenario sent.
                     reply_to = sent_ids[-1] if action.get("replyToPrevious") and sent_ids else None
@@ -399,11 +443,27 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
                         "action",
                         message_id,
                         actionType="send",
+                        actionIndex=action_index,
                         status="completed",
                         text=text,
                         **({"photo": photo} if photo else {}),
-                        **({"replyToMessageId": reply_to} if reply_to else {}),
+                        **(recorder._reply_fields(result or {}) if action.get("awaitReply")
+                           else {"replyToMessageId": reply_to} if reply_to else {}),
                     )
+                    if action.get("awaitReply"):
+                        try:
+                            reply = await_scenario_reply(recorder, action, result or {}, known_ids, deadline)
+                        except driver.DriverError as error:
+                            fail_reply_barrier(recorder, action_index, barrier_dir, error, message_id)
+                        receipt = recorder._append(
+                            "action", reply["messageId"], actionType="awaitReply", actionIndex=action_index,
+                            sentMessageId=message_id, status="completed", text=reply["text"],
+                            **{key: reply.get(key) for key in (
+                                "replyToMessageId", "replyToChatId", "quoteText", "topicType", "topicId",
+                            )},
+                        )
+                        if barrier_dir:
+                            publish_recorder_state(Path(barrier_dir) / str(action_index), receipt)
                     next_action += 1
                     continue
 
@@ -453,6 +513,9 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
         update = driver_obj.client.next_update(timeout=0.2)
         if update:
             recorder.ingest(update)
+    if next_action < len(telegram_actions) and any(action.get("awaitReply") for action in actions):
+        fail_reply_barrier(recorder, telegram_actions[next_action][0], barrier_dir,
+                           driver.DriverError("Scenario ended before the next send and visible reply"))
     return sent_ids
 
 

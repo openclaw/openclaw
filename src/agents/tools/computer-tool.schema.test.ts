@@ -105,6 +105,28 @@ describe("createComputerTool schema", () => {
     }
   });
 
+  it("explains browser discovery and required reference pairs before execution", () => {
+    const tool = createComputerTool({
+      transport: {
+        computerUse: v2Descriptor(["list_windows", "get_browser_state", "browser_prepare"]),
+        resolveNode: async () => ({ nodeId: "session-desktop" }),
+        invoke: async () => undefined,
+      },
+    });
+    for (const [field, prerequisites] of [
+      ["windowRef", ["list_windows", "browser_prepare", "required", "get_browser_state"]],
+      ["browserRef", ["get_browser_state", "windowRef", "requires pageRef"]],
+      ["pageRef", ["get_browser_state", "windowRef", "requires browserRef"]],
+    ] as const) {
+      for (const prerequisite of prerequisites) {
+        expect(tool.parameters).toHaveProperty(
+          `properties.${field}.description`,
+          expect.stringContaining(prerequisite),
+        );
+      }
+    }
+  });
+
   it("does not describe held-key input when the selected session only supports taps", () => {
     const tool = createComputerTool({
       transport: {

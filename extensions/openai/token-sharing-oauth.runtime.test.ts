@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -187,6 +188,101 @@ describe("ChatGPT token-sharing authorization", () => {
       expect((await callbackResponse!).status).toBe(200);
     },
   );
+
+  it("restarts a cancelled login without accepting its stale callback", async () => {
+    const controller = new AbortController();
+    const opened = createDeferred<URL>();
+    const ctx = context();
+    ctx.signal = AbortSignal.any([ctx.signal!, controller.signal]);
+    ctx.openUrl = async (url) => {
+      opened.resolve(new URL(url));
+    };
+    const login = loginTokenSharing(ctx);
+    void login.catch(() => undefined);
+    try {
+      const previousAuthorization = await opened.promise;
+      controller.abort();
+      await expect(login).rejects.toThrow();
+      expect(request).not.toHaveBeenCalled();
+
+      const nextContext = context();
+      const completeNextCallback = nextContext.openUrl;
+      nextContext.openUrl = async (url) => {
+        const nextAuthorization = new URL(url);
+        const previousState = previousAuthorization.searchParams.get("state")!;
+        expect(nextAuthorization.searchParams.get("state")).not.toBe(previousState);
+        const staleCallback = new URL(nextAuthorization.searchParams.get("redirect_uri")!);
+        staleCallback.hostname = "127.0.0.1";
+        staleCallback.search = new URLSearchParams({
+          code: "cancelled-code",
+          state: previousState,
+        }).toString();
+        const staleResponse = await fetch(staleCallback);
+        expect(staleResponse.status).toBe(400);
+        await staleResponse.text();
+        expect(request).not.toHaveBeenCalled();
+        await completeNextCallback(url);
+      };
+      const restarted = await loginTokenSharing(nextContext);
+      expect(restarted.profiles).toHaveLength(1);
+      expect(restarted.profiles[0]?.credential).toMatchObject({
+        access: "opaque-test-access",
+        authFlow: TOKEN_SHARING_AUTH_FLOW,
+      });
+      expect((await callbackResponse!).status).toBe(200);
+      const exchanges = request.mock.calls.filter(([params]) => params.init?.method === "POST");
+      expect(exchanges).toHaveLength(1);
+      expect(exchanges[0]![0].init.body.get("code")).toBe("test-code");
+    } finally {
+      controller.abort();
+      await login.catch(() => undefined);
+    }
+  });
+
+  it("releases the callback listener on cancellation while a token request is still cleaning up", async () => {
+    const releaseEntered = createDeferred<void>();
+    const allowRelease = createDeferred<void>();
+    const fetchResponse = request.getMockImplementation()!;
+    request.mockImplementationOnce(async (params) => {
+      const result = await fetchResponse(params);
+      return {
+        ...result,
+        release: async () => {
+          releaseEntered.resolve();
+          await allowRelease.promise;
+          await result.release();
+        },
+      };
+    });
+    const controller = new AbortController();
+    const ctx = context();
+    ctx.signal = AbortSignal.any([ctx.signal!, controller.signal]);
+    const login = loginTokenSharing(ctx);
+    const settled = vi.fn();
+    void login.then(settled, settled);
+    let originalCallback: Promise<Response> | undefined;
+    try {
+      await releaseEntered.promise;
+      originalCallback = callbackResponse!;
+      controller.abort();
+      expect(settled).not.toHaveBeenCalled();
+
+      const replacement = await loginTokenSharing(context());
+      expect(replacement.profiles).toHaveLength(1);
+      expect(replacement.profiles[0]?.credential).toMatchObject({
+        access: "opaque-test-access",
+        authFlow: TOKEN_SHARING_AUTH_FLOW,
+      });
+      expect((await callbackResponse!).status).toBe(200);
+      await expect(originalCallback).rejects.toThrow();
+      expect(settled).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      allowRelease.resolve();
+      await expect(login).rejects.toThrow();
+      await originalCallback?.then((response) => response.text()).catch(() => undefined);
+    }
+  });
 
   it.each(["without-id-token", "legacy"] as const)(
     "reuses registered client for %s reconnect",

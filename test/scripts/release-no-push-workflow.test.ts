@@ -409,6 +409,28 @@ function runnerSandbox(context: Record<string, unknown>) {
 }
 
 describe("release validation no-push transport", () => {
+  it.each(["github", "hybrid", ""])(
+    "keeps the QA Lab runtime-pair lane on Blacksmith when the backend is %j",
+    (backend) => {
+      const release = readWorkflow(RELEASE_CHECKS);
+      const runner = String(job(release, "qa_lab_runtime_pair_lane_release_checks")["runs-on"]);
+      const runsOn = (vars: Record<string, string>) =>
+        runInNewContext(runner.slice(3, -2), runnerSandbox({ vars }));
+      expect(runsOn({ OPENCLAW_CI_RUNNER_BACKEND: backend })).toBe("blacksmith-8vcpu-ubuntu-2404");
+      expect(
+        runsOn({
+          OPENCLAW_CI_RUNNER_BACKEND: backend,
+          OPENCLAW_RELEASE_RUNNER_GROUP: "release",
+        }),
+      ).toEqual({ group: "release", labels: "blacksmith-8vcpu-ubuntu-2404" });
+      const notice = job(release, "resolve_target").steps?.find(
+        (candidate) => candidate.name === "Report release runner routing",
+      );
+      expect(notice?.if).toBe("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
+      expect(notice?.run).toContain("QA Lab runtime-pair stays pinned to Blacksmith");
+    },
+  );
+
   it("scopes release Gateway capacity to the existing repo E2E runner input", () => {
     const live = readWorkflow(LIVE_E2E);
     for (const entry of [live.on?.workflow_call, live.on?.workflow_dispatch]) {
@@ -2082,6 +2104,10 @@ describe("release validation no-push transport", () => {
             "-c",
             `
           gh() { printf '%s\\n' "$SOURCE_SHA"; }
+          git() {
+            printf '%s\\trefs/tags/%s\\n' "$SIGNED_RELEASE_TAG_OBJECT_SHA" "$RELEASE_TAG"
+            printf '%s\\trefs/tags/%s^{}\\n' "$TARGET_SHA" "$RELEASE_TAG"
+          }
           node() {
             if [[ "$1 $2" == "scripts/linux-app-channel.mjs finalize-core" ]]; then
               printf '%s\\n' "$*" >> "$CALLS"
@@ -2101,7 +2127,10 @@ describe("release validation no-push transport", () => {
               GITHUB_REPOSITORY: "openclaw/openclaw",
               RELEASE_TAG: tag,
               RELEASE_NPM_DIST_TAG: distTag,
+              PARENT_WORKFLOW_SHA: "b".repeat(40),
+              SIGNED_RELEASE_TAG_OBJECT_SHA: "c".repeat(40),
               SOURCE_SHA: "a".repeat(40),
+              TARGET_SHA: "a".repeat(40),
               GITHUB_WORKFLOW_SHA: "b".repeat(40),
               GITHUB_REF_NAME: "release-publish/bbbbbbbbbbbb-123",
               GITHUB_REF: "refs/tags/release-publish/bbbbbbbbbbbb-123",

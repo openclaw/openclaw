@@ -4,6 +4,7 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
@@ -21,7 +22,7 @@ import { compareSemverStrings } from "./update-check.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { runStep } from "./update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -111,7 +112,8 @@ export async function withGitTargetInspectionRoot<T>(
     runCommand: CommandRunner;
     timeoutMs: number;
     work?: { timeoutMs?: number };
-    onWarning: (step: UpdateStepResult) => void;
+    onWarning: (step: UpdateStepResult) => void | Promise<void>;
+    retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
   },
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
 ): Promise<T> {
@@ -139,6 +141,7 @@ export async function withGitTargetInspectionRoot<T>(
     }
     return result.stdout;
   };
+  let cleanupUncertain = false;
   try {
     const head = (await command(params.root, ["rev-parse", "HEAD"])).trim();
     const headRef = (await command(params.root, ["symbolic-ref", "-q", "HEAD"], true)).trim();
@@ -266,14 +269,29 @@ export async function withGitTargetInspectionRoot<T>(
           : options,
       );
     return await inspect(inspectionRoot, runInspectionCommand);
+  } catch (error) {
+    cleanupUncertain = hasCommandProcessCleanupError(error);
+    throw error;
   } finally {
     // Only this invocation's private inspection repository, never the installed checkout.
-    await cleanupUpdateTemporaryDirectory({
-      directory: temporaryRoot,
-      root: params.root,
-      name: "git-target-inspection-cleanup",
-      onWarning: params.onWarning,
-    });
+    if (!cleanupUncertain) {
+      const cleanup = async () => {
+        let removed = true;
+        await cleanupUpdateTemporaryDirectory({
+          directory: temporaryRoot,
+          root: params.root,
+          name: "git-target-inspection-cleanup",
+          onWarning: (warning) => {
+            removed = false;
+            return params.onWarning(warning);
+          },
+        });
+        return removed;
+      };
+      if (!params.retainCleanup?.(cleanup)) {
+        await cleanup();
+      }
+    }
   }
 }
 
@@ -498,7 +516,7 @@ export async function fetchGitUpdateTarget(params: {
         message: `Could not refresh optional target remote ${fetchRemote}; continuing target resolution. ${fetch.stderrTail ?? ""}`,
       };
     }
-    options.progress?.onStepComplete?.({
+    await reportUpdateStepCompletion(options.progress, {
       ...fetch,
       index: options.stepIndex,
       total: options.totalSteps,

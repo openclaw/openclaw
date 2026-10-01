@@ -23,6 +23,7 @@ import {
   type ModelSetupPageState,
   type ModelSetupVerifyState,
   type ModelSetupWizardResult,
+  type ModelSetupWizardRecovery,
 } from "./state.ts";
 
 export type ModelSetupConnection = Pick<
@@ -62,6 +63,22 @@ export function captureModelSetupConnection(
 }
 
 type ConnectionSnapshot = ReturnType<typeof captureModelSetupConnection>;
+
+export function modelSetupOwnerChanges(
+  previous: ConnectionSnapshot | null,
+  connection: ConnectionSnapshot,
+) {
+  const authenticatedOwnerLost =
+    previous && (!connection.recoveryScope || connection.recoveryScope !== previous.recoveryScope);
+  const ownerChanged =
+    previous &&
+    (connection.agentId !== previous.agentId ||
+      connection.selectionIntentRevision !== previous.selectionIntentRevision ||
+      connection.firstRun !== previous.firstRun ||
+      connection.connectionRevision !== previous.connectionRevision ||
+      authenticatedOwnerLost);
+  return { authenticatedOwnerLost, ownerChanged };
+}
 
 export function reconcileModelSetupConnection(
   previous: ConnectionSnapshot | null,
@@ -133,6 +150,12 @@ type FirstRunSetupHost = {
   setVerifyState: (state: ModelSetupVerifyState) => void;
   setActivationState: (state: ModelSetupActivationState) => void;
   setRefreshWarning: (warning: string | null) => void;
+  resumeWizard: (
+    wizard: ModelSetupWizardRecovery,
+    observer: (result: ModelSetupWizardResult) => () => boolean,
+  ) => void;
+  closeWizard: () => void;
+  notify: () => void;
 };
 
 export class FirstRunSetup {
@@ -149,6 +172,10 @@ export class FirstRunSetup {
       const activation = this.pending;
       if (activation?.receipt && JSON.stringify(activation.receipt) === receipt) {
         this.pending = null;
+        if (activation.outcome === "pending") {
+          // Another page settled this wizard; retire its local work, not the Gateway session.
+          this.host.closeWizard();
+        }
         if (activation.outcome === "verified") {
           this.host.setActivationState({ phase: "idle" });
         }
@@ -296,6 +323,11 @@ export class FirstRunSetup {
       return;
     }
     const configured = this.configuredActivationModel(pageState.result);
+    if (!this.pending.modelRef && receipt?.wizard) {
+      this.started = true;
+      this.host.resumeWizard(receipt.wizard, this.observeActivation(this.pending));
+      return;
+    }
     if (this.pending && (!configured || !this.pending.modelRef)) {
       this.started = true;
       this.showUnresolved();
@@ -318,6 +350,7 @@ export class FirstRunSetup {
     kind: string;
     modelRef?: string;
     modelTarget?: "utility";
+    wizard?: ModelSetupWizardRecovery;
   }): FirstRunActivation | null {
     const routeData = this.host.routeData();
     if (!routeData?.firstRun) {
@@ -371,6 +404,14 @@ export class FirstRunSetup {
       result.status === "done" ? result.modelActivation?.modelTarget : undefined;
     activation.outcome = "verified";
     activation.receipt = persistFirstRunActivationReceipt(this.host.context(), activation);
+  }
+
+  observeActivation(activation: FirstRunActivation | null) {
+    return (result: ModelSetupWizardResult) => {
+      this.recordActivation(activation, result);
+      this.host.notify();
+      return () => this.ownsActivation(activation);
+    };
   }
 
   finishActivation(

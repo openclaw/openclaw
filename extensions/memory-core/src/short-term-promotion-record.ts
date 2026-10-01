@@ -198,7 +198,7 @@ export async function recordShortTermRecalls(params: {
       forgottenByAgent.set(
         agentId,
         new Set(
-          listMemorySessionTombstones({ agentId, sessionIds: [...sessionIds] }).map(
+          (await listMemorySessionTombstones({ agentId, sessionIds: [...sessionIds] })).map(
             (entry) => entry.sessionId,
           ),
         ),
@@ -368,7 +368,7 @@ export async function recordShortTermRecalls(params: {
     // Reserve lineage before publishing candidates. A failed provenance write
     // must not leave durable staged content without its source-session facts.
     for (const agentId of sourceSessions.keys()) {
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId,
         origins: origins.filter((origin) => origin.agentId === agentId),
       });
@@ -444,10 +444,7 @@ export async function readShortTermRecallEntries(params: {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const store = await readStore(workspaceDir, nowIso);
-  return Object.values(store.entries).filter(
-    (entry): entry is ShortTermRecallEntry =>
-      Boolean(entry) && entry.source === "memory" && isShortTermMemoryPath(entry.path),
-  );
+  return Object.values(store.entries).filter((entry) => isShortTermMemoryPath(entry.path));
 }
 
 export function resolveShortTermSourcePathCandidates(

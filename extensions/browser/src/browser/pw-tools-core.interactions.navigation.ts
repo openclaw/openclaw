@@ -364,6 +364,15 @@ function scheduleDelayedInteractionNavigationGuard(
       }
       resolve();
     };
+    const check = (mainFrameNavigated: boolean) => {
+      void assertObservedDelayedNavigations({
+        cdpUrl: opts.cdpUrl,
+        page: opts.page,
+        ...navigationPolicy,
+        targetId: opts.targetId,
+        observed: { mainFrameNavigated, subframes },
+      }).then(() => settle(), settle);
+    };
     const subframes: string[] = [];
     const onFrameNavigated = createInteractionFrameListener(
       page,
@@ -371,27 +380,12 @@ function scheduleDelayedInteractionNavigationGuard(
       subframes,
       () => {
         cleanup();
-        void assertObservedDelayedNavigations({
-          cdpUrl: opts.cdpUrl,
-          page: opts.page,
-          ...navigationPolicy,
-          targetId: opts.targetId,
-          observed: { mainFrameNavigated: true, subframes },
-        }).then(() => settle(), settle);
+        check(true);
       },
     );
     const timeout = setTimeout(() => {
       cleanup();
-      void assertObservedDelayedNavigations({
-        cdpUrl: opts.cdpUrl,
-        page: opts.page,
-        ...navigationPolicy,
-        targetId: opts.targetId,
-        observed: {
-          mainFrameNavigated: didCrossDocumentUrlChange(page, opts.previousUrl),
-          subframes,
-        },
-      }).then(() => settle(), settle);
+      check(didCrossDocumentUrlChange(page, opts.previousUrl));
     }, BROWSER_ACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);

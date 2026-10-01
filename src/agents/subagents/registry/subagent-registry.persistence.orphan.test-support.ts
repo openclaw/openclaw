@@ -22,7 +22,7 @@ export function registerSubagentOrphanTaskCases({
     persisted: Record<string, unknown>,
     opts?: { seedChildSessions?: boolean },
   ) => Promise<void>;
-  restartRegistry: () => void;
+  restartRegistry: () => Promise<void>;
   waitForRegistryWork: (predicate: () => boolean | Promise<boolean>) => Promise<void>;
 }) {
   it("preserves stale unended restored runs for attributed sweeper recovery", async () => {
@@ -95,7 +95,7 @@ export function registerSubagentOrphanTaskCases({
     // this fresh state dir (no boot history) takes the unattributed path.
     await loadGatewayBootSegmentsForAttribution(Date.now(), { forceRefresh: true });
 
-    restartRegistry();
+    await restartRegistry();
     await testing.sweepOnceForTests();
     await waitForRegistryWork(
       () => resolveSubagentSessionStatus(subagentRuns.get(runId)) === "failed",

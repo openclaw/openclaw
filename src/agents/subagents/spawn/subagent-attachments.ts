@@ -12,7 +12,6 @@ import {
 } from "../../sanitize-for-prompt.js";
 import { removeSubagentAttachmentTree } from "../subagent-attachment-cleanup.js";
 import {
-  resolveSubagentAttachmentDir,
   resolveSubagentSessionAttachmentRootDir,
   SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
 } from "../subagent-attachment-paths.js";
@@ -129,10 +128,6 @@ function resolveSubagentAttachmentRequest(params: {
   return { status: "ok", attachments: requestedAttachments, limits };
 }
 
-function failAttachment(error: string): never {
-  throw new Error(error);
-}
-
 function sanitizeMountPathHint(value?: string): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (
@@ -156,7 +151,7 @@ function renderStagedAttachmentPathBlock(relDir: string, names: readonly string[
   // wrapper text can grow past a raw-length check. Reject, do not truncate:
   // a partial path list would send the child back to the directory.
   if (rendered.length > SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS) {
-    failAttachment(
+    throw new Error(
       `attachments_prompt_paths_exceeded (chars=${rendered.length} maxChars=${SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS})`,
     );
   }
@@ -165,25 +160,25 @@ function renderStagedAttachmentPathBlock(relDir: string, names: readonly string[
 
 function validateAttachmentName(name: string, opts?: { promptSafe?: boolean }): void {
   if (!name) {
-    failAttachment("attachments_invalid_name (empty)");
+    throw new Error("attachments_invalid_name (empty)");
   }
   if (name.includes("/") || name.includes("\\")) {
-    failAttachment("attachments_invalid_name");
+    throw new Error("attachments_invalid_name");
   }
   // Prompt-safe checks are native-only. ACP forwards {mediaType,data} and
   // never stages or renders `name`; format characters and markup must not fail ACP.
   if (opts?.promptSafe) {
     if (hasPromptUnsafeControlCharacter(name)) {
-      failAttachment("attachments_invalid_name");
+      throw new Error("attachments_invalid_name");
     }
     // wrapUntrustedPromptDataBlock HTML-escapes < and > only. Ampersand
     // stays literal, so a&b.jpg remains a usable staged path.
     if (/[<>]/.test(name)) {
-      failAttachment(`attachments_invalid_name (${name})`);
+      throw new Error(`attachments_invalid_name (${name})`);
     }
   }
   if (name === "." || name === ".." || name === ".manifest.json") {
-    failAttachment(`attachments_invalid_name (${name})`);
+    throw new Error(`attachments_invalid_name (${name})`);
   }
 }
 
@@ -196,14 +191,14 @@ function decodeAttachmentContent(params: {
   if (params.encoding === "base64") {
     const strictBuf = decodeStrictBase64(params.content, params.limits.maxFileBytes);
     if (strictBuf === null) {
-      failAttachment("attachments_invalid_base64_or_too_large");
+      throw new Error("attachments_invalid_base64_or_too_large");
     }
     return strictBuf;
   }
 
   const estimatedBytes = Buffer.byteLength(params.content, "utf8");
   if (estimatedBytes > params.limits.maxFileBytes) {
-    failAttachment(
+    throw new Error(
       `attachments_file_bytes_exceeded (name=${params.name} bytes=${estimatedBytes} maxFileBytes=${params.limits.maxFileBytes})`,
     );
   }
@@ -229,12 +224,12 @@ function prepareSubagentAttachments(params: {
 
     validateAttachmentName(name, { promptSafe: params.promptSafeNames === true });
     if (seen.has(name)) {
-      failAttachment(`attachments_duplicate_name (${name})`);
+      throw new Error(`attachments_duplicate_name (${name})`);
     }
     seen.add(name);
 
     if (params.requireImageMime && !mimeType.startsWith("image/")) {
-      failAttachment(
+      throw new Error(
         `attachments_unsupported_for_acp (name=${name} mimeType=${mimeType || "unknown"})`,
       );
     }
@@ -249,7 +244,7 @@ function prepareSubagentAttachments(params: {
 
     totalBytes += bytes;
     if (totalBytes > params.limits.maxTotalBytes) {
-      failAttachment(
+      throw new Error(
         `attachments_total_bytes_exceeded (totalBytes=${totalBytes} maxTotalBytes=${params.limits.maxTotalBytes})`,
       );
     }
@@ -339,11 +334,7 @@ export async function materializeSubagentAttachments(params: {
   // workspace-relative, and the child prompt carries the usable sandbox mount or
   // absolute Gateway path; consumers must not resolve relDir as a location.
   const relDir = path.posix.join(".openclaw", "attachments", attachmentId);
-  const absDir = resolveSubagentAttachmentDir(
-    params.targetAgentId,
-    params.childSessionKey,
-    attachmentId,
-  );
+  const absDir = path.join(absRootDir, attachmentId);
   try {
     const prepared = prepareSubagentAttachments({
       attachments: request.attachments,
@@ -371,25 +362,20 @@ export async function materializeSubagentAttachments(params: {
       files.push({ name, bytes, sha256 });
     }
 
-    const manifest = {
+    const receipt = {
       relDir,
       count: files.length,
       totalBytes: prepared.totalBytes,
       files,
     };
     params.assertActive?.();
-    await attachmentStore.writeJson(path.posix.join(attachmentId, ".manifest.json"), manifest, {
+    await attachmentStore.writeJson(path.posix.join(attachmentId, ".manifest.json"), receipt, {
       trailingNewline: true,
     });
 
     return {
       status: "ok",
-      receipt: {
-        count: files.length,
-        totalBytes: prepared.totalBytes,
-        files,
-        relDir,
-      },
+      receipt,
       attachmentId,
       retainOnSessionKeep: request.limits.retainOnSessionKeep,
       // File-consuming tools reject directories. List each already-validated

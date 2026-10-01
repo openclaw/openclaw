@@ -1,14 +1,13 @@
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import type { GatewayScheduledJob } from "../../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode } from "../../plugins/types.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 import { createWorkerEnvironmentBuildPreparation } from "./build-preparation.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
@@ -58,6 +57,7 @@ const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) 
 
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
   const { store, scheduler } = options;
+  const scope = scheduler.scope();
   const warn = (message: string) => options.logger?.warn(message);
   const operations = new KeyedAsyncQueue();
   const providerOperations = new KeyedAsyncQueue();
@@ -79,7 +79,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
   let reconcileInFlight: Promise<void> | undefined;
-  let reconciliationJob: GatewayScheduledJob | undefined;
+  let serviceStarted = false;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
   let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler(
     (claim) => {
@@ -92,7 +92,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   // losing recovery pass attach or sync after the winner advances the placement.
   const guardedReconcileInFlight = new Map<string, Promise<void>>();
   let stopping = false;
-  const maintenanceAbort = new AbortController();
   let maintenanceInFlight: Promise<void> | undefined;
 
   const inState = (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
@@ -260,7 +259,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       await providerLifecycle.resumePrepared(record, signal, beforeReconcile);
     },
     now,
-    signal: maintenanceAbort.signal,
+    signal: scope.signal,
     warn,
   });
   const schedulePreparedRefill = (environmentId?: string) =>
@@ -402,11 +401,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       maintenanceInFlight = trackOperation(
         Promise.resolve()
           .then(() => {
-            maintenanceAbort.signal.throwIfAborted();
-            return options.maintainProviders!(maintenanceAbort.signal);
+            scope.signal.throwIfAborted();
+            return options.maintainProviders!(scope.signal);
           })
           .catch(() => {
-            if (!stopping) {
+            if (!scope.signal.aborted) {
               warn("Worker provider maintenance sweep failed; cleanup will retry");
             }
           })
@@ -421,7 +420,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const start = () => {
-    if (reconciliationJob || stopping) {
+    if (serviceStarted || stopping) {
       return;
     }
     unsubscribeSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
@@ -435,9 +434,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       providerLifecycle.warmMachineShape(profileId);
     }
     const everyMs = options.reconcileIntervalMs ?? 60_000;
-    reconciliationJob = scheduler.schedule({
+    scope.schedule({
       id: "worker-environments:reconcile",
-      atMs: scheduler.now() + everyMs,
+      atMs: scope.now() + everyMs,
       everyMs,
       run: () => {
         // The service joins its work; slow inspection must not hold the other maintenance duties.
@@ -446,6 +445,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         });
       },
     });
+    serviceStarted = true;
     void reconcileOnce().catch(() => warn("Worker environment startup reconcile failed"));
   };
 
@@ -455,13 +455,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
     providerLifecycle.clearMachineShapeListeners();
-    maintenanceAbort.abort();
+    scope.beginClose();
     options.stopNodeEnrollmentWaits?.();
-    reconciliationJob?.cancel();
     unsubscribeSessionIdentityMutation?.();
     unsubscribeSessionIdentityMutation = undefined;
     unsubscribeTurnClaimClosed?.();
     unsubscribeTurnClaimClosed = undefined;
+    await scope.stop();
     // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
     // inference or tunnel teardown can invalidate its closure-bound placement authority.
     await closeReconcileEnvironmentGuard();
@@ -475,7 +475,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
     credentialBroker.clear();
     options.liveEvents?.clear();
-    options.stopNodeWorkerBundleTransfers?.();
+    await options.stopNodeWorkerBundleTransfers?.();
     try {
       await joinWorkerTunnelStops([
         environmentAccess.stopAllTunnels(),
@@ -549,7 +549,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     resolveProvider: options.resolveProvider,
     projectNamespace: options.projectNamespace,
     providerLifecycle,
-    signal: maintenanceAbort.signal,
+    signal: scope.signal,
     now,
     serviceError,
     configuredProfileProviderId,
@@ -638,6 +638,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>
       (await options.nodePortalCarrier?.supports(environmentId, ownerEpoch)) === true,
     hasPendingNodeEnrollmentSetup: store.hasPendingNodeEnrollmentSetup.bind(store),
+    admitsNodeSetupCompletion: options.admitsNodeSetupCompletion,
     readProviderDisplayId: providerLifecycle.readProviderDisplayId,
     listMachineOptions: providerLifecycle.listMachineOptions,
     listOperatingSystems: providerLifecycle.listOperatingSystems,
@@ -685,7 +686,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     validateWorkerConnection: turnRpc.validateWorkerConnection,
     commitTranscript: turnRpc.commitTranscript,
     pushLiveEvent: turnRpc.pushLiveEvent,
-    executeSessionTool: turnRpc.executeSessionTool,
+    getToolSurface: turnRpc.getToolSurface,
+    invokeGatewayTool: turnRpc.invokeGatewayTool,
+    cancelGatewayTool: turnRpc.cancelGatewayTool,
+    createGatewayTools: options.createGatewayTools,
     executeComputer: turnRpc.executeComputer,
     prepareComputer: options.prepareComputer,
     startInference: turnRpc.startInference,

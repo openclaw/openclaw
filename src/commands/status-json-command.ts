@@ -22,7 +22,6 @@ export function assertStatusUsageAgentScope(opts: StatusJsonCommandOptions): voi
   }
 }
 
-/** Runs the fast status scan, resolves optional deep fields, and writes JSON through the runtime. */
 export async function runStatusJsonCommand(params: {
   opts: StatusJsonCommandOptions & StatusGatewayProbeBudget;
   runtime: RuntimeEnv;
@@ -47,7 +46,7 @@ export async function runStatusJsonCommand(params: {
     .catch((error: unknown) =>
       reportStatusScanFailure(error, params.runtime, params.opts.timeoutMs),
     );
-  const updateRunStatus = readUpdateRunStatus();
+  const updateRunStatus = await readUpdateRunStatus();
   writeRuntimeJson(params.runtime, {
     ...(await resolveStatusJsonOutput({
       scan,

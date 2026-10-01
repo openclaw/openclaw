@@ -721,7 +721,6 @@ describe("DraftGatewayState", () => {
       groupWorktree: false,
       groupCatalogGeneration: 1,
       groupDefaultsStatus: "ready",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     });

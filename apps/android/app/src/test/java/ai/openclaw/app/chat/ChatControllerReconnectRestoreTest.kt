@@ -105,6 +105,27 @@ class ChatControllerReconnectRestoreTest {
   private val userTurn = ReplayHistoryMessage("user", "keep working", 1_000)
 
   @Test
+  fun mainSessionReplacementFollowsDefaultWithoutReplacingCustomSelection() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("chat.history", history(emptyList()))
+      val controller = newController(gateway)
+
+      controller.prepareMainSessionKey("agent:ops:node-old")
+      controller.prepareMainSessionKey("agent:ops:node-new")
+      assertEquals("agent:ops:node-new", controller.sessionKey.value)
+
+      controller.switchSession("custom", ownerAgentId = "ops")
+      runCurrent()
+      controller.prepareMainSessionKey("agent:ops:node-newest")
+      assertEquals("custom", controller.sessionKey.value)
+
+      controller.switchSession("main")
+      runCurrent()
+      assertEquals("agent:ops:node-newest", controller.sessionKey.value)
+    }
+
+  @Test
   fun connectedRefreshUpsertsDeviceSessionBeforeLoadingHistory() =
     runTest {
       val sessionKey = "agent:main:node-device"

@@ -47,28 +47,25 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   if (snapshot.waitOutcome === "generation-changed") {
     lines.push("Gateway process generation changed before readiness could be confirmed.");
   }
-  if (snapshot.versionMismatch) {
-    const actual = snapshot.versionMismatch.actual ?? "unavailable";
-    lines.push(
-      `Gateway version mismatch: expected ${snapshot.versionMismatch.expected}, running gateway reported ${actual}.`,
-    );
-  }
-  if (snapshot.buildIdMismatch) {
-    const actual = snapshot.buildIdMismatch.actual ?? "unavailable";
-    lines.push(
-      `Gateway build mismatch: expected ${snapshot.buildIdMismatch.expected}, running gateway reported ${actual}.`,
-    );
-  }
-  if (snapshot.activatedPluginErrors?.length) {
-    lines.push("Activated plugin load errors:");
-    for (const plugin of snapshot.activatedPluginErrors) {
-      lines.push(`- ${plugin.id}: ${plugin.error}`);
+  for (const [kind, mismatch] of [
+    ["version", snapshot.versionMismatch],
+    ["build", snapshot.buildIdMismatch],
+  ] as const) {
+    if (mismatch) {
+      lines.push(
+        `Gateway ${kind} mismatch: expected ${mismatch.expected}, running gateway reported ${mismatch.actual ?? "unavailable"}.`,
+      );
     }
   }
-  if (snapshot.channelProbeErrors?.length) {
-    lines.push("Channel health probe errors:");
-    for (const channel of snapshot.channelProbeErrors) {
-      lines.push(`- ${channel.id}: ${channel.error}`);
+  for (const [heading, errors] of [
+    ["Activated plugin load errors:", snapshot.activatedPluginErrors],
+    ["Channel health probe errors:", snapshot.channelProbeErrors],
+  ] as const) {
+    if (errors?.length) {
+      lines.push(heading);
+      for (const { id, error } of errors) {
+        lines.push(`- ${id}: ${error}`);
+      }
     }
   }
   const runtimeSummary = [

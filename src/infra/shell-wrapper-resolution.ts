@@ -63,12 +63,7 @@ const NUSHELL_STARTUP_OPTIONS_WITH_VALUE = new Set([
 ]);
 const OPAQUE_STARTUP_FILE_SHELL_WRAPPERS = new Set(["csh", "osh", "tcsh"]);
 function withWindowsExeAliases(names: readonly string[]): string[] {
-  const expanded = new Set<string>();
-  for (const name of names) {
-    expanded.add(name);
-    expanded.add(`${name}.exe`);
-  }
-  return Array.from(expanded);
+  return names.flatMap((name) => [name, `${name}.exe`]);
 }
 
 export const POSIX_SHELL_WRAPPERS = new Set(withWindowsExeAliases(POSIX_SHELL_WRAPPER_NAMES));

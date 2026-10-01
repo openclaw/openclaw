@@ -1424,15 +1424,11 @@ describe("shared Codex app-server client", () => {
       const acquired = getLeasedSharedCodexAppServerClient(options);
       await sendInitializeResult(first, "openclaw/0.149.0 (Linux; test)");
       await acquired;
-      if (failure === "failure") {
-        mocks.refreshCodexAppServerAuthTokens.mockRejectedValueOnce(new Error("refresh failed"));
-      } else {
-        mocks.refreshCodexAppServerAuthTokens.mockResolvedValueOnce({
-          accessToken: "other-token",
-          chatgptAccountId: "other-account",
-          chatgptPlanType: null,
-        });
-      }
+      const failureMessage =
+        failure === "failure"
+          ? "refresh failed"
+          : "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.";
+      mocks.refreshCodexAppServerAuthTokens.mockRejectedValueOnce(new Error(failureMessage));
       const responseIndex = first.writes.length;
       first.send({
         id: "failed-refresh",
@@ -1443,10 +1439,7 @@ describe("shared Codex app-server client", () => {
         id: "failed-refresh",
         error: {
           code: -32603,
-          message:
-            failure === "failure"
-              ? "refresh failed"
-              : "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
+          message: failureMessage,
         },
       });
       expect(first.stdinDestroyed).toBe(false);

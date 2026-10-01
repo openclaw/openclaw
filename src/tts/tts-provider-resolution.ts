@@ -1,4 +1,5 @@
 import { clampTimerTimeoutMs } from "../../packages/normalization-core/src/number-coercion.js";
+import { asNonArrayRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -22,7 +23,6 @@ import { withSpeakerSelectionCompat } from "./speaker.js";
 import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,
-  asProviderConfigMap,
   normalizeConfiguredSpeechProviderId,
   readTtsPrefs as readPrefs,
   resolveTtsPersonaFromPrefs,
@@ -208,9 +208,9 @@ function resolveRawProviderConfig(
   if (!raw) {
     return {};
   }
-  const rawProviders = asProviderConfigMap(raw.providers);
+  const rawProviders = asNonArrayRecord(raw.providers);
   const direct = rawProviders[providerId] ?? (raw as Record<string, unknown>)[providerId];
-  return withSpeakerSelectionCompat(asProviderConfig(direct));
+  return asProviderConfig(direct);
 }
 
 function resolveLazyProviderConfig(
@@ -230,7 +230,7 @@ function resolveLazyProviderConfig(
   }
   const rawConfig = resolveRawProviderConfig(config.rawConfig, canonical);
   const rawBaseConfig = config.rawConfig as Record<string, unknown> | undefined;
-  const rawProviders = asProviderConfigMap(config.rawConfig?.providers);
+  const rawProviders = asNonArrayRecord(config.rawConfig?.providers);
   const resolvedProvider = provider ?? registry.getSpeechProvider(canonical, effectiveCfg);
   let hasRawProviderConfig =
     Object.hasOwn(rawProviders, canonical) ||
@@ -257,7 +257,7 @@ function resolveLazyProviderConfig(
   const compatRawProviderConfig = applyVoiceModelToSpeechProviderConfig({
     cfg: effectiveCfg,
     providerId: canonical,
-    providerConfig: withSpeakerSelectionCompat(asProviderConfig(rawProviderConfig)),
+    providerConfig: asProviderConfig(rawProviderConfig),
     provider: resolvedProvider,
     voiceModel,
     registry,

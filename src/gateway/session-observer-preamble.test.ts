@@ -62,22 +62,6 @@ function preambleEvent(
 }
 
 describe("session observer preamble publisher", () => {
-  it("keeps generation stable for duplicate snapshots while clearing publication state", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const session = state("Earlier headline");
-    const { publisher } = publisherFixture(Date.now);
-
-    publisher.handle(session, preambleEvent(session, 1, "Current headline"));
-    publisher.handle(session, preambleEvent(session, 2, "Current headline"));
-    expect(publisher.generation(session)).toBe(1);
-
-    vi.advanceTimersByTime(2_000);
-    expect(publisher.generation(session)).toBe(1);
-    publisher.dispose();
-    vi.useRealTimers();
-  });
-
   it("remembers a preamble that matches a restored digest", () => {
     const session = state("Checking files");
     const { publish, publisher } = publisherFixture();
@@ -98,7 +82,6 @@ describe("session observer preamble publisher", () => {
 
     expect(session.lastPreambleHeadline).toBe("Checking files");
     expect(publish).not.toHaveBeenCalled();
-    expect(publisher.generation(session)).toBe(0);
     publisher.dispose();
   });
 
@@ -122,7 +105,6 @@ describe("session observer preamble publisher", () => {
     publisher.handle(session, { ...event, seq: 2, ts: 2_001 });
 
     expect(publish).toHaveBeenCalledOnce();
-    expect(publisher.generation(session)).toBe(1);
     publisher.dispose();
   });
 

@@ -56,6 +56,15 @@ describe("normalizeJsonSchemaForTypeBox", () => {
     },
   );
 
+  it.each([{ type: [undefined] }, { type: ["string", undefined] }])(
+    "rejects undefined type union entries: $type",
+    ({ type }) => {
+      expect(findJsonSchemaShapeError({ type })).toBe(
+        "<schema>.type: unsupported JSON Schema type",
+      );
+    },
+  );
+
   it("preserves Control UI nullable value semantics", () => {
     const schema = {
       type: "string",

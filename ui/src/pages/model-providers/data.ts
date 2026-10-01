@@ -363,7 +363,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     if (!id) {
       continue;
     }
-    const draft = findDraft(drafts, [id]) ?? ensureDraft(drafts, id, providerDisplayLabel(id));
+    const draft = ensureDraft(drafts, id, providerDisplayLabel(id));
     const addition: ModelProviderLocalCost = {
       totalCost: entry.totals.totalCost,
       totalTokens: entry.totals.totalTokens,

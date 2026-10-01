@@ -16,12 +16,8 @@ import { killProcessTree } from "./kill-tree.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
-import {
-  brokerExecaOptions,
-  spawnBrokerCommand,
-  type CommandSubprocess,
-} from "./spawn-broker/execa-client.js";
-import type { CommandSpawnOptions } from "./spawn-broker/execa-types.js";
+import { brokerExecaOptions, spawnBrokerCommand } from "./spawn-broker/execa-client.js";
+import type { CommandSpawnOptions, CommandSubprocess } from "./spawn-broker/execa-types.js";
 import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 

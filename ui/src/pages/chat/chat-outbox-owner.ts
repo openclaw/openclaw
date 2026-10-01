@@ -158,7 +158,12 @@ class ChatOutboxGatewayOwner {
       return;
     }
     observeOutboxRecoveryOwner(host);
-    host.chatQueue = this.snapshot(host, resolveUiConversationIdentity(host, host.sessionKey));
+    const queue = this.snapshot(host, resolveUiConversationIdentity(host, host.sessionKey));
+    // Draft persistence also publishes outbox changes; an empty queue must not
+    // invalidate the transcript merely because the composer changed.
+    if (queue.length || host.chatQueue.length) {
+      host.chatQueue = queue;
+    }
     for (const item of host.chatQueue) {
       const key = item.attachmentPayload?.key;
       if (

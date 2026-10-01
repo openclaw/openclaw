@@ -149,7 +149,7 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   const defaultServerArgs = entryPath ? [entryPath, ...serverArgs] : serverArgs;
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
-  const { getActiveSkillEnvKeys } = await import("../skills/runtime/env-overrides.runtime.js");
+  const { getActiveSkillEnvKeysCore } = await import("../skills/runtime/env-overrides.js");
   const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
     serverCommand,
     serverArgs: effectiveArgs,
@@ -158,7 +158,7 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   });
   const stripKeys = buildAcpClientStripKeys({
     stripProviderAuthEnvVars,
-    activeSkillEnvKeys: getActiveSkillEnvKeys(),
+    activeSkillEnvKeys: getActiveSkillEnvKeysCore(),
   });
   const spawnEnv = resolveAcpClientSpawnEnv(process.env, { stripKeys });
   const spawnInvocation = resolveAcpClientSpawnInvocation(

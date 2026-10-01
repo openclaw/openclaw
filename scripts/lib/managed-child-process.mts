@@ -53,6 +53,7 @@ type TaskkillRunner = (
     }
   | undefined;
 type ManagedChildTerminationOptions = {
+  deadlineAt?: number;
   onChildSignalError?: (error: unknown) => void;
   onProcessGroupSignalError?: (error: unknown) => void;
   platform?: NodeJS.Platform;
@@ -194,6 +195,7 @@ export function terminateManagedChild(
   child: ManagedProcessGroupChild & { kill(signal: NodeJS.Signals): unknown },
   signal: NodeJS.Signals = "SIGTERM",
   {
+    deadlineAt,
     onChildSignalError,
     onProcessGroupSignalError,
     platform = process.platform,
@@ -227,6 +229,9 @@ export function terminateManagedChild(
       return { processTreeState: "signaled" };
     }
   } catch (error) {
+    if (isExitedDarwinGroup(child, platform, error, deadlineAt)) {
+      return { processTreeState: "terminated" };
+    }
     processGroupIsMissing = isMissingProcessError(error);
     if (!processGroupIsMissing) {
       onProcessGroupSignalError?.(error);
@@ -372,7 +377,7 @@ export function inspectManagedProcessGroup(
   try {
     process.kill(-pid, 0);
     if (platform === "linux" && (child.exitCode != null || child.signalCode != null)) {
-      if (isLinuxZombieProcessGroup(pid, deadlineAt)) {
+      if (isZombieProcessGroup(pid, platform, deadlineAt)) {
         return "dead";
       }
       // The group may be reaped while ps runs. Recheck kernel existence without
@@ -384,13 +389,47 @@ export function inspectManagedProcessGroup(
     if (isMissingProcessError(error)) {
       return "dead";
     }
+    if (isExitedDarwinGroup(child, platform, error, deadlineAt)) {
+      return "dead";
+    }
     return errorPolicy === "alive-on-eperm" && hasProcessErrorCode(error, "EPERM")
       ? "live"
       : "indeterminate";
   }
 }
 
-function isLinuxZombieProcessGroup(pid: number, deadlineAt?: number): boolean {
+function isExitedDarwinGroup(
+  child: ManagedProcessGroupChild,
+  platform: NodeJS.Platform,
+  error: unknown,
+  deadlineAt?: number,
+): boolean {
+  if (
+    platform !== "darwin" ||
+    !hasProcessErrorCode(error, "EPERM") ||
+    !child.pid ||
+    (child.exitCode == null && child.signalCode == null)
+  ) {
+    return false;
+  }
+  // XNU killpg skips zombies and returns EPERM when none are signalable.
+  // Require a zombie-only census or kernel-confirmed disappearance during ps.
+  if (isZombieProcessGroup(child.pid, platform, deadlineAt)) {
+    return true;
+  }
+  try {
+    process.kill(-child.pid, 0);
+  } catch (probeError) {
+    return isMissingProcessError(probeError);
+  }
+  return false;
+}
+
+function isZombieProcessGroup(
+  pid: number,
+  platform: NodeJS.Platform,
+  deadlineAt?: number,
+): boolean {
   const timeout =
     deadlineAt === undefined
       ? PROCESS_GROUP_DRAIN_TIMEOUT_MS
@@ -404,13 +443,16 @@ function isLinuxZombieProcessGroup(pid: number, deadlineAt?: number): boolean {
   // which cannot write or respond to signals while awaiting their parent's reap.
   // Enumerate threads (-L): a process row reports only the group leader's state,
   // and a pthread_exit leader reads Z while sibling threads still run and write.
-  const result = spawnSync("ps", ["-s", String(pid), "-L", "-o", "pgid=,state="], {
+  const selection = platform === "darwin" ? ["-g", String(pid)] : ["-s", String(pid), "-L"];
+  const result = spawnSync("ps", [...selection, "-o", "pgid=,state="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout,
     killSignal: "SIGKILL",
   });
-  const zombie = new RegExp(`^\\s*${pid}\\s+Z\\s*$`, "u");
+  // BSD ps appends flags (for example ZN for a niced zombie); Linux state is one letter.
+  const state = platform === "darwin" ? "Z[+<>AELNSsVWX]*" : "Z";
+  const zombie = new RegExp(`^\\s*${pid}\\s+${state}\\s*$`, "u");
   // Missing, failed or unrecognized snapshots never certify completion.
   return (
     !result.error &&
@@ -796,6 +838,8 @@ export async function finalizeManagedChild(
     }
   };
   const terminationOptions = {
+    // Cancellation's loop owns observation time; do not delay its force-kill boundary here.
+    deadlineAt: signal ? startedAt : startedAt + drainTimeoutMs,
     platform,
     runTaskkill,
     onChildSignalError: recordSignalError,
@@ -910,7 +954,7 @@ export async function finalizeManagedChild(
       if (!forced && (now >= forceAt || (forceKillOnLeaderExit && exited))) {
         forced = true;
         if (groupState !== "dead") {
-          terminateManagedChild(child, "SIGKILL", terminationOptions);
+          terminateManagedChild(child, "SIGKILL", { ...terminationOptions, deadlineAt: deadline });
         }
       }
       if (now >= deadline) {

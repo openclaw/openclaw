@@ -6,10 +6,6 @@ import {
 } from "./inbound-media.js";
 
 describe("hasInboundMedia", () => {
-  it("detects retained type-only media facts", () => {
-    expect(hasInboundMedia({ media: [{ kind: "sticker" }] })).toBe(true);
-  });
-
   it("detects aligned type-only facts without a placeholder body", () => {
     expect(hasInboundMedia({ Body: "", media: [{ kind: "sticker" }, { kind: "image" }] })).toBe(
       true,

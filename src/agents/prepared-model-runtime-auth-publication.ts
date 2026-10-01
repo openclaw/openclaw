@@ -66,6 +66,10 @@ export class PreparedModelRuntimeAuthPublicationOwner {
   #transaction: PreparedModelRuntimeAuthTransaction | undefined;
   #drainTail: Promise<void> = Promise.resolve();
 
+  get hasPendingPublication(): boolean {
+    return this.#transaction !== undefined;
+  }
+
   enqueue(
     invalidatedOwners: readonly PreparedModelRuntimeOwner[],
     profileSetChanged = false,

@@ -9,7 +9,7 @@ import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.j
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
-import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
+import { decodeFeishuCardAction } from "./card-interaction.js";
 import {
   createApprovalCard,
   FEISHU_APPROVAL_CANCEL_ACTION,
@@ -401,7 +401,7 @@ export async function handleFeishuCardAction(params: {
       return;
     }
 
-    const content = buildFeishuCardActionTextFallback(event);
+    const content = decoded.text;
 
     log(
       `feishu[${account.accountId}]: handling card action from ${event.operator.open_id}: ${content}`,

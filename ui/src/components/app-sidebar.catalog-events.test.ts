@@ -25,6 +25,7 @@ async function mountTab(
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["sessions.catalog.list"], events },
     } as ApplicationGatewaySnapshot["hello"],
   });

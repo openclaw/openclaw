@@ -183,6 +183,10 @@ manager, or machine owns the process.
     endpoint. Enable API-key authentication only when the server or proxy
     requires it.
 
+    The URL prompt accepts HTTP or HTTPS endpoints and host shorthand such as
+    `localhost:8080`. Invalid URLs and embedded credentials are rejected inline
+    so you can correct the endpoint without restarting setup.
+
   </Step>
   <Step title="Select the model">
     ```bash

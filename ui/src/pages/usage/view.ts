@@ -114,7 +114,6 @@ export function renderUsage(props: UsageProps) {
   const selectedDaySet = new Set(filters.selectedDays);
   const selectedSessionSet = new Set(filters.selectedSessions);
 
-  // Sort sessions by tokens or cost depending on mode
   const sortedSessions = data.sessions.toSorted((a, b) => {
     const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
     const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
@@ -146,11 +145,9 @@ export function renderUsage(props: UsageProps) {
   const querySuggestions = buildQuerySuggestions(filters.queryDraft, filterOptions);
   const queryTerms = extractQueryTerms(filters.queryDraft);
 
-  // Get first selected session for detail view (timeseries, logs)
   const primarySelectedEntry =
     filters.selectedSessions.length === 1
-      ? (data.sessions.find((s) => s.key === filters.selectedSessions[0]) ??
-        filteredSessions.find((s) => s.key === filters.selectedSessions[0]))
+      ? data.sessions.find((s) => s.key === filters.selectedSessions[0])
       : null;
 
   const scopedSessions = selectedSessionSet.size
@@ -737,7 +734,6 @@ export function renderUsage(props: UsageProps) {
                         displayActions.onSessionSortChange,
                         displayActions.onSessionSortDirChange,
                         displayActions.onSessionsTabChange,
-                        undefined,
                         totalSessions,
                         filterActions.onClearSessions,
                       )}

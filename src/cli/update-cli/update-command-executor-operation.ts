@@ -6,10 +6,9 @@ export async function runUpdateCommandExecutorOperation<T>(params: {
   operation: () => Promise<T>;
   children: ReturnType<typeof createChildOwner>;
   assertCurrent: () => void;
-}) {
-  let outcome: { result: T } | { error: Error };
+}): Promise<{ result: T } | { error: Error }> {
   try {
-    outcome = {
+    return {
       result: await withCommandProcessScope(async () => {
         let operationOutcome: { result: T } | { error: Error };
         try {
@@ -46,9 +45,8 @@ export async function runUpdateCommandExecutorOperation<T>(params: {
       }),
     };
   } catch (cause) {
-    outcome = {
+    return {
       error: cause instanceof Error ? cause : new Error("Update execution failed", { cause }),
     };
   }
-  return outcome;
 }

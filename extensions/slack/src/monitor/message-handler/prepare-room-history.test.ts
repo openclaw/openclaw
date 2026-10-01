@@ -3,7 +3,7 @@ import type { App } from "@slack/bolt";
 import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type * as SystemEventRuntime from "openclaw/plugin-sdk/system-event-runtime";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import type * as SlackMediaRuntime from "../media.runtime.js";
 import { prepareSlackMessage } from "./prepare.js";
@@ -28,8 +28,6 @@ vi.mock("../media.runtime.js", async (importOriginal) => ({
 
 describe("Slack platform-authoritative automatic room history", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-room-history-");
-  beforeAll(() => storeFixture.setup());
-  afterAll(() => storeFixture.cleanup());
   beforeEach(() => mediaFetchMock.mockReset());
   afterEach(() => vi.restoreAllMocks());
 

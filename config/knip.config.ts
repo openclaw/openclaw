@@ -24,6 +24,10 @@ const repositoryScriptEntries = [
   "apps/linux/scripts/test-native-control-auth.mjs!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  // CI preflight executes the manifest from its trusted harness checkout.
+  "scripts/ci-build-manifest.mjs!",
+  // CI security-fast runs this from its trusted harness checkout.
+  "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
   "src/node-host/mac-worker-entry.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
@@ -130,8 +134,12 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs!",
   // backup-rollback.sh invokes capture and verification through this CLI.
   "scripts/e2e/lib/upgrade-survivor/backup-rollback.mjs!",
+  // run.sh invokes the backup schedule upgrade scenario through this CLI.
+  "scripts/e2e/lib/upgrade-survivor/backup-schedule.mjs!",
   "scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
+  // run.sh invokes this CLI and preloads it into updater/Doctor children.
+  "scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs!",
   "scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs!",
   // Capture runs in the container; sanitization runs only on the trusted host.
   "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
@@ -146,6 +154,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
+  // published-driver-update-docker.sh launches this managed-update proof inside Docker.
+  "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.
@@ -257,8 +267,8 @@ const repositoryScriptEntries = [
   "scripts/update-clawtributors.ts!",
   // The candidate binder invokes this trusted producer-identity verifier by path.
   "scripts/verify-full-release-producer-job.mjs!",
-  // Staging and signed-app packaging execute this verifier with each bundled Node.
-  "scripts/verify-mac-node-worker.mjs!",
+  // Staging and signed-app packaging execute this verifier with each bundled Bun.
+  "scripts/verify-mac-runtime.mjs!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",
@@ -375,6 +385,8 @@ const rootEntries = [
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Packaged postinstall imports this private compiled entry before stage activation.
+  "src/commands/doctor-update-schema-guard.ts!",
   // Built as the official image's Docker HEALTHCHECK entrypoint.
   "src/docker-healthcheck.ts!",
   // Deployed in the worker archive and launched by path, without a static host import.
@@ -385,6 +397,8 @@ const rootEntries = [
   "src/worker/workspace-rsync-receiver.ts!",
   // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
   "src/gateway/plugin-channel-reload-targets.ts!",
+  // Published-update bridges import lifecycle facts from this stable dist entry.
+  "src/agents/provider-runtime-lifecycle.ts!",
   // Shipped compatibility facade for statusCommand and getStatusSummary.
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
@@ -411,9 +425,6 @@ const rootEntries = [
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/agents/prepared-model-catalog.worker.ts!",
-  // Documented core-only Decision Labs foundation entry. No automatic consumers
-  // ship with the gate; remove this root when the first consumer imports it.
-  "src/agents/decision-assistance.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
@@ -426,9 +437,9 @@ const rootEntries = [
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
-  // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
-  // Jiti virtualizes openclaw/plugin-sdk/agent-sessions through this cycle-safe barrel.
+  // Jiti exposes this SDK barrel and its type-only declaration owner.
   "src/agents/sessions/extension-sdk.ts!",
+  "src/agents/sessions/extensions/types.ts!",
   // Plugin-SDK ACP facades expose the registry's runtime signatures.
   "src/acp/runtime/registry.ts!",
   "src/plugins/runtime/index.ts!",
@@ -588,6 +599,17 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
   } as const;
 }
 
+function compileNativeProtocolConsumer(source: string, filePath: string): string {
+  if (path.resolve(filePath) !== path.resolve("scripts/prepare-native-protocol.mjs")) {
+    return source;
+  }
+  // The temporary esbuild bundle exports this source module's unchanged API.
+  return source.replace(
+    "import(pathToFileURL(bundlePath).href)",
+    'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
+  );
+}
+
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
     entry: [...bundledPluginEntries, ...extraEntries],
@@ -654,7 +676,11 @@ const ignoredTestSupportFiles = [
 ] as const;
 
 const config = {
-  compilers: { yml: compileFrvWorkflowConsumers, sh: compileShellConsumers },
+  compilers: {
+    yml: compileFrvWorkflowConsumers,
+    sh: compileShellConsumers,
+    mjs: compileNativeProtocolConsumer,
+  },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
     // companion config removes this exclusion and audits them as script roots.
@@ -664,6 +690,9 @@ const config = {
     // Declaration companions describe executable JavaScript modules; they are not standalone roots.
     "scripts/**/*.d.{mts,ts}",
     "**/live-*.ts",
+    // This worker-thread proof entry is loaded from its test with new URL(),
+    // which Knip cannot discover as a static import.
+    "src/worker/repro-worker-connection-closing-window.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
   ],
@@ -739,7 +768,16 @@ const config = {
         ...rootBundledPluginRuntimeDependencies,
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
-      ignoreBinaries: ["mint", "ngrok", "open", "openclaw", "sleep", "swiftlint", "xcrun"],
+      ignoreBinaries: [
+        "lsattr",
+        "mint",
+        "ngrok",
+        "open",
+        "openclaw",
+        "sleep",
+        "swiftlint",
+        "xcrun",
+      ],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [

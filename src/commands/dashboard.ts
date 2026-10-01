@@ -1,4 +1,3 @@
-// Implements `openclaw dashboard` URL resolution, readiness check, clipboard, and browser launch.
 import { readConfigFileSnapshot } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
@@ -117,7 +116,6 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
   }
 }
 
-/** Open or print the Control UI dashboard URL after ensuring the Gateway is reachable. */
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DashboardOptions = {},

@@ -8,6 +8,7 @@ import {
   lastWriteJsonCall,
   npmPluginUpdateCall,
   packageInstallCommandCall,
+  requireValue,
   spawnCall,
   syncPluginCall,
 } from "./update-cli-assertions.test-support.js";
@@ -72,7 +73,7 @@ describe("update-cli", () => {
     await updateCommand({ channel: "dev", yes: true, restart: false });
 
     const call = spawnCall();
-    expect(call?.[0]).toMatch(/node/);
+    expect(call?.[0]).toBe(process.execPath);
     expect(call?.[1]).toEqual([
       entrypoints[0],
       "update",
@@ -97,9 +98,23 @@ describe("update-cli", () => {
           after: { sha: "new-sha", version: VERSION },
         }),
     });
-    vi.mocked(runExec).mockResolvedValueOnce({
-      stdout: new Command("update").option("--accept-capabilities").helpInformation(),
-      stderr: "",
+    const runOtherCommand = requireValue(
+      vi.mocked(runExec).getMockImplementation(),
+      "update command fixture",
+    );
+    vi.mocked(runExec).mockImplementation(async (command, args, options) => {
+      if (
+        args.length === 3 &&
+        args[0] === entrypoints[0] &&
+        args[1] === "update" &&
+        args[2] === "--help"
+      ) {
+        return {
+          stdout: new Command("update").option("--accept-capabilities").helpInformation(),
+          stderr: "",
+        };
+      }
+      return runOtherCommand(command, args, options);
     });
 
     await updateCommand({ acceptCapabilities: true, yes: true, restart: false });
@@ -124,9 +139,10 @@ describe("update-cli", () => {
       readPackageVersion.mockResolvedValue("2026.9.3-beta.1");
       primeNpmChannelTag("latest", "2026.9.1");
 
-      await updateCommand({ channel: "stable", json: true, dryRun });
+      const command = updateCommand({ channel: "stable", json: true, dryRun });
 
       if (dryRun) {
+        await command;
         expect(lastWriteJsonCall()).toMatchObject({
           currentVersion: "2026.9.3-beta.1",
           targetVersion: "2026.9.1",
@@ -134,8 +150,12 @@ describe("update-cli", () => {
           switchToPackage: true,
         });
       } else {
+        await expect(command).rejects.toMatchObject({ code: 1 });
         expect(getErrorOutput()).toContain("Downgrade confirmation required.");
-        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "skipped",
+          reason: "downgrade-confirmation-required",
+        });
       }
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
       expectNoSideEffects(updateGitCheckout, replaceConfigFile, spawn);
@@ -261,11 +281,21 @@ describe("update-cli", () => {
     const doctorCalls = commandCalls().filter(([argv]) => argv.at(-1) === "--doctor");
     expect(doctorCalls).toHaveLength(1);
     expectDelegatedPluginDoctorInput(doctorCalls[0]?.[1].input);
-    expect(runExec).toHaveBeenCalledExactlyOnceWith(
-      expect.any(String),
-      [FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],
-      expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
-    );
+    const freshCommands = vi
+      .mocked(runExec)
+      .mock.calls.filter(([, args]) => args[0] === FRESH_POST_UPDATE_ENTRYPOINT)
+      .map(([command, args, options]) => ({
+        command,
+        args,
+        env: typeof options === "object" ? options.env : undefined,
+      }));
+    expect(freshCommands).toEqual([
+      {
+        command: expect.any(String),
+        args: [FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],
+        env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
+      },
+    ]);
     expect(strictValidationEnv).toBe("0");
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
