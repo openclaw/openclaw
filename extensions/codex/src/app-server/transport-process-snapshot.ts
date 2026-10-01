@@ -341,6 +341,17 @@ function parseLinuxBootId(value: string): string {
   return bootId;
 }
 
+/** A different kernel boot makes every saved procfs start identity impossible. */
+export function readCodexAppServerLinuxBootId(deadline: number): string {
+  try {
+    return parseLinuxBootId(
+      readSelectedProcFile("/proc/sys/kernel/random/boot_id", deadline).toString("utf8"),
+    );
+  } catch (error) {
+    throw inspectionFailure(error);
+  }
+}
+
 function parseLinuxProcess(
   stat: string,
   entry: string,

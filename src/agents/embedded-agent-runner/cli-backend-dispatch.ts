@@ -218,6 +218,16 @@ async function runEmbeddedAgentViaCliBackend(
       expectedLifecycleRevision,
       expectedWriterRunId,
       chatType: params.chatType,
+      // Preserve the host-owned identity and provenance consumed by CLI
+      // before_prompt_build hooks. The embedded path receives these fields
+      // directly; dropping them here silently disables Owner source packets.
+      senderId: params.senderId,
+      senderIsOwner: params.senderIsOwner,
+      chatId: params.chatId,
+      agentAccountId: params.agentAccountId,
+      currentChannelId: params.currentChannelId,
+      channelContext: params.channelContext,
+      inputProvenance: params.inputProvenance,
       agentId: params.agentId,
       storePath,
       trigger: params.trigger,

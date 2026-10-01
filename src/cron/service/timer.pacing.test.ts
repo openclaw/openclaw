@@ -238,6 +238,36 @@ describe("applyJobResult dynamic cadence", () => {
     expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + expectedDelayMs);
   });
 
+  it("keeps the five-minute check while a managed Flow waits hours away", () => {
+    const job = makePacedJob({ min: "5m", max: "5m" }, 5 * 60_000);
+    job.trigger = { script: "return {fire:false}" };
+
+    applyJobResult(makeState(), job, {
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      nextCheck: { delayMs: 6 * 60 * 60_000, scheduledAtMs: ENDED_AT + 6 * 60 * 60_000 },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 5 * 60_000);
+    expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 5 * 60_000);
+  });
+
+  it("keeps an exact managed Flow wake earlier than the paced check", () => {
+    const job = makePacedJob({ min: "5m", max: "5m" }, 5 * 60_000);
+    job.trigger = { script: "return {fire:false}" };
+
+    applyJobResult(makeState(), job, {
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      nextCheck: { delayMs: 2 * 60_000, scheduledAtMs: ENDED_AT + 2 * 60_000 },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 2 * 60_000);
+    expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 2 * 60_000);
+  });
+
   it("keeps existing schedule math when no proposal was recorded", () => {
     const job = makePacedJob({ min: "15m", max: "4h" });
     job.state.pacedNextRunAtMs = ENDED_AT + 30 * 60_000;

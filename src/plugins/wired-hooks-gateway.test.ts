@@ -44,6 +44,8 @@ function createRawCronHost() {
   };
   const host: PluginServiceCronHost = {
     list: async () => [job],
+    getJob: () => job,
+    run: async () => ({ ok: true, ran: true }),
     add: async () => job,
     update: async () => job,
     updateWithPrecondition: async (id, patch, precondition, options) => {
