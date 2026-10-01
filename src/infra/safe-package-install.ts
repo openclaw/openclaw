@@ -31,7 +31,13 @@ export function createSafeNpmInstallEnv(
   const nextEnv: NodeJS.ProcessEnv = {
     ...createNpmProjectInstallEnv(env, options),
     COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+    // npm 12 denies transitive Git and remote tarball dependencies by default.
+    // Preserve the admitted package behavior while lifecycle scripts remain disabled.
+    NPM_CONFIG_ALLOW_GIT: "all",
+    NPM_CONFIG_ALLOW_REMOTE: "all",
     NPM_CONFIG_IGNORE_SCRIPTS: "true",
+    npm_config_allow_git: "all",
+    npm_config_allow_remote: "all",
     npm_config_audit: "false",
     npm_config_fund: "false",
     npm_config_ignore_scripts: "true",

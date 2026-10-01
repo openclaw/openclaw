@@ -31,6 +31,8 @@ describe("safe npm install helpers", () => {
     const env = createSafeNpmInstallEnv(
       {
         PATH: "/usr/bin:/bin",
+        NPM_CONFIG_ALLOW_GIT: "none",
+        NPM_CONFIG_ALLOW_REMOTE: "none",
         NPM_CONFIG_IGNORE_SCRIPTS: "false",
         NPM_CONFIG_LEGACY_PEER_DEPS: "false",
         NPM_CONFIG_STRICT_PEER_DEPS: "true",
@@ -52,10 +54,14 @@ describe("safe npm install helpers", () => {
     );
 
     expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.NPM_CONFIG_ALLOW_GIT).toBe("all");
+    expect(env.NPM_CONFIG_ALLOW_REMOTE).toBe("all");
     expect(env.NPM_CONFIG_BEFORE).toBe("");
     expect(env.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
     expect(env.NPM_CONFIG_IGNORE_SCRIPTS).toBe("true");
     expect(env.npm_config_audit).toBe("false");
+    expect(env.npm_config_allow_git).toBe("all");
+    expect(env.npm_config_allow_remote).toBe("all");
     expect(env.npm_config_before).toBe("");
     expect(env.npm_config_cache).toBe("/tmp/openclaw-npm-cache");
     expect(env.npm_config_dry_run).toBe("false");
