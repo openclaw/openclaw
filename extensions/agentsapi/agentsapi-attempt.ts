@@ -251,10 +251,15 @@ export async function runAgentsApiAttempt(
       }
       await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
     }
+    const inputMedia =
+      environment.type === "openai_hosted" && params.hostCapabilities.resolveInputAttachmentMedia
+        ? await params.hostCapabilities.resolveInputAttachmentMedia()
+        : params.media;
+    assertCurrent();
     const inputs =
       environment.type === "openai_hosted"
         ? await files.prepareInputs(
-            params.media,
+            inputMedia,
             params.workspaceDir,
             assertCurrent,
             controller.signal,

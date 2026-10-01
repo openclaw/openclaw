@@ -5,6 +5,7 @@ import {
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createPluginStateKeyedStoreForTests,
@@ -27,16 +28,15 @@ const { createSession } = vi.hoisted(() => ({
 }));
 
 // Keep the registered harness, input formatting, host generation, binding lifecycle,
-// and SQLite stores real; provider execution and file transfers are separate contracts.
+// SQLite stores, and input file preparation real; provider execution stays mocked.
 vi.mock("./agentsapi-session.js", () => ({ createAgentsApiSession: createSession }));
 vi.mock("./agentsapi-prompt.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agentsapi-prompt.js")>()),
   buildAgentsApiInstructions: async () => "Fixture instructions",
 }));
-vi.mock("./agentsapi-files.js", () => ({
-  prepareInputs: async () => ({ files: [], mappingText: "" }),
+vi.mock("./agentsapi-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agentsapi-files.js")>()),
   prepareSelfHostedInputs: async () => ({ files: [], mappingText: "" }),
-  uploadInputs: async () => {},
   collectOutputs: async () => [],
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -204,6 +204,67 @@ it("continues image-bearing input and the following turn on the same native sess
         "image-session",
       ]);
       expect(create).toHaveBeenCalledTimes(1);
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
+it("transfers each turn's original image bytes to unique paths on the same hosted session", async () => {
+  await withOpenClawTestState({ label: "agentsapi-original-images" }, async (state) => {
+    const params = await createAttempt(state.stateDir);
+    const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue("image-session");
+    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
+    const upload = vi.spyOn(AgentsApiClient.prototype, "uploadFile").mockResolvedValue(undefined);
+    const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
+    vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+    const image = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const originals = ["first", "replacement"].map((label) =>
+      Buffer.concat([image, Buffer.from(label)]),
+    );
+    const harness = registerHarness(state.env);
+    try {
+      for (const [index, bytes] of originals.entries()) {
+        const saved = await saveMediaBuffer(bytes, "image/png", "inbound");
+        const media = [{ url: `media://inbound/${saved.id}`, fileName: "scene.png" }];
+        const result = await harness.runAttempt({
+          ...params,
+          runId: `image-turn-${index}`,
+          prompt: "Describe this image.",
+          images: [{ type: "image", data: image.toString("base64"), mimeType: "image/png" }],
+          hostCapabilities: {
+            ...params.hostCapabilities,
+            resolveInputAttachmentMedia: async () => media,
+          },
+        });
+        expect(result).toMatchObject({ terminal: { kind: "ok" } });
+      }
+      const firstFile = create.mock.calls[0]?.[3]?.files?.[0];
+      const nextFile = upload.mock.calls[0]?.[1];
+      expect(firstFile).toBeDefined();
+      expect(nextFile).toBeDefined();
+      expect(Buffer.from(firstFile!.data, "base64")).toEqual(originals[0]);
+      expect(Buffer.from(nextFile!.data, "base64")).toEqual(originals[1]);
+      expect(new Set([firstFile!.path, nextFile!.path]).size).toBe(2);
+      for (const [index, file] of [firstFile!, nextFile!].entries()) {
+        expect(path.posix.dirname(file.path)).toBe("/workspace/inputs");
+        expect(path.posix.basename(file.path)).toMatch(/-scene\.png$/u);
+        expect(message.mock.calls[index]?.[1]).toContain(file.path);
+      }
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(upload).toHaveBeenCalledExactlyOnceWith(
+        "image-session",
+        nextFile,
+        expect.any(AbortSignal),
+      );
+      expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+        "image-session",
+        "image-session",
+      ]);
+      expect(upload.mock.invocationCallOrder[0]).toBeLessThan(message.mock.invocationCallOrder[1]!);
     } finally {
       await harness.dispose();
     }

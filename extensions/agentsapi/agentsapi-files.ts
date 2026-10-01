@@ -39,7 +39,7 @@ export async function prepareSelfHostedInputs(
 
 /** Only host-prepared attachments are copied into the hosted workspace. */
 export async function prepareInputs(
-  media: AgentHarnessAttemptParamsV2["media"],
+  media: Readonly<AgentHarnessAttemptParamsV2["media"]>,
   workspaceDir: string,
   assertCurrent: () => void,
   signal: AbortSignal,

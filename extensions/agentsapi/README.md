@@ -165,8 +165,11 @@ an executor. Input submission has a 60-second HTTP deadline, including any wait
 for the executor to connect. Configure the controller to connect promptly;
 the API's longer connection window does not extend this deadline. Session
 connection events remain visible while it connects.
-Hosted environments support input
-attachments and output file transfers. Self-hosted input attachments use the
+Hosted environments support input attachments and output file transfers. Each
+turn transfers its admitted original files, including images, to unique hosted
+paths, so later uploads with the same filename keep their own bytes and mapping.
+Inline image preparation does not replace this original-file transfer.
+Self-hosted input attachments use the
 registered workspace provider's existing staging service. It prepares admitted
 originals on the executor workspace and returns execution-only paths without
 changing their Gateway media references or transcript provenance. Admission
