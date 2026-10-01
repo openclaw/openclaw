@@ -422,7 +422,11 @@ export function planCronJobUpdatePatch(params: {
     explicitToolsAllow === "absent" &&
     (startsToolPayload || startsToolTrigger) &&
     (existingPayloadRecord?.toolsAllowIsDefault === true ||
-      !Array.isArray(existingPayloadRecord?.toolsAllow));
+      !Array.isArray(existingPayloadRecord?.toolsAllow) ||
+      // Scripts reach MCP only through named servers, so a `*` job gaining one
+      // captures the creator's concrete tools.
+      (existingPayloadRecord.toolsAllow.includes("*") &&
+        (payloadKind === "script" || startsToolTrigger)));
   const needsResolvedAuthority =
     explicitToolsAllow === "resolved" ||
     reusesDefaultAuthority ||

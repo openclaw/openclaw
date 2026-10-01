@@ -22,6 +22,7 @@ import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
+import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
@@ -409,18 +410,10 @@ export async function prepareCronRunContext(params: {
     // Preserve an explicit cron timeout even when it equals the agent default;
     // the embedded runner uses its presence to configure the idle watchdog.
     const runTimeoutOverrideMs = resolveCronRunTimeoutOverrideMs(explicitTimeoutSeconds);
-    const storedAgentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
-    // Older builds froze an automatic snapshot of the creator's tools, which could
-    // miss tools the creator had. Such a run gets what its owner conversation gets,
-    // like a `*` job; Codex app authority stays bound to the list it was captured with.
-    const inheritsOwnerTools =
-      storedAgentPayload?.toolsAllowIsDefault === true &&
-      !input.job.runtimeAuthority &&
-      !input.job.runtimeAuthorityRecoveryRequired;
     const agentPayload =
-      storedAgentPayload && inheritsOwnerTools
-        ? { ...storedAgentPayload, toolsAllow: ["*"], toolsAllowIsDefault: undefined }
-        : storedAgentPayload;
+      input.job.payload.kind === "agentTurn"
+        ? { ...input.job.payload, toolsAllow: resolveCronRunToolsAllow(input.job) }
+        : null;
     const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
     const modelApi =
       findModelInCatalog(thinkingSelection.catalog, provider, model)?.api ??

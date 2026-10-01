@@ -92,6 +92,14 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     });
   });
 
+  it("runs a command prompt from an automatic snapshot without shell tools", options, async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(["message", "read"], { toolsAllowIsDefault: true, message: command }),
+    );
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.toolsAllow).toEqual(["*"]);
+  });
+
   it("runs an automatic creator snapshot with its owner's tools", options, async () => {
     // Older builds saved this snapshot without the creator's native shell.
     await runCronIsolatedAgentTurn(makeParams(["message", "read"], { toolsAllowIsDefault: true }));

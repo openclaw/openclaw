@@ -13,7 +13,7 @@ import {
   resolveCronAuthenticatedCallerOrigin,
   resolveCronAuthenticatedChannelRequester,
 } from "../tools-allow-provenance.js";
-import { cronJobUsesToolRuntime } from "../tools-allow.js";
+import { cronJobUsesToolRuntime, resolveCronRunToolsAllow } from "../tools-allow.js";
 import type {
   CronStoredJob,
   CronToolsAllowExecTarget,
@@ -23,14 +23,13 @@ import type {
 import type { CronAddOptions, CronUpdateOptions } from "./state.js";
 
 function resolveCronJobScheduledMessagePolicy(job: CronStoredJob) {
+  const toolsAllow = resolveCronRunToolsAllow(job);
   const policy = resolveCronScheduledToolPolicy({
-    toolsAllow: job.payload.toolsAllow,
+    toolsAllow,
     scheduledToolPolicy: job.scheduledToolPolicy,
     owner: job.owner,
   });
-  return cronJobUsesToolRuntime(job) &&
-    policy &&
-    isRuntimeToolAllowed("message", job.payload.toolsAllow)
+  return cronJobUsesToolRuntime(job) && policy && isRuntimeToolAllowed("message", toolsAllow)
     ? policy
     : undefined;
 }
