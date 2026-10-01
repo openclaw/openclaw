@@ -12,14 +12,17 @@ import {
 } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
 import {
+  needsThinkHydration,
+  normalizeThinkingCatalogProviders,
+} from "../../agents/thinking-runtime.js";
+import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import { needsThinkHydration, normalizeThinkingCatalogProviders } from "../../agents/thinking-runtime.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /** Builds model fallback options for an embedded follow-up run. */
 export function resolveModelFallbackOptions(
@@ -101,9 +104,7 @@ export async function resolveRunModelThinkingCapability(params: {
   thinkingCatalog?: FollowupRun["run"]["thinkingCatalog"];
 }): Promise<PreparedModelThinkingCapability | undefined> {
   let thinkingCatalog = params.thinkingCatalog;
-  if (
-    needsThinkHydration(thinkingCatalog, params.provider, params.model, params.agentRuntime)
-  ) {
+  if (needsThinkHydration(thinkingCatalog, params.provider, params.model, params.agentRuntime)) {
     const { loadProviderScopedThinkingCatalog } =
       await import("../../agents/model-catalog.runtime.js");
     thinkingCatalog = normalizeThinkingCatalogProviders(
@@ -111,6 +112,7 @@ export async function resolveRunModelThinkingCapability(params: {
         config: params.config,
         provider: params.provider,
         model: params.model,
+        agentRuntime: params.agentRuntime,
         agentId: params.agentId,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
@@ -128,6 +130,7 @@ export async function buildEmbeddedRunBaseParams(params: {
   run: FollowupRun["run"];
   provider: string;
   model: string;
+  agentRuntime?: string;
   runId: string;
   promptCacheKey?: string;
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;

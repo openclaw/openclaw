@@ -386,6 +386,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
   hasRepliedRef: { value: boolean } | undefined;
   provider: string;
   model: string;
+  agentRuntime?: string;
   runId: string;
   promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
