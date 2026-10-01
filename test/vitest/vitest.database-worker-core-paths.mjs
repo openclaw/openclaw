@@ -4,6 +4,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/status/status-plugin-health.installed.test.ts",
   "src/agents/tool-schema-quarantine.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-session-identity.worker.test.ts",
   "src/agents/embedded-agent-runner/run-entry.cleanup.test.ts",
   "src/agents/runtime-plugins.context-engine.integration.test.ts",
   "src/context-engine/context-engine.test.ts",
