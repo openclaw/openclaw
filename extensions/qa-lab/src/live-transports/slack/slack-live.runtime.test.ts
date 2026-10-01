@@ -951,9 +951,9 @@ describe("Slack native data QA scenarios", () => {
     },
   );
 
-  it("rejects fallback-only native chart delivery", async () => {
+  it.each(["chart", "table"] as const)("rejects fallback-only native %s delivery", async (kind) => {
     vi.useFakeTimers();
-    const run = buildNativeDataRun("chart");
+    const run = buildNativeDataRun(kind);
     const history = vi.fn(async () => ({
       messages: [{ text: run.accessibleText, ts: "2.000000", user: "U_SUT" }],
     }));

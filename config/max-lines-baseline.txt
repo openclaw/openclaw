@@ -645,7 +645,6 @@ ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-thread.test.ts
 ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
-ui/src/pages/chat/composer-persistence.test.ts
 ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts

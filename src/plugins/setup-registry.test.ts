@@ -305,13 +305,18 @@ describe("setup registry", () => {
     }
   });
 
-  it.each(["provider", "cliBackend"] as const)(
-    "rejects ambiguous setup %s owners before executing code",
-    (kind) => {
+  it.each([
+    ["provider", "openai"],
+    ["provider", "workspace-shadow"],
+    ["cliBackend", "openai"],
+    ["cliBackend", "workspace-shadow"],
+  ] as const)(
+    "rejects ambiguous setup %s owners with second plugin %s before executing code",
+    (kind, secondPluginId) => {
       manifests(
         ...["bundled", "workspace"].map((origin) =>
           fixture({
-            id: "openai",
+            id: origin === "bundled" ? "openai" : secondPluginId,
             origin: origin === "bundled" ? "bundled" : "workspace",
             setup:
               kind === "provider"

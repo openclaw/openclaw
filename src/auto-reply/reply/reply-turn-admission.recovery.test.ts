@@ -380,7 +380,7 @@ it.each([
   },
 );
 
-it.each(["started", "cancelled"] as const)(
+it.each(["started", "cancelled", "replaced"] as const)(
   "waits for reserved startup recovery before visible input: %s",
   async (outcome) => {
     const f = recoveryFixture();
@@ -393,13 +393,22 @@ it.each(["started", "cancelled"] as const)(
     if (outcome === "cancelled") {
       f.abort.abort();
     } else {
-      await f.write({ ...f.entry, sessionId, abortedLastRun: false });
+      await f.write({
+        ...f.entry,
+        sessionId: outcome === "replaced" ? "replacement-session" : sessionId,
+        abortedLastRun: false,
+      });
     }
     await admission.settled;
-    expect(admission.failure).toBeUndefined();
-    expect(admission.result).toMatchObject(
-      outcome === "started" ? { status: "owned" } : { status: "skipped", reason: "aborted" },
-    );
+    if (outcome === "replaced") {
+      expect(admission.failure).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      expect(admission.result).toBeUndefined();
+    } else {
+      expect(admission.failure).toBeUndefined();
+      expect(admission.result).toMatchObject(
+        outcome === "started" ? { status: "owned" } : { status: "skipped", reason: "aborted" },
+      );
+    }
     // Starting recovery wakes visible input before the recovered turn completes.
     expect(owner.isActive()).toBe(true);
   },

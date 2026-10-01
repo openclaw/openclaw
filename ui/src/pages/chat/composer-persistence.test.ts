@@ -427,6 +427,35 @@ it("retains ambiguous shipped main rows for explicit destination confirmation", 
   expect(readChatOutboxRecovery(state).entries[0]?.session.queue).toEqual([item]);
 });
 
+it.each(["outbox", "cleared draft"] as const)(
+  "does not guess an offline main owner when another agent has a %s",
+  (otherState) => {
+    const first = createState({
+      assistantAgentId: "alpha",
+      sessionKey: "global",
+      chatMessage: "alpha draft",
+    });
+    const other = createState({ assistantAgentId: "work", sessionKey: "global" });
+    expect(persist(first)).toBe(true);
+    if (otherState === "outbox") {
+      expect(admitItem(first, reconnectItem("alpha-offline", 1))).toBe(true);
+      expect(admitItem(other, reconnectItem("work-offline", 2))).toBe(true);
+    } else {
+      expect(persist({ ...other, chatMessage: "work draft" })).toBe(true);
+      expect(persist(other)).toBe(true);
+    }
+    expect(snapshot(createState({ sessionKey: "main" }), "main")).toBeNull();
+  },
+);
+
+it("keeps newly admitted unknown non-main routes agentless", () => {
+  const state = createState({ assistantAgentId: "work", sessionKey: "matrix:group:RoomCase" });
+  const item = reconnectItem("opaque-room", 1);
+  expect(admitItem(state, item)).toBe(true);
+  expect(snapshot(state, state.sessionKey)?.queue).toEqual(outbox(item, state.sessionKey).queue);
+  expect(listStoredChatOutboxes(state)).toEqual([outbox(item, state.sessionKey)]);
+});
+
 it("migrates and mutates shipped selected-agent opaque rows", () => {
   const sessionKey = "matrix:group:RoomCase";
   const first = reconnectItem("legacy-work", 1);
@@ -510,6 +539,7 @@ it("migrates full v1 main and global queues while consuming legacy tombstones", 
 
 it.each([
   ["sending", "waiting-reconnect", undefined, undefined],
+  ["executing-command", "unconfirmed", undefined, undefined],
   [
     "waiting-model",
     "failed",
@@ -615,6 +645,60 @@ it("evicts draft-only sessions before rejecting an outbox session overflow", () 
   expect(outboxes).toHaveLength(20);
   expect(outboxes.some((box) => box.sessionKey === overflowSessionKey)).toBe(false);
   expect(outboxes.some((box) => box.sessionKey === "agent:lily:queued:0")).toBe(true);
+});
+
+it("restores an agent-qualified custom main alias before defaults load", () => {
+  const connected = createState({
+    agentsList: { defaultId: "work", mainKey: "workspace" },
+    assistantAgentId: "work",
+    chatMessage: "qualified custom-main draft",
+    sessionKey: "agent:work:workspace",
+  });
+  const queued = reconnectItem("qualified-custom-main", 1);
+  expect(persist(connected)).toBe(true);
+  expect(admitItem(connected, queued)).toBe(true);
+  reloadStorage(connected);
+
+  const offline = createState({ sessionKey: "agent:work:workspace" });
+  expect(readRevision(offline, offline.sessionKey)).toBeGreaterThan(0);
+  expectDraft(
+    offline,
+    "qualified custom-main draft",
+    outbox(queued, offline.sessionKey, "work").queue,
+  );
+  expect(snapshot(offline, "agent:work:project")).toBeNull();
+});
+
+it("coalesces configured main aliases without retargeting an explicit agent", () => {
+  const explicit = reconnectItem("explicit-main-workspace", 1);
+  expect(admitItem(createState({ sessionKey: "agent:main:workspace" }), explicit)).toBe(true);
+  const state = createState({
+    agentsList: { defaultId: "work", mainKey: "workspace", scope: "global" },
+    assistantAgentId: "work",
+    sessionKey: "workspace",
+  });
+  expect(snapshot(state, "global")).toBeNull();
+  expect(snapshot({ ...state, assistantAgentId: "main" }, "global")?.queue).toEqual(
+    outbox(explicit, "global", "main").queue,
+  );
+  const bare = reconnectItem("bare-configured", 2);
+  const qualified = reconnectItem("qualified-configured", 3);
+  expect(admitItem(state, bare, "workspace")).toBe(true);
+  expect(admitItem(state, qualified, "agent:work:workspace")).toBe(true);
+  expect(snapshot(state, "global")?.queue).toEqual([
+    ...outbox(bare, "global", "work").queue,
+    ...outbox(qualified, "global", "work").queue,
+  ]);
+});
+
+it("does not let bounded clear fences crowd out a live draft", () => {
+  fillDrafts("clear-only", 20, "");
+  const live = createState({
+    chatMessage: "keep this live input",
+    sessionKey: "agent:live-after-clears:thread",
+  });
+  expect(persist(live)).toBe(true);
+  expectDraft(live, "keep this live input");
 });
 
 it("retains an unresolved custom-main clear through draft and outbox capacity pressure", () => {
@@ -761,5 +845,3 @@ it("retries a failed draft write when stopping", () => {
   expect(write).toHaveBeenCalledTimes(2);
   expect(snapshot(state, state.sessionKey)?.draft).toBe("retry this write");
 });
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

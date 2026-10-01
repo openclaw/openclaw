@@ -751,6 +751,66 @@ describe("Claude session catalog", () => {
     expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
   });
 
+  it("refreshes creation availability when a non-default Claude CLI route changes", () => {
+    let config: OpenClawConfig = {};
+    const provider = captureCatalogProvider(
+      createPluginRuntimeMock({ config: { current: () => config } }),
+    );
+    expect(provider.resolveCreateSession?.({})).toBeUndefined();
+
+    config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    expect(provider.resolveCreateSession?.({})).toEqual({
+      model: "anthropic/claude-sonnet-4-6",
+      agentRuntime: "claude-cli",
+    });
+
+    config = {};
+    expect(provider.resolveCreateSession?.({})).toBeUndefined();
+  });
+
+  it.each([
+    {
+      policy: "runtime",
+      research: {
+        models: { "anthropic/claude-opus-4-8": { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+    {
+      policy: "model allowlist",
+      research: { modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] } },
+    },
+  ])("resolves creation against the requested agent's $policy", ({ research }) => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-8" },
+          models: { "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } } },
+        },
+        list: [
+          { id: "main", default: true },
+          { id: "research", ...research },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const provider = captureCatalogProvider(
+      createPluginRuntimeMock({ config: { current: () => config } }),
+    );
+
+    expect(provider.resolveCreateSession?.({ agentId: "main" })).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
+    });
+    expect(provider.resolveCreateSession?.({ agentId: "research" })).toBeUndefined();
+  });
+
   async function listCatalogWithBoundSession(
     entry: (sessionId: string) => Record<string, unknown>,
     sessionId = "claude-bound-session",
@@ -1635,6 +1695,36 @@ describe("Claude session catalog", () => {
       sessions: [expect.objectContaining({ threadId: sessionId })],
     });
     expect(transcriptAttempts).toBe(2);
+  });
+
+  it("invalidates the assembled scan after same-size same-mtime atomic replacement", async () => {
+    const home = await createHome();
+    const watches = createClaudeCatalogWatchDriver(home);
+    const projectDir = projectFile(home);
+    const sessionId = "atomic-replacement";
+    const transcriptPath = projectFile(home, `${sessionId}.jsonl`);
+    const fixedTime = new Date("2026-07-20T12:00:00.000Z");
+    await writeUnindexedCliSessions(home, { [sessionId]: "Alpha" });
+    await fs.utimes(transcriptPath, fixedTime, fixedTime);
+    await fs.utimes(projectDir, fixedTime, fixedTime);
+    const originalStat = await fs.stat(transcriptPath);
+    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Alpha");
+    watches.arm();
+    await listLocalClaudeSessionPage({}, home);
+
+    const replacementPath = path.join(projectDir, "replacement.tmp");
+    await fs.writeFile(replacementPath, `${JSON.stringify(sdkCliMessage(sessionId, "Bravo"))}\n`);
+    await fs.utimes(replacementPath, fixedTime, fixedTime);
+    await fs.rename(replacementPath, transcriptPath);
+    await fs.utimes(projectDir, fixedTime, fixedTime);
+    const replacementStat = await fs.stat(transcriptPath);
+    expect({ mtimeMs: replacementStat.mtimeMs, size: replacementStat.size }).toEqual({
+      mtimeMs: originalStat.mtimeMs,
+      size: originalStat.size,
+    });
+
+    watches.change(transcriptPath, "rename");
+    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Bravo");
   });
 
   it("keeps the metadata byte frontier in serial directory order under parallel stats", async () => {

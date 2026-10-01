@@ -300,7 +300,7 @@ describe("plugin setup registry artifact lifecycle", () => {
     expect(cleaned).toHaveBeenCalledOnce();
   });
 
-  it.each(["success", "cancel"] as const)(
+  it.each(["success", "cancel", "failure"] as const)(
     "owns setup authentication through %s after releasing the installation lease",
     async (outcome) => {
       await withOpenClawTestState({ label: "setup-auth-owner" }, async (state) => {
@@ -326,6 +326,7 @@ describe("plugin setup registry artifact lifecycle", () => {
               run: async (ctx) => {
                 await ctx.prompter.note("auth entered", "Fixture");
                 ctx.signal?.throwIfAborted();
+                ${outcome === "failure" ? 'throw new Error("auth callback failed");' : ""}
                 return { profiles: [{ profileId: "lease-auth:synthetic", credential: {
                   type: "api_key", provider: "lease-auth", keyRef: { source: "env", provider: "default", id: "SYNTHETIC_AUTH_KEY" }
                 } }] };
@@ -406,7 +407,11 @@ describe("plugin setup registry artifact lifecycle", () => {
             if (result.ok) {
               throw new Error("auth fixture unexpectedly succeeded");
             }
-            expect(result.error).toBe(cancelled);
+            if (outcome === "cancel") {
+              expect(result.error).toBe(cancelled);
+            } else {
+              expect(String(result.error)).toContain("auth callback failed");
+            }
           }
         } finally {
           release.resolve();

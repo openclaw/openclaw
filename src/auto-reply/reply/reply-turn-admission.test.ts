@@ -330,6 +330,28 @@ it("skips an aborted reply waiting behind a lifecycle mutation", async () => {
   await release();
   await expect(admission).resolves.toEqual({ status: "skipped", reason: "aborted" });
 });
+it("keeps an already-waiting follow-up behind the delivery barrier", async () => {
+  vi.useFakeTimers();
+  const active = operation();
+  const barrier = createDeferred();
+  let settled = false;
+  const admission = admit({ sessionId: "queued-session", kind: "queued_followup" }).then(
+    (result) => {
+      settled = true;
+      return result;
+    },
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    active.completeWithAfterClearBarrier(barrier.promise);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+  } finally {
+    active.complete();
+    barrier.resolve();
+    owned(await admission).complete();
+  }
+});
 it("skips heartbeat turns while delivery settles", async () => {
   const active = operation();
   const barrier = createDeferred();

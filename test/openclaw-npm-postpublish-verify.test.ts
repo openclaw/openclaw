@@ -264,26 +264,24 @@ describe("npm registry provenance verification", () => {
   });
 
   it.each([
+    ["ordinary release from a feature branch", version, "refs/heads/feature/untrusted"],
     ["later patch on a noncanonical branch", "2026.6.34", "refs/heads/extended-stable/2026.6.34"],
     ["patch below 33", "2026.6.32", "refs/heads/extended-stable/2026.6.33"],
     ["correction suffix", "2026.6.33-1", "refs/heads/extended-stable/2026.6.33"],
-  ])(
-    "rejects extended-stable provenance for %s",
-    async (_label, extendedStableVersion, workflowRef) => {
-      const verifyBundle = makeBundleVerifier();
+  ])("rejects untrusted release provenance for %s", async (_label, releaseVersion, workflowRef) => {
+    const verifyBundle = makeBundleVerifier();
 
-      await expect(
-        verifyProvenance({
-          version: extendedStableVersion,
-          attestations: attestationsFor(buildProvenancePayload(extendedStableVersion, workflowRef)),
-          verifyBundle,
-        }),
-      ).rejects.toThrow(
-        `does not bind ${extendedStableVersion} to the trusted OpenClaw GitHub release workflow`,
-      );
-      expect(verifyBundle).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      verifyProvenance({
+        version: releaseVersion,
+        attestations: attestationsFor(buildProvenancePayload(releaseVersion, workflowRef)),
+        verifyBundle,
+      }),
+    ).rejects.toThrow(
+      `does not bind ${releaseVersion} to the trusted OpenClaw GitHub release workflow`,
+    );
+    expect(verifyBundle).not.toHaveBeenCalled();
+  });
 
   it("rejects a matching provenance payload when Sigstore cannot verify its bundle", async () => {
     await expect(
@@ -329,6 +327,29 @@ describe("npm registry provenance verification", () => {
 });
 
 describe("collectInstalledPackageErrors", () => {
+  it("requires the activation runtime and allowlisted facade sidecars", () => {
+    const packageRoot = makeInstalledPackageRoot();
+    const requiredArtifacts = [
+      [
+        "dist/facade-activation-check.runtime.js",
+        "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
+      ],
+      [
+        "dist/extensions/image-generation-core/runtime-api.js",
+        "installed package allows bundled runtime facade image-generation-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/image-generation-core/runtime-api.js.",
+      ],
+    ] as const;
+    const missingErrors = installedPackageErrors(packageRoot);
+    for (const [relativePath, error] of requiredArtifacts) {
+      expect(missingErrors).toContain(error);
+      writeInstalledFile(packageRoot, relativePath);
+    }
+    const installedErrors = installedPackageErrors(packageRoot);
+    for (const [, error] of requiredArtifacts) {
+      expect(installedErrors).not.toContain(error);
+    }
+  });
+
   function writeExpectedBundledExtensionManifests(
     packageRoot: string,
     omittedIds: readonly string[] = [],

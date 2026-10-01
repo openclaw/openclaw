@@ -93,11 +93,12 @@ describe("Teams mention policy in bot-created channel threads", () => {
   });
 
   it.each([
-    ["prefilled top-level post", false, "bot-id", channelConversationId, true],
-    ["proactive reply is not a root", true, "bot-id", channelConversationId, false],
-    ["another bot's root", false, "other-bot", channelConversationId, false],
-    ["another channel's root", false, "bot-id", "19:other@thread.tacv2", false],
-  ] as const)("%s", async (_name, threaded, botId, conversationId, allowed) => {
+    ["prefilled top-level post", false, "bot-id", channelConversationId, true, false],
+    ["proactive reply is not a root", true, "bot-id", channelConversationId, false, false],
+    ["another bot's root", false, "other-bot", channelConversationId, false, false],
+    ["another channel's root", false, "bot-id", "19:other@thread.tacv2", false, false],
+    ["expired ownership", false, "bot-id", channelConversationId, false, true],
+  ] as const)("%s", async (_name, threaded, botId, conversationId, allowed, expired) => {
     const rootId = `bot-thread-root-${++sequence}`;
     const config: MSTeamsConfig = {
       groupPolicy: "open",
@@ -114,12 +115,20 @@ describe("Teams mention policy in bot-created channel threads", () => {
     };
     MSTeamsConfigSchema.parse(config);
     const { deps } = createMessageHandlerDeps({ channels: { msteams: config } });
-    const destination = await sendChannelMessage({
-      messageId: rootId,
-      botId,
-      conversationId: `${conversationId};messageid=stale-source-thread`,
-      threadActivityId: threaded ? "human-thread-root" : undefined,
-    });
+    const clock = expired
+      ? vi.spyOn(Date, "now").mockReturnValue(Date.now() - 25 * 60 * 60 * 1000)
+      : undefined;
+    let destination: string | undefined;
+    try {
+      destination = await sendChannelMessage({
+        messageId: rootId,
+        botId,
+        conversationId: `${conversationId};messageid=stale-source-thread`,
+        threadActivityId: threaded ? "human-thread-root" : undefined,
+      });
+    } finally {
+      clock?.mockRestore();
+    }
     expect(destination).toBe(
       threaded ? `${conversationId};messageid=human-thread-root` : conversationId,
     );

@@ -170,11 +170,14 @@ it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
   },
 );
 
-it.each([
-  { wait: "writer", replacement: "unchanged" },
-  { wait: "active", replacement: "other-inode" },
-  { wait: "delivery", replacement: "same-inode" },
-] as const)(
+it.each(
+  (["writer", "active", "delivery"] as const).flatMap((wait) =>
+    (["unchanged", "same-inode", "other-inode"] as const).map((replacement) => ({
+      wait,
+      replacement,
+    })),
+  ),
+)(
   "keeps the exact database owner across $wait wait, replacement=$replacement",
   async ({ wait, replacement }) => {
     const root = tempDirs.make("reply-admission-claim-");
