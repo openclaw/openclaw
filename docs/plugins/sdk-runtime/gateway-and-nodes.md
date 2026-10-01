@@ -155,6 +155,20 @@ applicable policy also requires fresh publication admission.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
 
+    `await api.runtime.gateway.withUserProfileIdentity({ profileId, emails }, run)`
+    prepares the canonical profile's original binding lifetimes for up to 500
+    selected email aliases under the existing `users.list` / `operator.read`
+    permission. The callback receives a synchronous `assertCurrent()` function.
+    Compose it with the action's own authorization in the store's final commit
+    guard and immediately before dispatching an external mutation. It reads
+    current facts published by the profile owner without querying SQLite on the
+    calling thread. Moving an alias away and back, merging the selected profile,
+    an unsettled profile mutation, or closing the caller invalidates the check.
+    Unselected email bindings can change independently. The preparation is
+    released when the callback settles, and retained assertions then reject.
+    This capability checks the selected identity; it does not grant permission
+    to perform the action or roll back a mutation already accepted externally.
+
   </Accordion>
   <Accordion title="api.runtime.nodes">
     List connected nodes and invoke a node-host command from Gateway-loaded plugin code or from plugin CLI commands. Use this when a plugin owns local work on a paired device, for example a browser or audio bridge on another Mac.

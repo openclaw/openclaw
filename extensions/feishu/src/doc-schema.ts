@@ -71,7 +71,6 @@ export const FeishuDocSchema = Type.Union([
     doc_token: Type.String({ description: "Document token" }),
     block_id: Type.String({ description: "Block ID" }),
   }),
-  // Table creation (explicit structure)
   Type.Object({
     action: Type.Literal("create_table"),
     ...tableCreationProperties,
@@ -93,7 +92,6 @@ export const FeishuDocSchema = Type.Union([
       minItems: 1,
     }),
   }),
-  // Table row/column manipulation
   Type.Object({
     action: Type.Literal("insert_table_row"),
     doc_token: Type.String({ description: "Document token" }),
@@ -135,7 +133,6 @@ export const FeishuDocSchema = Type.Union([
     column_start: Type.Number({ description: "Start column index" }),
     column_end: Type.Number({ description: "End column index (exclusive)" }),
   }),
-  // Image / file upload
   Type.Object({
     action: Type.Literal("upload_image"),
     doc_token: Type.String({ description: "Document token" }),
@@ -168,7 +165,6 @@ export const FeishuDocSchema = Type.Union([
     ),
     filename: Type.Optional(Type.String({ description: "Optional filename override" })),
   }),
-  // Text color / style
   Type.Object({
     action: Type.Literal("color_text"),
     doc_token: Type.String({ description: "Document token" }),

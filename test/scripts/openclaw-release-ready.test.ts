@@ -647,6 +647,12 @@ describe("release readiness executable handoff", () => {
 
 function finalizationFixture(overrides: Record<string, unknown> = {}) {
   const fixture = bridgeFixture();
+  const signedTagObjectSha = "d".repeat(40);
+  mkdirSync(join(fixture.scripts, "lib"), { recursive: true });
+  copyFileSync(
+    resolve("scripts/lib/release-publish-children.sh"),
+    join(fixture.scripts, "lib/release-publish-children.sh"),
+  );
   copyFileSync(
     resolve("scripts/release-tooling-identity.mjs"),
     join(fixture.scripts, "release-tooling-identity.mjs"),
@@ -814,6 +820,21 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
   `,
   );
   chmodSync(gh, 0o755);
+  const git = writeFixtureFile(
+    fixture.root,
+    "bin/git",
+    `#!${process.execPath}
+    const { readFileSync } = require('node:fs');
+    const args = process.argv.slice(2);
+    if (JSON.stringify(args) !== JSON.stringify(['ls-remote', '--tags', 'origin',
+      'refs/tags/' + process.env.FIXTURE_RELEASE_TAG,
+      'refs/tags/' + process.env.FIXTURE_RELEASE_TAG + '^{}'])) process.exit(99);
+    const state = JSON.parse(readFileSync(process.env.FIXTURE_GITHUB_STATE, 'utf8'));
+    console.log('${signedTagObjectSha}\\trefs/tags/' + process.env.FIXTURE_RELEASE_TAG);
+    console.log(state.sourceSha + '\\trefs/tags/' + process.env.FIXTURE_RELEASE_TAG + '^{}');
+  `,
+  );
+  chmodSync(git, 0o755);
   const env = {
     ...fixture.env,
     PATH: `${dirname(gh)}:${fixture.env.PATH}`,
@@ -849,8 +870,11 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
         cwd: dirname(fixture.scripts),
         env: {
           ...env,
+          PARENT_WORKFLOW_SHA: TOOLING_SHA,
           RELEASE_TAG: tag,
+          SIGNED_RELEASE_TAG_OBJECT_SHA: signedTagObjectSha,
           SOURCE_SHA,
+          TARGET_SHA: SOURCE_SHA,
           FIXTURE_ACTIVATION_OWNER: owner,
           FIXTURE_RELEASE_TAG: tag,
           RELEASE_NPM_DIST_TAG: channel,

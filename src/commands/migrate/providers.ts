@@ -30,7 +30,6 @@ export async function withMigrationProvider<T>(
   );
 }
 
-/** Builds provider-specific options from shared migrate CLI flags. */
 export function buildMigrationProviderOptions(
   opts: MigrateCommonOptions,
   providerId = opts.provider,

@@ -23,6 +23,7 @@ import type {
 declare module "vitest" {
   export interface ProvidedContext {
     controlUiE2ePrebuiltAssets?: ControlUiE2ePrebuiltAssets;
+    controlUiE2eBuildRoot?: string;
     controlUiE2ePrebuiltGeneration: string;
   }
 }

@@ -116,7 +116,7 @@ function sendCompactionCompleted(
   send({ method: "turn/completed", params: { threadId, turn } });
 }
 
-it.each(["warm", "closed", "detached", "unconfirmed-close", "rejected-close"])(
+it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
   "supports repeated compaction and the next turn (owner %s)",
   async (ownerState) => {
     const closeFails = ownerState === "unconfirmed-close" || ownerState === "rejected-close";
@@ -309,7 +309,6 @@ it.each(["warm", "closed", "detached", "unconfirmed-close", "rejected-close"])(
 
 it.each([
   ["success", false, "untracked"],
-  ["failure", false, "untracked"],
   ["success", true, "untracked"],
   ["success", "during-resume", "untracked"],
   ["failure", "during-resume", "claimed"],

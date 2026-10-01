@@ -71,6 +71,7 @@ function clearProcessLocalTabState(): void {
     "openclaw.browser.session-tabs.exact-interaction-storage-keys",
     "openclaw.browser.session-tabs.volatile-aliases",
     "openclaw.browser.session-tabs.exact-volatile-aliases",
+    "openclaw.browser.session-tabs.deferred-diagnostics",
   ]) {
     delete state[Symbol.for(name)];
   }

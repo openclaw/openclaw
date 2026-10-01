@@ -1247,7 +1247,6 @@ exec "$OPENCLAW_TEST_NODE" "$@"
   });
 
   it("materializes the origin/main anchor wrapper when canonical is parked elsewhere", () => {
-    const fixture = makeMismatchedWrapperRepo();
     const names = [
       "space name",
       ...(process.platform === "win32"
@@ -1255,6 +1254,18 @@ exec "$OPENCLAW_TEST_NODE" "$@"
         : ["tab\tname", 'quote"name', "backslash\\name", "control\u0001name", "newline\nname"]),
     ];
     const directory = "scripts/pr-lib/path-spelling";
+    const fixture = makeMismatchedWrapperRepo({
+      dispatchBody: `node -e '
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const { strictEqual } = require("node:assert");
+for (const name of ${JSON.stringify(names)}) {
+  strictEqual(readFileSync(join(process.argv[1], "pr-lib/path-spelling", name), "utf8"), "anchored path bytes\\n");
+}
+console.log("anchored paths verified");
+' "$script_parent_dir" || return;
+echo "canonical wrapper executed";`,
+    });
     mkdirSync(join(fixture.canonical, directory));
     for (const name of names) {
       writeFileSync(join(fixture.canonical, directory, name), "anchored path bytes\n");
@@ -1272,6 +1283,7 @@ exec "$OPENCLAW_TEST_NODE" "$@"
     // The anchor (pushed main) marker proves materialized anchor code ran,
     // not the linked worktree's wrapper and not the parked canonical one.
     expect(result.stdout).toContain("canonical wrapper executed");
+    expect(result.stdout).toContain("anchored paths verified");
     expect(result.stdout).not.toContain("local wrapper executed");
     expect(result.stdout).not.toContain("parked canonical executed");
     expect(result.stderr).toContain(
@@ -1281,12 +1293,7 @@ exec "$OPENCLAW_TEST_NODE" "$@"
     const anchors = readdirSync(fixture.root).filter((name) =>
       name.startsWith("openclaw-pr-anchor."),
     );
-    expect(anchors).toHaveLength(1);
-    for (const name of names) {
-      expect(readFileSync(join(fixture.root, anchors[0]!, directory, name), "utf8")).toBe(
-        "anchored path bytes\n",
-      );
-    }
+    expect(anchors).toHaveLength(0);
   });
 
   itPosix("materializes the anchor when tar stops before the producer's trailing padding", () => {
@@ -1734,6 +1741,7 @@ exit 99
 
   it("initializes stamped review artifacts through the materialized anchor", () => {
     const fixture = makeMismatchedWrapperRepo();
+    const dependencyTarget = realpathSync(join(fixture.canonical, "node_modules/tsx"));
     writeFileSync(
       join(fixture.bin, "gh"),
       `#!/bin/sh
@@ -1776,6 +1784,11 @@ exit 99
       headSha: fixture.localRevision,
     });
     expect(existsSync(join(reviewRoot, ".local", "review.md"))).toBe(false);
+    expect(
+      readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+    ).toEqual([]);
+    expect(realpathSync(join(fixture.canonical, "node_modules/tsx"))).toBe(dependencyTarget);
+    expect(existsSync(join(dependencyTarget, "package.json"))).toBe(true);
   });
 
   it.each([
@@ -1853,14 +1866,19 @@ exit 99
   ])(
     "loads matching linked helper dependencies (installed=$installed, dev-wrapper=$devWrapper)",
     ({ installed, devWrapper }) => {
+      const dependencies = ["tsx", "zod", "minimatch", "yaml"];
       const fixture = makeMismatchedWrapperRepo({
-        dispatchBody: 'node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;',
+        dispatchBody: `node -e '
+const { realpathSync } = require("node:fs");
+const { join } = require("node:path");
+console.log("anchor-dependencies=" + JSON.stringify(${JSON.stringify(dependencies)}.map((name) => realpathSync(join(process.argv[1], "..", "node_modules", name)))));
+' "$script_parent_dir" || return;
+node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
       });
       fixture.git(fixture.linked, ["reset", "--hard", "refs/remotes/origin/main"]);
       parkCanonicalOffAnchor(fixture);
       const linkedModules = join(fixture.linked, "node_modules");
       expect(existsSync(linkedModules)).toBe(false);
-      const dependencies = ["tsx", "zod", "minimatch", "yaml"];
       const targets = dependencies.map((name) =>
         realpathSync(join(fixture.canonical, "node_modules", name)),
       );
@@ -1885,15 +1903,16 @@ exit 99
       const anchors = readdirSync(fixture.root).filter((name) =>
         name.startsWith("openclaw-pr-anchor."),
       );
-      expect(anchors).toHaveLength(installed ? 0 : 1);
+      expect(anchors).toHaveLength(0);
+      const dependencyProof = result.stdout
+        .split("\n")
+        .find((line) => line.startsWith("anchor-dependencies="));
+      expect(dependencyProof).toBeDefined();
+      expect(JSON.parse(dependencyProof!.slice("anchor-dependencies=".length))).toEqual(targets);
+      expect(targets.every((target) => existsSync(target))).toBe(true);
       if (!installed) {
         expect(result.stderr).toContain("matches origin/main but has no node_modules directory");
         expect(result.stderr).toContain("running wrapper code materialized from");
-        expect(
-          dependencies.map((name) =>
-            realpathSync(join(fixture.root, anchors[0]!, "node_modules", name)),
-          ),
-        ).toEqual(targets);
       }
     },
   );

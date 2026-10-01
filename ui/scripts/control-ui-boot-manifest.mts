@@ -1,8 +1,8 @@
 #!/usr/bin/env -S node --import tsx
-// Regenerates ui/config/control-ui-boot-modules.json: the measured module set
-// shared shell and route-specific boot flows load lazily, plus requested dynamic
-// entry points. Builds without the previous boot groups, then captures ready
-// routes against the mocked Gateway.
+// Regenerates ui/config/control-ui-boot-modules.json: the modules shared shell and
+// route-specific boot flows need, plus requested dynamic entry points. Builds
+// without the previous boot groups, captures ready routes against the mocked
+// Gateway, and keeps fetched modules reachable from what each route requested.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -125,6 +125,42 @@ function manifestKeysForChunks(chunkPaths: Iterable<string>, distDir: string): s
   return [...keys].toSorted();
 }
 
+type BootCaptureGraph = {
+  entryModules: string[];
+  // Dynamic-entry facade chunk path -> facade module id.
+  dynamicEntries: Map<string, string>;
+  moduleChunks: Map<string, string>;
+  imports: Map<string, { static: readonly string[]; dynamic: readonly string[] }>;
+};
+
+function routeModuleKeys(
+  graph: BootCaptureGraph,
+  chunks: ReadonlySet<string>,
+  roots: readonly string[],
+): Set<string> {
+  const facades = new Set(graph.dynamicEntries.values());
+  const seen = new Set<string>();
+  const pending = [...roots];
+  for (let id = pending.pop(); id !== undefined; id = pending.pop()) {
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const imports = graph.imports.get(id);
+    pending.push(...(imports?.static ?? []));
+    // A dynamic import without its own facade chunk resolves to the chunk that
+    // holds its target. Once that chunk is loaded the import sends no request,
+    // so the capture cannot tell whether it ran; keep its dependencies.
+    for (const target of imports?.dynamic ?? []) {
+      const chunk = graph.moduleChunks.get(target);
+      if (!facades.has(target) && chunk !== undefined && chunks.has(chunk)) {
+        pending.push(target);
+      }
+    }
+  }
+  return new Set([...seen].map(controlUiBootManifestKey));
+}
+
 function partitionBootKeys(routes: Record<"new" | "chat", Set<string>>) {
   const shared = new Set([...routes.new].filter((key) => routes.chat.has(key)));
   const sorted = (keys: Iterable<string>) =>
@@ -140,7 +176,12 @@ async function main(): Promise<void> {
   const distDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-boot-"));
   try {
     const config = controlUiViteConfig({ outDir: distDir });
-    const dynamicEntries = new Map<string, string>();
+    const graph: BootCaptureGraph = {
+      entryModules: [],
+      dynamicEntries: new Map(),
+      moduleChunks: new Map(),
+      imports: new Map(),
+    };
     await build({
       ...config,
       configFile: false,
@@ -158,12 +199,25 @@ async function main(): Promise<void> {
             };
           },
           generateBundle(_options, bundle) {
+            for (const id of this.getModuleIds()) {
+              const info = this.getModuleInfo(id);
+              graph.imports.set(id, {
+                static: info?.importedIds ?? [],
+                dynamic: info?.dynamicallyImportedIds ?? [],
+              });
+            }
             for (const chunk of Object.values(bundle)) {
-              if (chunk.type === "chunk" && chunk.isDynamicEntry && chunk.facadeModuleId) {
-                dynamicEntries.set(
-                  `/${chunk.fileName}`,
-                  controlUiBootManifestKey(chunk.facadeModuleId),
-                );
+              if (chunk.type !== "chunk") {
+                continue;
+              }
+              for (const id of chunk.moduleIds) {
+                graph.moduleChunks.set(id, `/${chunk.fileName}`);
+              }
+              if (chunk.isEntry && chunk.facadeModuleId) {
+                graph.entryModules.push(chunk.facadeModuleId);
+              }
+              if (chunk.isDynamicEntry && chunk.facadeModuleId) {
+                graph.dynamicEntries.set(`/${chunk.fileName}`, chunk.facadeModuleId);
               }
             }
           },
@@ -176,20 +230,22 @@ async function main(): Promise<void> {
       const routeEntries = { new: new Set<string>(), chat: new Set<string>() };
       for (const route of ["new", "chat"] as const) {
         const chunks = await collectBootChunkPaths(server.baseUrl, distDir, route);
-        routes[route] = new Set(manifestKeysForChunks(chunks, distDir));
-        for (const chunk of chunks) {
-          const entry = dynamicEntries.get(chunk);
-          if (entry) {
-            routeEntries[route].add(entry);
-          }
-        }
+        const requestedEntries = [...chunks].flatMap(
+          (chunk) => graph.dynamicEntries.get(chunk) ?? [],
+        );
+        routeEntries[route] = new Set(requestedEntries.map(controlUiBootManifestKey));
+        // Fetched shared chunks can co-locate modules only the other route
+        // imports; keep the modules reachable from what this route requested.
+        const needed = routeModuleKeys(graph, chunks, [...graph.entryModules, ...requestedEntries]);
+        const fetched = manifestKeysForChunks(chunks, distDir);
+        routes[route] = new Set(fetched.filter((key) => needed.has(key)));
         if (routes[route].size < 100) {
           throw new Error(
             `Boot capture looks truncated: ${route} recorded only ${routes[route].size} modules`,
           );
         }
         console.log(
-          `control-ui-boot-manifest: ${route}: ${chunks.size} chunks, ${routes[route].size} modules, ${routeEntries[route].size} dynamic entries`,
+          `control-ui-boot-manifest: ${route}: ${chunks.size} chunks, ${routes[route].size} of ${fetched.length} fetched modules reachable, ${routeEntries[route].size} dynamic entries`,
         );
       }
       const modules = partitionBootKeys(routes);

@@ -435,6 +435,20 @@ describe("workboard gateway methods", () => {
         columns: expect.any(Array),
         sessions: [],
       });
+      using readSpy = vi.spyOn(sessionsBoard, "read");
+      for (const view of [
+        {},
+        { involvingMe: true, includePeople: true },
+        { involvingProfileId: "profile-one", includePeople: true },
+        { involvingMe: false, includePeople: false },
+      ]) {
+        const response = await invoke("workboard.sessionsBoard.read", {
+          boardId: "sessions",
+          view,
+        });
+        expect(response.mock.calls[0]?.[0]).toBe(true);
+        expect(readSpy).toHaveBeenLastCalledWith("sessions", view);
+      }
       const updated = await invoke("workboard.sessionsBoard.update", {
         boardId: "sessions",
         patch: { instructions: "Keep approval requests in Needs input." },
@@ -445,6 +459,30 @@ describe("workboard gateway methods", () => {
       const beforeInvalid = await store.getSessionsBoard("sessions");
       const invalidRequests = [
         ["workboard.sessionsBoard.read", {}, /boardId required/],
+        [
+          "workboard.sessionsBoard.read",
+          { boardId: "sessions", junk: true },
+          /Unknown Sessions board read field: junk/,
+        ],
+        ...[null, [], true, "everyone"].map(
+          (view) =>
+            [
+              "workboard.sessionsBoard.read",
+              { boardId: "sessions", view },
+              /view must be an object/,
+            ] as const,
+        ),
+        ...(
+          [
+            [{ involvingMe: "true" }, /view.involvingMe must be a boolean/],
+            [{ includePeople: 1 }, /view.includePeople must be a boolean/],
+            [{ involvingProfileId: false }, /view.involvingProfileId must be a string/],
+            [{ junk: true }, /Unknown Sessions board view field: junk/],
+          ] as const
+        ).map(
+          ([view, message]) =>
+            ["workboard.sessionsBoard.read", { boardId: "sessions", view }, message] as const,
+        ),
         [
           "workboard.sessionsBoard.update",
           { boardId: "sessions", patch: [] },

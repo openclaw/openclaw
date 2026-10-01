@@ -28,6 +28,28 @@ const published = {
 const completed = { result: published, confirmation: null };
 
 describe("shared publication observation", () => {
+  it("retires an obsolete shared failure when discovery confirms it is no longer actionable", async () => {
+    const failure = {
+      result: {
+        requestId,
+        publisher: shared,
+        status: "failed" as const,
+        code: "unavailable" as const,
+        message: "GitHub publication failed.",
+        nextAction: "Inspect the unpublished changes.",
+      },
+      confirmation: null,
+    };
+    const { controller, request } = setup({ ...options, latestShared: failure });
+    expect((await settled(controller)).result).toEqual(failure.result);
+    request.mockResolvedValue(options);
+    controller.view()?.onRefresh();
+    expect((await settled(controller)).result).toBeNull();
+    controller.view()?.onRefresh();
+    expect((await settled(controller)).result).toBeNull();
+    expect(request.mock.calls.every(([method]) => method === "sessions.github.options")).toBe(true);
+  });
+
   it("restores a terminal shared receipt after reconnect and acknowledges it without a write", async () => {
     const { controller, request } = setup({ ...options, latestShared: completed });
     const restored = await settled(controller);
