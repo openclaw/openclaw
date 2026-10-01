@@ -234,7 +234,7 @@ flow:
                 expr: |-
                   (async () => {
                     const history = await env.gateway.call('chat.history', { sessionKey: parentSessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) });
-                    const messages = history.messages ?? [];
+                    const messages = projectQaToolMessages(history.messages ?? []);
                     const execIndex = messages.findLastIndex((message) => message?.role === 'assistant' && Array.isArray(message.content) && message.content.some((item) => (item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'exec'));
                     if (execIndex < 0) return undefined;
                     const finalReply = messages.slice(execIndex + 1).findLast((message) => message?.role === 'assistant' && message.phase !== 'commentary' && !message.openclawMessageToolMirror && !message.openclawDeliveryMirror && !(message.provider === 'openclaw' && ['delivery-mirror', 'gateway-injected'].includes(message.model)) && (!Array.isArray(message.content) || !message.content.some((item) => ['toolCall', 'toolUse', 'tool_use', 'toolResult', 'tool_result'].includes(item?.type))));
@@ -245,7 +245,7 @@ flow:
             - expr: liveTurnTimeoutMs(env, 60000)
             - 250
         - assert:
-            expr: "(parentHistory.messages ?? []).some((message) => message?.role === 'assistant' && Array.isArray(message.content) && message.content.some((item) => (item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'exec' && item?.id === parentSuccessfulToolEvents[2].toolCallId && (item?.arguments ?? item?.input)?.command === execCommand.replace('__CHILD_COMPLETION_TOKEN__', childTerminalMarker)))"
+            expr: "projectQaToolMessages(parentHistory.messages ?? []).some((message) => message?.role === 'assistant' && Array.isArray(message.content) && message.content.some((item) => (item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'exec' && item?.id === parentSuccessfulToolEvents[2].toolCallId && (item?.arguments ?? item?.input)?.command === execCommand.replace('__CHILD_COMPLETION_TOKEN__', childTerminalMarker)))"
             message: parent exec did not use the exact delivered-completion command
         - call: waitForOutboundMessage
           saveAs: parentOutbound
