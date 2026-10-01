@@ -10,6 +10,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { preparedModelRuntimeConfigsMatch } from "../prepared-model-runtime.owner.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeSnapshot,
@@ -176,6 +177,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       };
     };
     return {
+      preparedModelRuntimeConfigsMatch,
       acquireAgentRunPreparedModelRuntime: vi.fn(acquire),
       acquireReadOnlyPreparedModelRuntime: vi.fn(acquire),
       prepareModelRuntimeSnapshot: vi.fn(async (input: PreparedModelRuntimeInput) =>
