@@ -4,7 +4,10 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
-import { selectProfileAccessEntries, selectStoredGitHubIdentities } from "./user-profile-github-identity.js";
+import {
+  selectProfileAccessEntries,
+  selectStoredGitHubIdentities,
+} from "./user-profile-github-identity.js";
 import { listUserProfilesSync, readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   executeUserProfileWrite,

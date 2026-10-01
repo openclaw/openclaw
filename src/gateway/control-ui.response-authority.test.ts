@@ -15,6 +15,7 @@ import * as devInstallBranch from "../infra/dev-install-branch.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -111,6 +112,7 @@ describe("Control UI response authority", () => {
       };
       const res = new ServerResponse(req);
       const end = vi.spyOn(res, "end");
+      const catalog = await prepareUserProfileCatalog();
       const pending = handleControlUiHttpRequest(req, res, {
         config,
         cfg: config,
@@ -138,6 +140,7 @@ describe("Control UI response authority", () => {
         await settled;
         res.destroy();
         req.destroy();
+        catalog.release();
       }
     });
   });
