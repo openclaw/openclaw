@@ -503,45 +503,70 @@ describe("sessions_history redaction", () => {
   });
 
   it("paginates history with default filtering and explicit tool inclusion", async () => {
+    const visibleMessages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "visible" },
+          { type: "toolCall", id: "outer-call", name: "read", arguments: {} },
+        ],
+        __openclaw: { seq: 7 },
+      },
+      { role: "custom", customType: "notice", content: "visible notice", __openclaw: { seq: 8 } },
+      {
+        role: "assistant",
+        content: "latest <tool_result>embedded tool text</tool_result>",
+        __openclaw: { seq: 9 },
+      },
+    ];
+    const messages = [
+      { role: "tool", content: "hidden", __openclaw: { seq: 4 } },
+      { role: "toolResult", content: "also hidden", __openclaw: { seq: 5 } },
+      {
+        role: "custom",
+        customType: "openclaw.nested-tool.v1",
+        display: true,
+        content: [
+          { type: "toolCall", id: "nested-call", name: "read", arguments: {} },
+          {
+            type: "toolResult",
+            role: "toolResult",
+            toolCallId: "nested-call",
+            content: [{ type: "text", text: "nested output" }],
+          },
+        ],
+        __openclaw: { seq: 6 },
+      },
+      ...visibleMessages,
+    ];
     const tool = createSessionsHistoryTool({
       config: {},
       callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
-        ({
-          messages: [
-            { role: "tool", content: "hidden", __openclaw: { seq: 6 } },
-            { role: "assistant", content: "visible", __openclaw: { seq: 7 } },
-            { role: "assistant", content: "latest", __openclaw: { seq: 8 } },
-          ],
+        ({ messages, offset: 0, nextOffset: 7, hasMore: true, totalMessages: 10 }) as T,
+    });
+
+    for (const includeTools of [undefined, false]) {
+      const details = readHistoryDetails(
+        await tool.execute("without-tools", {
+          sessionKey: "main",
           offset: 0,
-          nextOffset: 5,
-          hasMore: true,
-          totalMessages: 10,
-        }) as T,
-    });
-
-    const result = await tool.execute("call-1", { sessionKey: "main", offset: 0 });
-    const details = readHistoryDetails(result);
-
-    expect(details.messages).toEqual([
-      { role: "assistant", content: "visible", __openclaw: { seq: 7 } },
-      { role: "assistant", content: "latest", __openclaw: { seq: 8 } },
-    ]);
-    expect(details).toMatchObject({
-      offset: 0,
-      nextOffset: 4,
-      hasMore: true,
-      totalMessages: 10,
-    });
+          ...(includeTools === undefined ? {} : { includeTools }),
+        }),
+      );
+      expect(details.messages).toEqual(visibleMessages);
+      expect(details).toMatchObject({
+        offset: 0,
+        nextOffset: 4,
+        hasMore: true,
+        totalMessages: 10,
+      });
+    }
 
     const withTools = readHistoryDetails(
       await tool.execute("with-tools", { sessionKey: "main", offset: 0, includeTools: true }),
     );
-    expect(withTools.messages).toEqual([
-      { role: "tool", content: "hidden", __openclaw: { seq: 6 } },
-      { role: "assistant", content: "visible", __openclaw: { seq: 7 } },
-      { role: "assistant", content: "latest", __openclaw: { seq: 8 } },
-    ]);
-    expect(withTools.nextOffset).toBe(5);
+    expect(withTools.messages).toEqual(messages);
+    expect(withTools.nextOffset).toBe(7);
   });
 
   it("preserves the Gateway replay cursor for projected siblings from the same row", async () => {

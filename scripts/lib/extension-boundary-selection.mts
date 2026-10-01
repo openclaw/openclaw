@@ -157,20 +157,35 @@ export function resolveExtensionBoundarySelection(
     return fullSelection(extensionIds, "missing pinned PR comparison base");
   }
   const git = (args: string[]) =>
-    execFileSync("git", args, { cwd: rootDir, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+    execFileSync("git", args, {
+      cwd: rootDir,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: "pipe",
+    });
   try {
-    const base = git(["merge-base", revision, "HEAD"]).trim();
+    git(["cat-file", "-e", `${revision}^{commit}`]);
+  } catch {
+    return fullSelection(
+      extensionIds,
+      `pinned PR comparison base unavailable in checkout: ${revision}`,
+    );
+  }
+  try {
+    // Depth-one checkouts hide parent edges from revision walks. The raw merge
+    // header still authenticates the pinned first parent without deepening HEAD.
+    const headers = git(["cat-file", "-p", "HEAD"]).split("\n\n", 1)[0]!;
+    const parents = [...headers.matchAll(/^parent ([a-f0-9]{40})$/gmu)].map((match) => match[1]);
+    const base =
+      parents.length > 1 && parents[0] === revision
+        ? revision
+        : git(["merge-base", revision, "HEAD"]).trim();
     if (base !== revision) {
       return fullSelection(extensionIds, "PR comparison base is not an ancestor of tested HEAD");
     }
-    const fields = git([
-      "diff",
-      "--name-status",
-      "--no-renames",
-      "-z",
-      `${base}...HEAD`,
-      "--",
-    ]).split("\0");
+    const fields = git(["diff", "--name-status", "--no-renames", "-z", base, "HEAD", "--"]).split(
+      "\0",
+    );
     fields.pop();
     if (fields.length % 2 !== 0) {
       return fullSelection(extensionIds, "incomplete PR diff");

@@ -164,6 +164,25 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it.each([
+    { channel: undefined, promptSurface: "openclaw_main" as const, silent: false },
+    { channel: "webchat", promptSurface: "openclaw_main" as const, silent: false },
+    { channel: "discord", promptSurface: "subagent" as const, silent: false },
+    { channel: "discord", promptSurface: "openclaw_main" as const, silent: true },
+  ])(
+    "limits silent reply guidance to external channel sessions: $promptSurface/$channel",
+    ({ channel, promptSurface, silent }) => {
+      const prompt = renderPrompt({
+        toolNames: ["message"],
+        promptSurface,
+        runtimeInfo: { channel, chatType: "group" },
+      });
+
+      expect(prompt.includes(SILENT_REPLY_TOKEN)).toBe(silent);
+      expect(prompt.includes("## Silent Replies")).toBe(silent);
+    },
+  );
+
   it("avoids the Claude subscription classifier wording in reply tag guidance", () => {
     const prompt = renderPrompt();
 

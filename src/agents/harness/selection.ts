@@ -621,6 +621,7 @@ function withoutPluginHarnessPrivateState(
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
     trajectoryRecorder: _trajectoryRecorder,
     inputAttachmentMedia: _inputAttachmentMedia,
+    supportsTurnScopedToolRestrictions: _supportsTurnScopedToolRestrictions,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
     ...pluginParams
   } = params as EmbeddedRunAttemptInternalParams & {

@@ -211,6 +211,13 @@ export type SlackQaScenarioContext = {
   sutReadClient: WebClient;
 };
 
+export type SlackQaApprovalContext = Pick<
+  SlackQaScenarioContext,
+  "sutIdentity" | "sutReadClient"
+> & {
+  gateway: Pick<QaGatewayChild, "call">;
+};
+
 export type SlackQaScenarioImplementation = {
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
   configOverrides?: SlackQaConfigOverrides;

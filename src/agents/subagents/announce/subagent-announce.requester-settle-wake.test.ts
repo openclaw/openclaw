@@ -301,7 +301,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(message).not.toContain("unfinished follow-up");
     expect(message.indexOf("alpha findings")).toBeLessThan(message.indexOf("bravo findings"));
     expect(message.indexOf("bravo findings")).toBeLessThan(message.indexOf("charlie findings"));
-    expect(call.steerMessage).toBe(message);
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
       ["run-a", "run-b", "run-c"],
       undefined,
@@ -945,7 +944,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(message).not.toContain("NO_REPLY");
     expect(message).not.toContain("stale source reply");
     expect(message).not.toContain("unrelated source reply");
-    expect(call.steerMessage).toBe(message);
     expect(call.requireVisibleReply).toBe(true);
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-b"], 1, {
       delivered: true,

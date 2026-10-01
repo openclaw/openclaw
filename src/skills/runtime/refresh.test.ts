@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { WatchEntry, WatchHealth, WatchInvalidation } from "@openclaw/fs-safe/watch";
 import { beforeEach, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { SkillSnapshot } from "../types.js";

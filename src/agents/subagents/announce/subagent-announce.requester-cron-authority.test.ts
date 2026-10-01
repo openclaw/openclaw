@@ -2,6 +2,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { CronJob } from "../../../cron/types.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { createRequesterInitialTransferFixture } from "../registry/subagent-registry-requester-yield.test-support.js";
+import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
 import {
   registryRuntimeMock,
   wakeParams,
@@ -98,15 +99,24 @@ describe("requester continuation automation management", () => {
       withGatewayToolCallerIdentity(
         { agentId: "main", sessionKey: REQUESTER, approvalAuthority: originalAuthority },
         async () => {
-          expect(
-            await markRequesterTurnYieldedInRuns({
-              requesterSessionKey: REQUESTER,
-              requesterAgentId: "main",
-              requesterTurnRunId: sourceRunId,
-              runs,
-              transfer,
-            }),
-          ).toBe(1);
+          const requester = {
+            requesterSessionKey: REQUESTER,
+            requesterAgentId: "main",
+            requesterTurnRunId: sourceRunId,
+          };
+          const preparedAuthority = prepareRequesterCronAuthority(requester);
+          try {
+            expect(
+              await markRequesterTurnYieldedInRuns({
+                ...requester,
+                preparedAuthority: preparedAuthority ?? null,
+                runs,
+                transfer,
+              }),
+            ).toBe(1);
+          } finally {
+            await preparedAuthority?.release();
+          }
           expect(
             await settleRequesterTurnAfterSessionSpawns({
               requesterSessionKey: REQUESTER,

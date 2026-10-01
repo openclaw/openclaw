@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor.js";
 import { encodePackageActivationLauncher } from "./package-update-activation-journal.js";
 import type { PackageActivationRecord } from "./package-update-activation-journal.js";
+import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 
 const [cut, root, encodedAuthority, encodedRecord] = process.argv.slice(2);
 if (!cut || !root || !encodedAuthority) {
@@ -140,7 +141,7 @@ await withUpdateCommandExecutor(
   async (executor) => {
     const fence = await executor.enter(liveRoot);
     await preparePackageActivationJournal({
-      options: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+      options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
       liveRoot,
       stageRoot: fixture.params.stage.packageRoot,
       launcherRoot: fixture.params.stage.layout.binDir,

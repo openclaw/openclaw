@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
-import { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
+import {
+  LEGACY_TALK_VOICE_CALL_INHERITANCE,
+  normalizeLegacyTalkConfig,
+} from "./legacy-talk-config-normalizer.js";
 
 function migrateLegacyConfig(raw: Record<string, unknown> | null) {
   const changes: string[] = [];
@@ -19,6 +22,69 @@ function providerTts(provider: string, config: Record<string, unknown>) {
 }
 
 describe("legacy migrate provider-shaped config", () => {
+  it.each([
+    {
+      talk: undefined,
+      inheritedProvider: undefined,
+      provider: "openai",
+      providers: { openai: { model: "inherited" } },
+    },
+    {
+      talk: undefined,
+      inheritedProvider: "openai",
+      provider: "openai",
+      providers: { openai: { model: "inherited" } },
+    },
+    {
+      talk: { realtime: { providers: { google: { model: "explicit" } } } },
+      inheritedProvider: "openai",
+      provider: "google",
+      providers: { openai: { model: "inherited" }, google: { model: "explicit" } },
+    },
+    {
+      talk: {
+        realtime: { provider: "google", providers: { openai: { model: "explicit" } } },
+      },
+      inheritedProvider: "openai",
+      provider: "google",
+      providers: { openai: { model: "explicit" } },
+    },
+    {
+      talk: {
+        realtime: { provider: "openai", providers: { OpenAI: { model: "explicit" } } },
+      },
+      inheritedProvider: "openai",
+      provider: "openai",
+      providers: { OpenAI: { model: "explicit" } },
+    },
+  ])("persists inherited Talk settings with selected provider $provider", (fixture) => {
+    const raw: Record<string, unknown> = {
+      ...(fixture.talk ? { talk: fixture.talk } : {}),
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: {
+                provider: fixture.inheritedProvider,
+                providers: { openai: { model: "inherited" } },
+              },
+            },
+          },
+        },
+      },
+    };
+    const plugins = structuredClone(raw.plugins);
+    const changes: string[] = [];
+    LEGACY_TALK_VOICE_CALL_INHERITANCE.apply(raw, changes);
+    expect(raw.talk).toEqual({
+      realtime: { provider: fixture.provider, providers: fixture.providers },
+    });
+    expect(raw.plugins).toEqual(plugins);
+    const again: string[] = [];
+    LEGACY_TALK_VOICE_CALL_INHERITANCE.apply(raw, again);
+    expect(again).toEqual([]);
+  });
+
   const legacyTts = {
     provider: "edge",
     enabled: true,

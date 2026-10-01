@@ -61,6 +61,8 @@ Candidates must meet the WAL safety floor and support extension loading before s
 
 SQLite storage workers inherit the main process's selected library. Opening another database or restarting a storage worker reuses that selection without repeating Bun's one-shot library initialization.
 
+Package-update recovery retains the library selected during Bun admission. On macOS, copy the printed recovery command including its `OPENCLAW_SQLITE_LIBRARY` prefix; it works from a fresh shell without the service environment or custom `HOMEBREW_PREFIX`. If recovery cannot meet the SQLite safety floor, it refuses before opening the journal and names the recorded library input to restore. The version-1 recovery journal format is unchanged.
+
 Set `OPENCLAW_SQLITE_LIBRARY` in the process environment before starting OpenClaw to override discovery:
 
 ```sh

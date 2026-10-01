@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prepareReplyToolAuthority } from "../auto-reply/reply/reply-tool-authority.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -10,21 +8,19 @@ import {
   consumeSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
 } from "../gateway/subagent-completion-tool-handoff.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 
 describe("resolveRequesterToolPolicies", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-requester-policy-");
   let tempDir: string;
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-requester-policy-"));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   async function writeSession(sessionKey: string, patch: Partial<SessionEntry>) {

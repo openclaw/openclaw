@@ -43,9 +43,10 @@ function parseCronRunLogEntriesFromJsonl(
 /** Import legacy per-job JSONL run logs into existing Cron history rows in task_runs and archive migrated files. */
 export async function migrateLegacyCronRunLogsToSqlite(
   storePath: string,
-): Promise<{ importedFiles: number }> {
+): Promise<{ importedFiles: number; warnings?: string[] }> {
   const resolvedStorePath = path.resolve(storePath);
   const jsonlFiles = await listLegacyCronRunLogFiles(resolvedStorePath);
+  const warnings: string[] = [];
 
   for (const filePath of jsonlFiles) {
     const jobId = path.basename(filePath, ".jsonl");
@@ -79,11 +80,13 @@ export async function migrateLegacyCronRunLogsToSqlite(
       migrateLegacyCronRunLogsToTaskRuns(db);
     });
     const archive = await archiveLegacyCronFile(filePath, sourceSha256);
-    if (!archive.ok) {
+    if (!archive.ok && archive.deferred) {
+      warnings.push(archive.reason);
+    } else if (!archive.ok) {
       throw new Error(`Cron history imported but could not archive ${filePath}: ${archive.reason}`);
     }
   }
-  return { importedFiles: jsonlFiles.length };
+  return { importedFiles: jsonlFiles.length, ...(warnings.length > 0 ? { warnings } : {}) };
 }
 
 export async function legacyCronRunLogFilesExist(storePath: string): Promise<boolean> {

@@ -12,7 +12,10 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  filterStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
 import { COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS } from "./models.js";
@@ -109,9 +112,7 @@ async function discoverEmbeddingModels(params: {
       if (!id) {
         return [];
       }
-      const endpoints = Array.isArray(entry.supported_endpoints)
-        ? entry.supported_endpoints.filter((value): value is string => typeof value === "string")
-        : [];
+      const endpoints = filterStringEntries(entry.supported_endpoints);
       return endpoints.some((ep) => ep.includes("embeddings")) || /\bembedding/i.test(id)
         ? [id]
         : [];
@@ -145,12 +146,8 @@ function pickBestModel(available: string[], userModel?: string): string {
     }
     return normalized;
   }
-  for (const preferred of PREFERRED_MODELS) {
-    if (available.includes(preferred)) {
-      return preferred;
-    }
-  }
-  const [firstAvailable] = available;
+  const firstAvailable =
+    PREFERRED_MODELS.find((preferred) => available.includes(preferred)) ?? available[0];
   if (firstAvailable) {
     return firstAvailable;
   }

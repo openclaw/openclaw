@@ -203,7 +203,7 @@ it.each([
         status: "accepted",
         targetDisposition: "steered",
         sessionKey: runScopedCallerKey,
-        delivery: { status: "skipped", mode: "announce" },
+        delivery: { status: "skipped" },
       });
       expect(queueMessage).toHaveBeenCalledOnce();
       expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(

@@ -3,6 +3,9 @@ import { createServer } from "node:http";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { closePlaywrightBrowserConnection } from "./pw-session.js";
+import { clickViaPlaywright } from "./pw-tools-core.interactions.js";
+import { snapshotRoleViaPlaywright } from "./pw-tools-core.snapshot.js";
 
 const { connectOverCdpMock } = vi.hoisted(() => ({
   connectOverCdpMock: vi.fn<(transport: ConnectOverCDPTransport) => Promise<Browser>>(),
@@ -91,17 +94,10 @@ function createBrowser(pages: unknown[]) {
   });
 }
 
-let snapshotRoleViaPlaywright: typeof import("./pw-tools-core.snapshot.js").snapshotRoleViaPlaywright;
-let clickViaPlaywright: typeof import("./pw-tools-core.interactions.js").clickViaPlaywright;
-let closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
-
 beforeAll(async () => {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   cdpUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-  ({ snapshotRoleViaPlaywright } = await import("./pw-tools-core.snapshot.js"));
-  ({ clickViaPlaywright } = await import("./pw-tools-core.interactions.js"));
-  ({ closePlaywrightBrowserConnection } = await import("./pw-session.js"));
 });
 
 afterEach(async () => {

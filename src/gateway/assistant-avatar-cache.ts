@@ -1,7 +1,7 @@
 // Prepared avatar representations retain their source revision through delivery.
 import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import type { PreparedLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
 
@@ -11,7 +11,7 @@ export type GatewayAvatarImageSource =
 
 const fileSources = new WeakMap<PreparedLocalAgentAvatarFile, GatewayAvatarImageSource>();
 const inlineFiles = new WeakMap<PreparedLocalAgentAvatarFile, string>();
-const dataSources = new Map<string, GatewayAvatarImageSource>();
+const dataSources = new LruCache<GatewayAvatarImageSource>(4);
 
 export function prepareGatewayAvatarFile(
   file: PreparedLocalAgentAvatarFile,
@@ -33,8 +33,6 @@ export function prepareGatewayAvatarFile(
 export function prepareGatewayAvatarDataUrl(dataUrl: string): GatewayAvatarImageSource | undefined {
   const cached = dataSources.get(dataUrl);
   if (cached) {
-    dataSources.delete(dataUrl);
-    dataSources.set(dataUrl, cached);
     return cached;
   }
   if (!isRenderableAvatarImageDataUrl(dataUrl)) {
@@ -45,7 +43,6 @@ export function prepareGatewayAvatarDataUrl(dataUrl: string): GatewayAvatarImage
     revision: sha256HexPrefixCore(`thumbnail-128-png-v1:${dataUrl}`, 16),
   };
   dataSources.set(dataUrl, source);
-  pruneMapToMaxSize(dataSources, 4);
   return source;
 }
 

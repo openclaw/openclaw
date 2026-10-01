@@ -108,6 +108,22 @@ auth health, sandbox images, and plugin installs.
     - payload `provider` delivery aliases → explicit `delivery.channel`
     - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from the retired raw `cron.webhook` value when valid; announce jobs keep their chat delivery and get `delivery.completionDestination`. Doctor then removes the old config key. Without a usable legacy webhook, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it.
 
+    Legacy default-agent ownership is repaired only by Doctor. Gateway startup
+    leaves stored cron ownership unchanged. An ownerless job whose config still
+    retains a legacy default marker waits for repair without consuming its due
+    occurrence or disabling a one-shot. Manual runs return `openclaw doctor --fix`
+    guidance; explicitly owned jobs continue normally. Doctor pins the historical
+    owner before removing that marker, preserving the job's definition and runtime
+    state. Unresolved historical jobs also require Doctor before updates or removal,
+    and the current system agent does not gain management access to them. Operator
+    inspection remains available. Current configurations without a legacy marker keep their dynamic
+    system-agent selection.
+
+    Missing interval anchors are repaired by Doctor. Runtime scheduling can
+    calculate the next run without writing an anchor into an old definition.
+    Schedule maintenance and run outcomes preserve stored ownership and authored
+    fields; intentional enable/disable transitions change only the enabled field.
+
     The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Malformed rows are quarantined in the shared SQLite state database in the same transaction that removes them from active scheduling; doctor reports those records and imports any `jobs-quarantine.json` sidecars left by older releases.
 
     Gateway startup normalizes the runtime projection and ignores the top-level `notify` marker, but leaves persisted cron state for doctor repair. Doctor removes inert markers for jobs with no migration target (`delivery.mode` none/absent, an unusable legacy webhook target, or existing announce/chat delivery), leaving existing delivery untouched, so repeated `doctor --fix` runs no longer re-warn about the same job.

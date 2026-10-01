@@ -145,7 +145,7 @@ describe("Control UI response authority", () => {
     });
   });
 
-  it.each(["avatar", "thumbnail", "bootstrap"] as const)(
+  it.each(["avatar", "bootstrap"] as const)(
     "withholds a prepared %s response after requester authority changes",
     async (kind) => {
       const workspace = testTempDirs.make("openclaw-ui-response-authority-");
@@ -197,10 +197,7 @@ describe("Control UI response authority", () => {
       const req = new IncomingMessage(new Socket());
       Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
       req.method = "GET";
-      req.url =
-        kind === "bootstrap"
-          ? CONTROL_UI_BOOTSTRAP_CONFIG_PATH
-          : `/avatar/main${kind === "thumbnail" ? "?v=current" : ""}`;
+      req.url = kind === "bootstrap" ? CONTROL_UI_BOOTSTRAP_CONFIG_PATH : "/avatar/main";
       req.headers = { authorization: "Bearer admitted-token" };
       const res = new ServerResponse(req);
       const end = vi.spyOn(res, "end");

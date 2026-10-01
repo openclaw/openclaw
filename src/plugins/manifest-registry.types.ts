@@ -7,6 +7,7 @@ import type {
   PluginManifest,
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
+  PluginManifestContracts,
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
@@ -17,28 +18,10 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginTrust } from "./plugin-trust.js";
 import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
-export type PluginManifestContractListKey =
-  | "codeModeExecutors"
-  | "decisionProviders"
-  | "speechProviders"
-  | "externalAuthProviders"
-  | "embeddingProviders"
-  | "mediaUnderstandingProviders"
-  | "transcriptSourceProviders"
-  | "documentExtractors"
-  | "realtimeVoiceProviders"
-  | "realtimeTranscriptionProviders"
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders"
-  | "webContentExtractors"
-  | "webFetchProviders"
-  | "webSearchProviders"
-  | "workerProviders"
-  | "storageProviders"
-  | "usageProviders"
-  | "migrationProviders"
-  | "gatewayMethodDispatch";
+export type PluginManifestContractListKey = Exclude<
+  keyof PluginManifestContracts,
+  "embeddedExtensionFactories" | "agentToolResultMiddleware" | "trustedToolPolicies" | "tools"
+>;
 
 type PluginManifestRecordStatic = Omit<
   PluginManifest,

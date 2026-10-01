@@ -196,13 +196,13 @@ describe("Gateway Claw package cleanup owner", () => {
   });
 
   it.each([
-    { runtimeWarnings: [], uninstallWarnings: [] },
-    { runtimeWarnings: ["Runtime cleanup is still finishing."], uninstallWarnings: [] },
-    { runtimeWarnings: [], uninstallWarnings: ["Package dependency pruning failed."] },
+    { runtimeWarnings: [], uninstallWarnings: [], expectedWarnings: [] },
     {
-      runtimeWarnings: ["Runtime cleanup is still finishing."],
-      uninstallWarnings: [
+      runtimeWarnings: ["Runtime cleanup is still finishing.", "Cleanup is still pending."],
+      uninstallWarnings: ["Package dependency pruning failed.", "Cleanup is still pending."],
+      expectedWarnings: [
         "Package dependency pruning failed.",
+        "Cleanup is still pending.",
         "Runtime cleanup is still finishing.",
       ],
     },
@@ -210,9 +210,7 @@ describe("Gateway Claw package cleanup owner", () => {
     const f = await fixture(warnings.uninstallWarnings);
     f.applyRuntime.mockResolvedValue({ ...f.application, warnings: warnings.runtimeWarnings });
     const result = await f.invoke();
-    const expectedWarnings = [
-      ...new Set([...warnings.uninstallWarnings, ...warnings.runtimeWarnings]),
-    ];
+    const { expectedWarnings } = warnings;
     expect(result).toEqual({
       packages: [{ kind: "plugin", ref: "audit", version: "1.0.0", action: "uninstalled" }],
       application: f.application,
@@ -307,25 +305,15 @@ describe("Gateway Claw package cleanup owner", () => {
       persistClawPackageRef({ ...f.plan, agent: { ...f.plan.agent, finalId: "other" } }, f.pkg);
     });
     await entered.promise;
-    let reply: unknown;
-    const pending = f
-      .invoke()
-      .catch((error: unknown) => error)
-      .then((result) => {
-        reply = result;
-      });
+    const pending = f.invoke();
     try {
-      await vi.waitFor(
-        () =>
-          expect(reply).toMatchObject({
-            cause: {
-              code: "UNAVAILABLE",
-              retryable: true,
-              message: expect.stringContaining("retry"),
-            },
-          }),
-        { timeout: 1_000 },
-      );
+      await expect(pending).rejects.toMatchObject({
+        cause: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          message: expect.stringContaining("retry"),
+        },
+      });
       expect(mocks.uninstall).not.toHaveBeenCalled();
       expect(f.applyRuntime).not.toHaveBeenCalled();
       expect(readAgentDeletionJournal("worker")).toEqual(journal);

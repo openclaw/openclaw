@@ -12,7 +12,7 @@ import {
 } from "../code-mode.test-support.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import type { PreparedSubagentRunsRead } from "../subagents/registry/subagent-registry-read-snapshot.js";
-import { saveSubagentRegistryToSqlite } from "../subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 
 const records = new Map<string, SubagentRunRecord>();
@@ -27,53 +27,29 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
   prepareSubagentRunsByRunIds: registryEvents.read,
 }));
 
-vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
-  onSubagentRegistryPersisted: registryEvents.subscribe,
-}));
+vi.mock("../subagents/registry/subagent-registry-publication.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../subagents/registry/subagent-registry-publication.js")>();
+  return {
+    ...actual,
+    subscribeSubagentRunChanges: ((phase, listener) =>
+      phase === "projection"
+        ? actual.subscribeSubagentRunChanges(phase, listener)
+        : registryEvents.subscribe(() =>
+            listener({ runIds: undefined, sessionKeys: undefined }),
+          )) satisfies typeof actual.subscribeSubagentRunChanges,
+  };
+});
 
 import { isToolResultError } from "../tool-result-error.js";
 import { createAgentsWaitTool, waitForCollectorCompletion } from "./agents-wait-tool.js";
-import { collectorRun } from "./agents-wait-tool.test-support.js";
-
-function createMainSessionWaitTool() {
-  return createAgentsWaitTool({
-    agentSessionKey: "agent:main:main",
-    agentId: "main",
-    config: { tools: { swarm: true } },
-  });
-}
-
-function waitAtBoundary(boundary: "tool" | "bridge", runId: string, signal?: AbortSignal) {
-  return boundary === "tool"
-    ? createMainSessionWaitTool()
-        .execute("wait", { ids: [runId], timeoutSeconds: 1 }, signal)
-        .then((result) => result.details)
-    : waitForCollectorCompletion({
-        runId,
-        currentSessionKeys: new Set(["agent:main:main"]),
-        currentAgentId: "main",
-        signal,
-      });
-}
-
-function selectRuns(runIds: readonly string[]): Map<string, SubagentRunRecord> {
-  return new Map(
-    runIds.flatMap((runId) => {
-      const entry =
-        records.get(runId) ??
-        [...records.values()].find((candidate) => candidate.swarmRunId === runId);
-      return entry ? [[runId, entry] as const] : [];
-    }),
-  );
-}
-
-function preparedRuns(
-  read: () => ReadonlyMap<string, SubagentRunRecord>,
-): PreparedSubagentRunsRead {
-  return {
-    consume: (consume) => ({ ready: true, value: consume(read()) }),
-  };
-}
+import {
+  collectorRun,
+  createMainSessionWaitTool,
+  preparedRuns,
+  selectRuns,
+  waitAtBoundary,
+} from "./agents-wait-tool.test-support.js";
 
 describe("agents_wait", () => {
   beforeEach(() => {
@@ -85,7 +61,7 @@ describe("agents_wait", () => {
     });
     registryEvents.read
       .mockReset()
-      .mockImplementation(async (runIds) => preparedRuns(() => selectRuns(runIds)));
+      .mockImplementation(async (runIds) => preparedRuns(() => selectRuns(records, runIds)));
   });
 
   it("composes real collector outputs through discovery, describe, and generated declarations", async () => {
@@ -263,7 +239,7 @@ describe("agents_wait", () => {
     const initialRead = createDeferred();
     registryEvents.read.mockImplementationOnce(async (runIds) =>
       preparedRuns(() => {
-        const selected = selectRuns(runIds);
+        const selected = selectRuns(records, runIds);
         initialRead.resolve();
         return selected;
       }),
@@ -495,7 +471,12 @@ describe("agents_wait", () => {
             generation: 2,
             delivery: { status: "not_required" },
           });
-          registryEvents.subscribe.mockImplementation(state.onSubagentRegistryPersisted);
+          const registryPublication = await vi.importActual<
+            typeof import("../subagents/registry/subagent-registry-publication.js")
+          >("../subagents/registry/subagent-registry-publication.js");
+          registryEvents.subscribe.mockImplementation((listener) =>
+            registryPublication.subscribeSubagentRunChanges("persistence", listener),
+          );
           let publication: Promise<void> | undefined;
           registryEvents.read.mockImplementation(async (runIds) => {
             const prepared = await state.prepareSubagentRunsSnapshotForRunIds(new Map(), runIds);
@@ -597,12 +578,12 @@ describe("agents_wait", () => {
       registryEvents.read
         .mockImplementationOnce(async (runIds) => {
           await firstRead.promise;
-          return preparedRuns(() => selectRuns(runIds));
+          return preparedRuns(() => selectRuns(records, runIds));
         })
         .mockImplementationOnce(async (runIds) => {
           secondStarted.resolve();
           await secondRead.promise;
-          return preparedRuns(() => selectRuns(runIds));
+          return preparedRuns(() => selectRuns(records, runIds));
         });
       const controller = new AbortController();
       const observed = waitAtBoundary(boundary, runId, controller.signal).then(
@@ -766,8 +747,14 @@ describe("agents_wait", () => {
         });
         saveSubagentRegistryToSqlite(new Map([entry, unrelated].map((run) => [run.runId, run])));
         const unsubscribed = vi.fn();
+        const registryPublication = await vi.importActual<
+          typeof import("../subagents/registry/subagent-registry-publication.js")
+        >("../subagents/registry/subagent-registry-publication.js");
         registryEvents.subscribe.mockImplementation((listener) => {
-          const unsubscribe = state.onSubagentRegistryPersisted(listener);
+          const unsubscribe = registryPublication.subscribeSubagentRunChanges(
+            "persistence",
+            listener,
+          );
           return () => {
             unsubscribe();
             unsubscribed();

@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -16,7 +17,6 @@ import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context
 import { runWithGatewaySessionSpawnContext } from "../../tools/gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "../../tools/gateway-session-spawn-execution-identity.js";
 import { callGatewayTool } from "../../tools/gateway.js";
-import { resolveSubagentRunTimerDelayMs } from "../registry/subagent-run-timeout.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { readSubagentGatewayExecutionIdentity } from "./subagent-spawn-execution-identity.js";
@@ -270,7 +270,8 @@ export function readGatewayRunId(
 }
 
 export function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {
-  const runTimeoutMs = resolveSubagentRunTimerDelayMs(runTimeoutSeconds) ?? 0;
+  const runTimeoutMs =
+    finiteSecondsToTimerSafeMilliseconds(runTimeoutSeconds, { floorSeconds: true }) ?? 0;
   if (runTimeoutMs <= 0) {
     return DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS;
   }
