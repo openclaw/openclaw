@@ -598,25 +598,20 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(releaseOperatorAuthority).toHaveBeenCalledOnce();
   });
 
-  it("marks memory inference from a non-owner requester as tainted", async () => {
-    const sessionEntry = createFlushSessionEntry();
-
-    await runDefaultMemoryFlush(sessionEntry, {
-      followupRun: createTestFollowupRun({ workspaceDir: rootDir, senderIsOwner: false }),
-    });
-
-    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ initialTurnTainted: true }),
-    );
-  });
-
   it.each([
     { label: "bounded tail", customTail: 512, newUser: false, tainted: true },
     { label: "latest usage", customTail: 0, newUser: false, tainted: true },
     { label: "new user boundary", customTail: 0, newUser: true, tainted: false },
+    {
+      label: "non-owner requester",
+      customTail: 0,
+      newUser: true,
+      tainted: true,
+      senderIsOwner: false,
+    },
   ])(
     "accounts for usage and owner-turn taint independently across $label",
-    async ({ customTail, newUser, tainted }) => {
+    async ({ customTail, newUser, tainted, senderIsOwner = true }) => {
       const scope = sessionScope("agent:main:main", "tainted-owner-session.json");
       const { sessionKey, storePath } = scope;
       await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
@@ -666,7 +661,7 @@ describe("runMemoryFlushIfNeeded", () => {
           workspaceDir: rootDir,
           sessionId: "session",
           sessionKey,
-          senderIsOwner: true,
+          senderIsOwner,
         }),
         sessionKey,
         storePath,
@@ -796,8 +791,9 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("redacts and caps generic visible memory-flush failures before delivery", async () => {
     const sessionEntry = createFlushSessionEntry();
+    await writeTestSessionStore(sessionScope().storePath, "main", sessionEntry);
     const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
-    const token = "sk-abcdefghijklmnopqrstuv";
+    const token = ["sk", "abcdefghijklmnopqrstuv"].join("-");
     runWithModelFallbackMock.mockRejectedValueOnce(
       new Error(`provider failed with Authorization: Bearer ${token} ${"🚀".repeat(400)}`),
     );
