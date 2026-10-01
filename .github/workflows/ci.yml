@@ -4227,6 +4227,8 @@ jobs:
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           # Runner labels are not CPU counts; preserve the CI worker budget.
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 16
+          OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: ${{ needs.preflight.outputs.diff_base_revision }}
+          OPENCLAW_CI_EXTENSION_BOUNDARY_FULL: ${{ vars.OPENCLAW_CI_EXTENSION_BOUNDARY_FULL }}
         shell: bash
         run: |
           set -euo pipefail
@@ -4265,11 +4267,7 @@ jobs:
                 "${boundary_runner[@]}"
                 ;;
               prompt-snapshots)
-                # No presence fallback: the boundary runner previously invoked
-                # this unconditionally, and silent success would drop snapshot
-                # drift coverage. The manifest gates the lane on the generator's
-                # import graph and fixtures; diffs outside both cannot change
-                # generated snapshots.
+                # The manifest selects generator/fixture changes; retain the required check.
                 if [ "$RUN_PROMPT_SNAPSHOTS" != "true" ]; then
                   echo "[skip] changed scope cannot affect generated prompt snapshots"
                 else
@@ -4310,10 +4308,7 @@ jobs:
                 fi
                 ;;
               plugin-sdk-api-diff)
-                # Pure reporting: no caller passes --require-acknowledgement, so
-                # this can only surface an artifact/summary. Keep it off the
-                # push/PR critical path; dispatch (incl. release validation)
-                # still produces the report.
+                # Informational API reports run on manual/release dispatches.
                 if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]]; then
                   echo "[skip] plugin SDK API diff reports on manual and release dispatches only"
                 elif node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:diff"] ? 0 : 1);'; then
