@@ -40,6 +40,33 @@ The manifest is discovery metadata: it does not execute the CLI or register
 runtime behavior. Runtime behavior starts when the plugin entry calls
 `api.registerCliBackend(...)`.
 
+## Model compatibility
+
+Backends can implement the optional `prepareModelCatalog` hook to establish
+model compatibility before catalog publication. OpenClaw supplies the registered
+command, host environment, model IDs, a discovery/routine/manual reason, and
+lifecycle cancellation and `assertCurrent` guards. The hook returns a `models`
+map with an availability result for every supplied ID and an optional actionable
+reason. Missing results stay unavailable for that runtime. API routes retain
+their own readiness.
+
+Return `nextCheckAt` to request renewal on the next catalog use after that time;
+OpenClaw does not start a polling timer. Cache prepared results within the plugin
+lifecycle and persist repair attempt limits through plugin state. Local execution
+also calls the hook before binding its executable, so repeat calls must reuse
+those facts. A returned `runtimeVersion` becomes part of idle-process reuse
+identity. Revalidate authority immediately before any installation side effect,
+honor cancellation, and verify the original command after an update. Run installation
+mutations inside `context.withMaintenance`. It returns `undefined` while local turns
+are active, so the plugin can defer repair without blocking nested work. Once idle,
+the host holds new turn admission until maintenance finishes. The hook
+does not grant authority to update a paired node from the Gateway.
+
+An explicit `models list --refresh` receives `manual`, including through a running
+Gateway when the caller has `operator.write`. The request retains its current write
+authority through the update. Ordinary read-scoped Gateway catalog refreshes cannot
+bypass the plugin's automatic repair limit.
+
 ## Minimal backend plugin
 
 <Steps>

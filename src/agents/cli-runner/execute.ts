@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { parse as parseSemver } from "semver";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
@@ -9,7 +8,6 @@ import {
   installationTargetEnv,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../../infra/installation-target-context.js";
-import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
@@ -47,6 +45,12 @@ import {
 import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
+import {
+  assertExactToolAvailabilityRuntimeVersion,
+  exactToolAvailabilityError,
+  captureCliMaintenanceEnv,
+  prepareCliExecutionCompatibility,
+} from "./execution-compatibility.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import {
   buildCliArgs,
@@ -64,50 +68,6 @@ import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import type { PreparedCliRunContext } from "./types.js";
-
-function exactToolAvailabilityError(params: {
-  code: "unsupported" | "runtime-unavailable";
-  isolatedCompletion: boolean;
-  message: string;
-}): Error {
-  if (!params.isolatedCompletion) {
-    return new Error(params.message);
-  }
-  return Object.assign(new Error(params.message), {
-    name: "IsolatedCompletionRuntimeError",
-    code: params.code,
-  });
-}
-
-function assertExactToolAvailabilityRuntimeVersion(params: {
-  backendId: string;
-  policy: NonNullable<
-    PreparedCliRunContext["backendResolved"]["runtimeArtifact"]
-  >["exactToolAvailabilityVersionPolicy"];
-  executableIdentity: Awaited<ReturnType<typeof resolveCliExecutableIdentity>>;
-  isolatedCompletion: boolean;
-}): void {
-  const artifact = params.executableIdentity?.runtimeArtifact;
-  const packageVersion = artifact?.kind === "package-tree" ? artifact.packageVersion : undefined;
-  const parsedVersion = packageVersion ? parseSemver(packageVersion) : null;
-  const prereleaseChannel = parsedVersion?.prerelease[0];
-  const minimumVersion =
-    parsedVersion?.prerelease.length === 0
-      ? params.policy?.stableMinimum
-      : typeof prereleaseChannel === "string"
-        ? params.policy?.prereleaseMinimums?.[prereleaseChannel]
-        : undefined;
-  const comparison =
-    packageVersion && minimumVersion ? compareValidSemver(packageVersion, minimumVersion) : null;
-  if (comparison !== null && comparison >= 0) {
-    return;
-  }
-  throw exactToolAvailabilityError({
-    code: "unsupported",
-    isolatedCompletion: params.isolatedCompletion,
-    message: `CLI backend ${params.backendId} requires a supported package version for exact per-run tool availability${minimumVersion ? ` (requires >=${minimumVersion}` : " (unsupported release line"}${packageVersion ? `; found ${packageVersion})` : ")"}`,
-  });
-}
 
 type ExecutePreparedCliRunOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
@@ -140,6 +100,7 @@ export async function executePreparedCliRun(
   const backend = context.preparedBackend.backend;
   const executionTarget = context.executionTarget;
   const localProcessEnv = installationTargetEnv(getInstallationTarget());
+  const maintenanceEnv = captureCliMaintenanceEnv(backend, localProcessEnv);
   if (localProcessEnv && executionTarget.kind === "node") {
     throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
   }
@@ -329,6 +290,7 @@ export async function executePreparedCliRun(
           })
         : undefined;
     let cleanupMcpCaptureAttempt: (() => Promise<void>) | undefined;
+    let releaseRuntimeUse: (() => void) | undefined;
     let runOutput: CliOutput | undefined;
     let runError: unknown;
     let runFailed = false;
@@ -418,6 +380,14 @@ export async function executePreparedCliRun(
       // Never mark Claude CLI as host-managed. That marker routes runs into
       // Anthropic's separate host-managed usage tier instead of normal CLI use.
       delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+
+      if (!nodePlacement) {
+        releaseRuntimeUse = await prepareCliExecutionCompatibility({
+          context,
+          maintenanceEnv,
+          assertCurrent,
+        });
+      }
 
       let executionCommand = backend.command;
       let executionArgv0: string | undefined;
@@ -608,6 +578,7 @@ export async function executePreparedCliRun(
     } catch (error) {
       recordRunError(error);
     } finally {
+      releaseRuntimeUse?.();
       await toolTracking.finishDeliveryTracking({
         useManagedClaudeLiveSession,
         recordRunError,

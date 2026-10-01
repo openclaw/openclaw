@@ -154,6 +154,36 @@ export function projectSessionModelCatalog(
   models: ModelChoice[],
   config: OpenClawConfig,
 ): ModelChoice[] {
+  if (readParams.sessionEntry?.execHost === "node") {
+    // Gateway-local login and installation facts cannot establish node readiness.
+    const omitLocalReadiness = <
+      T extends { available?: boolean; unavailableReason?: string; unavailableUntil?: number },
+    >(
+      choice: T,
+    ) => {
+      const {
+        available: _available,
+        unavailableReason: _reason,
+        unavailableUntil: _until,
+        ...remote
+      } = choice;
+      return remote;
+    };
+    return models.map((model) => {
+      const projected =
+        model.agentRuntime?.id === "claude-cli" || model.provider === "claude-cli"
+          ? omitLocalReadiness(model)
+          : model;
+      return model.runtimeChoices
+        ? {
+            ...projected,
+            runtimeChoices: model.runtimeChoices.map((choice) =>
+              choice.agentRuntime.id === "claude-cli" ? omitLocalReadiness(choice) : choice,
+            ),
+          }
+        : projected;
+    });
+  }
   const ownership = readSessionRuntimeOwnership({ ...readParams, config });
   if (ownership?.auth !== "native") {
     return models;

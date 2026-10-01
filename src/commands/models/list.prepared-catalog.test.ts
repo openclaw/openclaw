@@ -131,15 +131,19 @@ describe("models list published transport", () => {
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
     expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        requiredCapabilities: ["published-model-catalog"],
+        requiredCapabilities: [
+          "published-model-catalog",
+          "model-catalog-cli-compatibility-refresh-v1",
+        ],
         localPortOverride: 19001,
-        timeoutMs: 210_000,
+        timeoutMs: 1_200_000,
         params: {
           agentId: "work",
           view: "all",
           provider: "catalog-provider",
           includeDetails: true,
           refresh: true,
+          refreshCliCompatibility: true,
         },
       }),
     );
@@ -189,6 +193,9 @@ describe("models list published transport", () => {
       expect.not.objectContaining({ localPortOverride: expect.anything() }),
     );
     expect(vi.mocked(gateway.callGateway).mock.calls[0]?.[0].timeoutMs).toBeUndefined();
+    expect(vi.mocked(gateway.callGateway).mock.calls[0]?.[0].requiredCapabilities).toEqual([
+      "published-model-catalog",
+    ]);
   });
 
   it("prints an unknown provider rejection and exits unsuccessfully", async () => {
@@ -251,7 +258,11 @@ describe("models list published transport", () => {
       expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
       expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          params: { view: "default", includeDetails: true, ...(refresh ? { refresh: true } : {}) },
+          params: {
+            view: "default",
+            includeDetails: true,
+            ...(refresh ? { refresh: true, refreshCliCompatibility: true } : {}),
+          },
         }),
       );
     },

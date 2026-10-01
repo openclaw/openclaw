@@ -3,6 +3,7 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import {
   resolvePluginSetupCliBackend,
@@ -31,6 +32,7 @@ export type ResolvedCliBackend = Pick<
   CliBackendPlugin,
   | "id"
   | "modelProvider"
+  | "prepareModelCatalog"
   | "config"
   | "bundleMcpMode"
   | "transformSystemPrompt"
@@ -261,6 +263,24 @@ export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendL
   };
 }
 
+/** Execution and catalog maintenance share the registered plugin's launch configuration. */
+export function resolveCliBackendLaunchConfig(
+  backend: CliBackendPlugin,
+  cfg?: OpenClawConfig,
+  options: { agentId?: string } = {},
+): CliBackendConfig | null {
+  const context: CliBackendNormalizeConfigContext = {
+    backendId: normalizeProviderId(backend.id),
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+    ...(cfg ? { config: cfg } : {}),
+  };
+  const config = backend.normalizeConfig
+    ? backend.normalizeConfig({ ...backend.config }, context)
+    : backend.config;
+  const command = config.command?.trim();
+  return command ? { ...config, command } : null;
+}
+
 /** Resolves the executable CLI backend registered by its owning plugin. */
 export function resolveCliBackendConfig(
   provider: string,
@@ -268,11 +288,6 @@ export function resolveCliBackendConfig(
   options: { agentId?: string } = {},
 ): ResolvedCliBackend | null {
   const normalized = normalizeProviderId(provider);
-  const normalizeContext: CliBackendNormalizeConfigContext = {
-    backendId: normalized,
-    ...(options.agentId ? { agentId: options.agentId } : {}),
-    ...(cfg ? { config: cfg } : {}),
-  };
   const runtimeTextTransforms = resolveRuntimeTextTransforms();
   const registered = resolveRegisteredBackend(normalized);
   const backend =
@@ -280,12 +295,8 @@ export function resolveCliBackendConfig(
   if (!backend) {
     return null;
   }
-  const baseConfig = registered ? { ...backend.config } : backend.config;
-  const config = backend.normalizeConfig
-    ? backend.normalizeConfig(baseConfig, normalizeContext)
-    : baseConfig;
-  const command = config.command?.trim();
-  if (!command) {
+  const config = resolveCliBackendLaunchConfig(backend, cfg, options);
+  if (!config) {
     return null;
   }
   const modelProvider = resolveCliBackendModelProvider(backend);
@@ -293,7 +304,8 @@ export function resolveCliBackendConfig(
   return {
     id: normalized,
     ...(modelProvider ? { modelProvider } : {}),
-    config: { ...config, command },
+    prepareModelCatalog: backend.prepareModelCatalog,
+    config,
     bundleMcp,
     bundleMcpMode: normalizeBundleMcpMode(backend.bundleMcpMode, bundleMcp),
     ...(registered ? { pluginId: registered.pluginId } : {}),

@@ -23,6 +23,7 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
+import { captureModelsCliCompatibilityRefresh } from "./models-compatibility-refresh.js";
 import { UnknownModelCatalogProviderError } from "./models-list-capabilities.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -38,7 +39,13 @@ export const modelsHandlers: GatewayRequestHandlers = {
     }
     let scope: ChatMetadataReadParams | undefined;
     let publicationScope: ChatMetadataReadParams | undefined;
+    let cliCompatibilityRefresh:
+      | ReturnType<typeof captureModelsCliCompatibilityRefresh>
+      | undefined;
     try {
+      cliCompatibilityRefresh = params.refreshCliCompatibility
+        ? captureModelsCliCompatibilityRefresh(options)
+        : undefined;
       const scoped = Boolean(params.sessionKey || params.authProfileId);
       const draftAccountSelection =
         !params.sessionKey && params.authProfileId
@@ -123,6 +130,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
           requesterProfileId: publicationScope.requesterProfileId,
           readScope: scope,
           publicationScope,
+          cliCompatibilityRefresh,
         }));
       publicationScope.draftAccountSelection?.assertCurrent();
       publicationScope.assertCurrent?.();
@@ -175,6 +183,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
       }
       respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
     } finally {
+      cliCompatibilityRefresh?.release();
       (publicationScope ?? scope)?.release?.();
     }
   },

@@ -8,6 +8,8 @@ export const chatMetadataSessionFields = [
   "sessionId",
   "lifecycleRevision",
   "sessionStartedAt",
+  "execHost",
+  "execNode",
   "acp",
   "agentHarnessId",
   "agentRuntimeOverride",

@@ -248,6 +248,7 @@ function createPublicModelsListProjector(params: {
 }
 
 type BuildModelsListResultParams = {
+  cliCompatibilityRefresh?: { assertCurrent: () => void; signal?: AbortSignal };
   source: ModelsListCatalogSource;
   agentId?: string;
   requesterProfileId?: string;
@@ -315,6 +316,9 @@ export async function prepareModelsListResult(
     await loadDeferredCatalog(source.context, initialAgentId, {
       readOnly: false,
       refreshFullCatalog: true,
+      ...(params.cliCompatibilityRefresh
+        ? { cliCompatibilityRefresh: params.cliCompatibilityRefresh }
+        : {}),
       ...(params.params.provider ? { providerDiscoveryProviderIds: [params.params.provider] } : {}),
     });
   }

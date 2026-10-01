@@ -122,12 +122,30 @@ OpenClaw release:
         claude auth login
         ```
 
-        If the installed build is incompatible, update Claude Code and restart
-        OpenClaw so the gateway launches the new binary:
+        Model discovery checks the installed CLI before marking a known model
+        ready. For example, Opus 5.5 requires Claude Code 2.1.280 or newer.
+        OpenClaw repairs an older installation through its verified native,
+        Homebrew, or npm owner on macOS and Linux, then checks the selected
+        executable again. Homebrew keeps its existing cask and release channel.
+        Active turns finish normally; the next turn replaces an idle process
+        running the older version. A Gateway restart is not required.
+
+        There is no background polling timer. Discovery of a stronger model
+        requirement triggers a check; unchanged compatibility facts and failed
+        repair attempts are cached for 24 hours. Busy or in-progress repairs
+        can be checked sooner on the next request. To retry manually, use
+        `operator.write` access when connecting to a running Gateway:
 
         ```bash
-        claude update
+        openclaw models list --refresh
         ```
+
+        Pinned binaries, custom wrappers, Desktop-managed installs, Windows,
+        and unrecognized package managers require an update through their owner.
+        If the selected channel remains too old, the model stays unavailable.
+        Models with unknown CLI requirements are not advertised as verified.
+        Direct API routes remain independent. Paired-node installations belong
+        to the node; Gateway-local repair does not update them.
       </Step>
       <Step title="Run onboarding">
         ```bash

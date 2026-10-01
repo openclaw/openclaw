@@ -24,6 +24,8 @@ export const ModelsListParamsSchema = Type.Object(
     preparedOnly: Type.Optional(Type.Boolean()),
     /** Force replacement of a completed full-catalog generation. */
     refresh: Type.Optional(Type.Boolean()),
+    /** Retry local CLI compatibility maintenance with current operator write authority. */
+    refreshCliCompatibility: Type.Optional(Type.Boolean()),
     view: Type.Optional(
       Type.Union([
         Type.Literal("default"),
@@ -43,6 +45,19 @@ export const ModelsListParamsSchema = Type.Object(
         },
       },
       { not: { required: ["sessionKey", "authProfileId"] } },
+      {
+        if: {
+          properties: { refreshCliCompatibility: { const: true } },
+          required: ["refreshCliCompatibility"],
+        },
+        // JSON Schema conditional keyword, not a Promise method.
+        // oxlint-disable-next-line unicorn/no-thenable
+        then: {
+          properties: { refresh: { const: true } },
+          required: ["refresh"],
+          not: { anyOf: [{ required: ["sessionKey"] }, { required: ["authProfileId"] }] },
+        },
+      },
     ],
   },
 );

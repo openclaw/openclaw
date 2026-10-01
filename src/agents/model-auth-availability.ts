@@ -12,8 +12,6 @@ import { coerceSecretRef } from "../config/types.secrets.js";
 import type {
   ProviderModelRouteAuthRequirement,
   ProviderModelRouteCandidate,
-  ProviderModelRouteResolution,
-  ProviderModelRouteSource,
 } from "../plugin-sdk/provider-model-types.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
@@ -57,6 +55,13 @@ import {
 } from "./cli-backends.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import type {
+  ModelAuthAvailability,
+  ModelAuthAvailabilityEvidence,
+  ModelAuthAvailabilityEvaluation,
+  ModelAuthAvailabilityRef,
+  ModelAuthAvailabilityResolver,
+} from "./model-auth-availability.types.js";
 import {
   listProviderEnvAuthLookupKeys,
   resolveProviderEnvAuthLookupMaps,
@@ -89,7 +94,6 @@ import {
   buildProviderModelAuthSourcePlan,
   fromProviderModelAuthReadiness,
   toProviderModelAuthReadiness,
-  type ProviderModelAuthEvidence,
   type ProviderModelAuthProfileSource,
   type ProviderModelAuthSourcePlan,
 } from "./provider-model-auth-source-plan.js";
@@ -99,62 +103,17 @@ import {
   type ProviderModelAuthSourceSelection,
 } from "./provider-model-route-auth.js";
 import { modelMatchesProviderModelRoute } from "./provider-model-route.js";
+export type {
+  ModelAuthAvailabilityEvaluation,
+  ModelAuthAvailabilityRef,
+  ModelAuthAvailabilityResolver,
+} from "./model-auth-availability.types.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 const EXTERNAL_CLI_REFRESH_PROVIDER_IDS = new Set(
   listExternalCliSyncProviderIds().map(normalizeProviderIdForAuth),
 );
-
-type ModelAuthAvailability = boolean | undefined;
-type ModelAuthAvailabilityEvidence = Exclude<ProviderModelAuthEvidence, "none">;
-export type ModelAuthAvailabilityRef = {
-  /** Concrete runtime selected by the model decision owner; absent means provider auth only. */
-  runtimeId?: string;
-  modelId?: string;
-  api?: string | null;
-  baseUrl?: unknown;
-  /** All physical route rows observed for this logical provider/model pair. */
-  observedRoutes?: readonly ProviderModelRouteSource[];
-  /** Automatic session preference; considered before the configured profile order. */
-  preferredProfileId?: string;
-  /** Explicit session preference, including profiles outside the shared order. */
-  pinnedProfileId?: string;
-  /** Runtime-owned account boundary that forbids shared profile failover. */
-  requiredProfileId?: string;
-};
-export type ModelAuthAvailabilityEvaluation = {
-  requestedRuntimeId?: string;
-  availability: ModelAuthAvailability;
-  /** A route/account or runtime-owned result must not fall back to provider-only registry auth. */
-  availabilityAuthoritative?: true;
-  unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
-  /** Earliest known retry time, in milliseconds since the Unix epoch. */
-  unavailableUntil?: number;
-  routeResolution: ProviderModelRouteResolution | null;
-  selectedRoute?: ProviderModelRouteCandidate;
-  selectedProfileId?: string;
-  selectedAuthMode?: string;
-  evidence?: ModelAuthAvailabilityEvidence;
-  runtimeAuth?: { id: string; source: "native" };
-};
-export type ModelAuthAvailabilityResolver = {
-  evaluateRuntimeModelAuth(
-    this: void,
-    provider: string,
-    ref?: ModelAuthAvailabilityRef,
-  ): ModelAuthAvailabilityEvaluation;
-  providerDiscoveryProviderIds: readonly string[];
-  evaluateModelAuth(
-    provider: string,
-    ref?: ModelAuthAvailabilityRef,
-  ): ModelAuthAvailabilityEvaluation;
-  resolveProviderAuthAvailability(
-    provider: string,
-    ref?: ModelAuthAvailabilityRef,
-  ): ModelAuthAvailability;
-  hasSyntheticAuth(provider: string): boolean;
-};
 
 function evaluateCliRuntimeModelAuthAvailability(
   params: CreateModelAuthAvailabilityResolverParams,

@@ -19,8 +19,8 @@ import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { ensureFlagCompatibility, resolveModelsTargetAgent } from "./shared.js";
 
-// The catalog worker permits three minutes; leave room for connection and result projection.
-const MODEL_CATALOG_REFRESH_TIMEOUT_MS = 210_000;
+// A manual refresh permits a 15-minute installer, three-minute discovery, and transport slack.
+const MODEL_CATALOG_MAINTENANCE_TIMEOUT_MS = 20 * 60_000;
 
 function toCliModelRow(model: ModelChoice): ModelRow {
   return {
@@ -61,7 +61,7 @@ export async function modelsListCommand(
     view: opts.all || provider ? "all" : "default",
     ...(provider ? { provider } : {}),
     includeDetails: true,
-    ...(opts.refresh ? { refresh: true } : {}),
+    ...(opts.refresh ? { refresh: true, refreshCliCompatibility: true } : {}),
   };
   const localTarget = await isImplicitLocalGatewayTarget({ config: cfg });
   const explicitPort = Boolean(process.env.OPENCLAW_GATEWAY_PORT?.trim());
@@ -76,8 +76,11 @@ export async function modelsListCommand(
     result = await callGateway<ModelsListResult>({
       config: cfg,
       method: "models.list",
-      ...(opts.refresh ? { timeoutMs: MODEL_CATALOG_REFRESH_TIMEOUT_MS } : {}),
-      requiredCapabilities: [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG],
+      ...(opts.refresh ? { timeoutMs: MODEL_CATALOG_MAINTENANCE_TIMEOUT_MS } : {}),
+      requiredCapabilities: [
+        GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
+        ...(opts.refresh ? [GATEWAY_SERVER_CAPS.MODEL_CATALOG_CLI_COMPATIBILITY_REFRESH] : []),
+      ],
       ...(gatewayOwner ? { localPortOverride: gatewayOwner.port } : {}),
       params,
     });

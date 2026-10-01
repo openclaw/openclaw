@@ -279,10 +279,41 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   }).evaluateNative;
   // A selected profile is host-owned auth, not evidence from the shared native
   // login; the harness evaluator already applies this rule to session pins.
-  const evaluateNative: typeof nativeEvaluator = (entry, host, runtimeId) =>
-    preferredProfilesByProvider.has(normalizeProviderId(entry.provider))
+  const evaluateNative: typeof nativeEvaluator = (entry, host, runtimeId) => {
+    const evaluation = preferredProfilesByProvider.has(normalizeProviderId(entry.provider))
       ? host
       : nativeEvaluator(entry, host, runtimeId);
+    const requestedRuntimeId = runtimeId ?? evaluation.requestedRuntimeId;
+    const runtime = !isDefaultAgentRuntimeId(requestedRuntimeId)
+      ? requestedRuntimeId
+      : resolveCatalogDecisionRuntime({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          entry,
+          evaluation: { ...evaluation, requestedRuntimeId },
+          pluginRegistry: params.pluginRegistry,
+        })?.id;
+    if (!runtime || runtime === "openclaw" || runtime === "auto") {
+      return evaluation;
+    }
+    const compatibility = snapshot.cliRuntimeCompatibility?.[runtime];
+    const needsPreparation =
+      compatibility !== undefined ||
+      params.pluginRegistry?.cliBackends.some(
+        ({ backend }) => backend.id === runtime && backend.prepareModelCatalog !== undefined,
+      );
+    if (!needsPreparation || compatibility?.models[entry.id]?.available === true) {
+      return evaluation;
+    }
+    return {
+      ...evaluation,
+      availability: false,
+      availabilityAuthoritative: true,
+      runtimeCompatibilityReason:
+        compatibility?.models[entry.id]?.reason ??
+        "CLI compatibility has not been verified. Refresh Models to retry.",
+    };
+  };
   // Store revisions do not advance when a token or failure window expires.
   // Retire the captured host evaluation so its caller prepares fresh facts.
   const preparedAt = Date.now();
@@ -601,11 +632,18 @@ export function resolveCatalogDecisionRuntime(params: {
       })();
   // Route projection must retain the native owner that supplied availability. Recomputing
   // implicit policy from its API-key route alone would relabel that owner as OpenClaw.
+  // Direct CLI provider refs also name their execution owner, even without a harness policy.
+  const provider = normalizeProviderId(params.entry.provider);
+  const directCliRuntime = params.pluginRegistry
+    ? params.pluginRegistry.cliBackends.find(
+        ({ backend }) => normalizeProviderId(backend.id) === provider,
+      )?.backend.id
+    : listCliRuntimeModelBackendBindings().find((binding) => binding.runtime === provider)?.runtime;
   const runtime =
     selected.policy.runtimeSource === "implicit" &&
     !selected.policy.forcedByEnvironment &&
     isDefaultAgentRuntimeId(params.evaluation.requestedRuntimeId)
-      ? (params.evaluation.runtimeAuth?.id ?? selected.runtime)
+      ? (params.evaluation.runtimeAuth?.id ?? directCliRuntime ?? selected.runtime)
       : selected.runtime;
   if (
     selected.policy.runtime === "auto" &&

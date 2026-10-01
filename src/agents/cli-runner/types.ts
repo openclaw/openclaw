@@ -277,6 +277,8 @@ export type PreparedCliRunContext = {
   runtimeOwnerFingerprint?: string;
   /** Exact executable/package implementation used by this CLI process. */
   runtimeArtifactFingerprint?: string;
+  /** Plugin-verified serving version used to retire incompatible idle processes. */
+  cliRuntimeVersion?: string;
   authBindingSkipsLocalCredential?: true;
   authEpochVersion: number;
   extraSystemPromptHash?: string;

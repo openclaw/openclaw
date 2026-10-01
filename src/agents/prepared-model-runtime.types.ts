@@ -31,6 +31,8 @@ export type PreparedRuntimeCapabilityModel = PreparedConfiguredRuntimeModel;
 export type PreparedModelRuntimeCatalogMode = "live" | "static";
 
 export type PreparedModelCatalogRefreshOptions = {
+  /** Request-bound authority for a manual CLI compatibility retry. Never retained for renewal. */
+  cliCompatibilityRefresh?: { assertCurrent: () => void; signal?: AbortSignal };
   refresh?: boolean;
   providerIds?: readonly string[];
   changedOnly?: boolean;

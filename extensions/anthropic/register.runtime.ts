@@ -650,7 +650,14 @@ export function buildAnthropicProvider(): ProviderPlugin {
 
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   const version = createClaudeCodeVersionProbe(api);
-  api.registerCliBackend(buildAnthropicCliBackend(version));
+  const readiness = createLazyRuntimeModule(async () => {
+    const { createClaudeCliReadiness } = await import("./cli-readiness.js");
+    return createClaudeCliReadiness(api, version.invalidateVersion);
+  });
+  api.registerCliBackend({
+    ...buildAnthropicCliBackend(version),
+    prepareModelCatalog: async (context) => (await readiness())(context),
+  });
   api.registerProvider({
     ...buildAnthropicProvider(),
     wrapStreamFn: (ctx) =>

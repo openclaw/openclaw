@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { OpenClawPluginApi, ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createClaudeCodeVersionProbe } from "./cli-version.js";
 import { registerAnthropicPlugin } from "./register.runtime.js";
 import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js";
 
@@ -107,6 +108,26 @@ afterEach(() => {
 });
 
 describe("Claude version discovery", () => {
+  it("reprobes after maintenance without letting an old in-flight result restore stale capabilities", async () => {
+    const old = createDeferred<CommandResult>();
+    const runner = vi
+      .fn<CommandRunner>()
+      .mockReturnValueOnce(old.promise)
+      .mockResolvedValue(versionResult("2.1.286 (Claude Code)"));
+    const api = createTestPluginApi();
+    Object.assign(api.runtime, { system: { runCommandWithTimeout: runner } });
+    const probe = createClaudeCodeVersionProbe(api);
+    const beforeUpdate = probe.resolveVersion();
+    await Promise.resolve();
+    probe.invalidateVersion();
+    expect(await probe.resolveVersion()).toBe("2.1.286");
+    old.resolve(versionResult("2.0.1 (Claude Code)"));
+    expect(await beforeUpdate).toBe("2.1.286");
+    expect(await probe.resolveVersion()).toBe("2.1.286");
+    expect(probe.supportsDynamicSystemPromptSections()).toBe(true);
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["failure", "missing", "output-limit", "prerelease"] as const)(
     "leaves the transport floor intact after %s",
     async (mode) => {

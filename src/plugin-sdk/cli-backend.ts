@@ -11,6 +11,8 @@ export type {
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
+  CliBackendModelCatalogContext,
+  CliBackendModelCatalogResult,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
   CliBackendParseJsonlEvent,

@@ -398,11 +398,39 @@ type CliBackendManualCompaction = Readonly<{
 }>;
 
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
+export type CliBackendModelCatalogContext = {
+  /** Launch command and environment selected by the host's registered backend. */
+  command: string;
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+  modelIds: readonly string[];
+  reason: "discovery" | "routine" | "manual";
+  signal: AbortSignal;
+  /** Revalidate the catalog owner immediately before any installation mutation. */
+  assertCurrent: () => void;
+  /** Update while idle, or return undefined to defer while local turns are active. */
+  withMaintenance?: <T>(update: () => Promise<T>) => Promise<T | undefined>;
+  /** Changes when local maintenance completes, invalidating cached version observations. */
+  runtimeGeneration?: number;
+};
+
+export type CliBackendModelCatalogResult = {
+  models: Readonly<Record<string, { available: boolean; reason?: string }>>;
+  /** Cached deadline consumed by inventory requests; the host does not start a timer. */
+  nextCheckAt?: number;
+  /** Verified serving version, also usable as a warm-process fingerprint input. */
+  runtimeVersion?: string;
+};
+
 type CliBackendPluginBase = {
   /** Provider id used in model refs, for example `claude-cli/opus`. */
   id: string;
   /** Canonical model provider whose models this CLI backend can execute. */
   modelProvider?: string;
+  /** Prepare local installation compatibility before advertising native model readiness. */
+  prepareModelCatalog?: (
+    context: CliBackendModelCatalogContext,
+  ) => Promise<CliBackendModelCatalogResult>;
   /** Static command adapter owned by this plugin. */
   config: CliBackendConfig;
   /**
