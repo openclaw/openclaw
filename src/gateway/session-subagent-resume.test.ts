@@ -308,10 +308,10 @@ it("rejects a foreign task replacement instead of accepting untracked work", asy
   upsertSubagentRunRowInDatabase(openOpenClawStateDatabase(), bindSubagentRunRecord(replacement));
   await expect(adopt()).rejects.toThrow(/changed/);
   expect(subagentRuns.has(nextRunId)).toBe(false);
-  expect(subagentRuns.get(previousRunId)).toMatchObject(replacement);
+  expect(subagentRuns.get(previousRunId)).toEqual(replacement);
   const stored = loadSubagentRegistryFromSqlite();
   expect(stored.has(nextRunId)).toBe(false);
-  expect(stored.get(previousRunId)).toMatchObject(replacement);
+  expect(stored.get(previousRunId)).toEqual(replacement);
 });
 
 it("delivers a result once after the former synchronous wait window, through the task owner", async () => {

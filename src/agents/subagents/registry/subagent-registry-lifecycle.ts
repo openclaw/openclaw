@@ -67,6 +67,10 @@ import {
 
 export type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
 
+export class SubagentSessionCleanupRevocationChangedError extends SubagentRegistryMutationRejectedError {
+  override name = "SubagentSessionCleanupRevocationChangedError";
+}
+
 // Restored rows can arrive in a large burst. Limit only that startup catch-up
 // so ordinary live settles keep their existing latency and concurrency.
 const RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY = 2;
@@ -262,7 +266,7 @@ export class SubagentLifecycleController {
   async revokeTerminalSessionEffects(
     entries: Iterable<SubagentRunRecord>,
     assertCurrent?: () => void,
-  ): Promise<() => void> {
+  ): Promise<void> {
     const selected = new Map([...entries].map((entry) => [entry.runId, entry]));
     await mutateSubagentRuns(
       [...selected.keys()],
@@ -277,6 +281,9 @@ export class SubagentLifecycleController {
             throw new SubagentRegistryMutationRejectedError(
               "Subagent cleanup owner changed before reset",
             );
+          }
+          if (this.terminalCompletionLocks.has(getSubagentRunRuntimeKey(entry))) {
+            throw new Error("Subagent completion is still settling; retry the session reset.");
           }
           if (
             entry.execution.status === "terminal" &&
@@ -293,23 +300,23 @@ export class SubagentLifecycleController {
       },
       { runs: this.options.runs, assertCurrent },
     );
-    return () => {
-      assertCurrent?.();
-      for (const [runId, expected] of selected) {
-        const current = this.options.runs.get(runId);
-        if (
-          current &&
-          isSameSubagentRunOwner(current, expected) &&
-          current.execution.status === "terminal" &&
-          current.pauseReason !== "sessions_yield" &&
-          current.execution.suppressSessionEffects !== true
-        ) {
-          throw new SubagentRegistryMutationRejectedError(
-            "Subagent cleanup revocation changed before reset",
-          );
-        }
+  }
+
+  assertTerminalSessionEffectsRevoked(currentEntries: Iterable<SubagentRunRecord>): void {
+    for (const entry of currentEntries) {
+      if (this.terminalCompletionLocks.has(getSubagentRunRuntimeKey(entry))) {
+        throw new Error("Subagent completion is still settling; retry the session reset.");
       }
-    };
+      if (
+        entry.execution.status === "terminal" &&
+        entry.pauseReason !== "sessions_yield" &&
+        entry.execution.suppressSessionEffects !== true
+      ) {
+        throw new SubagentSessionCleanupRevocationChangedError(
+          "Subagent cleanup revocation changed before reset",
+        );
+      }
+    }
   }
 
   clearScheduledResumeTimers = () => {

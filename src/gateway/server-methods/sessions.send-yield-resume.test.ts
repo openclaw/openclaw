@@ -1,3 +1,9 @@
+// Preserve native worker fixture mocks before production consumers load the registry.
+// oxfmt-ignore
+import {
+  runSubagentStateWorkerOperation,
+  useSubagentControlFixture,
+} from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -9,10 +15,6 @@ import { createRequesterYieldCallback } from "../../agents/openclaw-tools.reques
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../../agents/subagents/announce/subagent-announce-overrides.test-support.js";
 import { dispatchGatewayMethodInProcess } from "../../agents/subagents/announce/subagent-announce.runtime.js";
-import {
-  runSubagentStateWorkerOperation,
-  useSubagentControlFixture,
-} from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../../agents/subagents/registry/subagent-registry-run-pause.js";

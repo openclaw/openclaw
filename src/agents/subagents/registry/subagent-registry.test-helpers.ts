@@ -23,6 +23,8 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { immutableSubagentRun } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type RegistryTestApi = {
@@ -53,7 +55,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   return getRegistryTestApi().resetSubagentRegistryForTests(opts);
 }
 
-export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
+function createRegistryRunFixture(entry: SubagentRunRecordOverrides): SubagentRunRecord {
   const canonical = createSubagentRunRecord(entry);
   const requesterAgentId =
     entry.requesterAgentId ?? parseAgentSessionKey(canonical.requesterSessionKey)?.agentId;
@@ -71,7 +73,17 @@ export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
       agentId: controllerAgentId,
     });
   }
-  return getRegistryTestApi().addSubagentRunForTests(canonical);
+  return canonical;
+}
+
+export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
+  return getRegistryTestApi().addSubagentRunForTests(createRegistryRunFixture(entry));
+}
+
+/** Read-only fixtures install canonical immutable rows without durable write admission. */
+export function seedSubagentRunForReadTest(entry: SubagentRunRecordOverrides): void {
+  const canonical = immutableSubagentRun(structuredClone(createRegistryRunFixture(entry)));
+  subagentRuns.set(canonical.runId, canonical);
 }
 
 export function releaseSubagentRun(runId: string) {

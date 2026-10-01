@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
+import { configureMockSubagentRegistryPersistence } from "../agents/subagent-test-fixtures.test-helpers.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -24,6 +25,7 @@ export function useMcpCollectorRegistry(
   });
   beforeEach(async () => {
     await resetSubagentRegistryForTests({ persist: false });
+    await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
     await addSubagentRunForTests({ ...entry, collect: true });
   });
   afterEach(async () => {

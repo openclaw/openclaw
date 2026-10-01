@@ -67,6 +67,7 @@ import {
   resolveSubagentSessionStartedAt,
 } from "./subagent-session-reconciliation.js";
 
+export { SubagentSessionCleanupRevocationChangedError } from "./subagent-registry-lifecycle.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
 
@@ -87,22 +88,15 @@ export async function prepareSubagentSessionCleanupRevocation(
   assertCurrent?: () => void,
 ): Promise<() => void> {
   await subagentRestorer.restoreOnce(undefined, true);
-  const validate = await subagentLifecycleController.revokeTerminalSessionEffects(
+  await subagentLifecycleController.revokeTerminalSessionEffects(
     getSubagentRunsForChildSession(sessionKey),
     assertCurrent,
   );
   return () => {
     assertCurrent?.();
-    validate();
-    for (const entry of getSubagentRunsForChildSession(sessionKey)) {
-      if (
-        entry.execution.status === "terminal" &&
-        entry.pauseReason !== "sessions_yield" &&
-        entry.execution.suppressSessionEffects !== true
-      ) {
-        throw new Error("Subagent terminal cleanup changed during session reset; retry the reset.");
-      }
-    }
+    subagentLifecycleController.assertTerminalSessionEffectsRevoked(
+      getSubagentRunsForChildSession(sessionKey),
+    );
   };
 }
 

@@ -10,7 +10,7 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -289,16 +289,16 @@ describe("buildStatusReply subagent summary", () => {
         },
       ],
     });
-    await resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   afterEach(async () => {
-    await resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   it("counts ended orchestrators with active descendants as active", async () => {
     const parentKey = "agent:main:subagent:status-ended-parent";
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-ended-parent",
       childSessionKey: parentKey,
       requesterSessionKey: "agent:main:main",
@@ -310,7 +310,7 @@ describe("buildStatusReply subagent summary", () => {
       endedAt: Date.now() - 110_000,
       outcome: { status: "ok" },
     });
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-active-child",
       childSessionKey: "agent:main:subagent:status-ended-parent:subagent:child",
       requesterSessionKey: parentKey,
@@ -328,7 +328,7 @@ describe("buildStatusReply subagent summary", () => {
 
   it("dedupes stale rows in the verbose subagent status summary", async () => {
     const childSessionKey = "agent:main:subagent:status-dedupe-worker";
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-current",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -338,7 +338,7 @@ describe("buildStatusReply subagent summary", () => {
       createdAt: Date.now() - 60_000,
       startedAt: Date.now() - 60_000,
     });
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-stale",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -361,7 +361,7 @@ describe("buildStatusReply subagent summary", () => {
     const oldParentKey = "agent:main:subagent:status-old-parent";
     const newParentKey = "agent:main:subagent:status-new-parent";
     const childSessionKey = "agent:main:subagent:status-shared-child";
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-old-parent",
       childSessionKey: oldParentKey,
       requesterSessionKey: "agent:main:main",
@@ -371,7 +371,7 @@ describe("buildStatusReply subagent summary", () => {
       createdAt: Date.now() - 120_000,
       startedAt: Date.now() - 120_000,
     });
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-new-parent",
       childSessionKey: newParentKey,
       requesterSessionKey: "agent:main:main",
@@ -381,7 +381,7 @@ describe("buildStatusReply subagent summary", () => {
       createdAt: Date.now() - 90_000,
       startedAt: Date.now() - 90_000,
     });
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-child-stale-old-parent",
       childSessionKey,
       requesterSessionKey: oldParentKey,
@@ -392,7 +392,7 @@ describe("buildStatusReply subagent summary", () => {
       createdAt: Date.now() - 60_000,
       startedAt: Date.now() - 60_000,
     });
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-child-current-new-parent",
       childSessionKey,
       requesterSessionKey: newParentKey,
@@ -411,7 +411,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("counts controller-owned runs even when the latest child requester differs", async () => {
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-controller-owned",
       childSessionKey: "agent:main:subagent:status-controller-owned",
       requesterSessionKey: "agent:main:requester-only",

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -145,7 +145,7 @@ describe("buildStatusText global subagent scope", () => {
 
   it("shows the selected global agent's children instead of the default agent's", async () => {
     for (const agentId of ["research", "ops"]) {
-      await addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId: `status-global-${agentId}`,
         childSessionKey: `agent:${agentId}:subagent:status-worker`,
         controllerSessionKey: "global",

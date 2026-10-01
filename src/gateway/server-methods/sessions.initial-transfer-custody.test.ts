@@ -1,3 +1,9 @@
+// Preserve native worker fixture mocks before production consumers load the registry.
+// oxfmt-ignore
+import {
+  runSubagentStateWorkerOperation,
+  useSubagentControlFixture,
+} from "../../agents/subagents/registry/subagent-control.test-support.js";
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
@@ -7,10 +13,6 @@ import {
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { createRequesterYieldCallback } from "../../agents/openclaw-tools.requester-yield.js";
-import {
-  runSubagentStateWorkerOperation,
-  useSubagentControlFixture,
-} from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import * as registryState from "../../agents/subagents/registry/subagent-registry-state.js";
@@ -252,19 +254,30 @@ it("finishes the initial handoff after the same child completes during promotion
     ]);
     expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBe("staged-cohort-parent");
     expect(subagentRuns.get(entry.runId)?.requesterSettleWake?.rearmGeneration).toBe(1);
+    const terminalPublished = createDeferred();
+    const stopObserving = registryState.onSubagentRegistryPersisted(() => {
+      if (subagentRuns.get(entry.runId)?.execution.status === "terminal") {
+        terminalPublished.resolve();
+      }
+    });
     const settleRootWork = observeRootWork();
     fixture.announce.mockResolvedValue("requester_turn_pending");
-    emitAgentEvent({
-      runId: entry.runId,
-      sessionKey: entry.childSessionKey,
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        endedAt: Date.now(),
-        terminalReply: { disposition: "visible", text: "Child finished during the handoff." },
-      },
-    });
-    await settleRootWork();
+    try {
+      emitAgentEvent({
+        runId: entry.runId,
+        sessionKey: entry.childSessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: Date.now(),
+          terminalReply: { disposition: "visible", text: "Child finished during the handoff." },
+        },
+      });
+      await terminalPublished.promise;
+      await settleRootWork();
+    } finally {
+      stopObserving();
+    }
     expect(subagentRuns.get(entry.runId)?.execution.status).toBe("terminal");
     expect(fixture.wake).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30_000);

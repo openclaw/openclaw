@@ -10,6 +10,7 @@ import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/sub
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -101,12 +102,12 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         data: { phase: "end", endedAt: Date.now() },
       });
       await fixture.settle();
-      expect(ended.execution.status).toBe("terminal");
+      expect(subagentRuns.get("ended")?.execution.status).toBe("terminal");
       clearAgentRunContext("ended");
       await fixture.settle();
-      expect(ended.endedReason).toBe("subagent-complete");
+      expect(subagentRuns.get("ended")?.endedReason).toBe("subagent-complete");
     }
-    expect(subagentRuns.get("ended")).toBe(ended);
+    expect(isSameSubagentRunOwner(subagentRuns.get("ended"), ended)).toBe(true);
     const entered = createDeferred();
     const resume = createDeferred();
     const endedMutationEntered = createDeferred();
@@ -182,7 +183,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       const session = loadExactSessionEntryReadOnly({ storePath, sessionKey: endedKey })?.entry;
       expect(session?.sessionId).toBe("ended-session");
       expect(session?.lifecycleRevision === "original").toBe(!reset);
-      expect(subagentRuns.get("ended")).toBe(ended);
+      expect(isSameSubagentRunOwner(subagentRuns.get("ended"), ended)).toBe(true);
       if (!completed) {
         newAdmission = await sessionLifecycle.beginSessionWorkAdmission({
           scope: storePath,
@@ -223,7 +224,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       expect(subagentRuns.get("grandchild")?.execution.status).toBe(reset ? "queued" : "terminal");
       if (!completed) {
         expect(interrupted).toHaveBeenCalledTimes(reset ? 0 : 1);
-        expect(ended.execution.status).toBe(reset ? "running" : "terminal");
+        expect(subagentRuns.get("ended")?.execution.status).toBe(reset ? "running" : "terminal");
       }
       releaseSwarmRun("capacity");
       if (reset) {
