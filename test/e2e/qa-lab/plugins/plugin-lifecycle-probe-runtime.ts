@@ -1,6 +1,6 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
 import { spawn, spawnSync } from "node:child_process";
-/* oxlint-disable eslint/no-shadow, eslint/prefer-const, eslint/no-promise-executor-return, typescript/restrict-template-expressions, typescript/no-base-to-string -- QA probe intentionally validates loosely typed external JSON and mirrors child-process callback shapes. */
+/* oxlint-disable eslint/no-shadow, eslint/prefer-const, typescript/restrict-template-expressions, typescript/no-base-to-string -- QA probe intentionally validates loosely typed external JSON and mirrors child-process callback shapes. */
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
