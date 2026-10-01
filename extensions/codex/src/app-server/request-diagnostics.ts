@@ -26,11 +26,18 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
   }
   const startedAt = performance.now();
   let attempt = createAttempt(0);
-  function createAttempt(ordinal: number) {
+  function createAttempt(ordinal: number): {
+    ordinal: number;
+    phase: "prepare" | "acquire-client" | "callback" | "release-client";
+    clientInstanceId: string | undefined;
+    started: number;
+    pending: number;
+    methods: Map<string, number>;
+  } {
     return {
       ordinal,
-      phase: "prepare" as "prepare" | "acquire-client" | "callback" | "release-client",
-      clientInstanceId: undefined as string | undefined,
+      phase: "prepare",
+      clientInstanceId: undefined,
       started: 0,
       pending: 0,
       methods: new Map<string, number>(),
