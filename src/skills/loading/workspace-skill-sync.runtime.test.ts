@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
@@ -477,6 +478,68 @@ describe("syncWorkspaceSkills", () => {
       false,
     );
   });
+
+  it
+    .runIf(process.platform !== "win32" && process.getuid?.() !== 0)
+    .each(["copied source", "legacy destination"])(
+    "refreshes read-only skill trees from a %s",
+    async (scenario) => {
+      const sourceWorkspace = await createCaseDir("readonly-source");
+      const targetWorkspace = await createCaseDir("readonly-target");
+      const outsideDir = await createCaseDir("readonly-outside");
+      const sourceSkill = path.join(sourceWorkspace, ".bundled", "sealed");
+      const targetSkill = path.join(targetWorkspace, "skills", "sealed");
+      await writeSkill({ dir: sourceSkill, name: "sealed", description: "Sealed release skill" });
+      await fs.mkdir(path.join(sourceSkill, "scripts"));
+      await fs.writeFile(path.join(sourceSkill, "scripts", "run.sh"), "#!/bin/sh\necho sealed\n");
+      await fs.chmod(path.join(sourceSkill, "SKILL.md"), 0o444);
+      await fs.chmod(path.join(sourceSkill, "scripts", "run.sh"), 0o555);
+      const directories = [sourceSkill, path.join(sourceSkill, "scripts"), outsideDir];
+      try {
+        for (const directory of directories) {
+          await fs.chmod(directory, 0o555);
+        }
+        if (scenario === "legacy destination") {
+          await fs.cp(sourceSkill, targetSkill, { recursive: true });
+          await fs.chmod(targetSkill, 0o755);
+          await fs.symlink(outsideDir, path.join(targetSkill, "outside"), "dir");
+          await fs.writeFile(path.join(targetSkill, "stale.txt"), "old copy");
+          await fs.chmod(targetSkill, 0o555);
+        } else {
+          await syncSourceSkillsToTarget(sourceWorkspace, targetWorkspace);
+          bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+        }
+
+        await syncSourceSkillsToTarget(sourceWorkspace, targetWorkspace);
+
+        for (const relative of ["", "scripts"]) {
+          expect((await fs.stat(path.join(targetSkill, relative))).mode & 0o700).toBe(0o700);
+          expect((await fs.stat(path.join(sourceSkill, relative))).mode & 0o777).toBe(0o555);
+        }
+        expect(await fs.readFile(path.join(targetSkill, "SKILL.md"), "utf8")).toContain(
+          "Sealed release skill",
+        );
+        expect(await fs.readFile(path.join(targetSkill, "scripts", "run.sh"), "utf8")).toBe(
+          "#!/bin/sh\necho sealed\n",
+        );
+        expect((await fs.stat(path.join(targetSkill, "SKILL.md"))).mode & 0o777).toBe(0o444);
+        expect((await fs.stat(path.join(targetSkill, "scripts", "run.sh"))).mode & 0o777).toBe(
+          0o555,
+        );
+        expect((await fs.stat(outsideDir)).mode & 0o777).toBe(0o555);
+        expect(await pathExists(path.join(targetSkill, "stale.txt"))).toBe(false);
+        expect(await pathExists(path.join(targetSkill, "outside"))).toBe(false);
+      } finally {
+        for (const directory of [...directories, targetSkill, path.join(targetSkill, "scripts")]) {
+          await fs.chmod(directory, 0o700).catch((error: unknown) => {
+            if (!hasErrnoCode(error, "ENOENT")) {
+              throw error;
+            }
+          });
+        }
+      }
+    },
+  );
 
   it("does not publish a manifest when a refreshed copy fails", async () => {
     const sourceWorkspace = await createCaseDir("source");
