@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
@@ -362,7 +361,7 @@ export async function runEmbeddedFallbackCandidate(
     // Plugin harnesses return the same canonical receipt as the built-in runner,
     // but do not receive host-private completion callbacks. Project their settled
     // current-source delivery before the fallback owner selects another candidate.
-    if (hasCompletedSourceReplyDeliveryEvidence(result)) {
+    if (result.sourceReplyDelivered === true) {
       params.onCompletedSourceReplyDelivered();
     }
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);

@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
+import * as runAttemptResources from "./run-attempt-resources.js";
 import {
   createParams,
   createStartedThreadHarness,
@@ -11,6 +12,7 @@ import {
   userMessage,
 } from "./run-attempt-test-harness.js";
 import {
+  createCodexTestBindingStore,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   type writeCodexAppServerBinding,
@@ -226,6 +228,43 @@ export function registerSettledFinalizationTests({
       }
     },
   );
+  it("preserves a projected canonical source reply when native binding retention fails", async () => {
+    const resourcesSpy = vi.spyOn(runAttemptResources, "prepareCodexAttemptResources");
+    const bindingStore = createCodexTestBindingStore();
+    const originalMutate = bindingStore.mutate.bind(bindingStore);
+    const sessionFile = path.join(tempDir, "session-source-reply-finalization.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-source-reply-finalization");
+    const params = createParams(sessionFile, workspaceDir);
+    let failBindingRetention = false;
+    const failingBindingStore: typeof bindingStore = {
+      ...bindingStore,
+      async mutate(...args: Parameters<typeof bindingStore.mutate>): Promise<boolean> {
+        if (failBindingRetention) {
+          throw new Error("binding retention failed after source delivery");
+        }
+        return await originalMutate(...args);
+      },
+    };
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params, { bindingStore: failingBindingStore });
+    await harness.waitForMethod("turn/start");
+    const resources = resourcesSpy.mock.results[0]?.value;
+    if (!resources) {
+      throw new Error("Expected prepared Codex attempt resources");
+    }
+    resources.prompt.context.attemptTools.toolBridge.telemetry.sourceReplyDelivered = true;
+    failBindingRetention = true;
+    await harness.notify(turnCompleted({ id: "turn-1", status: "completed" }));
+
+    const result = await run;
+    expect(result.sourceReplyDelivered).toBe(true);
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: expect.objectContaining({
+        message:
+          "Native finalization failed after the source reply was delivered. Inspect the existing thread before continuing; do not repeat the completed reply.",
+      }),
+    });
+  });
   it("captures settled tool evidence when an active native compaction fails terminally", async () => {
     const storePath = path.join(tempDir, "settled-compaction-failure.sqlite");
     const sessionId = "session-settled-compaction-failure";

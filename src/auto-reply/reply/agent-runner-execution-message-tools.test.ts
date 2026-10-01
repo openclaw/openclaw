@@ -417,6 +417,48 @@ describe("executeAgentTurn: message tool progress", () => {
     });
   });
 
+  it("keeps fallback available for legacy-only plugin delivery evidence", async () => {
+    state.runEmbeddedAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "NO_REPLY" }],
+        sourceReplyDeliveryState: "delivered",
+        meta: { error: { message: "legacy runtime failed after coarse delivery telemetry" } },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "Fallback answer" }],
+        meta: {},
+      });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("legacy", "primary", initialFallbackAttemptOptions(params));
+      expect(params.canFallbackAfterError?.()).toBe(true);
+      const result = await params.run(
+        "openai",
+        "fallback",
+        fallbackAttemptOptions(params, "unknown"),
+      );
+      return { result, provider: "openai", model: "fallback", attempts: [] };
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    const result = await executeAgentTurn({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: {} satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      ...createAgentTurnExecutionDefaults(),
+      resolvedVerboseLevel: "on",
+    });
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      kind: "success",
+      runResult: { payloads: [{ text: "Fallback answer" }] },
+    });
+  });
+
   it.each(["progress", "partial delivery"])(
     "keeps fallback available after unfinished source %s",
     async (sourceReplyKind) => {
