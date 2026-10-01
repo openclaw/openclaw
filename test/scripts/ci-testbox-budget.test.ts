@@ -51,7 +51,14 @@ describe("Testbox spending admission", () => {
     expect(() => planTestboxAdmission({ ...request, minutes }, now)).toThrow(/runtime/);
   });
 
-  it("retains long proof while enforcing each sibling's existing maximum", () => {
+  it("defaults routine proof to one hour and preserves explicit long-proof requests", () => {
+    const workflow = parse(readFileSync(".github/workflows/ci-check-testbox.yml", "utf8"));
+    const dispatchDefault = workflow.on.workflow_dispatch.inputs.timeout_minutes.default;
+    expect(planTestboxAdmission({ ...request, minutes: dispatchDefault }, now).minutes).toBe(60);
+    expect(planTestboxAdmission(request, now).minutes).toBe(60);
+    expect(planTestboxAdmission({ ...request, minutes: "" }, now).minutes).toBe(60);
+    expect(planTestboxAdmission({ ...request, minutes: 30 }, now).minutes).toBe(30);
+    expect(planTestboxAdmission({ ...request, profile: "check-memory" }, now).minutes).toBe(240);
     expect(planTestboxAdmission({ ...request, minutes: 240 }, now).minutes).toBe(240);
     expect(() => planTestboxAdmission({ ...request, profile: "build", minutes: 36 }, now)).toThrow(
       /1 to 35/,

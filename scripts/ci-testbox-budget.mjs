@@ -17,6 +17,7 @@ const WINDOWS_RUNNERS = new Set([
 const ADMISSION_AGE_MS = 10 * 60_000;
 const CONCURRENT_LEASES = 32;
 const MAX_IDLE_MINUTES = 15;
+const DEFAULT_STANDARD_MINUTES = 60;
 const HIGH_MEMORY_LEASES = 4;
 
 export function assertFreshTestboxAdmission(expiresAt, now = Date.now()) {
@@ -43,7 +44,8 @@ export function planTestboxAdmission(
   ) {
     throw new Error(`Runner ${selectedRunner} is not allowed for the ${profile} Testbox profile.`);
   }
-  const timeout = minutes === undefined || minutes === "" ? policy.minutes : Number(minutes);
+  const defaultMinutes = profile === "check" ? DEFAULT_STANDARD_MINUTES : policy.minutes;
+  const timeout = minutes === undefined || minutes === "" ? defaultMinutes : Number(minutes);
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > policy.minutes) {
     throw new Error(`Testbox runtime must be an integer from 1 to ${policy.minutes} minutes.`);
   }

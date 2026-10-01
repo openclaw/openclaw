@@ -11228,7 +11228,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(setupNodeWith["cache-mode"]).toBe("restore");
     for (const [minutes, expected] of [
       ["45", 45],
-      ["", 240],
+      ["", 60],
     ] as const) {
       expect(
         evaluateWorkflowExpression(checkTestboxJob["timeout-minutes"], {
