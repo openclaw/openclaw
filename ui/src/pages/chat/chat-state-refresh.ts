@@ -247,8 +247,12 @@ export async function refreshChatMetadata(
     }
     // Presentation changes owners; the model cache still owns the direct transport.
     binding.catalogRequest = undefined;
+    host.chatModelsLoading =
+      !freshCatalog &&
+      (Boolean(host.chatModelCatalogError) ||
+        host.chatModelsLoading ||
+        host.chatModelCatalog.length === 0);
     host.chatModelCatalogError = null;
-    host.chatModelsLoading = !freshCatalog && host.chatModelCatalog.length === 0;
     host.requestUpdate?.();
     const ownsRefresh = () =>
       binding.isCurrent() && refresh.isCurrent() && binding.refreshPending?.refresh === refresh;
@@ -429,8 +433,11 @@ async function loadChatModelCatalog(
   const version = binding.version;
   const ownsRequest = () =>
     binding.isCurrent() && binding.catalogRequest?.controller === controller;
+  host.chatModelsLoading =
+    Boolean(host.chatModelCatalogError) ||
+    host.chatModelsLoading ||
+    host.chatModelCatalog.length === 0;
   host.chatModelCatalogError = null;
-  host.chatModelsLoading = host.chatModelCatalog.length === 0;
   host.requestUpdate?.();
   const promise = loadModelCatalog(binding.client, { ...binding.scope, signal: controller.signal })
     .then(
@@ -497,8 +504,14 @@ function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBi
     binding.catalogRequest?.controller.abort();
     binding.catalogRequest = undefined;
   }
+  const previousError = host.chatModelCatalogError;
+  const previousLoading = host.chatModelsLoading;
   applyChatModelCatalog(host, result);
-  host.chatModelsLoading = false;
+  // A stale display receipt cannot settle this pane's newer failed or pending read.
+  if (!fresh) {
+    host.chatModelCatalogError = previousError;
+  }
+  host.chatModelsLoading = !fresh && previousLoading;
   host.requestUpdate?.();
   return Boolean(fresh);
 }
