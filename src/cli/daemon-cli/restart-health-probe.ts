@@ -221,8 +221,8 @@ function readChannelProbeFailures(health: unknown) {
             ([accountId, account]) => [`${channelId}/${accountId}`, account] as const,
           )
         : [[channelId, summary] as const];
-    return entries.flatMap(([id, value]) => {
-      const account = asOptionalRecord(value);
+    return entries.flatMap(([id, accountValue]) => {
+      const account = asOptionalRecord(accountValue);
       if (
         account?.enabled === false ||
         account?.configured === false ||
