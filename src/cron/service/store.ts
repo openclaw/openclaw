@@ -131,7 +131,7 @@ function validateCronStoreLoad(params: {
   previousJobsById: Map<string, CronJob>;
   /** Rows come from a job-id narrowed read, so `sourceIndex` is subset-relative. */
   narrowed?: boolean;
-}) {
+}): ValidatedCronStoreLoad {
   const { state, loaded, loadNowMs, previousJobsById, narrowed } = params;
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
