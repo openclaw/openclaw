@@ -80,6 +80,8 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_COLD !== "1")(
         );
         const used = process.threadCpuUsage(cpu);
         const elapsedMs = performance.now() - started;
+        // Let the delay sampler observe the final response turn.
+        await yieldToEventLoop();
         await yieldToEventLoop();
         console.log(
           JSON.stringify({
