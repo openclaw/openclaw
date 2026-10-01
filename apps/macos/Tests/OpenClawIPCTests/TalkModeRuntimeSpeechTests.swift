@@ -461,6 +461,23 @@ private func runtimeRecoveryState(
     """
 }
 
+private func runtimeTestDependencies(
+    audioCapture: @escaping @MainActor @Sendable () -> any RealtimeTalkAudioCapturing)
+    -> TalkModeRuntime.Dependencies
+{
+    let live = TalkModeRuntime.Dependencies.live
+    return .init(
+        permissions: .init(supported: { true }, granted: { true }, ensure: { _ in true }),
+        audioCapture: audioCapture,
+        pcmPlayer: { RuntimeTestPCMPlayer() },
+        selectedSession: live.selectedSession,
+        stopPCM: live.stopPCM,
+        stopMP3: live.stopMP3,
+        stopBuffered: live.stopBuffered,
+        stopSystem: live.stopSystem,
+        stopMLX: live.stopMLX)
+}
+
 @Suite(.serialized)
 struct TalkModeRuntimeSpeechTests {
     @Test @MainActor func `macOS realtime relay preference defaults off and reads explicit opt in`() async {
@@ -539,21 +556,21 @@ struct TalkModeRuntimeSpeechTests {
                 recoveryMilestones.record("\(recoveryStartedAt.duration(to: ContinuousClock.now)): \(event)")
             }
             let bootstrap = try makeRuntimeTestBootstrap(requests: recoveryRequests)
-            let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: {
-                recordRecovery("bootstrap")
-                return bootstrap
-            })
             let recoveryStarted = RuntimeTestSignal<Void>()
             let recoveryCapture = RuntimeTestAudioCapture()
             recoveryCapture.onStart = {
                 recordRecovery("microphone-started")
                 recoveryStarted.send(())
             }
-            await runtime._test_setRealtimeAudioCaptureProvider {
-                recordRecovery("capture-created")
-                return recoveryCapture
-            }
-            await runtime._test_setVoiceWakeReadiness(supported: true, permissionGranted: true)
+            let runtime = TalkModeRuntime(
+                realtimeTalkBootstrapProvider: {
+                    recordRecovery("bootstrap")
+                    return bootstrap
+                },
+                dependencies: runtimeTestDependencies(audioCapture: {
+                    recordRecovery("capture-created")
+                    return recoveryCapture
+                }))
             let audioCapture = RuntimeTestAudioCapture()
             let session = makeRecordingRelaySession(requests: requests, audioCapture: audioCapture)
             defer { session.stop() }
@@ -744,9 +761,9 @@ struct TalkModeRuntimeSpeechTests {
             let bootstrap = try makeRuntimeTestBootstrap(
                 requests: requests,
                 realtimeModel: "fresh-model")
-            let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { bootstrap })
-            await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
-            await runtime._test_setVoiceWakeReadiness(supported: true, permissionGranted: true)
+            let runtime = TalkModeRuntime(
+                realtimeTalkBootstrapProvider: { bootstrap },
+                dependencies: runtimeTestDependencies(audioCapture: { RuntimeTestAudioCapture() }))
             _ = await runtime._test_prepareEnabledLifecycle()
             await runtime.setPaused(true)
             await runtime.setEnabled(false)
@@ -1028,9 +1045,9 @@ struct TalkModeRuntimeSpeechTests {
             let sequence = RuntimeTestBootstrapSequence(
                 bootstraps: [firstBootstrap, retryBootstrap],
                 firstBarrier: barrier)
-            let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { try await sequence.next() })
-            await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
-            await runtime._test_setVoiceWakeReadiness(supported: true, permissionGranted: true)
+            let runtime = TalkModeRuntime(
+                realtimeTalkBootstrapProvider: { try await sequence.next() },
+                dependencies: runtimeTestDependencies(audioCapture: { RuntimeTestAudioCapture() }))
             let attempt = Task {
                 await runtime.setEnabled(true)
                 return true
@@ -1118,10 +1135,9 @@ struct TalkModeRuntimeSpeechTests {
         let sequence = RuntimeTestBootstrapSequence(
             bootstraps: [bootstrapA, bootstrapB],
             firstBarrier: barrier)
-        let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: {
-            try await sequence.next()
-        })
-        await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
+        let runtime = TalkModeRuntime(
+            realtimeTalkBootstrapProvider: { try await sequence.next() },
+            dependencies: runtimeTestDependencies(audioCapture: { RuntimeTestAudioCapture() }))
         let lifecycleA = await runtime._test_prepareEnabledLifecycle()
         await runtime._test_enableRealtimeRelaySelection()
         let attemptA = Task {
