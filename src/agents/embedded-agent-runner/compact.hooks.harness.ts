@@ -247,7 +247,9 @@ export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { sur
       : ["Main compact command guidance."],
 );
 export const buildEmbeddedSystemPromptMock = vi.fn<typeof buildEmbeddedSystemPrompt>(() => "");
-export const resolveSkillsPromptMock = vi.fn((): string | undefined => undefined);
+export const resolveSkillsPromptMock = vi.fn<
+  typeof import("../../skills/loading/workspace-skill-prompt.js").resolveSkillsPrompt
+>(async () => "");
 export const resolveEmbeddedAgentStreamMock: Mock<
   (params?: unknown) => { streamFn: MockEmbeddedAgentStreamFn; strategy: string }
 > = vi.fn((_params?: unknown) => ({ streamFn: vi.fn(), strategy: "session-custom" }));
@@ -508,7 +510,7 @@ export function resetCompactSessionStateMocks(): void {
   buildEmbeddedSystemPromptMock.mockReset();
   buildEmbeddedSystemPromptMock.mockReturnValue("");
   resolveSkillsPromptMock.mockReset();
-  resolveSkillsPromptMock.mockReturnValue(undefined);
+  resolveSkillsPromptMock.mockResolvedValue("");
 }
 
 export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = "session-1"): void {
