@@ -233,11 +233,7 @@ export async function readDesktopOverlay(
     dirty !== "all" &&
     !(dirty instanceof Set && dirty.size > 0)
   ) {
-    setBoundedCache(desktopOverlays, homeDir, entry, 8, (evicted) => {
-      void evicted.watch?.close().catch((error: unknown) => {
-        log.warn(`Claude Desktop catalog watcher cleanup failed: ${String(error)}`);
-      });
-    });
+    setBoundedCache(desktopOverlays, homeDir, entry, 8);
     return entry.overlay;
   }
   const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir), 3);

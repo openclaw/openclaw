@@ -468,13 +468,12 @@ function subscribeWorkspaceToPath(workspaceDir: string, target: WatchTarget): vo
     if (reusable || existing.replacing) {
       return;
     }
+    existing.verified = false;
     if (healthy) {
       // A deeper subscriber cannot claim coverage while scope expansion is pending.
-      existing.verified = false;
       void existing.refreshScope();
       return;
     }
-    existing.verified = false;
     if (!existing.unavailable) {
       existing.unavailable = true;
       publishSkillsWatchChanges([
@@ -565,8 +564,7 @@ export function ensureSkillsWatcher(params: {
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
   };
   const now = Date.now();
-  const watchEnabled = params.config?.skills?.load?.watch !== false;
-  if (!watchEnabled) {
+  if (params.config?.skills?.load?.watch === false) {
     disposeWorkspaceWatchState(watcherKey);
     evictWorkspaceWatchStates(now, disposeWorkspaceWatchState);
     return;
@@ -735,9 +733,7 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
   workspaceWatchOwners.clear();
   workspaceWatchTargetCache.clear();
   workspaceWatchLastEnsuredAt.clear();
-  for (const state of active) {
-    void state.close().catch(() => {});
-  }
+  active.forEach((state) => void state.close());
   const results = await Promise.allSettled([
     ...replacingWatchers,
     ...retiringWatchers,
