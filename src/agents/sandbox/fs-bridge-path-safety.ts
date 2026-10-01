@@ -116,7 +116,7 @@ export class SandboxFsPathGuard {
   async openReadableFile(
     target: SandboxResolvedFsPath,
     signal?: AbortSignal,
-  ): Promise<RootFileOpenResult & { ok: true }> {
+  ): Promise<RootFileOpenResult & { ok: true; containerPath: string }> {
     const resolved = await this.resolveCanonicalReadTarget(target, "read files", signal);
     const opened = await this.openBoundaryWithinRequiredMount(resolved.target, "read files");
     if (!opened.ok) {
@@ -138,7 +138,7 @@ export class SandboxFsPathGuard {
       fs.closeSync(opened.fd);
       throw error;
     }
-    return opened;
+    return { ...opened, containerPath: resolved.target.containerPath };
   }
 
   private async resolveCanonicalEndpoint(

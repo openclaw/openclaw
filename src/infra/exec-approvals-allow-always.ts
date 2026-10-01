@@ -1,5 +1,4 @@
 import { sha256HexPrefixCore } from "./crypto-digest.js";
-// Owns durable approval matching and allow-always persistence.
 import {
   buildExecApprovalPolicyRuleKey,
   canonicalizeExecApprovalPolicyRules,

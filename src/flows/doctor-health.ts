@@ -10,9 +10,13 @@ import {
   isDoctorUpdateRepairMode,
   resolveDoctorRepairMode,
 } from "../commands/doctor-repair-mode.js";
-import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.js";
+import {
+  DOCTOR_SQLITE_NOCOW_REPAIR_ENV,
+  isUpdateDoctorLintPass,
+} from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -458,7 +462,6 @@ async function runDoctorHealthFlowWithResult(
         );
         if (!readiness.schemaPublicationDeferred) {
           resumeCapture?.();
-          const { isTruthyEnvValue } = await import("../infra/env.js");
           if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_PROXY_ENABLED)) {
             const { initializeDebugProxyCaptureAsync } =
               await import("../proxy-capture/runtime.js");
@@ -476,7 +479,16 @@ async function runDoctorHealthFlowWithResult(
     try {
       ctx = await (maintenance ? maintenance.run(runChecks) : runChecks());
       if (ctx && maintenance && options.repair === true && sqliteNoCowPaths.length > 0) {
-        await maintenance.repairSqliteNoCow(sqliteNoCowPaths);
+        if (
+          resolveDoctorRepairMode(options).updateInProgress &&
+          !isTruthyEnvValue(process.env[DOCTOR_SQLITE_NOCOW_REPAIR_ENV])
+        ) {
+          effectiveRuntime.log(
+            "SQLite NOCOW repair deferred: the managed updater did not request the store rewrite in this run.",
+          );
+        } else {
+          await maintenance.repairSqliteNoCow(sqliteNoCowPaths);
+        }
       }
     } catch (error) {
       failure = error;

@@ -2,7 +2,7 @@ import { safeParseJson, stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 
-export const UPDATE_DEV_TARGET_REF_ENV = "OPENCLAW_UPDATE_DEV_TARGET_REF";
+const UPDATE_DEV_TARGET_REF_ENV = "OPENCLAW_UPDATE_DEV_TARGET_REF";
 const TRACKED_DEV_TARGET_PREFIX = "openclaw-dev-target:v1:";
 const MAX_TRACKED_DEV_TARGET_PAYLOAD_LENGTH = 4096;
 
@@ -72,7 +72,7 @@ export function devUpdateTargetFromGitTarget(
   };
 }
 
-export function parseDevUpdateTargetEnv(env: NodeJS.ProcessEnv): DevUpdateTargetEnvParseResult {
+function parseDevUpdateTargetEnv(env: NodeJS.ProcessEnv): DevUpdateTargetEnvParseResult {
   const value = env[UPDATE_DEV_TARGET_REF_ENV]?.trim();
   if (!value) {
     return { status: "absent" };
@@ -87,6 +87,16 @@ export function parseDevUpdateTargetEnv(env: NodeJS.ProcessEnv): DevUpdateTarget
   return isValidTargetPart(value)
     ? { status: "valid", target: { mode: "detached", ref: value } }
     : { status: "invalid" };
+}
+
+export function readDevUpdateTarget(): DevUpdateTarget | undefined {
+  const parsed = parseDevUpdateTargetEnv(process.env);
+  if (parsed.status === "invalid") {
+    throw new Error(
+      `Invalid internal ${UPDATE_DEV_TARGET_REF_ENV} contract; expected a plain Git ref or a supported tracked-target encoding.`,
+    );
+  }
+  return parsed.status === "valid" ? parsed.target : undefined;
 }
 
 export function applyDevUpdateTargetEnv(

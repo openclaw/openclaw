@@ -383,11 +383,13 @@ describe("Agents API output attachment publication", () => {
         { output: bytes },
       );
       const controller = new AbortController();
+      const transferAborted = new Error("fixture transfer aborted");
+      const bindingRevoked = new Error("fixture binding lease revoked");
       let bindingCurrent = true;
       let reachedSave = false;
       const assertCurrent = () => {
         if (!bindingCurrent) {
-          throw new Error("fixture binding lease revoked");
+          throw bindingRevoked;
         }
       };
       const detectMime = mediaMime.detectMime;
@@ -401,14 +403,19 @@ describe("Agents API output attachment publication", () => {
           } else if (revocation === "binding") {
             bindingCurrent = false;
           } else {
-            controller.abort(new Error("fixture transfer aborted"));
+            controller.abort(transferAborted);
           }
         }
         return mime;
       });
-      await expect(collect(client, assertCurrent, controller.signal)).rejects.toThrow(
-        /no longer active|binding lease revoked|transfer aborted|This operation was aborted/,
-      );
+      const collecting = collect(client, assertCurrent, controller.signal);
+      if (revocation === "host") {
+        await expect(collecting).rejects.toMatchObject({ name: "AbortError", code: 20 });
+      } else {
+        await expect(collecting).rejects.toBe(
+          revocation === "abort" ? transferAborted : bindingRevoked,
+        );
+      }
       expect(reachedSave).toBe(true);
       expect(await outboundFiles()).toEqual([]);
     },

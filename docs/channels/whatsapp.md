@@ -295,7 +295,11 @@ delayed echo to do.
 
 **Retention.** The accepted-send ownership marker and the poll creation
 message (including its decryption key) stay only in bounded, process-local
-caches; OpenClaw never writes them to plugin state. A Gateway restart drops
+caches, with a ten-minute lifetime and at most 500 entries per cache; OpenClaw
+never writes them to plugin state. Once the ownership marker expires or is
+evicted, later votes are treated as unowned and are not decoded or dispatched.
+Send a new poll when hook observation must continue beyond that window.
+A Gateway restart drops
 both caches. Votes for polls sent before that restart are therefore treated as
 unowned and are not decoded or dispatched, even if WhatsApp later redelivers
 their creation message: an inbound echo never recreates the ownership marker.

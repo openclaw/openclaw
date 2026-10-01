@@ -107,7 +107,7 @@ function cacheExecutablePath(key: string, resolved: string | undefined): void {
 
 function executablePathCacheKey(
   executable: string,
-  pathEnv: string,
+  pathEnv: string | readonly string[],
   env: NodeJS.ProcessEnv | undefined,
   includeExtensionless: boolean | undefined,
   requestedCwd: string | undefined,
@@ -123,7 +123,7 @@ function executablePathCacheKey(
   } catch {
     // A deleted cwd already makes relative probes fail; keep the cache key stable for that state.
   }
-  return `${process.platform}\0${executable}\0${pathEnv}\0${pathExt}\0${includeExtensionless !== false}\0${cwd}\0${requestedCwd !== undefined}`;
+  return `${process.platform}\0${executable}\0${JSON.stringify(pathEnv)}\0${pathExt}\0${includeExtensionless !== false}\0${cwd}\0${requestedCwd !== undefined}`;
 }
 
 /** Clears process-local PATH probe results after the runtime environment changes. */
@@ -131,9 +131,10 @@ export function clearExecutablePathCache(): void {
   executablePathCache.clear();
 }
 
+/** Prepared entries preserve delimiters introduced by caller-owned home expansion. */
 export function resolveExecutableFromPathEnv(
   executable: string,
-  pathEnv: string,
+  pathEnv: string | readonly string[],
   env?: NodeJS.ProcessEnv,
   options?: { includeExtensionless?: boolean; cwd?: string; useCache?: boolean },
 ): string | undefined {
@@ -161,9 +162,9 @@ export function resolveExecutableFromPathEnv(
     executablePathCache.delete(cacheKey);
   }
   const delimiter = process.platform === "win32" ? ";" : path.delimiter;
-  const entries = pathEnv
-    .split(delimiter)
-    .filter((entry) => Boolean(entry) || (cwd !== undefined && process.platform !== "win32"));
+  const entries = (typeof pathEnv === "string" ? pathEnv.split(delimiter) : pathEnv).filter(
+    (entry) => Boolean(entry) || (cwd !== undefined && process.platform !== "win32"),
+  );
   const extensions = resolveWindowsExecutableExtensions(
     executable,
     env,

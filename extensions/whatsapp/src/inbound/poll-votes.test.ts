@@ -59,11 +59,11 @@ describe("decodeWhatsAppPollVote", () => {
   it.each(pollSections)("decodes a vote for %s poll creation messages", (section) => {
     const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
       section,
-      options: ["Pizza", "Sushi", "Tacos"],
+      options: ["Pizza", " Sushi ", "Tacos"],
     });
     const creationKey = creationKeyFor(POLL_MSG_ID);
     const vote = encryptPollVoteForTests({
-      selectedOptionNames: ["Sushi"],
+      selectedOptionNames: [" Sushi "],
       pollEncKey,
       pollCreatorJid: POLL_CREATOR_JID,
       pollMsgId: POLL_MSG_ID,
@@ -87,7 +87,7 @@ describe("decodeWhatsAppPollVote", () => {
       pollMessageId: POLL_MSG_ID,
       chatJid: CHAT_JID,
       voter: VOTER_JID,
-      selectedOptions: ["Sushi"],
+      selectedOptions: [" Sushi "],
       timestamp: 1_700_000_000_000,
     });
   });

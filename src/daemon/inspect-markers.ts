@@ -19,11 +19,7 @@ import {
 } from "./constants.js";
 import { resolveGeneratedEnvWrapperLayout } from "./launchd-plist.js";
 import { resolveRuntimeScriptPosition } from "./runtime-binary.js";
-import {
-  parseSystemdInlineEnvironment,
-  parseSystemdExecStart,
-  splitSystemdLogicalLines,
-} from "./systemd-unit.js";
+import { parseSystemdExecStart, splitSystemdLogicalLines } from "./systemd-unit.js";
 
 export const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
 
@@ -93,10 +89,6 @@ export function hasGatewayServiceMarker(value: unknown): boolean {
   );
 }
 
-export function hasSystemdGatewayServiceMarker(content: string): boolean {
-  return hasGatewayServiceMarker(parseSystemdInlineEnvironment(content));
-}
-
 export function detectLaunchdGatewayExecutionMarker(plist: Record<string, unknown>): Marker | null {
   const args = plist.ProgramArguments;
   if (!Array.isArray(args) || !args.every((arg): arg is string => typeof arg === "string")) {
@@ -116,16 +108,6 @@ export function detectLaunchdGatewayExecutionMarker(plist: Record<string, unknow
   // many unrelated helper jobs.
   const launchCommand = normalizeLowercaseStringOrEmpty(command.join("\n"));
   return EXTRA_MARKERS.find((marker) => launchCommand.includes(marker)) ?? null;
-}
-
-export function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
-  if (hasSystemdGatewayServiceMarker(contents)) {
-    return true;
-  }
-  if (!name.startsWith("openclaw-gateway")) {
-    return false;
-  }
-  return normalizeLowercaseStringOrEmpty(contents).includes("gateway");
 }
 
 export function isOpenClawGatewayTaskName(name: string): boolean {

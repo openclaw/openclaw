@@ -7,6 +7,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import {
   getSessionColdStorageMaintenanceStatus,
   requestGatewaySessionColdStorageMaintenance,
@@ -140,7 +141,6 @@ it.each(["periodic", "manual"] as const)(
 );
 
 it("acknowledges Run now before worker completion and exposes committed progress after failure", async () => {
-  const { sessionReadHandlers } = await import("./server-methods/sessions-read.js");
   let config: OpenClawConfig = {};
   const getRuntimeConfig = () => config;
   maintenance = startSessionColdStorageMaintenance({
@@ -218,7 +218,6 @@ it("acknowledges Run now before worker completion and exposes committed progress
 });
 
 it("does not accept Run now if request authority expires during inventory", async () => {
-  const { sessionReadHandlers } = await import("./server-methods/sessions-read.js");
   let config: OpenClawConfig = {};
   const getRuntimeConfig = () => config;
   maintenance = startSessionColdStorageMaintenance({

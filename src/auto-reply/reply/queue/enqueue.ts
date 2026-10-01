@@ -6,11 +6,7 @@ import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  applyQueueDropPolicy,
-  countPendingQueueItems,
-  shouldSkipQueueItem,
-} from "../../../utils/queue-helpers.js";
+import { applyQueueDropPolicy, countPendingQueueItems } from "../../../utils/queue-helpers.js";
 import {
   createOverflowSummaryRetrySource,
   resolveFollowupAuthorizationKey,
@@ -152,9 +148,7 @@ export function enqueueFollowupRun(
   }
   const queue = getFollowupQueue(key, settings);
 
-  const dedupe = dedupeMode === "none" ? undefined : isRunAlreadyQueued;
-
-  if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
+  if (dedupeMode !== "none" && isRunAlreadyQueued(run, queue.items)) {
     return false;
   }
   // Preserve later prompts while an older steer decides between same-turn

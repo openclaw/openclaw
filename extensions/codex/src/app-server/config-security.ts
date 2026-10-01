@@ -16,9 +16,7 @@ import { selectGuardianSandbox } from "./config-exec-policy.js";
 import { DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX } from "./config-parsing.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
-  parseAllowedApprovalPoliciesFromCodexRequirements,
-  parseAllowedApprovalsReviewersFromCodexRequirements,
-  parseAllowedSandboxModesFromCodexRequirements,
+  parseCodexRequirementsPolicy,
   readCodexRequirementsToml,
   selectGuardianApprovalPolicy,
   selectGuardianApprovalsReviewer,
@@ -246,19 +244,11 @@ export function resolveDefaultCodexAppServerPolicy(params: {
   if (content === undefined && !params.forceGuardian) {
     return { mode: "yolo", dangerFullAccessAllowed: true };
   }
-  const allowedSandboxModes =
-    content === undefined
-      ? undefined
-      : parseAllowedSandboxModesFromCodexRequirements(
-          content,
-          readNonEmptyString(params.hostName) ?? readHostName(),
-        );
-  const allowedApprovalPolicies =
-    content === undefined ? undefined : parseAllowedApprovalPoliciesFromCodexRequirements(content);
-  const allowedApprovalsReviewers =
-    content === undefined
-      ? undefined
-      : parseAllowedApprovalsReviewersFromCodexRequirements(content);
+  const { allowedSandboxModes, allowedApprovalPolicies, allowedApprovalsReviewers } =
+    parseCodexRequirementsPolicy(
+      content,
+      content === undefined ? undefined : (readNonEmptyString(params.hostName) ?? readHostName()),
+    );
   const yoloSandboxAllowed =
     allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access");
   const yoloApprovalAllowed =

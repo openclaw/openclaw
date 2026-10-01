@@ -4,7 +4,7 @@ import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import { loadMSTeamsDelegatedTokens, saveMSTeamsDelegatedTokens } from "./delegated-state.js";
 import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
@@ -45,13 +45,7 @@ function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
 function resolveFederatedPath(configValue?: string, envValue?: string): string | undefined {
   // Reject blank settings without trimming a real path: surrounding whitespace
   // can be part of the certificate filename on the filesystem.
-  if (normalizeOptionalString(configValue)) {
-    return configValue;
-  }
-  if (normalizeOptionalString(envValue)) {
-    return envValue;
-  }
-  return undefined;
+  return readNonBlankString(configValue) ?? readNonBlankString(envValue);
 }
 
 export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {

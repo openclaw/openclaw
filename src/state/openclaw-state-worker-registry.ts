@@ -8,8 +8,10 @@ import type { ChannelIngressWorkerOperations } from "../channels/message/ingress
 import type { DoctorWorkerOperations } from "../commands/doctor-state.worker.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.worker-contract.js";
 import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.kernel.js";
+import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
 import type { DevicePairingWorkerOperations } from "../infra/device-pairing-worker-contract.js";
+import type { ExecAuthorizationWorkerOperations } from "../infra/exec-approvals-authorization.worker-contract.js";
 import type { CurrentConversationBindingWorkerOperations } from "../infra/outbound/current-conversation-bindings.worker.js";
 import type { PromotionWorkerOperations } from "../infra/promotions-feed.worker.js";
 import type { ApnsRegistrationWorkerOperations } from "../infra/push-apns-store.worker-contract.js";
@@ -21,6 +23,7 @@ import type { ModelCatalogWorkerOperations } from "../model-catalog/remote-store
 import type { NodeWorkerJournalWorkerOperations } from "../node-host/node-worker-journal.worker-contract.js";
 import type { PluginBlobWorkerOperations } from "../plugin-state/plugin-blob-store.worker.js";
 import type { PluginRuntimeWorkerOperations } from "../plugins/state.worker-contract.js";
+import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
 import type {
   SkillWorkshopWorkerOperations,
@@ -32,9 +35,12 @@ import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
+  ProjectRegistryWorkerOperations &
   ApnsRegistrationWorkerOperations &
   WorktreeWorkerOperations &
   FleetRegistryWriteOperations &
+  OperatorApprovalWorkerOperations &
+  ExecAuthorizationWorkerOperations &
   DeliveryQueueWorkerOperations &
   SessionDeliveryWorkerOperations &
   CurrentConversationBindingWorkerOperations &
@@ -62,6 +68,16 @@ export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
   UserProfileWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredStateWorkerOperations>({
+  projects: () =>
+    import("../projects/project-registry.worker.js").then((m) => m.projectRegistryOperations),
+  operatorApprovals: () =>
+    import("../gateway/operator-approval-store.operations.js").then(
+      (m) => m.operatorApprovalOperations,
+    ),
+  execApprovals: () =>
+    import("../infra/exec-approvals-authorization.worker.js").then(
+      (m) => m.execAuthorizationOperations,
+    ),
   userProfiles: () => import("./user-profiles.worker.js").then((m) => m.userProfileOperations),
   authProfiles: () =>
     import("../agents/auth-profiles/store.worker.js").then((m) => m.authProfileOperations),

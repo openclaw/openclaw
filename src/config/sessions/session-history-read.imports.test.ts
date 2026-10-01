@@ -3,21 +3,10 @@ import { findSourceImportBackedges } from "../../../test/helpers/source-import-c
 
 const readOwners = [
   "src/config/sessions/session-transcript.worker.ts",
-  "src/config/sessions/session-accessor.sqlite-entry-read.ts",
   "src/gateway/session-history-readonly-reader.ts",
   "src/gateway/session-transcript-preview-reader.ts",
-  "src/state/openclaw-agent-db-readonly-scope.ts",
-  "src/config/sessions/session-canonical-key.ts",
-  "src/gateway/session-transcript-read-kernel.ts",
   "src/gateway/server-methods/chat-history-page-kernel.ts",
   "src/gateway/session-history-snapshot.ts",
-  "src/gateway/session-history-tail.ts",
-  "src/config/sessions/session-accessor.sqlite-projection-read.ts",
-  "src/config/sessions/session-accessor.sqlite-history-query.ts",
-  "src/config/sessions/session-accessor.sqlite-raw-delta-read.ts",
-  "src/config/sessions/session-transcript-read-fence.ts",
-  "src/gateway/session-transcript-archive-reader.ts",
-  "src/gateway/session-transcript-entry-message.ts",
 ];
 
 it("keeps history readers independent of host acquisition and decoration", () => {

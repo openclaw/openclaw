@@ -16,6 +16,7 @@ const {
   appendAssistantMessageToSessionTranscriptMock,
   commitBackgroundResultToSessionMock,
   hasUnsettledCronDescendantsMock,
+  listDescendantRunsForRequesterMock,
   deliverOutboundPayloadsMock,
   ensureOutboundSessionEntryMock,
   loadCronSessionEntryLatestMock,
@@ -33,6 +34,7 @@ const {
     messageId: "current-completion-message",
   }),
   hasUnsettledCronDescendantsMock: vi.fn().mockResolvedValue(false),
+  listDescendantRunsForRequesterMock: vi.fn().mockResolvedValue([]),
   deliverOutboundPayloadsMock: vi.fn().mockResolvedValue([{ ok: true }]),
   ensureOutboundSessionEntryMock: vi.fn().mockResolvedValue(undefined),
   loadCronSessionEntryLatestMock: vi.fn(),
@@ -103,6 +105,10 @@ vi.mock("./delivery-subagent-registry.runtime.js", () => ({
   hasUnsettledCronDescendants: hasUnsettledCronDescendantsMock,
 }));
 
+vi.mock("./run-subagent-registry.runtime.js", () => ({
+  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
+}));
+
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: deliverOutboundPayloadsMock,
   deliverOutboundPayloadsInternal: deliverOutboundPayloadsMock,
@@ -170,10 +176,15 @@ vi.mock("./subagent-followup-hints.js", () => ({
   isLikelyInterimCronMessage: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("./subagent-followup.runtime.js", () => ({
-  readDescendantSubagentFallbackReply: vi.fn().mockResolvedValue(undefined),
-  waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("./subagent-followup.runtime.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./subagent-followup.js")>("./subagent-followup.js");
+  return {
+    readDescendantSubagentFallbackReply: vi.fn().mockResolvedValue(undefined),
+    waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
+    waitForDescendantSubagentResult: actual.waitForDescendantSubagentResult,
+  };
+});
 
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
@@ -190,6 +201,8 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { withTempCronHome } from "../isolated-agent.test-harness.js";
+import type { CronDelivery } from "../types.js";
+import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
 import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
@@ -197,6 +210,7 @@ import {
 import { makeBaseParams, makeResolvedDelivery } from "./delivery-dispatch.test-fixtures.js";
 import { hasUnsettledCronDescendants } from "./delivery-subagent-registry.runtime.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
+import * as realFollowup from "./subagent-followup.js";
 import {
   readDescendantSubagentFallbackReply,
   waitForDescendantSubagentSummary,
@@ -719,6 +733,22 @@ describe("dispatchCronDelivery", () => {
     expect(state.deliveryError).toBe("cron descendants completed without a final reply");
   });
 
+  it("classifies a settled child's AUTOMATION_FAILED answer and delivers only its explanation", async () => {
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
+      "AUTOMATION_FAILED\nNo shell tool is available in this run.",
+    );
+
+    const state = await dispatchCronDelivery(emptyParams(true));
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, { payloads: [{ text: "No shell tool is available in this run." }] });
+    expect(state).toMatchObject({
+      delivered: true,
+      agentReportedFailure: "No shell tool is available in this run.",
+      summary: "No shell tool is available in this run.",
+    });
+  });
+
   it.each([
     ["active threaded best-effort", true, "42", true],
     ["completed direct", false, undefined, false],
@@ -778,6 +808,162 @@ describe("dispatchCronDelivery", () => {
       deliveryAttempted: true,
     });
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  describe("spawn-only handoff without delivery", () => {
+    const childReply = "[blocked] Unable to execute the command: no shell tool.";
+    let runStartedAt = 0;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      // Production wait timings (5 s synthesis grace) under fake time.
+      vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+      runStartedAt = Date.now();
+      // Announce settlement runs for real too, so a no-delivery run routed through it
+      // shows its parent-synthesis wait and dropped silence.
+      vi.mocked(waitForDescendantSubagentSummary).mockImplementation(
+        realFollowup.waitForDescendantSubagentSummary,
+      );
+      vi.mocked(readDescendantSubagentFallbackReply).mockImplementation(
+        realFollowup.readDescendantSubagentFallbackReply,
+      );
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      listDescendantRunsForRequesterMock.mockResolvedValue([]);
+    });
+
+    function spawnOnlyJob(delivery: CronDelivery) {
+      const params = emptyParams(true);
+      params.job.delivery = delivery;
+      params.job.deleteAfterRun = true;
+      params.deliveryPlan = resolveCronDeliveryPlan(params.job);
+      params.deliveryRequested = params.deliveryPlan.requested;
+      params.runStartedAt = runStartedAt;
+      return params;
+    }
+
+    /** The registry settles the child at `settleAfterMs` with the given terminal reply. */
+    function childSettlesAt(
+      settleAfterMs: number,
+      terminalReply: NonNullable<SubagentRunRecord["completion"]>["terminalReply"],
+    ) {
+      const settledAt = runStartedAt + settleAfterMs;
+      vi.mocked(hasUnsettledCronDescendants).mockImplementation(async () => Date.now() < settledAt);
+      listDescendantRunsForRequesterMock.mockImplementation(async () =>
+        Date.now() < settledAt
+          ? []
+          : [
+              {
+                runId: "child-run",
+                childSessionKey: "agent:main:subagent:child",
+                requesterSessionKey: "agent:main:cron:test-job",
+                requesterDisplayKey: "agent:main:cron:test-job",
+                task: "monthly report",
+                cleanup: "keep",
+                createdAt: runStartedAt,
+                execution: { status: "terminal", endedAt: settledAt, outcome: { status: "ok" } },
+                completion: { required: true, terminalReply },
+              } as SubagentRunRecord,
+            ],
+      );
+    }
+
+    async function dispatchUntilWatchdog(params: DispatchCronDeliveryParams) {
+      const watchdog = new AbortController();
+      setTimeout(() => watchdog.abort(new Error("cron run timed out")), params.timeoutMs);
+      params.abortSignal = watchdog.signal;
+      params.isAborted = () => watchdog.signal.aborted;
+      const state = dispatchCronDelivery(params);
+      await vi.advanceTimersByTimeAsync(params.timeoutMs + 1_000);
+      return await state;
+    }
+
+    it("records a child result that settles in the last seconds before the deadline", async () => {
+      const params = spawnOnlyJob({ mode: "none" });
+      childSettlesAt(params.timeoutMs - 3_000, { disposition: "visible", text: childReply });
+
+      const state = await dispatchUntilWatchdog(params);
+
+      expect(state.disposition).toBeUndefined();
+      expect(state).toMatchObject({
+        outputText: childReply,
+        summary: childReply,
+        deliveryState: { status: "not-requested" },
+      });
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expectSessionDeleted();
+    });
+
+    it("settles an explicitly silent child as a quiet success", async () => {
+      const params = spawnOnlyJob({ mode: "none" });
+      childSettlesAt(1_000, { disposition: "silent" });
+
+      const state = await dispatchUntilWatchdog(params);
+
+      expect(state.disposition).toBeUndefined();
+      expect(state.summary).toBeUndefined();
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expectSessionDeleted();
+    });
+
+    it("records a child's AUTOMATION_FAILED report as a failure and keeps the transcript", async () => {
+      const params = spawnOnlyJob({ mode: "none" });
+      childSettlesAt(1_000, {
+        disposition: "visible",
+        text: "AUTOMATION_FAILED\nNo shell tool is available in this run.",
+      });
+
+      const state = await dispatchUntilWatchdog(params);
+
+      expect(state).toMatchObject({
+        agentReportedFailure: "No shell tool is available in this run.",
+        outputText: "No shell tool is available in this run.",
+        summary: "No shell tool is available in this run.",
+        deliveryState: { status: "not-requested" },
+      });
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      );
+    });
+
+    it.each([
+      {
+        name: "the child never settles",
+        settleAfterMs: Number.POSITIVE_INFINITY,
+        error: "cron child-session handoff timed out before producing a final assistant payload",
+      },
+      {
+        name: "the child ends without output",
+        settleAfterMs: 1_000,
+        error: "cron child-session handoff completed without a final assistant payload",
+      },
+    ])("fails and keeps the transcript when $name", async ({ settleAfterMs, error }) => {
+      const params = spawnOnlyJob({ mode: "none" });
+      params.abortSignal = undefined;
+      childSettlesAt(settleAfterMs, { disposition: "empty" });
+
+      const pending = dispatchCronDelivery(params);
+      await vi.advanceTimersByTimeAsync(params.timeoutMs + 1_000);
+      const state = await pending;
+
+      expect(state.disposition).toMatchObject({ kind: "error", error });
+      expect(callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      );
+    });
+
+    it("leaves webhook jobs on their own completion policy", async () => {
+      const params = spawnOnlyJob({ mode: "webhook", to: "https://hooks.example.test/cron" });
+      childSettlesAt(0, { disposition: "visible", text: childReply });
+
+      const state = await dispatchUntilWatchdog(params);
+
+      expect(state.disposition).toBeUndefined();
+      expect(state.summary).toBeUndefined();
+      expect(listDescendantRunsForRequesterMock).not.toHaveBeenCalled();
+    });
   });
 
   it("preserves abort precedence when an accepted child handoff is interrupted", async () => {

@@ -233,7 +233,7 @@ export function observePlacementAuthority(pathname: string, sessionId: string) {
     release(this: void) {
       released = true;
       observations.delete(observation);
-      if (observations.size === 0) {
+      if (observations.size === 0 && owner.observations.get(sessionId) === observations) {
         owner.observations.delete(sessionId);
       }
     },

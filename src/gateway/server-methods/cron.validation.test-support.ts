@@ -226,6 +226,18 @@ export function createCronTestContext(
   };
 }
 
+export function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "cron job",
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
+    ...overrides,
+  };
+}
+
 export function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
   return {
     id: "cron-1",

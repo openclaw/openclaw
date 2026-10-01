@@ -124,6 +124,7 @@ async function runWhatsAppScenarioAttempt(params: {
     gateway: params.environment.gateway as never,
     gatewayTarget: targets?.gatewayTarget ?? runtimeEnv.driverPhoneE164,
     gatewayWorkspaceDir: params.environment.gateway.workspaceDir,
+    proofOutputDir: params.environment.getProofOutputDir(),
     recordObservedMessage: (message) => {
       params.environment.observedMessages.push({
         ...message,
@@ -133,6 +134,7 @@ async function runWhatsAppScenarioAttempt(params: {
       });
     },
     requestStartedAt,
+    repoRoot: params.environment.repoRoot,
     scenarioId: params.scenario.id,
     scenarioTitle: params.scenario.title,
     sent,

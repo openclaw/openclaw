@@ -167,8 +167,8 @@ it("counts caller-visible open ownership and direct running work across agents b
 
       // A sharing/ownership change during readiness must affect the whole facet.
       const projection = getSessionRowProjection(context)!;
-      const ensure = projection.ensureMaterialized;
-      vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
+      const ensure = projection.prepareSelection;
+      vi.spyOn(projection, "prepareSelection").mockImplementationOnce(async () => {
         assignSessionOwner(
           { agentId: "main", sessionKey: running },
           {

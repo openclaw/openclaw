@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
 import { serializePluginStoreJson } from "../plugin-state/plugin-store-validation.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type {
   MeetingParticipationAttempt,
   MeetingParticipationOptions,
@@ -323,7 +324,6 @@ describe("meeting participation authority and durable attempts", () => {
   });
 
   it("persists completed attempts across independent SQLite store and owner instances", async () => {
-    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
     const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
       await import("../plugin-state/plugin-state-store.js");
     await withOpenClawTestState(
@@ -821,7 +821,6 @@ describe("meeting participation ledger capacity", () => {
   });
 
   it("makes space for new meetings in the real SQLite namespace without evicting active claims", async () => {
-    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
     const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
       await import("../plugin-state/plugin-state-store.js");
     await withOpenClawTestState(
@@ -890,7 +889,6 @@ describe("meeting participation ledger capacity", () => {
   });
 
   it("does not clean up closed SQLite claims for oversized or blank input fields", async () => {
-    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
     const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
       await import("../plugin-state/plugin-state-store.js");
     await withOpenClawTestState(

@@ -1157,20 +1157,6 @@ export function createHookRunner(
     return result ?? {};
   }
 
-  function hasHooks<K extends PluginHookName>(
-    hookName: K,
-    ctx?: Partial<Parameters<PluginHookHandlerMap[K]>[1]>,
-  ): boolean {
-    return registry.typedHooks.some(
-      (hook) =>
-        hook.hookName === hookName && (ctx === undefined || isHookContextEligible(hook, ctx)),
-    );
-  }
-
-  function getHookCount(hookName: PluginHookName): number {
-    return registry.typedHooks.filter((h) => h.hookName === hookName).length;
-  }
-
   return {
     runBeforeModelResolve: bindModifyingHook("before_model_resolve", {
       mergeResults: mergeBeforeModelResolve,
@@ -1180,6 +1166,13 @@ export function createHookRunner(
     }),
     runBeforePromptBuild,
     runAuthorizedPromptBuild,
+    hasAuthorizedPromptBuildHooks: (ctx?: Partial<HookContext<"before_prompt_build">>): boolean =>
+      registry.typedHooks.some(
+        (hook) =>
+          hook.hookName === "before_prompt_build" &&
+          hook.requiresToolAuthority === true &&
+          (ctx === undefined || isHookContextEligible(hook, ctx)),
+      ),
     runBeforeAgentReply: bindClaimingHook("before_agent_reply"),
     runModelCallStarted: bindVoidHook("model_call_started"),
     runModelCallEnded: bindVoidHook("model_call_ended"),
@@ -1283,8 +1276,13 @@ export function createHookRunner(
       terminalLabel: "block=true",
     }),
     runResolveExecEnv,
-    hasHooks,
-    getHookCount,
+    hasHooks: <K extends PluginHookName>(hookName: K, ctx?: Partial<HookContext<K>>): boolean =>
+      registry.typedHooks.some(
+        (hook) =>
+          hook.hookName === hookName && (ctx === undefined || isHookContextEligible(hook, ctx)),
+      ),
+    getHookCount: (hookName: PluginHookName): number =>
+      registry.typedHooks.filter((h) => h.hookName === hookName).length,
   };
 }
 

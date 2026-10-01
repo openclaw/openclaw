@@ -18,6 +18,10 @@ import {
   type DeliveryTargetResolution,
 } from "./isolated-agent/delivery-target.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
+import {
+  CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+  hasCanonicalCronDeliveryMode,
+} from "./store/delivery-codec.js";
 import type { CronDeliveryPreview, CronJob } from "./types.js";
 
 type CronDeliveryPreviewJob = Pick<CronJob, "delivery" | "payload" | "sessionTarget"> &
@@ -59,6 +63,11 @@ type CronDeliveryPreviewParams = {
 };
 
 function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
+  if (!hasCanonicalCronDeliveryMode(params.job.delivery)) {
+    return {
+      preview: { label: "delivery requires review", detail: CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE },
+    };
+  }
   const agentId = tryResolveCronJobEffectiveAgentId(
     params.job,
     params.defaultAgentId ?? tryResolveAmbientOwnerAgentId(params.cfg),

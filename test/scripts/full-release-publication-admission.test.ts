@@ -1236,21 +1236,6 @@ globalThis.Date = class extends OriginalDate {
     check(existsSync(join(target, "node_modules"))).toBe(false);
   }
   check(existsSync(forbidden), stderr).toBe(false);
-  if (options.registry === "parent-interrupt") {
-    const deadline = Date.now() + 5000;
-    while (
-      !readFileSync(registryCalls, "utf8")
-        .split("\n")
-        .filter(Boolean)
-        .some((line) => {
-          const entry = JSON.parse(line);
-          return entry.kind === "settled" && entry.worker;
-        }) &&
-      Date.now() < deadline
-    ) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-    }
-  }
   const factPath = join(temporary, "publication-source-admission.json");
   const fact =
     existsSync(factPath) && readFileSync(factPath, "utf8").trim()
@@ -1293,11 +1278,12 @@ globalThis.Date = class extends OriginalDate {
   const workerBoundary = registryTrace.find((entry) => entry.kind === "worker-boundary");
   let scratchCleanedByOwner = true;
   if (options.registry === "parent-interrupt" && workerBoundary) {
+    // The admission parent settles only after its worker's close event; that joins
+    // the worker's synchronous exit record and exact process before the shell returns.
     check(registryTrace).toContainEqual(
       expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
     );
     const proc = `/proc/${workerBoundary.pid}/stat`;
-    const deadline = Date.now() + 2000;
     const live = () => {
       try {
         const fields = readFileSync(proc, "utf8").split(") ")[1]?.split(" ");
@@ -1311,9 +1297,6 @@ globalThis.Date = class extends OriginalDate {
         throw error;
       }
     };
-    while (live() && Date.now() < deadline) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-    }
     check(live()).toBe(false);
     const snapshot = expectDefined(workerBoundary.snapshot, "owned worker snapshot");
     scratchCleanedByOwner = !existsSync(snapshot);

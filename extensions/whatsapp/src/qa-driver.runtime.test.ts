@@ -411,10 +411,13 @@ describe("startWhatsAppQaDriverSession", () => {
     expect(mocks.socketSendMessage).not.toHaveBeenCalled();
   });
 
-  it("decodes a poll vote referencing an earlier observed poll", async () => {
+  it.each([
+    { name: "group participant", chatJid: "123456@g.us", participant: "111@s.whatsapp.net" },
+    { name: "PN DM peer", chatJid: "111@s.whatsapp.net", participant: undefined },
+    { name: "LID DM peer", chatJid: "111@lid", participant: undefined },
+  ])("decodes a received poll vote from its $name", async ({ chatJid, participant }) => {
     const session = await startSession();
-    const chatJid = "999@s.whatsapp.net";
-    const pollCreatorJid = "111@s.whatsapp.net";
+    const pollCreatorJid = participant ?? chatJid;
     const voterJid = "222@s.whatsapp.net";
     const pollMsgId = "poll-1";
 
@@ -427,7 +430,7 @@ describe("startWhatsAppQaDriverSession", () => {
         id: pollMsgId,
         remoteJid: chatJid,
         fromMe: false,
-        participant: pollCreatorJid,
+        participant,
       }),
     );
 
@@ -445,7 +448,7 @@ describe("startWhatsAppQaDriverSession", () => {
             remoteJid: chatJid,
             id: pollMsgId,
             fromMe: false,
-            participant: pollCreatorJid,
+            participant,
           },
           vote,
           senderTimestampMs: 1_700_000_100_000,

@@ -1707,7 +1707,6 @@ class TalkModeManager internal constructor(
               }
 
               "assistant" -> {
-                finishRealtimeConversationEntry(VoiceConversationRole.User)
                 upsertRealtimeConversation(VoiceConversationRole.Assistant, text, isFinal)
               }
             }

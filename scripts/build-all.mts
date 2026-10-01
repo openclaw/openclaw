@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Builds OpenClaw packages and plugin SDK artifacts with cache-aware orchestration.
 
-import type { SpawnSyncOptions } from "node:child_process";
+import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
 import {
@@ -18,8 +20,15 @@ import {
 } from "./lib/dist-artifact-ownership.mts";
 import { formatDurationElapsed } from "./lib/format-duration.mts";
 import { resolveLiveManagedGatewayDistFence } from "./lib/live-gateway-dist-fence.mts";
+import {
+  BUILD_STAMP_FILE,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+  writeBuildStamp,
+  writeRuntimePostBuildStamp,
+} from "./lib/local-build-metadata.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import type { MemoryLimitParams } from "./lib/process-memory.mts";
+import { captureRunNodeInputState } from "./lib/run-node-input-state.mts";
 import { preflightInstalledSourceArtifacts } from "./lib/source-update-artifact-preflight.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -82,6 +91,7 @@ const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["ui:build", ["scripts/ui.js", "build"]],
 ]);
 export const BUILD_ALL_STEPS: BuildAllStep[] = [
+  nodeStep("native-protocol", ["scripts/prepare-native-protocol.mjs"]),
   nodeStep("clean:dist", [
     "-e",
     'require("node:fs").rmSync("dist", { recursive: true, force: true })',
@@ -205,6 +215,7 @@ const FINAL_BUILD_ARTIFACTS_STEP_LABELS = [
   ...BUILD_METADATA_STEP_LABELS,
 ] as const;
 const CI_ARTIFACT_STEP_LABELS = [
+  "native-protocol",
   ...ASSET_RUNTIME_STEP_LABELS,
   ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
 ];
@@ -218,7 +229,11 @@ const FULL_COMPILER_STEP_LABELS = [
 const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
   step === "tsdown" ? FULL_COMPILER_STEP_LABELS : [step],
 );
-const FULL_BUILD_STEP_LABELS = [...FULL_RUNTIME_STEP_LABELS, ...FINAL_BUILD_ARTIFACTS_STEP_LABELS];
+const FULL_BUILD_STEP_LABELS = [
+  "native-protocol",
+  ...FULL_RUNTIME_STEP_LABELS,
+  ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
+];
 
 const BUILD_ALL_PROFILES: Record<string, string[]> = {
   full: [...FULL_BUILD_STEP_LABELS],
@@ -238,6 +253,7 @@ const BUILD_ALL_PROFILES: Record<string, string[]> = {
 };
 
 const FULL_RUNTIME_ONLY_STEPS = [
+  "native-protocol",
   ...ASSET_RUNTIME_STEP_LABELS,
   "ui:build",
   ...BUILD_METADATA_STEP_LABELS,
@@ -571,10 +587,60 @@ export async function runBuildAllSteps(
   const resolveCacheState = params.resolveCacheState ?? resolveBuildStepCacheState;
   const restoreCache = params.restoreCache ?? restoreBuildStepCacheOutputs;
   const finalizeCache = params.finalizeCache ?? finalizeBuildStepCache;
+  const cwd = params.cwd ?? process.cwd();
+  const inputDeps = { cwd, distRoot: path.join(cwd, "dist"), fs, env: buildEnv, spawnSync };
+  const capturesNativeInputs =
+    !params.runStep && steps.some((step) => step.label.endsWith("build-stamp"));
+  const hasAssetBuild =
+    capturesNativeInputs && steps.some((step) => step.label === "plugins:assets:build");
+  const assetInputState = hasAssetBuild
+    ? captureRunNodeInputState(inputDeps, "build", { assetPhase: true })
+    : null;
+  let buildInputState =
+    capturesNativeInputs && !hasAssetBuild && steps.some((step) => step.label === "build-stamp")
+      ? captureRunNodeInputState(inputDeps, "build")
+      : null;
+  const runtimeEnv = {
+    ...buildEnv,
+    ...steps.find((step) => step.label === "runtime-postbuild")?.env,
+  };
+  let runtimeInputState =
+    capturesNativeInputs &&
+    !hasAssetBuild &&
+    steps.some((step) => step.label === "runtime-postbuild-stamp")
+      ? captureRunNodeInputState({ ...inputDeps, env: runtimeEnv }, "runtime")
+      : null;
+  let stampsInvalidated = false;
+  const invalidateInputStamps = () => {
+    // Injected steps own their fixture writes; native writers share this lifecycle.
+    if (
+      stampsInvalidated ||
+      params.runStep ||
+      !steps.some((step) => step.label.endsWith("build-stamp"))
+    ) {
+      return;
+    }
+    for (const name of [BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE]) {
+      fs.rmSync(path.join(cwd, "dist", name), { force: true });
+    }
+    stampsInvalidated = true;
+  };
   const runStep =
     params.runStep ??
     (async (invocation: ReturnType<typeof resolveBuildAllStep>) => {
       const script = invocation.args[2];
+      if (
+        script === "scripts/build-stamp.mts" ||
+        script === "scripts/runtime-postbuild-stamp.mts"
+      ) {
+        const buildStamp = script === "scripts/build-stamp.mts";
+        (buildStamp ? writeBuildStamp : writeRuntimePostBuildStamp)({
+          cwd,
+          env: buildStamp ? buildEnv : runtimeEnv,
+          inputState: buildStamp ? buildInputState : runtimeInputState,
+        });
+        return { status: 0 };
+      }
       return {
         status: await runManagedCommand({
           bin: invocation.command,
@@ -609,8 +675,11 @@ export async function runBuildAllSteps(
     let stepToRun = step;
     let reusedCache = false;
     if (cacheEnabled && cacheState.fresh) {
-      if (cacheState.restorable && !restoreCache(cacheState)) {
-        throw new Error(`Build cache changed before restoration: ${step.label}; rerun the build`);
+      if (cacheState.restorable) {
+        invalidateInputStamps();
+        if (!restoreCache(cacheState)) {
+          throw new Error(`Build cache changed before restoration: ${step.label}; rerun the build`);
+        }
       }
       const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
       if (!cacheHitStep) {
@@ -624,6 +693,7 @@ export async function runBuildAllSteps(
     }
     logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
     const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
+    invalidateInputStamps();
     const result = await runStep(invocation);
     params.signal?.throwIfAborted();
     const durationMs = cacheDurationMs + now() - startedAt;
@@ -632,6 +702,21 @@ export async function runBuildAllSteps(
       logger.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
       exitCode = typeof result.status === "number" ? result.status : 1;
       break;
+    }
+    if (step.label === "plugins:assets:build" && !params.runStep) {
+      const current = captureRunNodeInputState(inputDeps, "build", { assetPhase: true });
+      if (
+        assetInputState &&
+        (!current ||
+          current.signature !== assetInputState.signature ||
+          current.generation !== assetInputState.generation)
+      ) {
+        throw new Error("Build inputs changed during asset preparation; rerun the build");
+      }
+      buildInputState = assetInputState ? captureRunNodeInputState(inputDeps, "build") : null;
+      runtimeInputState = assetInputState
+        ? captureRunNodeInputState({ ...inputDeps, env: runtimeEnv }, "runtime")
+        : null;
     }
     // Runtime-only tsdown cleans its output roots. Cache hits restore
     // declarations again after that pass so the full build stays complete.

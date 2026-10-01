@@ -1,6 +1,27 @@
 import Foundation
 
 extension OnboardingView {
+    func setKeepGatewayRunning(_ enabled: Bool) {
+        guard !self.installingCLI, !self.updatingGatewayHosting,
+              GatewayProcessManager.shared.keepGatewayRunningAvailable else { return }
+        self.updatingGatewayHosting = true
+        self.gatewayHostingError = nil
+        OnboardingController.shared.setWindowCloseEnabled(false)
+        OnboardingController.shared.busyReason = "OpenClaw is updating how the Gateway runs."
+        Task { @MainActor in
+            defer {
+                self.updatingGatewayHosting = false
+                OnboardingController.shared.setWindowCloseEnabled(true)
+                OnboardingController.shared.busyReason = nil
+            }
+            do {
+                try await GatewayProcessManager.shared.setKeepGatewayRunning(enabled)
+            } catch {
+                self.gatewayHostingError = error.localizedDescription
+            }
+        }
+    }
+
     func updateDiscoveryMonitoring(for pageIndex: Int) {
         let shouldMonitor = pageIndex == connectionPageIndex
         if shouldMonitor, !monitoringDiscovery {

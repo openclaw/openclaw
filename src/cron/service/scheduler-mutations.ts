@@ -50,6 +50,7 @@ export async function recordSkippedCronRuns(params: {
           ? state.deps.resolveDefaultAgentId()
           : state.deps.defaultAgentId;
         const effectiveDefaultAgentId = defaultAgentId ?? state.deps.defaultAgentId;
+        const legacyDefaultAgentId = state.deps.legacyDefaultAgentId;
         const notificationRouting = captureCronNotificationRouting(
           defaultAgentId,
           state.deps.defaultAgentId,
@@ -61,6 +62,7 @@ export async function recordSkippedCronRuns(params: {
             : state.deps.defaultAgentId;
           if (
             currentDefault !== defaultAgentId ||
+            state.deps.legacyDefaultAgentId !== legacyDefaultAgentId ||
             (currentDefault ?? state.deps.defaultAgentId) !== effectiveDefaultAgentId ||
             captureCronNotificationRouting(currentDefault, state.deps.defaultAgentId)
               .defaultAgentId !== notificationRouting.defaultAgentId
@@ -83,6 +85,7 @@ export async function recordSkippedCronRuns(params: {
           value: {
             nowMs: params.nowMs,
             defaultAgentId,
+            legacyDefaultAgentId,
             notificationRouting,
             cronConfig,
             ownership: prepared.ownership,
@@ -156,6 +159,7 @@ export async function planCronStartup(params: {
       prepare({ jobIds, notificationNeedsDefault }) {
         const prepared = prepareCronScheduleOwnership(state, jobIds);
         const skipMissedJobs = state.deps.cronConfig?.skipMissedJobs === true;
+        const legacyDefaultAgentId = state.deps.legacyDefaultAgentId;
         const notifications = prepareCronNotificationRouting(
           state.deps,
           skipMissedJobs && notificationNeedsDefault,
@@ -164,6 +168,7 @@ export async function planCronStartup(params: {
           value: {
             nowMs: params.nowMs,
             skipMissedJobs,
+            legacyDefaultAgentId,
             ownership: prepared.ownership,
             notificationRouting: notifications.routing,
           },
@@ -171,6 +176,9 @@ export async function planCronStartup(params: {
             source.assertCurrent();
             prepared.assertCurrent();
             notifications.assertCurrent();
+            if (state.deps.legacyDefaultAgentId !== legacyDefaultAgentId) {
+              throw new Error("Cron ownership policy changed before startup commit");
+            }
             if ((state.deps.cronConfig?.skipMissedJobs === true) !== skipMissedJobs) {
               throw new Error("Cron missed-job policy changed before commit");
             }

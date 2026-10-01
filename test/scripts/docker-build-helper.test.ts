@@ -22,10 +22,17 @@ import {
 import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { mainLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
+import { readSystemdServiceExecStart } from "../../src/daemon/systemd-service-files.js";
 import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   copySurvivorCaptureClosure,
@@ -36,8 +43,69 @@ import {
   UPGRADE_SURVIVOR_PATHS_HELPER,
 } from "./upgrade-survivor-paths.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const pendingChildCompletions = new Set<Promise<unknown>>();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // Vitest starts afterEach without joining a timed-out body's async finally.
+    // Keep stop-policy scripts and child state until their native owners settle.
+    await Promise.allSettled(pendingChildCompletions);
+    cleanup();
+  }),
+);
 const testNodeExecPath = resolveTestNodeExecPath();
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+
+function ownChildCompletion<T>(completion: Promise<T>): Promise<T> {
+  const owned = completion.finally(() => {
+    pendingChildCompletions.delete(owned);
+  });
+  pendingChildCompletions.add(owned);
+  return owned;
+}
+
+function writeFixtureReceiptReporter(workDir: string): string {
+  const reporter = join(workDir, "fixture-receipt.mjs");
+  writeFileSync(
+    reporter,
+    `${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
+const [source, line] = process.argv.slice(2);
+fs.appendFileSync(source, line + "\\n");
+sendReceipt(source, line);
+fixtureReceiptSocket.ref();
+fixtureReceiptSocket.end();
+`,
+  );
+  return reporter;
+}
+
+function fixtureEventBeforeSettlement(
+  source: string,
+  text: string,
+  operation: PromiseLike<unknown>,
+  message: string,
+): Promise<void> {
+  const recorded = () => existsSync(source) && readFileSync(source, "utf8").includes(text);
+  const settled = Promise.resolve(operation).then(
+    () => {
+      if (!recorded()) {
+        throw new Error(message);
+      }
+    },
+    (error: unknown) => {
+      if (!recorded()) {
+        throw error;
+      }
+    },
+  );
+  return Promise.race([receipts.waitFor(source, text), settled]);
+}
 
 const PACKAGE_BUILDER_NODE_SCRIPT = `node() {
   local script="$1"
@@ -203,6 +271,8 @@ function containerCleanupFixture(scenario: string) {
   const log = join(temp, "runner log");
   const eventsPath = join(root, "events.jsonl");
   const pidPath = join(root, "docker.pid");
+  const readyPath = join(root, "docker.ready");
+  const reporter = writeFixtureReceiptReporter(root);
   const stdinPath = join(root, "stdin");
   mkdirSync(temp);
   writeFileSync(join(root, "retained-evidence"), "keep evidence");
@@ -263,6 +333,7 @@ console.log("fixture container output");
 if (scenario === "signal") {
   fs.writeFileSync(process.env.FIXTURE_PID, String(process.pid));
   process.on("SIGTERM", () => process.exit(143));
+  require("node:child_process").spawn(process.execPath, [${JSON.stringify(reporter)}, ${JSON.stringify(readyPath)}, "ready"], { stdio: "ignore" });
   setInterval(() => {}, 1000);
 } else {
   console.log("Tests 4 passed");
@@ -292,7 +363,7 @@ if (scenario === "signal") {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-  return { root, temp, log, env, events, pidPath };
+  return { root, temp, log, env, events, pidPath, readyPath };
 }
 
 function expectContainerCleanup(
@@ -437,6 +508,37 @@ function spawnDockerSnippet(
   return spawnSync(...prepareDockerSnippet(script, options, args));
 }
 
+async function runDockerSnippet(script: string, signal: AbortSignal): Promise<void> {
+  const child = spawn("/bin/bash", ["--noprofile", "--norc", "-c", script], {
+    detached: true,
+    env: { ...process.env, BASH_ENV: "", ENV: "" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
+  child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
+  let closed = false;
+  const completion = ownChildCompletion(
+    new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => {
+        closed = true;
+        resolve(code);
+      });
+    }),
+  );
+  try {
+    expect(await withinTest(completion, signal), output).toBe(0);
+  } finally {
+    if (!closed && child.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {}
+      await completion;
+    }
+  }
+}
+
 function writeExecutables(directory: string, files: Record<string, string>): void {
   mkdirSync(directory, { recursive: true });
   for (const [name, contents] of Object.entries(files)) {
@@ -504,20 +606,28 @@ function installUpgradeSurvivorSystemctlShim(
   return join(prefix, "bin", "systemctl");
 }
 
-async function waitForProcessExit(child: ChildProcess, timeoutMs = 5_000): Promise<number | null> {
+function waitForProcessExit(child: ChildProcess): Promise<number | null> {
   if (child.exitCode !== null || child.signalCode !== null) {
-    return child.exitCode;
+    return Promise.resolve(child.exitCode);
   }
-  return await new Promise<number | null>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error("process did not exit before its test deadline"));
-    }, timeoutMs);
-    child.once("exit", (code) => {
-      clearTimeout(timeout);
-      resolve(code);
-    });
-  });
+  return ownChildCompletion(
+    new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", resolve);
+    }),
+  );
+}
+
+// The watchdog's escalation callback exits before reaping its foreign child.
+// Keep this exact-PID observation tied to the test lifetime, without another deadline.
+async function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessRunning(pid)) {
+      await delay(10, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`process stayed alive: ${pid}`, { cause });
+  }
 }
 
 function isProcessRunning(pid: number): boolean {
@@ -559,6 +669,7 @@ process.on("SIGTERM", () => {});
 const pendingPid = process.env.DESCENDANT_PID_FILE + ".pending";
 fs.writeFileSync(pendingPid, String(process.pid));
 fs.renameSync(pendingPid, process.env.DESCENDANT_PID_FILE);
+process.send?.({ kind: "ready", pid: process.pid });
 setInterval(() => {}, 1_000);
 `,
   );
@@ -566,6 +677,7 @@ setInterval(() => {}, 1_000);
 }
 
 async function forEachUpgradeSurvivorSystemctlShim(
+  signal: AbortSignal,
   callback: (fixture: {
     pid: number;
     pidPath: string;
@@ -581,12 +693,17 @@ async function forEachUpgradeSurvivorSystemctlShim(
     const childPidPath = join(workDir, "child.pid");
     const child = spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
       env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    });
+    const exited = waitForProcessExit(child);
+    const ready = new Promise<void>((resolve) => {
+      child.once("message", () => resolve());
     });
     try {
-      for (let attempt = 0; attempt < 100 && !existsSync(childPidPath); attempt += 1) {
-        await delay(10);
-      }
+      await withinTest(
+        awaitGateBeforeSettlement(ready, exited, `file was not written: ${childPidPath}`),
+        signal,
+      );
       const pid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
       writeFileSync(pidPath, `${pid}\n`);
       const daemonLog = join(workDir, "gateway.log");
@@ -1237,7 +1354,7 @@ grep -q '^build --progress=plain --build-arg GITHUB_ACTIONS -t demo-image .$' "$
     execDockerSnippet(script);
   });
 
-  it("stops the tracked build command without retrying when interrupted", async () => {
+  it("stops the tracked build command without retrying when interrupted", async ({ signal }) => {
     const workDir = tempDirs.make("openclaw-docker-build-signal-");
     writeExecutables(join(workDir, "bin"), {
       docker: `#!/bin/bash
@@ -1253,6 +1370,7 @@ printf 'rpc error: code = Unavailable\\n'
 trap 'printf "term\\n" >"$TMPDIR/docker.term"; exit 0' TERM
 mkfifo "$TMPDIR/docker.block"
 printf 'ready\\n' >"$TMPDIR/docker.ready"
+printf 'ready\\n' >&3
 while true; do
   read -r -t 1 _ <> "$TMPDIR/docker.block" || true
 done
@@ -1272,31 +1390,7 @@ docker_build_run e2e-build -t demo-image .
 `,
     });
 
-    const waitForFile = async (filePath: string) => {
-      for (let attempt = 0; attempt < 500; attempt += 1) {
-        if (existsSync(filePath)) {
-          return;
-        }
-        await delay(10);
-      }
-      throw new Error(`file was not written: ${filePath}`);
-    };
-    const waitForExit = async (child: ReturnType<typeof spawn>) =>
-      await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-        child.once("exit", (code, signal) => resolve({ code, signal }));
-      });
-    const waitForDead = async (pid: number) => {
-      for (let attempt = 0; attempt < 500; attempt += 1) {
-        try {
-          process.kill(pid, 0);
-        } catch {
-          return;
-        }
-        await delay(10);
-      }
-      throw new Error(`process stayed alive: ${pid}`);
-    };
-    const runInterruptedBuild = async (signal: NodeJS.Signals, expectedCode: number) => {
+    const runInterruptedBuild = async (childSignal: NodeJS.Signals, expectedCode: number) => {
       rmSync(join(workDir, "docker.pid"), { force: true });
       rmSync(join(workDir, "docker.term"), { force: true });
       rmSync(join(workDir, "docker.ready"), { force: true });
@@ -1304,25 +1398,44 @@ docker_build_run e2e-build -t demo-image .
       rmSync(join(workDir, "docker-count"), { force: true });
       const runner = spawn(join(workDir, "runner.sh"), {
         env: { ...process.env, TMPDIR: workDir },
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "ignore", "pipe"],
+      });
+      const exited = waitForProcessExit(runner);
+      const closed = ownChildCompletion(
+        new Promise<number | null>((resolve, reject) => {
+          runner.once("error", reject);
+          runner.once("close", resolve);
+        }),
+      );
+      const ready = new Promise<void>((resolve, reject) => {
+        runner.stdio[3]!.once("data", () => resolve());
+        runner.stdio[3]!.once("error", reject);
       });
       try {
         const pidPath = join(workDir, "docker.pid");
-        await waitForFile(pidPath);
-        await waitForFile(join(workDir, "docker.ready"));
+        // A builtin FD write leaves no foreground reporter that tree shutdown could
+        // kill first, making errexit bypass the fixture's own TERM trap.
+        await withinTest(
+          awaitGateBeforeSettlement(ready, exited, `file was not written: ${pidPath}`),
+          signal,
+        );
+        expect(existsSync(join(workDir, "docker.ready"))).toBe(true);
         const buildPid = Number.parseInt(readFileSync(pidPath, "utf8"), 10);
 
-        runner.kill(signal);
-        const exit = await waitForExit(runner);
-
-        expect(exit).toEqual({ code: expectedCode, signal: null });
-        await waitForFile(join(workDir, "docker.term"));
+        runner.kill(childSignal);
+        expect(await withinTest(closed, signal)).toBe(expectedCode);
+        expect(runner.signalCode).toBeNull();
+        // The timeout wrapper can exit first; the Docker fixture holds FD 3 until
+        // its TERM trap finishes, so runner close also joins that fixture's output.
+        expect(existsSync(join(workDir, "docker.term"))).toBe(true);
         expect(readFileSync(join(workDir, "docker-count"), "utf8").trim()).toBe("1");
-        await waitForDead(buildPid);
+        await waitForForeignProcessExit(buildPid, signal);
+        expect(isProcessRunning(buildPid)).toBe(false);
       } finally {
         if (runner.exitCode === null && runner.signalCode === null) {
-          runner.kill("SIGKILL");
+          runner.kill("SIGTERM");
         }
+        await closed;
       }
     };
 
@@ -1454,7 +1567,7 @@ stdout="$(<"$TMPDIR/stdout")"
     execDockerSnippet(script);
   });
 
-  it.each([
+  it.for([
     {
       title: "keeps reused Docker image probes behind the timeout-aware helper",
       tempPrefix: "openclaw-docker-image-reuse-timeout-",
@@ -1827,32 +1940,24 @@ export OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS=1
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
 command_pid_file="$TMPDIR/command.pid"
+mkfifo "$TMPDIR/ready.pipe"
 (
-  run_logged_print_heartbeat plugins-run 30 bash -c 'trap "exit 0" TERM; printf "%s" "$$" > "$1"; while true; do /bin/sleep 0.05; done' bash "$command_pid_file"
-) &
+  run_logged_print_heartbeat plugins-run 30 bash -c 'trap "exit 0" TERM; printf "%s" "$$" > "$1"; printf "ready\\n" >&3; while true; do /bin/sleep 0.05; done' bash "$command_pid_file"
+) 3>"$TMPDIR/ready.pipe" &
 wrapper_pid="$!"
-for _ in $(seq 1 100); do
-  [ -s "$command_pid_file" ] && break
-  /bin/sleep 0.01
-done
-if [ ! -s "$command_pid_file" ]; then
+if ! IFS= read -r ready <"$TMPDIR/ready.pipe"; then
   kill -TERM "$wrapper_pid" 2>/dev/null || true
   echo "heartbeat command pid was not recorded" >&2
   exit 1
 fi
 command_pid="$(cat "$command_pid_file")"
 kill -TERM "$wrapper_pid"
-for _ in $(seq 1 50); do
-  if ! kill -0 "$command_pid" 2>/dev/null; then
-    wait "$wrapper_pid" 2>/dev/null || true
-    exit 0
-  fi
-  /bin/sleep 0.01
-done
-kill -TERM "$command_pid" 2>/dev/null || true
-kill -TERM "$wrapper_pid" 2>/dev/null || true
-echo "heartbeat command still alive after wrapper termination: $command_pid" >&2
-exit 1
+wait "$wrapper_pid" 2>/dev/null || true
+# cleanup_heartbeat_command joins the exact command before the wrapper returns.
+if kill -0 "$command_pid" 2>/dev/null; then
+  echo "heartbeat command still alive after wrapper termination: $command_pid" >&2
+  exit 1
+fi
 `,
     },
     {
@@ -1892,26 +1997,21 @@ docker() {
   printf "started\\n" >"$TMPDIR/docker-started"
   printf "docker running\\n"
   trap 'exit 143' TERM
+  printf "ready\\n" >&3
   while true; do /bin/sleep 0.05; done
 }
 export -f docker
 
+mkfifo "$TMPDIR/ready.pipe"
 (
   docker_e2e_run_logged_print_with_harness plugins-run image-name bash -lc true
-) &
+) 3>"$TMPDIR/ready.pipe" &
 wrapper_pid="$!"
-for _ in $(seq 1 50); do
-  [ -s "$TMPDIR/docker-started" ] && break
-  /bin/sleep 0.01
-  kill -0 "$wrapper_pid" 2>/dev/null || true
-done
+IFS= read -r ready <"$TMPDIR/ready.pipe"
 test -s "$TMPDIR/docker-started"
 kill -TERM "$wrapper_pid" 2>/dev/null || true
 wait "$wrapper_pid" 2>/dev/null || true
-for _ in $(seq 1 50); do
-  grep -qx "container-term" "$TMPDIR/docker-rm-seen" 2>/dev/null && break
-  /bin/sleep 0.01
-done
+# The joined harness removes its container before the heartbeat wrapper returns.
 grep -qx "container-term" "$TMPDIR/docker-rm-seen"
 test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
 `,
@@ -1960,11 +2060,11 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
 [[ -s "$stats_log" ]]
 `,
     },
-  ])("$title", ({ tempPrefix, scriptSource }) => {
+  ])("$title", async ({ tempPrefix, scriptSource }, { signal }) => {
     const workDir = tempDirs.make(tempPrefix);
     const script = scriptSource(workDir);
 
-    execDockerSnippet(script);
+    await runDockerSnippet(script, signal);
   });
 
   it("derives the browser CDP image from the shared functional image", () => {
@@ -2255,14 +2355,19 @@ OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
     ["TERM", "143"],
     ["HUP", "129"],
   ] as const) {
-    it(`escalates Docker watchdog children that ignore parent SIG${shellSignal}`, () => {
+    it(`escalates Docker watchdog children that ignore parent SIG${shellSignal}`, async ({
+      signal,
+    }) => {
       const workDir = tempDirs.make("openclaw-docker-node-signal-");
+      const reporter = writeFixtureReceiptReporter(workDir);
+      const readyPath = join(workDir, "ready");
       writeExecutables(join(workDir, "bin"), {
         node: `#!/bin/bash\nexec ${shellQuote(process.execPath)} "$@"\n`,
         docker: `#!/bin/bash
 trap "" TERM HUP
 printf "%s\\n" "$$" >"$TMPDIR/docker-pid"
 printf "%s\\n" "$PPID" >"$TMPDIR/watchdog-pid"
+${shellQuote(process.execPath)} ${shellQuote(reporter)} ${shellQuote(readyPath)} ready
 while true; do /bin/sleep 1; done
 `,
       });
@@ -2276,30 +2381,44 @@ export OPENCLAW_DOCKER_TIMEOUT_KILL_GRACE_MS=100
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
 
-docker_e2e_docker_cmd run demo &
-watchdog_pid="$!"
-for ((i = 0; i < 100; i += 1)); do
-  [ -s "$TMPDIR/docker-pid" ] && [ -s "$TMPDIR/watchdog-pid" ] && break
-  /bin/sleep 0.02
-done
-[ -s "$TMPDIR/docker-pid" ]
-[ -s "$TMPDIR/watchdog-pid" ]
-kill -${shellSignal} "$(/bin/cat "$TMPDIR/watchdog-pid")"
-set +e
-wait "$watchdog_pid"
-status="$?"
-set -e
-[ "$status" = "${expectedStatus}" ]
-docker_pid="$(/bin/cat "$TMPDIR/docker-pid")"
-for ((i = 0; i < 100; i += 1)); do
-  kill -0 "$docker_pid" 2>/dev/null || exit 0
-  /bin/sleep 0.02
-done
-echo "docker child still alive after watchdog termination" >&2
-exit 1
+docker_e2e_docker_cmd run demo
+
 `;
 
-      execDockerSnippet(script);
+      const runner = spawn("/bin/bash", ["--noprofile", "--norc", "-c", script], {
+        env: { ...process.env, BASH_ENV: "", ENV: "" },
+        stdio: "ignore",
+      });
+      const exited = waitForProcessExit(runner);
+      try {
+        await withinTest(
+          fixtureEventBeforeSettlement(
+            readyPath,
+            "ready",
+            exited,
+            "docker child PID was not recorded",
+          ),
+          signal,
+        );
+        const watchdogPid = Number(readFileSync(join(workDir, "watchdog-pid"), "utf8"));
+        const dockerPid = Number(readFileSync(join(workDir, "docker-pid"), "utf8"));
+        process.kill(watchdogPid, `SIG${shellSignal}`);
+        expect(await withinTest(exited, signal)).toBe(Number(expectedStatus));
+        await waitForForeignProcessExit(dockerPid, signal);
+      } finally {
+        for (const name of ["watchdog-pid", "docker-pid"]) {
+          const path = join(workDir, name);
+          if (existsSync(path)) {
+            try {
+              process.kill(Number(readFileSync(path, "utf8")), "SIGKILL");
+            } catch {}
+          }
+        }
+        if (runner.exitCode === null && runner.signalCode === null) {
+          runner.kill("SIGKILL");
+        }
+        await exited;
+      }
     });
   }
 
@@ -2653,14 +2772,15 @@ printf '%s\\n' "$seconds"
     }
   });
 
-  it("records an interrupted upgrade survivor phase as failed", async () => {
+  it("records an interrupted upgrade survivor phase as failed", async ({ signal }) => {
     const workDir = tempDirs.make("openclaw-upgrade-survivor-signal-");
     const binDir = join(workDir, "bin");
     const markerPath = join(workDir, "npm-started");
+    const reporter = writeFixtureReceiptReporter(workDir);
     const summaryPath = join(workDir, "artifacts", "summary.json");
     writeExecutables(binDir, {
       npm: `#!/bin/sh
-touch "$FAKE_NPM_MARKER"
+${shellQuote(process.execPath)} ${shellQuote(reporter)} "$FAKE_NPM_MARKER" ready
 exec sleep 300
 `,
       timeout: `#!/bin/sh
@@ -2691,20 +2811,28 @@ exec "$@"
     if (!childPid) {
       throw new Error("upgrade survivor process did not start");
     }
-    const exitPromise = new Promise<{
-      code: number | null;
-      signal: NodeJS.Signals | null;
-    }>((resolve) => {
-      child.once("exit", (code, signal) => resolve({ code, signal }));
-    });
+    const exitPromise = ownChildCompletion(
+      new Promise<{
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      }>((resolve) => {
+        child.once("exit", (code, childSignal) => resolve({ code, signal: childSignal }));
+      }),
+    );
 
     try {
-      for (let attempt = 0; attempt < 500 && !existsSync(markerPath); attempt += 1) {
-        await delay(10);
-      }
+      await withinTest(
+        fixtureEventBeforeSettlement(
+          markerPath,
+          "ready",
+          exitPromise,
+          "npm-started marker was not written",
+        ),
+        signal,
+      );
       expect(existsSync(markerPath)).toBe(true);
       process.kill(-childPid, "SIGTERM");
-      const exit = await exitPromise;
+      const exit = await withinTest(exitPromise, signal);
 
       expect(exit).toEqual({ code: 143, signal: null });
       const diagnostics = JSON.parse(
@@ -2734,6 +2862,7 @@ exec "$@"
       if (child.exitCode === null && child.signalCode === null) {
         process.kill(-childPid, "SIGKILL");
       }
+      await exitPromise;
     }
   });
 
@@ -2882,9 +3011,10 @@ fi
     ]);
   });
 
-  it.skipIf(process.platform !== "linux").each(["published", "current"])(
+  it.skipIf(process.platform !== "linux").for(["published", "current"])(
     "starts the %s auth probe under the manager that owns its restart and stop",
-    async (lane) => {
+    { timeout: 60_000 },
+    async (lane, { signal }) => {
       const workDir = tempDirs.make("survivor-managed-probe-");
       const paths = readUpgradeSurvivorPaths(workDir);
       const artifacts = paths.artifactRoot;
@@ -2897,16 +3027,22 @@ fi
       const childPath = join(workDir, "listener.mjs");
       const startsPath = join(workDir, "starts.jsonl");
       const portPath = join(workDir, "port");
+      const readyPipe = join(workDir, "ready.pipe");
+      execFileSync("mkfifo", [readyPipe]);
       writeFileSync(
         childPath,
-        `import fs from "node:fs";
+        `${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
 import http from "node:http";
 const identity = { pid: process.pid, managed: process.env.OPENCLAW_SYSTEMD_UNIT === "openclaw-gateway.service" };
 const server = http.createServer((_req, res) => res.end(JSON.stringify(identity)));
+const firstStart = !fs.existsSync(process.env.PORT_FILE);
 const port = fs.existsSync(process.env.PORT_FILE) ? Number(fs.readFileSync(process.env.PORT_FILE, "utf8")) : 0;
 server.listen(port, "127.0.0.1", () => {
   fs.writeFileSync(process.env.PORT_FILE, String(server.address().port));
   fs.appendFileSync(process.env.STARTS_FILE, JSON.stringify(identity) + "\\n");
+  sendReceipt(process.env.STARTS_FILE, "ready");
+  if (firstStart) fs.writeFileSync(process.env.READY_PIPE, "ready\\n");
   console.log("[gateway] ready on 127.0.0.1:" + server.address().port);
 });
 `,
@@ -2966,6 +3102,7 @@ process.on("SIGTERM", () => {
         LISTENER_SCRIPT: childPath,
         STARTS_FILE: startsPath,
         PORT_FILE: portPath,
+        READY_PIPE: readyPipe,
       };
       const source = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
       const setup =
@@ -2990,7 +3127,7 @@ ${tcpProbeAdapter}
 # This fixture chooses an ephemeral port; retain the actual readiness implementation.
 eval "$(declare -f openclaw_e2e_wait_gateway_ready | sed '1s/openclaw_e2e_wait_gateway_ready/fixture_wait_gateway_ready/')"
 openclaw_e2e_wait_gateway_ready() {
-  for _ in {1..200}; do [ -s "$PORT_FILE" ] && break; sleep 0.01; done
+  IFS= read -r ready <"$READY_PIPE"
   fixture_wait_gateway_ready "$1" "$2" 20 "$(cat "$PORT_FILE")" "\${5:-strict}"
 }
 ${lane === "published" ? "prepare_update_restart_probe" : 'prepare_update_restart_probe_current_install 18789 "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG"'}
@@ -3033,9 +3170,7 @@ openclaw_e2e_probe_tcp 127.0.0.1 18789 400`,
           expect(isProcessRunning(records()[0]!.pid)).toBe(false);
           await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
           expect(systemctl("start", "openclaw-gateway.service").status).toBe(0);
-          for (let attempt = 0; attempt < 200 && records().length < 2; attempt++) {
-            await delay(10);
-          }
+          await withinTest(receipts.waitFor(startsPath, "ready", 2), signal);
           expect(records()).toHaveLength(2);
         }
         const initial = (await (
@@ -3044,9 +3179,7 @@ openclaw_e2e_probe_tcp 127.0.0.1 18789 400`,
         expect(initial.managed).toBe(true);
         expect(systemctl("restart", "openclaw-gateway.service").status).toBe(0);
         const expectedStarts = lane === "published" ? 3 : 2;
-        for (let attempt = 0; attempt < 200 && records().length < expectedStarts; attempt++) {
-          await delay(10);
-        }
+        await withinTest(receipts.waitFor(startsPath, "ready", expectedStarts), signal);
         expect(records()).toHaveLength(expectedStarts);
         const replacement = (await (
           await fetch(url, { signal: AbortSignal.timeout(1_000) })
@@ -3067,7 +3200,6 @@ openclaw_e2e_probe_tcp 127.0.0.1 18789 400`,
         }
       }
     },
-    60_000,
   );
 
   it("returns the gateway readiness failure when startup is called conditionally", () => {
@@ -3325,8 +3457,8 @@ printf '%s\n' "$status" >"$TMPDIR/status"
 
   it.skipIf(process.platform === "win32")(
     "stops promptly when the systemctl target is a zombie with spaces and parentheses in comm",
-    async () => {
-      await forEachUpgradeSurvivorSystemctlShim(({ pid, run, readLog, scriptPath }) => {
+    async ({ signal }) => {
+      await forEachUpgradeSurvivorSystemctlShim(signal, ({ pid, run, readLog, scriptPath }) => {
         const procTail = Array.from({ length: 49 }, (_, field) => field + 1).join(" ");
         expect(run(`${pid} (gateway (old) worker) Z ${procTail}`, true), scriptPath).toBe(0);
         expect(readLog()).toEqual([
@@ -3341,20 +3473,23 @@ printf '%s\n' "$status" >"$TMPDIR/status"
 
   it.skipIf(process.platform === "win32")(
     "waits for a killable systemctl target when proc stat is unreadable or malformed",
-    async () => {
-      await forEachUpgradeSurvivorSystemctlShim(({ pid, pidPath, run, readLog, scriptPath }) => {
-        for (const procStat of [undefined, `${pid} (gateway) Z`]) {
-          // Reaching the wait sentinel proves the shell did not mistake missing stat data for exit.
-          expect(run(procStat), `${scriptPath}: ${procStat ?? "unreadable"}`).toBe(97);
-          expect(readLog()).toEqual([
-            "--user stop openclaw-gateway.service",
-            "proc-stat-read",
-            "wait",
-          ]);
-          expect(isProcessRunning(pid)).toBe(true);
-          expect(readFileSync(pidPath, "utf8")).toBe(`${pid}\n`);
-        }
-      });
+    async ({ signal }) => {
+      await forEachUpgradeSurvivorSystemctlShim(
+        signal,
+        ({ pid, pidPath, run, readLog, scriptPath }) => {
+          for (const procStat of [undefined, `${pid} (gateway) Z`]) {
+            // Reaching the wait sentinel proves the shell did not mistake missing stat data for exit.
+            expect(run(procStat), `${scriptPath}: ${procStat ?? "unreadable"}`).toBe(97);
+            expect(readLog()).toEqual([
+              "--user stop openclaw-gateway.service",
+              "proc-stat-read",
+              "wait",
+            ]);
+            expect(isProcessRunning(pid)).toBe(true);
+            expect(readFileSync(pidPath, "utf8")).toBe(`${pid}\n`);
+          }
+        },
+      );
     },
   );
 
@@ -3994,9 +4129,9 @@ writePluginInstallIndexForE2E(${JSON.stringify(index)}, { stateDir: ${JSON.strin
     }
   });
 
-  it.each([true])(
+  it.for([true])(
     "retains a failed service child and only sanitized diagnostics (candidate redactor: %s)",
-    async (candidateRedactorPresent) => {
+    async (candidateRedactorPresent, { signal }) => {
       const workDir = tempDirs.make("openclaw-survivor-diagnostics-");
       const artifacts = join(workDir, "artifacts");
       const state = join(workDir, "home", ".openclaw");
@@ -4043,7 +4178,15 @@ writePluginInstallIndexForE2E(${JSON.stringify(index)}, { stateDir: ${JSON.strin
         },
         stdio: "ignore",
       });
-      expect(await waitForProcessExit(supervisor)).toBe(0);
+      const exited = waitForProcessExit(supervisor);
+      try {
+        expect(await withinTest(exited, signal)).toBe(0);
+      } finally {
+        if (supervisor.exitCode === null && supervisor.signalCode === null) {
+          supervisor.kill("SIGTERM");
+        }
+        await exited;
+      }
       const observation = JSON.parse(readFileSync(`${logPath}.exit.json`, "utf8"));
       expect(observation.last).toMatchObject({ code: 78, signal: null });
       const managerEnv = {
@@ -4128,9 +4271,9 @@ writePluginInstallIndexForE2E(${JSON.stringify(index)}, { stateDir: ${JSON.strin
     },
   );
 
-  it.each([UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH])(
+  it.for([UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH])(
     "retains supervisor bootstrap stderr without inventing a child exit in %s",
-    async (scriptPath) => {
+    async (scriptPath, { signal }) => {
       const workDir = tempDirs.make("openclaw-survivor-bootstrap-");
       const unitDir = join(workDir, ".config", "systemd", "user");
       mkdirSync(unitDir, { recursive: true });
@@ -4139,10 +4282,12 @@ writePluginInstallIndexForE2E(${JSON.stringify(index)}, { stateDir: ${JSON.strin
         `[Service]\nExecStart="${process.execPath}" unused\n`,
       );
       const binDir = join(workDir, "bin");
+      const reporter = writeFixtureReceiptReporter(workDir);
+      const readyPath = join(workDir, "bootstrap.ready");
       writeExecutables(binDir, {
         node: `#!/bin/sh
 case "$1" in
-  *.supervisor.mjs) echo supervisor-bootstrap-failure >&2; exit 17 ;;
+  *.supervisor.mjs) echo supervisor-bootstrap-failure >&2; ${shellQuote(process.execPath)} ${shellQuote(reporter)} ${shellQuote(readyPath)} ready; exit 17 ;;
 esac
 exec ${shellQuote(process.execPath)} "$@"
 `,
@@ -4162,15 +4307,7 @@ exec ${shellQuote(process.execPath)} "$@"
       });
       expect(started.status, started.stderr).toBe(0);
       const bootstrapPath = `${logPath}.bootstrap.log`;
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (
-          existsSync(bootstrapPath) &&
-          readFileSync(bootstrapPath, "utf8").includes("supervisor-bootstrap-failure")
-        ) {
-          break;
-        }
-        await delay(10);
-      }
+      await withinTest(receipts.waitFor(readyPath, "ready"), signal);
       expect(readFileSync(bootstrapPath, "utf8")).toContain("supervisor-bootstrap-failure");
       expect(existsSync(`${logPath}.exit.json`)).toBe(false);
       const shown = spawnSync("bash", [shimPath, ...SURVIVOR_SERVICE_SHOW_ARGS], {
@@ -4514,7 +4651,7 @@ exit 0
     },
   );
 
-  it("stops supervised gateway restarts after the systemd burst limit", async () => {
+  it("stops supervised gateway restarts after the systemd burst limit", async ({ signal }) => {
     const workDir = tempDirs.make("openclaw-update-restart-supervisor-");
     const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
@@ -4540,9 +4677,15 @@ exit 0
         },
         stdio: "ignore",
       });
-      const exitCode = await waitForProcessExit(supervisor);
-
-      expect(exitCode).toBe(0);
+      const exited = waitForProcessExit(supervisor);
+      try {
+        expect(await withinTest(exited, signal)).toBe(0);
+      } finally {
+        if (supervisor.exitCode === null && supervisor.signalCode === null) {
+          supervisor.kill("SIGTERM");
+        }
+        await exited;
+      }
       expect(readFileSync(countPath, "utf8")).toBe("xxxxx");
       expect(readFileSync(logPath, "utf8")).toContain(
         "[systemctl-shim] gateway restart limit reached",
@@ -4552,13 +4695,14 @@ exit 0
 
   it.skipIf(process.platform === "win32")(
     "terminates supervised gateway descendants at the systemd stop timeout",
-    async () => {
+    async ({ signal }) => {
       const workDir = tempDirs.make("openclaw-update-restart-process-group-");
       const descendantPath = writeTermIgnoringDescendant(workDir);
       const gatewayPath = join(workDir, "gateway.mjs");
       writeFileSync(
         gatewayPath,
-        `import fs from "node:fs";
+        `${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 process.on("SIGTERM", () => {
   setTimeout(() => {
@@ -4566,12 +4710,13 @@ process.on("SIGTERM", () => {
     process.exit(0);
   }, 50);
 });
-spawn(process.execPath, [process.env.DESCENDANT_SCRIPT], { stdio: "ignore" });
-const ready = setInterval(() => {
-  if (!fs.existsSync(process.env.DESCENDANT_PID_FILE)) return;
-  clearInterval(ready);
+const descendant = spawn(process.execPath, [process.env.DESCENDANT_SCRIPT], {
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
+});
+descendant.once("message", () => {
   fs.writeFileSync(process.env.STATE_FILE, "ready");
-}, 5);
+  sendReceipt(process.env.STATE_FILE, "ready");
+});
 setInterval(() => {}, 1_000);
 `,
       );
@@ -4598,24 +4743,25 @@ setInterval(() => {}, 1_000);
           },
           stdio: "ignore",
         });
+        const exited = waitForProcessExit(supervisor);
         try {
-          for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt += 1) {
-            await delay(10);
-          }
-          expect(
-            existsSync(statePath),
-            `${supervisorPath}: readiness missing (exit=${supervisor.exitCode}, signal=${supervisor.signalCode})`,
-          ).toBe(true);
+          await withinTest(
+            fixtureEventBeforeSettlement(
+              statePath,
+              "ready",
+              exited,
+              `${supervisorPath}: readiness missing (exit=${supervisor.exitCode}, signal=${supervisor.signalCode})`,
+            ),
+            signal,
+          );
           const descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
           expect(descendantPid).toBeGreaterThan(1);
           expect(isProcessRunning(descendantPid)).toBe(true);
 
           supervisor.kill("SIGTERM");
-          expect(await waitForProcessExit(supervisor)).toBe(0);
+          expect(await withinTest(exited, signal)).toBe(0);
           expect(readFileSync(statePath, "utf8")).toBe("ready-graceful");
-          for (let attempt = 0; attempt < 100 && isProcessRunning(descendantPid); attempt += 1) {
-            await delay(10);
-          }
+          // The supervisor exits only after drainProcessGroup observes the group absent.
           expect(isProcessRunning(descendantPid)).toBe(false);
         } finally {
           await stopUpgradeSurvivorSupervisor(supervisor, descendantPidPath);
@@ -4626,7 +4772,7 @@ setInterval(() => {}, 1_000);
 
   it.skipIf(process.platform === "win32")(
     "drains the previous gateway process group before restarting",
-    async () => {
+    async ({ signal }) => {
       const workDir = tempDirs.make("openclaw-update-restart-process-group-restart-");
       const descendantPath = writeTermIgnoringDescendant(workDir);
       const gatewayPath = join(workDir, "restart-gateway.mjs");
@@ -4637,12 +4783,10 @@ import { spawn } from "node:child_process";
 fs.appendFileSync(process.env.STARTS_FILE, "x");
 const starts = fs.readFileSync(process.env.STARTS_FILE, "utf8").length;
 if (starts === 1) {
-  spawn(process.execPath, [process.env.DESCENDANT_SCRIPT], { stdio: "ignore" });
-  const ready = setInterval(() => {
-    if (!fs.existsSync(process.env.DESCENDANT_PID_FILE)) return;
-    clearInterval(ready);
-    process.exit(1);
-  }, 5);
+  const descendant = spawn(process.execPath, [process.env.DESCENDANT_SCRIPT], {
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+  descendant.once("message", () => process.exit(1));
   setInterval(() => {}, 1_000);
 } else {
   const pid = Number.parseInt(fs.readFileSync(process.env.DESCENDANT_PID_FILE, "utf8"), 10);
@@ -4686,8 +4830,9 @@ if (starts === 1) {
           },
           stdio: "ignore",
         });
+        const exited = waitForProcessExit(supervisor);
         try {
-          expect(await waitForProcessExit(supervisor)).toBe(0);
+          expect(await withinTest(exited, signal)).toBe(0);
           const descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
           expect(descendantPid).toBeGreaterThan(1);
           expect(readFileSync(startsPath, "utf8")).toBe("xx");
@@ -5196,36 +5341,48 @@ process.exit(73);
     expectContainerCleanup(fixture, "openclaw-plugin-binding-command-escape-e2e-");
   });
 
-  it.each([
+  it.for([
     ["SIGINT", 130],
     ["SIGTERM", 143],
     ["SIGHUP", 129],
-  ] as const)("cleans the actual cron runner and its harness on %s", async (signal, status) => {
-    const fixture = containerCleanupFixture("signal");
-    const runner = spawn("/bin/bash", ["scripts/e2e/cron-cli-docker.sh"], {
-      env: fixture.env,
-      stdio: "ignore",
-    });
-    try {
-      await expect.poll(() => existsSync(fixture.pidPath), { timeout: 5_000 }).toBe(true);
-      runner.kill(signal);
-      expect(await waitForProcessExit(runner)).toBe(status);
-      expectContainerCleanup(fixture, "openclaw-cron-cli-e2e-");
-      expect(isProcessRunning(Number(readFileSync(fixture.pidPath, "utf8")))).toBe(false);
-    } finally {
-      if (runner.exitCode === null && runner.signalCode === null) {
-        runner.kill("SIGTERM");
-        await waitForProcessExit(runner);
-      }
-      if (existsSync(fixture.pidPath)) {
-        const pid = Number(readFileSync(fixture.pidPath, "utf8"));
-        if (isProcessRunning(pid)) {
-          process.kill(pid, "SIGKILL");
-          await expect.poll(() => isProcessRunning(pid), { timeout: 5_000 }).toBe(false);
+  ] as const)(
+    "cleans the actual cron runner and its harness on %s",
+    async ([childSignal, status], { signal }) => {
+      const fixture = containerCleanupFixture("signal");
+      const runner = spawn("/bin/bash", ["scripts/e2e/cron-cli-docker.sh"], {
+        env: fixture.env,
+        stdio: "ignore",
+      });
+      const exited = waitForProcessExit(runner);
+      try {
+        await withinTest(
+          fixtureEventBeforeSettlement(
+            fixture.readyPath,
+            "ready",
+            exited,
+            "Docker PID file was not written",
+          ),
+          signal,
+        );
+        runner.kill(childSignal);
+        expect(await withinTest(exited, signal)).toBe(status);
+        expectContainerCleanup(fixture, "openclaw-cron-cli-e2e-");
+        expect(isProcessRunning(Number(readFileSync(fixture.pidPath, "utf8")))).toBe(false);
+      } finally {
+        if (runner.exitCode === null && runner.signalCode === null) {
+          runner.kill("SIGTERM");
+          await exited;
+        }
+        if (existsSync(fixture.pidPath)) {
+          const pid = Number(readFileSync(fixture.pidPath, "utf8"));
+          if (isProcessRunning(pid)) {
+            process.kill(pid, "SIGKILL");
+            await waitForForeignProcessExit(pid, signal);
+          }
         }
       }
-    }
-  });
+    },
+  );
 
   it.each(
     [
@@ -5764,8 +5921,6 @@ done
       busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
       "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
     });
-    const { readSystemdServiceExecStart } =
-      await import("../../src/daemon/systemd-service-files.js");
     const loadedEnv = {
       HOME: home,
       PATH: `${binDir}:${process.env.PATH}`,
@@ -5831,8 +5986,6 @@ done
       XDG_RUNTIME_DIR: join(home, "runtime"),
       DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, "runtime", "bus")}`,
     };
-    const { readSystemdServiceExecStart } =
-      await import("../../src/daemon/systemd-service-files.js");
     expect(
       await readSystemdServiceExecStart(env, { requireEffective: true, timeoutMs: 30_000 }),
     ).toBeNull();

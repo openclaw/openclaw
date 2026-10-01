@@ -1,4 +1,5 @@
 // Covers plugin marketplace catalog loading and validation.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";

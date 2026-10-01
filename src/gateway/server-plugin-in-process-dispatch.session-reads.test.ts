@@ -108,19 +108,22 @@ async function withSyntheticReader(
           catalogGate = createDeferred();
           catalogEntered = createDeferred();
           const readEntered = createDeferred();
-          const ensure = projection.ensureMaterialized.bind(projection);
+          const prepare = projection.prepareSelection.bind(projection);
           // Background catalog work uses a private closure; this observes the actual reader.
           const readiness = vi
-            .spyOn(projection, "ensureMaterialized")
-            .mockImplementationOnce(() => {
+            .spyOn(projection, "prepareSelection")
+            .mockImplementationOnce((...args) => {
               readEntered.resolve();
-              return ensure();
+              return prepare(...args);
             });
           restoreReadiness = () => readiness.mockRestore();
           sessionChanges.emit({ all: true, scope: "catalog" });
           return {
             entered: catalogEntered.promise,
-            readEntered: readEntered.promise,
+            readEntered: readEntered.promise.then(() => {
+              expect(readiness).toHaveBeenCalledOnce();
+              expect(readiness).toHaveBeenCalledWith(true);
+            }),
             release: () => catalogGate?.resolve(),
           };
         },

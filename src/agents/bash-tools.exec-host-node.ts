@@ -431,9 +431,9 @@ export async function executeNodeHostCommand(
         inlineDispatchAuthority = inlineApprovalSource ?? "human-approval";
         inlineFallbackPolicy = outcome.state.timeoutContext;
       } else {
-        const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
+        const followupTarget = {
           approvalId,
-          agentId: params.agentId,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           sessionKey: params.notifySessionKey ?? params.sessionKey,
           expectedSessionId: params.sessionId,
           sessionStore: params.sessionStore,
@@ -443,7 +443,7 @@ export async function executeNodeHostCommand(
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,
           direct: params.approvalFollowupMode === "direct",
-        });
+        };
         const sendApprovalRequestFailedFollowup = async (): Promise<void> => {
           if (!params.signal?.aborted) {
             await execHostShared.sendExecApprovalFollowupResult(

@@ -30,7 +30,7 @@ import {
   type ExecCommandSegment,
   type ExecutableResolution,
 } from "./exec-approvals-analysis.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import type { AllowAlwaysPattern, ExecAllowlistEntry } from "./exec-approvals.types.js";
 import {
   canUseReusableWrapperPayloadCandidates,
   planShellAuthorization,
@@ -1052,11 +1052,6 @@ function resolveShellWrapperPositionalArgvCandidate(params: {
     durable,
   };
 }
-
-export type AllowAlwaysPattern = {
-  pattern: string;
-  argPattern?: string;
-};
 
 function buildScriptArgPatternFromArgv(
   argv: string[],

@@ -185,12 +185,15 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      3758, // +1: WhatsApp poll_vote_received plugin hook event contract.
+      // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
+      // +1: WhatsApp poll_vote_received plugin hook event contract.
+      3759,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      2186,
+      // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
+      2187,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

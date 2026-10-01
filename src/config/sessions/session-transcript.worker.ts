@@ -162,19 +162,34 @@ serveOwnedWorkerTasks(
           await import("../../state/openclaw-agent-db-readonly.js");
         const { runSqliteDeferredTransactionSync } =
           await import("../../infra/sqlite-transaction.js");
-        const { readHistoricalSessionIdsInDatabase } =
-          await import("./session-history-eviction-candidates.js");
+        const {
+          readHistoricalSessionIdsInDatabase,
+          readDiskEvictableArchivedSessionBatchInDatabase,
+        } = await import("./session-history-eviction-candidates.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           (database) =>
             runSqliteDeferredTransactionSync(database.db, () =>
-              readHistoricalSessionIdsInDatabase({ ...request, database }),
+              "archived" in request
+                ? {
+                    batch: readDiskEvictableArchivedSessionBatchInDatabase(
+                      database,
+                      request.archived,
+                    ),
+                  }
+                : { sessionIds: readHistoricalSessionIdsInDatabase({ ...request, database }) },
             ),
           { ...request.database, env: request.env },
         );
         if (!result.found) {
+          if ("archived" in request && result.reason === "database-missing") {
+            return {
+              kind: "historical-eviction-candidates",
+              batch: { candidates: [], exhausted: true },
+            };
+          }
           throw new Error(`SQLite history eviction cannot read its database: ${result.reason}`);
         }
-        return { kind: "historical-eviction-candidates" as const, sessionIds: result.value };
+        return { kind: "historical-eviction-candidates" as const, ...result.value };
       }
       if (request.kind === "session-pending-archives") {
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -487,6 +502,14 @@ serveOwnedWorkerTasks(
         return (
           loadSessionEntryReadOnlyInScope({ ...request.scope, projection: "list" }) !== undefined
         );
+      }
+      if (request.kind === "transcript-watermark") {
+        const { readSessionTranscriptWatermark } =
+          await import("./session-accessor.sqlite-transcript-watermark.js");
+        return {
+          kind: "transcript-watermark",
+          watermark: readSessionTranscriptWatermark(request.scope),
+        };
       }
       return await runWithSessionTranscriptReadFence(
         request.admission,

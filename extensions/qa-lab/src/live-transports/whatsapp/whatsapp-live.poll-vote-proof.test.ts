@@ -1,9 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { WhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import { describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { whatsappScenarioImplementations } from "./scenario-implementations.js";
+import { runWhatsAppScenario } from "./scenario-runtime.js";
 import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
 import type { WhatsAppQaMessageScenarioContext } from "./whatsapp-live.contracts.js";
 import { whatsappQaPollVoteHookProofScenario } from "./whatsapp-live.scenario-implementations.poll-vote-proof.js";
@@ -65,8 +67,8 @@ function buildContext(params: {
     sendPoll: vi.fn(),
     sendReaction: vi.fn(),
     sendSticker: vi.fn(),
-    sendText: vi.fn(),
-    waitForMessage: vi.fn(async () => pollVote),
+    sendText: vi.fn<WhatsAppQaDriverSession["sendText"]>(),
+    waitForMessage: vi.fn<WhatsAppQaDriverSession["waitForMessage"]>(async () => pollVote),
   };
   const context = {
     driver,
@@ -155,11 +157,54 @@ describe("WhatsApp poll-vote hook proof scenario", () => {
         return { messageId: pollMessageId };
       });
       const { context, pollVote } = buildContext({ artifactDir, gatewayCall, pollMessageId });
-      const run = whatsappQaPollVoteHookProofScenario.buildRun();
-      if (run.kind === "approval" || !run.afterReply) {
-        throw new Error("WhatsApp poll-vote proof scenario must define afterReply");
+      const metadata = readQaScenarioById("whatsapp-poll-vote-hook-proof");
+      const implementationName = metadata.execution.config?.whatsappScenario;
+      if (typeof implementationName !== "string") {
+        throw new Error("Registered poll proof must select a WhatsApp implementation");
       }
-      const details = await run.afterReply(pollVote, context);
+      const implementation = whatsappScenarioImplementations[implementationName];
+      if (!implementation) {
+        throw new Error("Registered poll proof implementation is missing");
+      }
+      const run = implementation.buildRun();
+      if (run.kind === "approval" || typeof run.matchText !== "string") {
+        throw new Error("WhatsApp poll-vote proof must be a message scenario");
+      }
+      context.driver.sendText.mockResolvedValue({ messageId: "trigger-message-1" });
+      const marker = run.matchText;
+      let observationIndex = 0;
+      context.driver.waitForMessage.mockImplementation(async ({ match }) => {
+        const message =
+          observationIndex++ === 0
+            ? {
+                ...pollVote,
+                kind: "text" as const,
+                fromPhoneE164: context.sutPhoneE164,
+                observedAt: new Date(Date.now() + 1).toISOString(),
+                text: marker,
+              }
+            : pollVote;
+        expect(match(message)).toBe(true);
+        return message;
+      });
+      const result = await runWhatsAppScenario({
+        preparedScenario: { implementation, run },
+        driverAuthDir: "/tmp/qa-driver",
+        gateway: context.gateway as never,
+        getDriver: () => context.driver,
+        getProofOutputDir: () => artifactDir,
+        observedMessages: [],
+        repoRoot: process.cwd(),
+        replaceDriver: async () => {},
+        runtimeEnv: {
+          driverAuthArchiveBase64: "unused",
+          driverPhoneE164: context.driverPhoneE164,
+          sutAuthArchiveBase64: "unused",
+          sutPhoneE164: context.sutPhoneE164,
+        },
+        scenario: { id: metadata.id, title: metadata.title, timeoutMs: 300_000 },
+        sutAccountId: context.sutAccountId,
+      });
 
       expect(gatewayCall).toHaveBeenCalledWith(
         "poll",
@@ -169,8 +214,9 @@ describe("WhatsApp poll-vote hook proof scenario", () => {
         }),
         expect.anything(),
       );
-      expect(context.driver.waitForMessage).toHaveBeenCalledOnce();
-      expect(details).toContain("whatsapp-poll-vote-hook-proof");
+      expect(context.driver.waitForMessage).toHaveBeenCalledTimes(2);
+      expect(result.status).toBe("pass");
+      expect(result.details).toContain("whatsapp-poll-vote-hook-proof");
       const proof = JSON.parse(await readFile(path.join(proofDir, "proof.json"), "utf8")) as {
         assertions: Record<string, boolean>;
         status: string;

@@ -7,6 +7,23 @@ import { loadCronStore } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-trigger-cadence-" });
 
+function createTriggerDeps(
+  storePath: string,
+  evaluateCronTrigger: CronServiceDeps["evaluateCronTrigger"],
+): CronServiceDeps {
+  return {
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
+    storePath,
+    cronEnabled: true,
+    log: logger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    evaluateCronTrigger,
+  };
+}
+
 describe("cron trigger cadence", () => {
   it("does not replay a quiet occurrence after an earlier fired payload", async () => {
     const { storePath } = await makeStorePath();
@@ -17,17 +34,7 @@ describe("cron trigger cadence", () => {
       firstEvaluation = false;
       return { kind: "evaluated" as const, fire };
     });
-    const deps: CronServiceDeps = {
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
-      storePath,
-      cronEnabled: true,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      evaluateCronTrigger,
-    };
+    const deps = createTriggerDeps(storePath, evaluateCronTrigger);
     let cron = new CronService(deps);
     await cron.start();
     try {
@@ -71,17 +78,7 @@ describe("cron trigger cadence", () => {
         vi.setSystemTime(Date.now() + 123);
         return result;
       });
-      const deps: CronServiceDeps = {
-        scheduler: createTestGatewayScheduler(),
-        nowMs: () => Date.now(),
-        storePath,
-        cronEnabled: true,
-        log: logger,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        evaluateCronTrigger,
-      };
+      const deps = createTriggerDeps(storePath, evaluateCronTrigger);
       let cron = new CronService(deps);
       await cron.start();
       try {
@@ -126,17 +123,7 @@ describe("cron trigger cadence", () => {
       vi.setSystemTime(Date.now() + 123);
       return { kind: "evaluated" as const, fire: false, state: { count: 1 } };
     });
-    const deps: CronServiceDeps = {
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
-      storePath,
-      cronEnabled: true,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      evaluateCronTrigger,
-    };
+    const deps = createTriggerDeps(storePath, evaluateCronTrigger);
     let cron = new CronService(deps);
     await cron.start();
     try {
@@ -209,17 +196,7 @@ describe("cron trigger cadence", () => {
       ],
     });
     const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: false }));
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
-      storePath,
-      cronEnabled: true,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      evaluateCronTrigger,
-    });
+    const cron = new CronService(createTriggerDeps(storePath, evaluateCronTrigger));
     try {
       await cron.start();
       expect(evaluateCronTrigger).toHaveBeenCalledOnce();

@@ -604,25 +604,13 @@ describe("routeReply", () => {
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
-  it("passes policySessionKey through to outbound delivery targets", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          silentReply: {
-            group: "allow",
-            internal: "allow",
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
+  it("uses the policy session's direct conversation type over a group routing hint", async () => {
     const res = await routeTestReply({
       payload: { text: "native command response" },
       channel: "slack",
       to: "channel:C123",
-      cfg,
       sessionKey: "agent:main:main",
-      policySessionKey: "agent:main:direct:U123",
+      policySessionKey: "agent:main:slack:direct:U123",
       isGroup: true,
     });
 
@@ -630,8 +618,8 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload().text).toBe("native command response");
     const session = lastDelivery().session as Record<string, unknown>;
     expect(session.key).toBe("agent:main:main");
-    expect(session.policyKey).toBe("agent:main:direct:U123");
-    expect(session.conversationType).toBeUndefined();
+    expect(session.policyKey).toBe("agent:main:slack:direct:U123");
+    expect(session.conversationType).toBe("direct");
   });
 
   it("applies responsePrefix when routing", async () => {

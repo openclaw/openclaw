@@ -73,7 +73,7 @@ function buildPollOptionHashMap(pollCreationMessage: proto.IMessage): Map<string
     (section?.value as { options?: Array<{ optionName?: string | null }> } | undefined)?.options;
   const map = new Map<string, string>();
   for (const option of options ?? []) {
-    const name = option.optionName?.trim();
+    const name = option.optionName;
     if (name) {
       map.set(hashPollOptionName(name), name);
     }
@@ -136,9 +136,8 @@ function resolvePollVoterJidForDecrypt(
 /**
  * Mirrors the voter-side resolution above for the poll's creator.
  *
- * When the poll is someone else's (`fromMe` false with an explicit
- * `participant`), that participant *is* the creator, and it is already in
- * the address space the encryptor signed — use it directly. The
+ * For a received poll, the primary participant or DM peer is the creator
+ * in the address space the encryptor signed. The
  * `poll_vote_received` hook never reaches this case, because its ownership
  * gate only admits polls this gateway sent; the QA driver does, since it
  * observes any poll in the conversation.
@@ -152,8 +151,8 @@ function resolvePollCreatorJidForDecrypt(
   selfJid: string | null | undefined,
   selfLid: string | null | undefined,
 ): string | undefined {
-  if (!creationKey.fromMe && creationKey.participant) {
-    return creationKey.participant;
+  if (!creationKey.fromMe) {
+    return creationKey.participant || creationKey.remoteJid || undefined;
   }
   const referenceJid = creationKey.participant || creationKey.remoteJid || "";
   return referenceJid.endsWith("@lid")
