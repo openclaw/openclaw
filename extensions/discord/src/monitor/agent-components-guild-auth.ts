@@ -14,6 +14,7 @@ import type {
   DiscordUser,
 } from "./agent-components.types.js";
 import {
+  hasConfiguredDiscordChannels,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   resolveDiscordAllowListMatch,
@@ -82,8 +83,7 @@ async function ensureGuildComponentMemberAllowed(params: {
     await replyUnauthorized();
     return false;
   }
-  const channelAllowlistConfigured =
-    Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
+  const channelAllowlistConfigured = hasConfiguredDiscordChannels(guildInfo?.channels);
   const channelAllowed = channelConfig?.allowed !== false;
   if (
     !isDiscordGroupAllowedByPolicy({

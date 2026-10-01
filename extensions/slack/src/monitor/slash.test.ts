@@ -1215,18 +1215,26 @@ describe("Slack native command argument menus", () => {
     }
   });
 
-  it("keeps table fallback tokens literal in Web API action replies", async () => {
+  it("keeps Web API action replies ephemeral and table fallback tokens literal", async () => {
     const tableFallback = "Account\tOwner\nprod\t<@U123> & <!channel>";
     const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
     deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
       const responseBudget = (
         params as {
           responseBudget: {
-            respond: (payload: { text: string; mrkdwn?: false }) => Promise<unknown>;
+            respond: (payload: {
+              text: string;
+              mrkdwn?: false;
+              response_type: "in_channel";
+            }) => Promise<unknown>;
           };
         }
       ).responseBudget;
-      await responseBudget.respond({ text: tableFallback, mrkdwn: false });
+      await responseBudget.respond({
+        text: tableFallback,
+        mrkdwn: false,
+        response_type: "in_channel",
+      });
     });
     dispatchMock.mockImplementation((params: unknown) => {
       const deliver = (

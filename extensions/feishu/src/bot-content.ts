@@ -236,15 +236,6 @@ function resolveFeishuMediaKind(messageType: string): FeishuMediaInfo["kind"] {
   }
 }
 
-function resolvePostAttachmentMediaKind(
-  attachment: ReturnType<typeof parsePostContent>["attachments"][number],
-): FeishuMediaInfo["kind"] {
-  if (attachment.kind === "image") {
-    return "image";
-  }
-  return attachment.origin === "top-level" ? "document" : "video";
-}
-
 export async function resolveFeishuMediaList(params: {
   cfg: ClawdbotConfig;
   messageId: string;
@@ -285,7 +276,12 @@ export async function resolveFeishuMediaList(params: {
         key: attachment.key,
         type: attachment.kind,
         fileName: attachment.kind === "file" ? attachment.fileName : undefined,
-        kind: resolvePostAttachmentMediaKind(attachment),
+        kind:
+          attachment.kind === "image"
+            ? "image"
+            : attachment.origin === "top-level"
+              ? "document"
+              : "video",
         label: `embedded ${attachment.kind} ${attachment.key}`,
       });
     }

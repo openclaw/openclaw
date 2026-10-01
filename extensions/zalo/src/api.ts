@@ -240,9 +240,6 @@ export async function sendPhoto(
   );
 }
 
-/**
- * Send a temporary chat action such as typing.
- */
 export async function sendChatAction(
   token: string,
   params: ZaloSendChatActionParams,

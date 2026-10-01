@@ -1,4 +1,5 @@
 // Mattermost tests cover interactions plugin behavior.
+import { createHmac } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
@@ -7,6 +8,7 @@ import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostClient, MattermostPost } from "./client.js";
 import {
+  buildButtonAttachments,
   buildButtonProps,
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -40,6 +42,7 @@ function buildButtonAttachmentsForTest(params: ButtonPropsInput): ButtonAttachme
   const signedChannelId = params.buttons[0]?.context?.["__openclaw_channel_id"];
   const props = buildButtonProps({
     ...params,
+    accountId: params.accountId ?? "default",
     channelId: typeof signedChannelId === "string" ? signedChannelId : "test-channel",
   });
   const attachments = props?.attachments;
@@ -99,21 +102,34 @@ function verifyInteractionToken(
 
 describe("setInteractionSecret / getInteractionSecret", () => {
   beforeEach(() => {
-    setInteractionSecret("test-bot-token");
+    setInteractionSecret("default", "test-bot-token");
+  });
+
+  it("signs public account-free attachments with the sole registered account", () => {
+    const attachments = buildButtonAttachments({
+      callbackUrl: "https://gateway.example.com/mattermost/interactions/default",
+      buttons: [{ id: "probe", name: "Probe" }],
+    });
+    const secret = createHmac("sha256", "openclaw-mattermost-interactions")
+      .update("test-bot-token")
+      .digest("hex");
+    expect(attachments[0]?.actions?.[0]?.integration.context._token).toBe(
+      createHmac("sha256", secret).update('{"action_id":"probe"}').digest("hex"),
+    );
   });
 
   it("derives a deterministic secret from the bot token", () => {
-    setInteractionSecret("token-a");
+    setInteractionSecret("default", "token-a");
     const secretA = getInteractionSecret();
-    setInteractionSecret("token-a");
+    setInteractionSecret("default", "token-a");
     const secretA2 = getInteractionSecret();
     expect(secretA).toBe(secretA2);
   });
 
   it("produces different secrets for different tokens", () => {
-    setInteractionSecret("token-a");
+    setInteractionSecret("default", "token-a");
     const secretA = getInteractionSecret();
-    setInteractionSecret("token-b");
+    setInteractionSecret("default", "token-b");
     const secretB = getInteractionSecret();
     expect(secretA).not.toBe(secretB);
   });
@@ -123,7 +139,7 @@ describe("setInteractionSecret / getInteractionSecret", () => {
 
 describe("generateInteractionToken / verifyInteractionToken", () => {
   beforeEach(() => {
-    setInteractionSecret("test-bot-token");
+    setInteractionSecret("default", "test-bot-token");
   });
 
   it("verifies nested context regardless of nested key order", () => {
@@ -269,7 +285,7 @@ describe("resolveInteractionCallbackUrl", () => {
 
 describe("buildButtonProps attachments", () => {
   beforeEach(() => {
-    setInteractionSecret("test-bot-token");
+    setInteractionSecret("default", "test-bot-token");
   });
 
   it("returns an array with one attachment containing all buttons", () => {
@@ -624,24 +640,27 @@ describe("createMattermostInteractionHandler", () => {
     expectSuccessfulApprovalUpdate(res, requestLog);
   });
 
-  it("rejects malformed JSON callback requests with a stable parser error", async () => {
-    const log = vi.fn();
-    const handler = createMattermostInteractionHandler({
-      client: createMattermostClientMock(async () => {
-        throw new Error("unexpected client request");
-      }),
-      accountId: "acct",
-      log,
-    });
+  it.each(["{not json", "null"])(
+    "rejects invalid callback body %s with a stable parser error",
+    async (body) => {
+      const log = vi.fn();
+      const handler = createMattermostInteractionHandler({
+        client: createMattermostClientMock(async () => {
+          throw new Error("unexpected client request");
+        }),
+        accountId: "acct",
+        log,
+      });
 
-    const res = await runHandler(handler, { body: "{not json" });
+      const res = await runHandler(handler, { body });
 
-    expect(res.statusCode).toBe(400);
-    expect(res.body).toBe(JSON.stringify({ error: "Invalid request body" }));
-    expect(log).toHaveBeenCalledWith(
-      "mattermost interaction: failed to parse body: Error: Mattermost interaction body was malformed JSON",
-    );
-  });
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toBe(JSON.stringify({ error: "Invalid request body" }));
+      expect(log).toHaveBeenCalledWith(
+        "mattermost interaction: failed to parse body: Error: Mattermost interaction body was malformed JSON",
+      );
+    },
+  );
 
   it("accepts forwarded Mattermost source IPs from a trusted proxy", async () => {
     const { res } = await runApproveInteraction({

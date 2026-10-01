@@ -253,7 +253,7 @@ export function buildPollResultsSummary(params: {
   const answerIds = new Set(parsed.answers.map((answer) => answer.id));
   const latestVoteBySender = new Map<string, string[]>();
 
-  const orderedRelationEvents = [...params.relationEvents].toSorted((left, right) => {
+  const orderedRelationEvents = params.relationEvents.toSorted((left, right) => {
     const leftTs = asFiniteNumber(left.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     const rightTs = asFiniteNumber(right.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     if (leftTs !== rightTs) {
