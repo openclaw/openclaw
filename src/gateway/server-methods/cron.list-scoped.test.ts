@@ -205,9 +205,10 @@ describe("cron.list scoped SQLite snapshots", () => {
               .get(cronStoreKey(storePath))?.job_json;
           const original = raw();
           await cron.start();
-          expect(loadCronQuarantinedJobs(storePath)).toHaveLength(quarantine ? 1 : 0);
+          const quarantinedJobs = await loadCronQuarantinedJobs(storePath);
+          expect(quarantinedJobs).toHaveLength(quarantine ? 1 : 0);
           if (quarantine) {
-            expect(loadCronQuarantinedJobs(storePath)[0]).toMatchObject({
+            expect(quarantinedJobs[0]).toMatchObject({
               reason: "invalid-schedule",
               job: { id: "job-0002" },
             });
