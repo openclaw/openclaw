@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
@@ -267,39 +268,69 @@ async function startMcpLoopbackServer(
           return;
         }
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
-        // Tools capture their creator at construction, not the later HTTP execution scope.
+        const callerIdentity = boundClientGrant
+          ? createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext: boundClientGrant.admittedRunContext,
+              receiptAuthority: boundClientGrant.isCurrent,
+              cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
+              mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
+              agentId: resolveSessionAgentIds({
+                config: cfg,
+                sessionKey: requestContext.sessionKey,
+                agentId: requestContext.agentId,
+              }).sessionAgentId,
+              sessionKey: requestContext.sessionKey,
+              turnSourceChannel: requestContext.messageProvider,
+              turnSourceLocal:
+                !requestContext.messageProvider &&
+                requestContext.cronCreatorCallerOrigin?.kind === "local"
+                  ? true
+                  : undefined,
+              turnSourceTo: requestContext.currentChannelId,
+              turnSourceAccountId: requestContext.accountId,
+              turnSourceThreadId: requestContext.currentThreadTs,
+            })
+          : undefined;
+        if (callerIdentity && boundClientGrant?.personalToolParticipants) {
+          callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
+        }
+        // Tools bind their creator at construction, before the later tools/call scope.
         const scopedTools = await withAgentQuestionAnswerAuthority(
           boundClientGrant?.questionAnswerAuthority,
           () =>
-            toolCache.resolve({
-              context: requestContext,
-              admittedRunContext: boundClientGrant?.admittedRunContext,
-              sessionControlAuthority: readAdmittedRunOperatorAuthority(
-                boundClientGrant?.admittedRunContext,
+            withGatewayToolCallerIdentity(callerIdentity, () =>
+              (boundClientGrant?.constructCronManagementTools ?? ((run) => run()))(() =>
+                toolCache.resolve({
+                  context: requestContext,
+                  admittedRunContext: boundClientGrant?.admittedRunContext,
+                  sessionControlAuthority: readAdmittedRunOperatorAuthority(
+                    boundClientGrant?.admittedRunContext,
+                  ),
+                  rootedExecution: boundClientGrant?.rootedExecution,
+                  messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
+                  cfg,
+                  signal: requestAbort.signal,
+                  ...(boundClientGrant?.toolAuth
+                    ? {
+                        authProfileStore: boundClientGrant.toolAuth.store,
+                        ...(boundClientGrant.toolAuth.agentDir
+                          ? { authProfileStoreAgentDir: boundClientGrant.toolAuth.agentDir }
+                          : {}),
+                      }
+                    : {}),
+                  ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
+                  // Same liveness check `authorizeToolCall` applies after the hook,
+                  // handed to run-contract tools so a revocation that lands while a
+                  // call is in flight also fails the durable write.
+                  isGrantCurrent: authorizeToolCall,
+                  yieldContextCacheKey: yieldContext?.cacheKey,
+                  onYield: yieldContext?.onYield,
+                  ...(boundClientGrant?.skillLibraryAuthoring
+                    ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
+                    : {}),
+                }),
               ),
-              rootedExecution: boundClientGrant?.rootedExecution,
-              messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
-              cfg,
-              signal: requestAbort.signal,
-              ...(boundClientGrant?.toolAuth
-                ? {
-                    authProfileStore: boundClientGrant.toolAuth.store,
-                    ...(boundClientGrant.toolAuth.agentDir
-                      ? { authProfileStoreAgentDir: boundClientGrant.toolAuth.agentDir }
-                      : {}),
-                  }
-                : {}),
-              ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
-              // Same liveness check `authorizeToolCall` applies after the hook,
-              // handed to run-contract tools so a revocation that lands while a
-              // call is in flight also fails the durable write.
-              isGrantCurrent: authorizeToolCall,
-              yieldContextCacheKey: yieldContext?.cacheKey,
-              onYield: yieldContext?.onYield,
-              ...(boundClientGrant?.skillLibraryAuthoring
-                ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
-                : {}),
-            }),
+            ),
         );
 
         // Discovery may outlive the requesting connection or grant.
@@ -393,28 +424,6 @@ async function startMcpLoopbackServer(
                     }
                   : undefined,
               });
-            const callerIdentity = boundClientGrant
-              ? createAdmittedGatewayToolCallerIdentity({
-                  admittedRunContext: boundClientGrant.admittedRunContext,
-                  receiptAuthority: boundClientGrant.isCurrent,
-                  cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
-                  mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
-                  agentId: scopedTools.agentId,
-                  sessionKey: requestContext.sessionKey,
-                  turnSourceChannel: requestContext.messageProvider,
-                  turnSourceLocal:
-                    !requestContext.messageProvider &&
-                    requestContext.cronCreatorCallerOrigin?.kind === "local"
-                      ? true
-                      : undefined,
-                  turnSourceTo: requestContext.currentChannelId,
-                  turnSourceAccountId: requestContext.accountId,
-                  turnSourceThreadId: requestContext.currentThreadTs,
-                })
-              : undefined;
-            if (callerIdentity && boundClientGrant?.personalToolParticipants) {
-              callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
-            }
             response = await withGatewayToolCallerIdentity(callerIdentity, () =>
               runWithTrackedCancellation(requestAbort.signal, handleRequest),
             );

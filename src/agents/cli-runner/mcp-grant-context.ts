@@ -6,6 +6,7 @@ import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   bindActiveCronAuthorityCurrentness,
+  bindCronManagementToolConstruction,
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
@@ -34,6 +35,7 @@ export function finalizeCliMcpGrant(
   }
   const cronRequesterGrantIssuer = captureCronRequesterGrantIssuer(context.runId);
   const cronAuthorityCheck = bindActiveCronAuthorityCurrentness(context.runId);
+  const constructCronManagementTools = bindCronManagementToolConstruction(context.runId);
   const personalToolParticipants = source.toolAuthorityFingerprint
     ? source.replyOperation?.personalToolParticipants
     : undefined;
@@ -46,6 +48,7 @@ export function finalizeCliMcpGrant(
     },
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
     ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
+    ...(constructCronManagementTools ? { constructCronManagementTools } : {}),
     admittedRunContext: source.admittedRunContext,
     messageActionTurnCapability: source.messageActionTurnCapability,
     abortSignal: source.abortSignal,

@@ -142,6 +142,8 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   ) => CronCreatorAuthorityGrant;
   /** Retained Cron permission, independent of this grant's other tool authority. */
   cronAuthorityCheck?: () => boolean;
+  /** Re-enter only the minting run's live Cron management scope at tool construction. */
+  constructCronManagementTools?: <T>(run: () => T) => T;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   /** Original CLI policy, rebound only to this stored row's exact lifetime. */
@@ -280,6 +282,9 @@ export function mintMcpLoopbackClientGrant(
       ? { cronRequesterGrantIssuer: params.cronRequesterGrantIssuer }
       : {}),
     ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
+    ...(params.constructCronManagementTools
+      ? { constructCronManagementTools: params.constructCronManagementTools }
+      : {}),
     abortSignal: params.abortSignal,
     assertCurrent: params.assertCurrent,
     bindQuestionAnswerAuthority: params.bindQuestionAnswerAuthority,
@@ -480,6 +485,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       messageActionTurnCapability?: string;
       mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
       cronAuthorityCheck?: () => boolean;
+      constructCronManagementTools?: <T>(run: () => T) => T;
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
       rootedExecution?: PreparedRootedExecutionCapability;
@@ -513,6 +519,7 @@ export function resolveMcpLoopbackClientGrant(params: {
     }
   });
   const issueCronRequesterGrant = grant.cronRequesterGrantIssuer;
+  const constructCronManagementTools = grant.constructCronManagementTools;
   // Cached tools and OAuth refreshes must share the prepared store for this
   // grant; cloning on each request would discard refreshed credentials.
   return {
@@ -526,6 +533,16 @@ export function resolveMcpLoopbackClientGrant(params: {
       ? { messageActionTurnCapability: grant.messageActionTurnCapability }
       : {}),
     ...(grant.cronAuthorityCheck ? { cronAuthorityCheck: grant.cronAuthorityCheck } : {}),
+    ...(constructCronManagementTools
+      ? {
+          constructCronManagementTools: <T>(run: () => T): T => {
+            if (!isCurrent()) {
+              throw new Error("cron management MCP grant is no longer active");
+            }
+            return constructCronManagementTools(run);
+          },
+        }
+      : {}),
     ...(issueCronRequesterGrant
       ? {
           mintCronRequesterGrant: (signal?: AbortSignal) => {
