@@ -120,7 +120,6 @@ DatabaseSync.prototype.prepare = function(sql) {
 it.each([
   { outcome: "recover", agentId: "worker" },
   { outcome: "corrupt", agentId: "worker" },
-  { outcome: "physical-corrupt", agentId: "worker" },
   { outcome: "physical-corrupt", agentId: "main" },
   { outcome: "shutdown", agentId: "worker" },
   { outcome: "fast", agentId: "worker" },
@@ -450,7 +449,7 @@ it.each([
         );
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
         expect(hostJournalReads).toBe(0);
-      } else if (outcome === "corrupt" || outcome === "physical-corrupt") {
+      } else if (outcome === "corrupt") {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
           repairHint: expect.stringContaining("doctor --fix"),

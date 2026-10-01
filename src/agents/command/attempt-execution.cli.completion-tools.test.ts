@@ -313,7 +313,7 @@ describe("CLI completion tool handoffs", () => {
     expectMockArgFields({
       provider: "claude-cli",
       disableTools: false,
-      allowEmptyAssistantReplyAsSilent: true,
+      terminalReplyExpectation: "required",
     });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     const run = runCliAgentMock.mock.calls[0]?.[0] as RunCliAgentParams;

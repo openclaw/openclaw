@@ -18,6 +18,7 @@ import {
   prepareAgentWorkspaceAttachments,
   type AgentWorkspaceAccess,
 } from "./workspace-access.js";
+import { prepareLocalWorkspaceAttachments } from "./workspace-attachments.local.js";
 
 function workspace() {
   return path.resolve("test-workspace", randomUUID());
@@ -325,7 +326,6 @@ describe("workspace attachment preparation", () => {
         }
         return handle;
       });
-      const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
 
       const note = await prepareLocalWorkspaceAttachments({
         media: [{ path: filePath }],

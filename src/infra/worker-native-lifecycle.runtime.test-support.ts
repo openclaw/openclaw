@@ -57,6 +57,7 @@ export async function runNativeResourceLifecycle(
   supervisorLoss = false,
   closeBeforeLoss = false,
   edge?:
+    | "idle-broker"
     | "late-attachment"
     | "owner-reply-loss"
     | "auto-close-success"
@@ -71,6 +72,8 @@ export async function runNativeResourceLifecycle(
   ]);
   const { captureRetainedNativeWorkerSource, createRetainedNativeWorker } =
     await import("./worker-native-lifecycle.js");
+  const { assertNativeResourceCustody, createIdleBrokerRetirementProof } =
+    await import("./worker-native-lifecycle.custody.test-support.js");
   const { SpawnBrokerHost } = await import("../process/spawn-broker/host.js");
   const { drainGlobalSingletonLifecycleState } = await import("../shared/global-singleton.js");
   const autoCloseEdge =
@@ -190,6 +193,8 @@ export async function runNativeResourceLifecycle(
   const control = createControl();
   const { channel, facts, order, waitFor, permit } = control;
   const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const idleBrokerProof =
+    edge === "idle-broker" ? createIdleBrokerRetirementProof(source) : undefined;
   const resource = source.captureResource(
     resolveRuntimeWorkerUrl(nativeWorkerResourceEntrypoint),
     "nativeResource",
@@ -320,14 +325,11 @@ export async function runNativeResourceLifecycle(
     const observer = new DatabaseSync(databasePath);
     database = observer;
     observer.exec("PRAGMA busy_timeout=0");
-    const assertHeld = () => {
-      assert.equal(exited, false);
-      assert.equal(facts.constructions, 1);
-      assert.equal(facts.childClosed, false);
-      process.kill(facts.childPid, 0);
-      assert.throws(() => observer.exec("BEGIN IMMEDIATE"), /locked|busy/i);
-    };
+    const assertHeld = () => assertNativeResourceCustody(facts, exited, observer);
     assertHeld();
+    if (idleBrokerProof) {
+      await idleBrokerProof.assertRefused(facts.brokerPid, assertHeld);
+    }
     if (edge === "late-attachment") {
       // Cross the original cold broker's 15-second readiness deadline using real elapsed time.
       await delay(15_050);
@@ -565,6 +567,9 @@ export async function runNativeResourceLifecycle(
     assert.equal(facts.childClosed, true);
     assert.equal(exited, true);
     assert.equal(target.threadId, -1);
+    if (idleBrokerProof) {
+      await idleBrokerProof.assertRetired(facts.brokerPid);
+    }
     if (shutdown) {
       await supervisorJoined.promise;
       await nextTurn();
@@ -636,18 +641,15 @@ export async function runNativeResourceLifecycle(
     observer.exec("ROLLBACK");
     console.log(
       JSON.stringify({
-        ending: autoCloseEdge
+        ending: edge
           ? `resource-${edge}`
-          : edge === "late-attachment"
-            ? "resource-late-attachment"
-            : edge === "owner-reply-loss"
-              ? "resource-owner-reply-loss"
-              : closeBeforeLoss
-                ? "resource-close-supervisor-loss"
-                : supervisorLoss
-                  ? "resource-supervisor-loss"
-                  : "native-resource",
+          : closeBeforeLoss
+            ? "resource-close-supervisor-loss"
+            : supervisorLoss
+              ? "resource-supervisor-loss"
+              : "native-resource",
         ...(closeBeforeLoss ? { originalCloseJoined: true } : {}),
+        ...idleBrokerProof?.result,
         ...(edge === "late-attachment" ? { lateSameBrokerAttached: true } : {}),
         ...(edge === "owner-reply-loss"
           ? {

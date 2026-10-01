@@ -43,7 +43,7 @@ export function observeSessionSendContinuations(options: { trackAllWork?: boolea
         origin === "session:a2a-send" ? () => continuationWork.run(true, run) : run,
         origin,
       );
-      if (origin === "session:a2a-send") {
+      if (options.trackAllWork || origin === "session:a2a-send") {
         completions.add(completion);
       }
       return completion;

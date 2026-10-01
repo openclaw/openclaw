@@ -144,7 +144,7 @@ describe("sessions_yield tool", () => {
     expect(isToolResultError(result)).toBe(false);
     expect(result.details).toMatchObject({
       status: "nothing_pending",
-      message: expect.stringContaining("arrive as a later turn on their own"),
+      message: expect.stringContaining("did not pause the turn or schedule a continuation"),
     });
     expect(onYield).not.toHaveBeenCalled();
   });

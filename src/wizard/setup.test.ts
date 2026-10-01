@@ -517,7 +517,6 @@ describe("runSetupWizard", () => {
         bind: "loopback",
         authMode: "token",
         gatewayToken: "test-token",
-        tailscaleMode: "off",
       },
     }));
     let authoredConfig: OpenClawConfig | undefined;
@@ -1224,7 +1223,6 @@ describe("runSetupWizard", () => {
               bind: gateway.bind,
               authMode: gateway.authMode,
               gatewayToken: undefined,
-              tailscaleMode: gateway.tailscaleMode,
             },
           }),
         );

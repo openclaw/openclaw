@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
+import { runCliEntry } from "./runner.entries.js";
+import { runCapability } from "./runner.js";
 import {
   createSafeAudioFixtureBuffer,
   withAudioFixture,
@@ -24,8 +26,6 @@ vi.mock("../media/media-services.js", () => ({
   runFfmpeg: (...args: unknown[]) => runFfmpegMock(...args),
 }));
 
-let runCliEntry: typeof import("./runner.entries.js").runCliEntry;
-let runCapability: typeof import("./runner.js").runCapability;
 type Fixture = Parameters<Parameters<typeof withAudioFixture>[1]>[0];
 type Overrides = Pick<Parameters<typeof runCliEntry>[0], "config" | "request">;
 
@@ -144,10 +144,6 @@ const transcriptFileCases: Array<{
 ];
 
 describe("media-understanding CLI audio entry", () => {
-  beforeAll(async () => {
-    ({ runCliEntry } = await import("./runner.entries.js"));
-    ({ runCapability } = await import("./runner.js"));
-  });
   beforeEach(() => {
     runExecMock.mockReset().mockResolvedValue({ stdout: "cli transcript" });
     runFfmpegMock.mockReset();

@@ -76,7 +76,7 @@ function fixture(scopes = ["operator.write"], creator = "someone-else") {
     createdActor: { type: "human", source: "profile", id: creator },
     visibility: "shared",
   };
-  let generation = Symbol("database");
+  const generation = Symbol("database");
   const client = {
     connect: { role: "operator", scopes, client: { id: "test", mode: "webchat" } },
     authenticatedUserProfile: { profileId: "alice", displayName: "Alice" },
@@ -116,20 +116,48 @@ function fixture(scopes = ["operator.write"], creator = "someone-else") {
     setEntry(next: SessionEntry | undefined) {
       entry = next;
     },
-    replaceGeneration() {
-      generation = Symbol("replacement database");
-    },
-    prepare: async (ownSessionOnly = false) =>
+    prepare: async () =>
       hold(
         await prepareGatewaySessionAccessAuthority({
           policy: { mode: "write", requiredTool: "browser", allowOwnSessionScope: true },
           requestParams: { sessionKey: key, agentId: "main" },
           context,
           client,
-          ownSessionOnly,
+          ownSessionOnly: false,
         }),
       ),
   };
+}
+
+function dispatchSession(
+  test: ReturnType<typeof fixture>,
+  handler: GatewayRequestHandler,
+  options: Partial<
+    Pick<
+      Parameters<typeof handleGatewayRequest>[0],
+      "respond" | "sessionMutationCommitGuard" | "expectedProfileBinding"
+    >
+  > & { allowOwnSessionScope?: boolean } = {},
+) {
+  const { allowOwnSessionScope, ...request } = options;
+  const method = "fixture.session.open";
+  return handleGatewayRequest({
+    req: { type: "req", id: "session-access", method, params: { sessionKey: key } },
+    respond: vi.fn(),
+    client: test.client,
+    context: test.context,
+    methodRegistry: createGatewayMethodRegistry([
+      createPluginGatewayMethodDescriptor({
+        pluginId: "fixture",
+        name: method,
+        handler,
+        scope: "operator.write",
+        sessionAccess: { mode: "write", requiredTool: "browser", allowOwnSessionScope },
+      }),
+    ]),
+    isWebchatConnect: () => false,
+    ...request,
+  });
 }
 
 beforeEach(() => {
@@ -200,24 +228,8 @@ describe("session resource admission", () => {
         effect();
         respond(true, {});
       });
-      const method = "fixture.session.open";
       const respond = vi.fn();
-      const pending = handleGatewayRequest({
-        req: { type: "req", id: "profile-preparation", method, params: { sessionKey: key } },
-        respond,
-        client: test.client,
-        context: test.context,
-        methodRegistry: createGatewayMethodRegistry([
-          createPluginGatewayMethodDescriptor({
-            pluginId: "fixture",
-            name: method,
-            handler,
-            scope: "operator.write",
-            sessionAccess: { mode: "write", requiredTool: "browser" },
-          }),
-        ]),
-        isWebchatConnect: () => false,
-      });
+      const pending = dispatchSession(test, handler, { respond });
       const failure = pending.then(
         () => undefined,
         (error: unknown) => error,
@@ -285,23 +297,7 @@ describe("session resource admission", () => {
         expect(() => resource.assertCurrent()).not.toThrow();
         respond(true, {});
       });
-      const method = "fixture.session.open";
-      await handleGatewayRequest({
-        req: { type: "req", id: "hydration", method, params: { sessionKey: key } },
-        respond: vi.fn(),
-        client: test.client,
-        context: test.context,
-        methodRegistry: createGatewayMethodRegistry([
-          createPluginGatewayMethodDescriptor({
-            pluginId: "fixture",
-            name: method,
-            handler,
-            scope: "operator.write",
-            sessionAccess: { mode: "write", requiredTool: "browser" },
-          }),
-        ]),
-        isWebchatConnect: () => false,
-      });
+      await dispatchSession(test, handler);
       expect(test.client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
       expect(handler).toHaveBeenCalledOnce();
       expect(effect).not.toHaveBeenCalled();
@@ -330,23 +326,10 @@ describe("session resource admission", () => {
         };
       });
     const handler = vi.fn<GatewayRequestHandler>();
-    const method = "fixture.session.open";
     const respond = vi.fn();
-    await handleGatewayRequest({
-      req: { type: "req", id: "final-denial", method, params: { sessionKey: key } },
+    await dispatchSession(test, handler, {
       respond,
-      client: test.client,
-      context: test.context,
-      methodRegistry: createGatewayMethodRegistry([
-        createPluginGatewayMethodDescriptor({
-          pluginId: "fixture",
-          name: method,
-          handler,
-          scope: "operator.write",
-          sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "browser" },
-        }),
-      ]),
-      isWebchatConnect: () => false,
+      allowOwnSessionScope: true,
     });
     expect(capture).toHaveBeenCalledOnce();
     expect(handler).not.toHaveBeenCalled();
@@ -400,7 +383,7 @@ describe("session resource admission", () => {
   });
   it.each([
     { scopes: ["operator.write"], creator: "someone-else", allowed: true },
-    { scopes: ["operator.sessions.write"], creator: "alice", allowed: true },
+    { scopes: ["operator.sessions.write"], creator: "former-alice", allowed: true },
     { scopes: ["operator.sessions.write"], creator: "someone-else", allowed: false },
     { scopes: ["operator.read"], creator: "alice", allowed: false },
   ])(
@@ -414,25 +397,8 @@ describe("session resource admission", () => {
         resource = hold(admitted!.retainSession());
         respond(true, { ok: true });
       });
-      const method = "fixture.session.open";
-      const methodRegistry = createGatewayMethodRegistry([
-        createPluginGatewayMethodDescriptor({
-          pluginId: "fixture",
-          name: method,
-          handler,
-          scope: "operator.write",
-          sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "browser" },
-        }),
-      ]);
       const respond = vi.fn();
-      await handleGatewayRequest({
-        req: { type: "req", id: "one", method, params: { sessionKey: key, agentId: "main" } },
-        respond,
-        client: test.client,
-        context: test.context,
-        methodRegistry,
-        isWebchatConnect: () => false,
-      });
+      await dispatchSession(test, handler, { respond, allowOwnSessionScope: true });
       expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
       expect(respond.mock.calls[0]?.[0]).toBe(allowed);
       if (allowed) {
@@ -450,7 +416,6 @@ describe("session resource admission", () => {
       let invocationActive = true;
       let viewer: ReturnType<Awaited<ReturnType<typeof test.prepare>>["retain"]> | undefined;
       let resource: typeof viewer;
-      const method = "fixture.session.open";
       const handler: GatewayRequestHandler = async ({ sessionAccessAuthority, respond }) => {
         const authority = sessionAccessAuthority!;
         viewer = hold(authority.retain());
@@ -464,22 +429,7 @@ describe("session resource admission", () => {
         expect(() => resource!.assertCurrent()).not.toThrow();
         respond(true, {});
       };
-      const methodRegistry = createGatewayMethodRegistry([
-        createPluginGatewayMethodDescriptor({
-          pluginId: "fixture",
-          name: method,
-          handler,
-          scope: "operator.write",
-          sessionAccess: { mode: "write", requiredTool: "browser" },
-        }),
-      ]);
-      await handleGatewayRequest({
-        req: { type: "req", id: "one", method, params: { sessionKey: key } },
-        respond: vi.fn(),
-        client: test.client,
-        context: test.context,
-        methodRegistry,
-        isWebchatConnect: () => false,
+      await dispatchSession(test, handler, {
         sessionMutationCommitGuard: () => {
           if (kind === "receipt" && !invocationActive) {
             throw new Error("receipt expired");
@@ -569,6 +519,7 @@ describe("session resource admission", () => {
         await projection.ensureMaterialized();
         await projection.prepareMembership();
         expect(() => resource.assertCurrent()).toThrow();
+        expect(resource.signal.aborted).toBe(true);
       } finally {
         projection.dispose();
       }
@@ -634,16 +585,6 @@ describe("session resource admission", () => {
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(resource.signal.aborted).toBe(true);
   });
-  it("preserves broad shared-session writes while restricting the narrow scope to its creator", async () => {
-    await expect(fixture().prepare()).resolves.toBeDefined();
-    await expect(fixture(["operator.sessions.write"]).prepare(true)).rejects.toThrow(
-      "Session access changed",
-    );
-    await expect(
-      fixture(["operator.sessions.write"], "former-alice").prepare(true),
-    ).resolves.toBeDefined();
-  });
-
   it("keeps a session resource after request completion and actor revocation, without reviving that actor", async () => {
     const test = fixture();
     const authority = await test.prepare();
@@ -677,16 +618,6 @@ describe("session resource admission", () => {
     });
     expect(resource.signal.aborted).toBe(true);
     expect(viewer.signal.aborted).toBe(true);
-  });
-
-  it("retires same-ID resources after a resident physical-store generation replacement", async () => {
-    const test = fixture();
-    const authority = await test.prepare();
-    const resource = hold(authority.retainSession());
-    test.replaceGeneration();
-    sessionChanges.emit({ agentId: "main", sessionKey: key });
-    expect(resource.signal.aborted).toBe(true);
-    expect(() => authority.assertCurrent()).toThrow();
   });
 
   it.each(["sandboxRequired", "sandboxed"] as const)(

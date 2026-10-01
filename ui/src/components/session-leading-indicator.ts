@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { DirectiveResult } from "lit/directive.js";
 import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -55,6 +56,7 @@ export function renderSessionLeadingState(
   avatarAuth?: SessionAvatarAuth,
   trailingState = false,
   icon?: TemplateResult,
+  runVisibility?: DirectiveResult,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
@@ -66,6 +68,7 @@ export function renderSessionLeadingState(
   const running = session.hasActiveRun || subagentsWorking;
   const ownRunQueued = session.hasActiveRun && session.status === "queued";
   const runState = {
+    runVisibility,
     running: running && !trailingState && session.attention.kind !== "question",
     queued: ownRunQueued && !subagentsWorking,
     runningLabel:

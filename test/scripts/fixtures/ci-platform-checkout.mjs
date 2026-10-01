@@ -27,20 +27,6 @@ const commandsFile = path.join(root, "commands.jsonl");
 const optionsFile = path.join(root, "fixture-options.json");
 const options = fs.existsSync(optionsFile) ? JSON.parse(fs.readFileSync(optionsFile, "utf8")) : {};
 const localGit = options.localGit ?? options.performance;
-// Preload identity support before the cleanup handshake; its TypeScript graph
-// uses .js specifiers that native Node type stripping cannot resolve.
-let getFileLockProcessStartTime;
-if (options.cancelDuringCleanup && ["supervise", "git"].includes(mode)) {
-  if (process.versions.bun) {
-    ({ getFileLockProcessStartTime } = await import("../../../src/shared/pid-alive.ts"));
-  } else {
-    const { tsImport } = await import("tsx/esm/api");
-    ({ getFileLockProcessStartTime } = await tsImport(
-      "../../../src/shared/pid-alive.ts",
-      import.meta.url,
-    ));
-  }
-}
 const refsFile = path.join(root, "refs.json");
 
 function docsPublisherPackages() {
@@ -332,12 +318,10 @@ async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lea
   // Readiness belongs to the owned child's lifetime. The supervisor's existing
   // watchdog bounds startup; an independent short timer can preempt legal Git work.
   return new Promise((resolve, reject) => {
-    const watchers = [];
     let finished = false;
     const finish = (ready, error) => {
       if (finished) return;
       finished = true;
-      for (const watcher of watchers) watcher.close();
       child.off("exit", check);
       child.off("error", fail);
       child.off("message", published);
@@ -360,19 +344,9 @@ async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lea
       }
     };
     try {
-      // Owned Node actors signal after publishing. Directory notifications can
-      // be coalesced before the final rename, leaving a true predicate unwoken.
-      // Subscribe before the initial read so publication cannot fall between them.
-      if (child.channel) {
-        child.on("message", published);
-      } else {
-        // Bash cleanup/backoff waits retain their filesystem notification path.
-        for (const directory of [root, recordsDir]) {
-          const watcher = fs.watch(directory, check);
-          watchers.push(watcher);
-          watcher.on("error", fail);
-        }
-      }
+      // Both callers own an IPC actor that signals after atomic publication.
+      // Subscribe before reading so publication cannot fall between the two.
+      child.on("message", published);
       child.once("exit", check);
       child.once("error", fail);
       check();
@@ -470,14 +444,6 @@ async function command() {
   }
   if (mode === "observe") {
     await boundary(args[0]);
-    if (args[0] === "backoff-ready" && options.cancelDuringBackoff) {
-      publish("backoff-ready.json", true);
-      await until(
-        () => fs.existsSync(path.join(root, "backoff-release.json")),
-        "backoff cancellation acknowledgement",
-        operationDeadline,
-      );
-    }
     process.exit(0);
   }
   if (options.performance && ["curl", "tar", "sha256sum", "npm"].includes(mode)) {
@@ -512,13 +478,6 @@ async function command() {
   if (descendant) {
     const attempt = Number(args[0]);
     process.on("SIGTERM", () => {
-      if (
-        options.cancelDuringCleanup &&
-        (!options.cleanupCancelMatch ||
-          fs.existsSync(path.join(root, `cleanup-target-${attempt}.json`)))
-      ) {
-        publish("cleanup-started.json", attempt);
-      }
       if (options.cooperativeTrees) {
         process.exit(0);
       }
@@ -777,14 +736,13 @@ async function command() {
       }
     }
     if (options.cancelDuringCleanup) {
-      const pid = process.ppid;
-      publish("owner.json", { pid, startTime: getFileLockProcessStartTime(pid) });
-      await record(pid, "owner");
+      await record(process.ppid, "owner");
       if (
-        options.cleanupCancelMatch &&
+        !options.cleanupCancelMatch ||
         new RegExp(options.cleanupCancelMatch).test([operation, ...args].join(" "))
       ) {
-        publish(`cleanup-target-${attempt}.json`, attempt);
+        // The rendered owner consumes only its currently spawned command's marker.
+        publish(`cleanup-target-${process.pid}.json`, attempt);
       }
     }
     const child = launch("child", attempt);
@@ -1270,6 +1228,7 @@ async function supervise() {
         }
       }
       if (!cleanupError) {
+        report.cancelledDuringCleanup = fs.existsSync(path.join(root, "cleanup-cancelled.json"));
         report.ownedProcesses = records();
         report.boundaries = fs
           .readFileSync(eventsFile, "utf8")
@@ -1456,47 +1415,6 @@ source "$2"`,
     const closed = track(shell);
     if (shell.pid) {
       await record(shell.pid, "shell");
-    }
-    const ready = (name) =>
-      waitForReady(
-        () => fs.existsSync(path.join(root, name)),
-        shell,
-        () => Boolean(stopping),
-      );
-    if (options.cancelDuringCleanup && (await ready("cleanup-started.json"))) {
-      const owner = JSON.parse(fs.readFileSync(path.join(root, "owner.json"), "utf8"));
-      // File policies exec into Bash's PID; raw Git owners are its direct children.
-      // Revalidate the observed birth and exact placement after awaited readiness.
-      if (
-        (owner.pid !== shell.pid &&
-          (options.performance
-            ? !isWorkflowDescendant(owner.pid, shell.pid)
-            : Number(
-                fs
-                  .readFileSync(`/proc/${owner.pid}/status`, "utf8")
-                  .match(/^PPid:\s+(\d+)$/mu)?.[1],
-              ) !== shell.pid)) ||
-        owner.startTime === null ||
-        getFileLockProcessStartTime(owner.pid) !== owner.startTime ||
-        stopping ||
-        shell.exitCode !== null ||
-        shell.signalCode !== null
-      ) {
-        throw new Error("Git owner changed before cleanup cancellation");
-      }
-      process.kill(owner.pid, "SIGTERM");
-      report.cancelledDuringCleanup = true;
-    }
-    if (options.cancelDuringBackoff) {
-      try {
-        await ready("backoff-ready.json");
-        if (!stopping && shell.exitCode === null && shell.signalCode === null) {
-          await boundary("backoff-cancel");
-          shell.kill("SIGTERM");
-        }
-      } finally {
-        publish("backoff-release.json", true);
-      }
     }
     const code = await closed;
     if (stopping) {

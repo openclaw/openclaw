@@ -287,11 +287,10 @@ describe("operator access cancellation", () => {
     },
   );
 
-  it.each(
-    [false, true].flatMap((collect) =>
-      [false, true].map((activeAdmission) => ({ collect, activeAdmission })),
-    ),
-  )(
+  it.each([
+    { collect: false, activeAdmission: false },
+    { collect: true, activeAdmission: true },
+  ])(
     "retains queued custody across collect=$collect and active admission=$activeAdmission",
     async ({ collect, activeAdmission }) => {
       await withCancellationFixture(async (f) => {

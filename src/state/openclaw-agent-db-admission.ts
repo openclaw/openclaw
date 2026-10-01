@@ -9,6 +9,11 @@ import {
   type SqliteIntegrityCheck,
   type SqliteIntegrityOperation,
 } from "../infra/sqlite-integrity.js";
+import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
+import {
+  runSqliteImmediateTransactionSync,
+  type SqliteTransactionOptions,
+} from "../infra/sqlite-transaction.js";
 import { registerDeferredSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -22,13 +27,16 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
   OpenClawAgentDatabaseRegistrationObserver,
+  OpenClawAgentDatabaseRepairAdmission,
 } from "./openclaw-agent-db-contract.js";
+import { assertOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import type { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
   retainAgentDatabase,
   type PendingAgentDatabaseOpen,
 } from "./openclaw-agent-db-lifecycle.js";
+import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import {
   assertExistingAgentSchemaOwner,
   assertSupportedAgentSchemaVersion,
@@ -96,6 +104,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     pending?: PendingAgentDatabaseOpen,
     preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
     registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
+    repairAdmission?: OpenClawAgentDatabaseRepairAdmission,
   ) => SqliteIntegrityOperation<OpenClawAgentDatabase>,
 ) {
   /** Open or return a cached per-agent database after schema and owner validation. */
@@ -104,23 +113,90 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
     registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
   ): OpenClawAgentDatabase {
+    return openAgentDatabase(options, preparedLease, registrationObserver);
+  }
+
+  function openAgentDatabase(
+    options: OpenClawAgentDatabaseOptions,
+    preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
+    registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
+    repairAdmission?: OpenClawAgentDatabaseRepairAdmission,
+  ): OpenClawAgentDatabase {
     const run = () => {
-      const steps = openSteps(options, undefined, preparedLease, registrationObserver);
+      const steps = openSteps(
+        options,
+        undefined,
+        preparedLease,
+        registrationObserver,
+        repairAdmission,
+      );
       return runSqliteIntegrityOperationSync(
         steps,
-        preparedLease && !isMainThread
+        (preparedLease && !isMainThread) || repairAdmission?.assertCurrent
           ? () =>
-              assertAgentDatabaseOpenAuthority(steps, () =>
-                requestSqliteWorkerOperationAdmission({
-                  stage: "prepare",
-                  facts: { kind: "agent-open-resume", lease: preparedLease.receipt },
-                }),
-              )
+              assertAgentDatabaseOpenAuthority(steps, () => {
+                repairAdmission?.assertCurrent?.();
+                if (preparedLease && !isMainThread) {
+                  requestSqliteWorkerOperationAdmission({
+                    stage: "prepare",
+                    facts: { kind: "agent-open-resume", lease: preparedLease.receipt },
+                  });
+                }
+              })
           : undefined,
       );
     };
     const scope = getOpenClawDatabaseMaintenanceScope();
     return scope ? scope.run(run) : run();
+  }
+
+  function runOpenClawAgentWriteTransaction<T>(
+    operation: (database: OpenClawAgentDatabase) => T,
+    options: OpenClawAgentDatabaseOptions,
+    transactionOptions: Pick<
+      SqliteTransactionOptions,
+      "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+    > & { repairAdmission?: OpenClawAgentDatabaseRepairAdmission } = {},
+  ): T {
+    const { repairAdmission, ...writeOptions } = transactionOptions;
+    const database = openAgentDatabase(options, undefined, undefined, repairAdmission);
+    const deletionCommit = getAgentDeletionDatabaseCleanup(options)?.withCommit;
+    const withCommit = repairAdmission
+      ? (commit: () => void) => {
+          repairAdmission.assertCurrent?.();
+          if (repairAdmission.expectedIdentity) {
+            assertOpenClawAgentDatabaseIdentity(database, repairAdmission.expectedIdentity);
+          }
+          if (deletionCommit) {
+            deletionCommit(commit);
+          } else {
+            commit();
+          }
+        }
+      : deletionCommit;
+    const enteredNestedTransaction = database.db.isTransaction;
+    return withSqlitePostCommitPublications(database.db, () =>
+      runSqliteImmediateTransactionSync(
+        database.db,
+        () => {
+          assertAgentDeletionDatabaseCleanupAccess(database, options);
+          const operationResult = operation(database);
+          if (!enteredNestedTransaction && !cache.incognito.has(database)) {
+            // Permission failure must roll back with the write. Repairing after
+            // COMMIT could make callers retry a transaction already durable in SQLite.
+            ensureOpenClawAgentDatabasePermissions(database.path, options);
+          }
+          return operationResult;
+        },
+        {
+          busyTimeoutMs: writeOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: database.path,
+          ...writeOptions,
+          operationLabel: writeOptions.operationLabel ?? "agent.write",
+          withCommit,
+        },
+      ),
+    );
   }
 
   /** The initiating caller guards its physical open; each coalesced caller guards its own operation. */
@@ -423,6 +499,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
 
   return {
     openOpenClawAgentDatabase,
+    runOpenClawAgentWriteTransaction,
     withOpenClawAgentDatabaseAsync,
     withOpenClawAgentDatabaseAdmission,
   };

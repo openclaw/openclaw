@@ -55,6 +55,7 @@ export async function runAnnounceAgentCall(params: {
   settleWakeSourceSessionKeys?: readonly string[];
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
+  onAccepted?: (payload: unknown) => void;
   signal?: AbortSignal;
   timeoutMs?: number;
   isExecutionAllowed: () => boolean;
@@ -120,7 +121,10 @@ export async function runAnnounceAgentCall(params: {
         : {}),
       // Accepted queue waits belong to session admission; execution belongs to
       // the requester runtime budget, not the announcement handoff deadline.
-      onAccepted: () => clearTimeout(timer),
+      onAccepted: (payload) => {
+        clearTimeout(timer);
+        params.onAccepted?.(payload);
+      },
       onExecutionStarted: () => {
         executionSignal.throwIfAborted();
         if (!params.isExecutionAllowed()) {

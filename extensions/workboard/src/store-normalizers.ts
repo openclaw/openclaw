@@ -23,7 +23,6 @@ import {
   type WorkboardDiagnosticKind,
   type WorkboardEvent,
   type WorkboardExecution,
-  type WorkboardExecutionMode,
   type WorkboardLink,
   type WorkboardLinkType,
   type WorkboardLaunchState,
@@ -521,16 +520,14 @@ function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
   const error = normalizeBoundedString(record.error, undefined, 800, "attempt error");
   const engine = normalizeBoundedString(record.engine, undefined, 160, "attempt engine");
   const model = normalizeBoundedString(record.model, undefined, 160, "attempt model");
+  const mode = normalizeEnumValue(record.mode, WORKBOARD_EXECUTION_MODES, undefined);
   return {
     id,
     status: normalizeEnumValue(record.status, WORKBOARD_ATTEMPT_STATUSES, "running"),
     startedAt,
     ...(endedAt ? { endedAt } : {}),
     ...(engine ? { engine } : {}),
-    ...(typeof record.mode === "string" &&
-    WORKBOARD_EXECUTION_MODES.includes(record.mode as WorkboardExecutionMode)
-      ? { mode: record.mode as WorkboardExecutionMode }
-      : {}),
+    ...(mode ? { mode } : {}),
     ...(model ? { model } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(runId ? { runId } : {}),
