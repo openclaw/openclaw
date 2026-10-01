@@ -46,7 +46,13 @@ function resolveRootSchemaRef(
     return undefined;
   }
   const table = match[1] === "$defs" ? root.$defs : root.definitions;
-  const name = encodedName.replaceAll("~1", "/").replaceAll("~0", "~");
+  let name = encodedName;
+  try {
+    name = decodeURIComponent(encodedName);
+  } catch {
+    // Leave malformed URI fragments unresolved so normal validation reports the bad reference.
+  }
+  name = name.replaceAll("~1", "/").replaceAll("~0", "~");
   const target = table && Object.hasOwn(table, name) ? table[name] : undefined;
   // Scoped documents stay on their existing path; never reinterpret their refs at the tool root.
   return isJsonSchemaObject(target) && !hasSchemaScope(target) ? target : undefined;
