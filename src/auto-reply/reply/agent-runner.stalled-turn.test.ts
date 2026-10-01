@@ -16,12 +16,13 @@ import type * as AgentRunnerExecution from "./agent-runner-execution.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import {
-  clearSessionQueues,
   enqueueFollowupRun,
   getFollowupQueueDepth,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
+import { clearFollowupQueue } from "./queue/state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -185,7 +186,8 @@ function createQueuedRequest(from: { senderId: string; to: string }): FollowupRu
 describe("runReplyAgent stalled turn continuation", () => {
   beforeEach(() => {
     replyRunTesting.resetReplyRunRegistry();
-    clearSessionQueues([queueKey]);
+    clearFollowupQueue(queueKey);
+    clearFollowupDrainCallback(queueKey);
     drainedRuns.mockClear();
     mocks.executeFollowups = false;
     executionStarted = createDeferred();
@@ -206,7 +208,8 @@ describe("runReplyAgent stalled turn continuation", () => {
   });
 
   afterEach(() => {
-    clearSessionQueues([queueKey]);
+    clearFollowupQueue(queueKey);
+    clearFollowupDrainCallback(queueKey);
     replyRunTesting.resetReplyRunRegistry();
   });
 

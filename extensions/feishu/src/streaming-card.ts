@@ -189,9 +189,6 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
 }
 
 function truncateSummary(text: string, max = 50): string {
-  if (!text) {
-    return "";
-  }
   const clean = text.replace(/\n/g, " ").trim();
   // Slice on a code-point boundary so CardKit never receives a lone surrogate at the limit.
   return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";

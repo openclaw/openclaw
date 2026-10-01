@@ -196,6 +196,24 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   // control remains executable during model overrides and restart recovery.
   const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
   const resultBudget = resolveToolResultBudget(ctx.modelContextWindowTokens);
+  const formatResult = (
+    rawResult: Awaited<ReturnType<typeof runCodeModeExec | typeof runWait>>,
+    runtime: ToolSearchRuntime | undefined,
+    signal?: AbortSignal,
+  ) => {
+    const result = normalizeCodeModeTimeoutResult(rawResult);
+    markCodeModePermissionChangeResult(result, signal);
+    return recordCodeModeToolOutcome(
+      {
+        ...formatToolSearchControlResult(result, runtime, {
+          terminalBatchStatus: result.status,
+          compact: true,
+        }),
+        ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
+      },
+      result,
+    );
+  };
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,
     label: "exec",
@@ -228,35 +246,23 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       const input = readCode(args);
       const executionContext = getAgentToolExecutionContext();
       let runtime: ToolSearchRuntime | undefined;
-      const result = normalizeCodeModeTimeoutResult(
-        await runCodeModeExec({
-          toolCallId,
-          ctx,
-          config,
-          resultBudget,
-          code: input.code,
-          assistantTurnId:
-            executionContext?.assistantMessage.responseId?.trim() ||
-            executionContext?.assistantMessage.turnId?.trim(),
-          restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
-          signal,
-          onUpdate,
-          onRuntime: (value) => {
-            runtime = value;
-          },
-        }),
-      );
-      markCodeModePermissionChangeResult(result, signal);
-      return recordCodeModeToolOutcome(
-        {
-          ...formatToolSearchControlResult(result, runtime, {
-            terminalBatchStatus: result.status,
-            compact: true,
-          }),
-          ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
+      const result = await runCodeModeExec({
+        toolCallId,
+        ctx,
+        config,
+        resultBudget,
+        code: input.code,
+        assistantTurnId:
+          executionContext?.assistantMessage.responseId?.trim() ||
+          executionContext?.assistantMessage.turnId?.trim(),
+        restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
+        signal,
+        onUpdate,
+        onRuntime: (value) => {
+          runtime = value;
         },
-        result,
-      );
+      });
+      return formatResult(result, runtime, signal);
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
@@ -280,29 +286,17 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       runtimeRefresh.assertActive();
       ctx.abortSignal?.throwIfAborted();
       let runtime: ToolSearchRuntime | undefined;
-      const result = normalizeCodeModeTimeoutResult(
-        await runWait({
-          toolCallId,
-          ctx,
-          runId: readRunId(args),
-          signal,
-          onUpdate,
-          onRuntime: (value) => {
-            runtime = value;
-          },
-        }),
-      );
-      markCodeModePermissionChangeResult(result, signal);
-      return recordCodeModeToolOutcome(
-        {
-          ...formatToolSearchControlResult(result, runtime, {
-            terminalBatchStatus: result.status,
-            compact: true,
-          }),
-          ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
+      const result = await runWait({
+        toolCallId,
+        ctx,
+        runId: readRunId(args),
+        signal,
+        onUpdate,
+        onRuntime: (value) => {
+          runtime = value;
         },
-        result,
-      );
+      });
+      return formatResult(result, runtime, signal);
     },
   } as AnyAgentTool);
   return [execTool, waitTool];

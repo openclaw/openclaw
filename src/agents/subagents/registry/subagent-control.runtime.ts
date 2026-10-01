@@ -1,4 +1,4 @@
-export { clearSessionQueues } from "../../../auto-reply/reply/queue.js";
+export { clearSessionLifecycleQueues } from "../../../auto-reply/reply/queue/cleanup.js";
 export {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,

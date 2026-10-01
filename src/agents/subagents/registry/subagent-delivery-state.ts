@@ -14,6 +14,31 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 
+export function resetRequesterSettleWakeRetry(
+  wake?: RequesterSettleWakeState,
+): RequesterSettleWakeState {
+  return {
+    ...wake,
+    status: "pending",
+    attemptCount: 0,
+    replayCount: undefined,
+    nextAttemptAt: undefined,
+    deferralCount: undefined,
+    lastError: undefined,
+  };
+}
+
+/** A pause uses the existing retry owner, but never consumes the completion cohort. */
+export function consumeSubagentPauseNotice(entry: SubagentRunRecord): boolean {
+  const wake = entry.requesterSettleWake;
+  if (entry.pauseReason !== "sessions_yield" || !wake?.pauseNotice) {
+    return false;
+  }
+  const { pauseNotice: _notice, ...completionWake } = wake;
+  entry.requesterSettleWake = resetRequesterSettleWakeRetry(completionWake);
+  return true;
+}
+
 export function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
   return {
     runId: entry.runId,

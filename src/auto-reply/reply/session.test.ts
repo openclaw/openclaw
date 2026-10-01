@@ -65,8 +65,8 @@ import { maybeHandleResetCommand } from "./commands-reset.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { resolveDispatchResetAdmission } from "./dispatch-from-config.context.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { clearSessionQueues, enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
+import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
+import { clearFollowupQueueForTest, createQueueTestRun } from "./queue.test-helpers.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -1015,7 +1015,7 @@ describe("initSessionState thread forking", () => {
       expect(cancel).not.toHaveBeenCalled();
     } finally {
       clearEmbeddedSessionPromptStates([threadSessionKey]);
-      clearSessionQueues([threadSessionKey]);
+      clearFollowupQueueForTest(threadSessionKey);
       activeReply.complete();
     }
   });

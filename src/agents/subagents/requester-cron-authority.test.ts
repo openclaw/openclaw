@@ -25,12 +25,12 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
+import { consumeSubagentPauseNotice } from "./registry/subagent-delivery-state.js";
 import { settleRequesterTurnAfterSessionSpawns } from "./registry/subagent-registry-requester-yield.js";
 import {
   createRequesterInitialTransferFixture,
   markRequesterTurnYieldedWithAuthority,
 } from "./registry/subagent-registry-requester-yield.test-support.js";
-import { consumeSubagentPauseNotice } from "./registry/subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
   consumeRequesterCronAuthorityAdmission,

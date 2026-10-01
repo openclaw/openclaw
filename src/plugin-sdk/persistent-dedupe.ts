@@ -26,7 +26,6 @@ import type {
   PersistentDedupeCheckOptions,
   PersistentDedupeLegacyPathOptions,
   PersistentDedupeOptions,
-  PersistentDedupeEntry,
   PersistentDedupeLegacyJsonImportEntry,
   PersistentDedupePluginStateOptions,
 } from "./persistent-dedupe.types.js";
@@ -72,12 +71,6 @@ type PersistentDedupeLegacyJsonEntriesResult = {
 
 function isRecentTimestamp(seenAt: number | undefined, ttlMs: number, now: number): boolean {
   return seenAt != null && (ttlMs <= 0 || now - seenAt < ttlMs);
-}
-
-function resolveEntrySeenAt(entry: PersistentDedupeEntry | undefined): number | undefined {
-  return typeof entry?.seenAt === "number" && Number.isFinite(entry.seenAt)
-    ? entry.seenAt
-    : undefined;
 }
 
 function resolveUnknownEntrySeenAt(value: unknown): number | undefined {
@@ -192,7 +185,7 @@ export async function migratePersistentDedupeLegacyJsonFile(
   for (const entry of legacy.entries) {
     let observed = await store.get().observe(entry.key);
     for (;;) {
-      const currentSeenAt = resolveEntrySeenAt(observed.value);
+      const currentSeenAt = resolveUnknownEntrySeenAt(observed.value);
       const outcome = await store
         .get()
         .compareAndApply(
@@ -247,7 +240,7 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
       try {
         let loaded = 0;
         for (const entry of await store.get().entries()) {
-          const ts = resolveEntrySeenAt(entry.value);
+          const ts = resolveUnknownEntrySeenAt(entry.value);
           if (ts == null) {
             continue;
           }
@@ -298,7 +291,7 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
         const entryKey = resolveEntryKey(trimmed);
         let observed = await store.get().observe(entryKey);
         for (;;) {
-          const seenAt = resolveEntrySeenAt(observed.value);
+          const seenAt = resolveUnknownEntrySeenAt(observed.value);
           const duplicate = isRecentTimestamp(seenAt, ttlMs, now);
           const outcome = await store.get().compareAndApply(
             entryKey,
@@ -359,7 +352,9 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
       }
 
       try {
-        const seenAt = resolveEntrySeenAt(await store.get().lookup(resolveEntryKey(trimmed)));
+        const seenAt = resolveUnknownEntrySeenAt(
+          await store.get().lookup(resolveEntryKey(trimmed)),
+        );
         if (!isRecentTimestamp(seenAt, ttlMs, now)) {
           return false;
         }

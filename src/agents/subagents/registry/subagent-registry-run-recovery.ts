@@ -16,11 +16,11 @@ import {
   clearDeliveryState,
   ensureCompletionState,
   normalizeSubagentRunState,
+  resetRequesterSettleWakeRetry,
 } from "./subagent-delivery-state.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { commitSubagentRunReplacement } from "./subagent-registry-replacement-store.js";
-import { resetRequesterSettleWakeRetry } from "./subagent-registry-run-pause.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { nextSubagentRunGeneration } from "./subagent-run-generation.js";

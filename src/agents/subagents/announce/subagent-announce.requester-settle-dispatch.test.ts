@@ -31,8 +31,8 @@ import { createEmbeddedRunLaneController } from "../../embedded-agent-runner/run
 import type { RunEmbeddedAgentParams } from "../../embedded-agent-runner/run/params.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../main-session-recovery/main-session-recovery-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
 import type { countPendingDescendantRuns } from "../registry/subagent-registry-read.js";
-import { consumeSubagentPauseNotice } from "../registry/subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   registerRequesterFinalAttachment,

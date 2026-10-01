@@ -15,7 +15,7 @@ import {
 } from "../../infra/legacy-acp-migration-source.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import type { AcpSessionControlBinding } from "./session-control-owner.js";
+import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "./session-meta-entry.kernel.js";
 import { selectAcpSessionRowForStoreEntry } from "./session-meta-keys.js";
 import { clearLegacyEmbeddedAcpMetadata } from "./session-meta-legacy-cleanup.js";
