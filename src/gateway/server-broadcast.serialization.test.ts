@@ -190,7 +190,7 @@ describe("broadcast serialization failures", () => {
 
     expect(reads).toEqual([initial, initial + " changed", initial]);
     for (const [index, peer] of peers.entries()) {
-      expect(peer.socket.send.mock.calls[0]?.[0]).toBe(
+      expect(String(peer.socket.send.mock.calls[0]?.[0])).toBe(
         JSON.stringify({
           type: "event",
           event: "session.message",

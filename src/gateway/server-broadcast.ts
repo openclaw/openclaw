@@ -632,7 +632,6 @@ export function createGatewayBroadcaster(params: {
           (c.connect.role ?? "operator") === "operator" ? c.preparedRecipientProfileId : undefined;
         if (
           !presencePayload &&
-          !projectSession &&
           lastFrame !== undefined &&
           lastPayloadFragment === payloadFragment &&
           lastFrameSequence === nextSeq &&
@@ -641,8 +640,9 @@ export function createGatewayBroadcaster(params: {
           frame = lastFrame;
         } else {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
-          if (!presencePayload && !projectSession) {
-            // Share UTF-8 bytes too: ws otherwise encodes the same string for every socket.
+          if (!presencePayload) {
+            // Compare final recipient bytes after projection, hooks, and ancestor receipts.
+            // Share UTF-8 too: ws otherwise encodes the same string for every socket.
             if (!retained && (targetConnIds?.size ?? params.clients.size) > 1) {
               frame = Buffer.from(frame);
             }
