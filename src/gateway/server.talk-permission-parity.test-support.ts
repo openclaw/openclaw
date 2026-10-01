@@ -5,13 +5,16 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createExecTool } from "../agents/bash-tools.js";
+import { abortable } from "../agents/embedded-agent-runner/run/abortable.js";
 import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
 import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { createParityAppFixture } from "./server.installed-app.test-support.js";
 import {
   createGatewaySuiteHarness,
   prepareGatewayReplyRuntimeForTest,
@@ -33,6 +36,8 @@ export async function runTalkNodePermissionParity({
   runEmbeddedAgent,
   rpc,
   waitForDispatchEnd,
+  installedApp = false,
+  testSignal,
 }: {
   harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
   client: GatewayClient;
@@ -47,6 +52,8 @@ export async function runTalkNodePermissionParity({
   runEmbeddedAgent: MockInstance<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
   rpc: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
   waitForDispatchEnd: () => Promise<void>;
+  installedApp?: boolean;
+  testSignal?: AbortSignal;
 }) {
   const scope = () => ({ agentId, sessionKey: canonicalKey, sessionId, storePath });
 
@@ -97,6 +104,7 @@ export async function runTalkNodePermissionParity({
     "system.which",
     "system.execApprovals.get",
     "system.execApprovals.set",
+    ...(installedApp ? ["device.apps", "device.apps.launch"] : []),
   ];
   const current = getRuntimeConfig();
   const config = {
@@ -111,6 +119,10 @@ export async function runTalkNodePermissionParity({
     },
     tools: { ...current.tools, exec: { host: "node" as const, mode: "full" as const } },
   };
+  // RPC helpers republish persisted fixture config; retain the explicit app-command opt-in.
+  if (installedApp) {
+    await writeConfigFile(config);
+  }
   await prepareGatewayReplyRuntimeForTest({ force: true, config });
   const token = expectDefined(
     asOptionalRecord(testState.gatewayAuth)?.token,
@@ -119,7 +131,29 @@ export async function runTalkNodePermissionParity({
   if (typeof token !== "string") {
     throw new Error("invalid fixture auth");
   }
-  const node = await createTalkParityNodeFixture(config, harness.port, token);
+  let permitReceived = createDeferred();
+  let permitRelease = createDeferred();
+  let cancelReceived = createDeferred();
+  let holdPermit = false;
+  let holdCancellation = false;
+  const node = await createTalkParityNodeFixture(
+    config,
+    harness.port,
+    token,
+    installedApp,
+    installedApp
+      ? {
+          beforePermit: async () => {
+            permitReceived.resolve();
+            if (holdPermit) {
+              await permitRelease.promise;
+            }
+          },
+          holdCancellation: () => holdCancellation,
+          onCancellation: () => cancelReceived.resolve(),
+        }
+      : undefined,
+  );
   const provider = await installTalkParityProviderFixture();
   const originalConnections = context.getClientConnIds;
   context.getClientConnIds = (filter) => new Set(!filter || filter(client) ? [connectionId] : []);
@@ -146,6 +180,8 @@ export async function runTalkNodePermissionParity({
       }
       return result;
     });
+  const appFixture = await createParityAppFixture(workspace, installedApp);
+  const { children: appChildren, cleanup: cleanupAppChildren } = appFixture;
   let requested = createDeferred<Record<string, unknown>>();
   let approvalEvents = 0;
   const onMessage = (raw: unknown) => {
@@ -157,31 +193,74 @@ export async function runTalkNodePermissionParity({
   };
   reviewer.on("message", onMessage);
   const effectText = () =>
-    fs
-      .stat(marker)
-      .then(() => "effect")
-      .catch((error: unknown) => {
-        if (asOptionalRecord(error)?.code === "ENOENT") {
-          return "";
-        }
-        throw error;
-      });
+    installedApp
+      ? Promise.resolve(
+          appChildren.some((child) => child.exitCode === null && child.signalCode === null)
+            ? "effect"
+            : "",
+        )
+      : fs
+          .stat(marker)
+          .then(() => "effect")
+          .catch((error: unknown) => {
+            if (asOptionalRecord(error)?.code === "ENOENT") {
+              return "";
+            }
+            throw error;
+          });
+  const previousApprovals = installedApp ? readExecApprovalsSnapshot().file : undefined;
   const observed: unknown[] = [];
   const outcomes: unknown[] = [];
   try {
     for (const ingress of ["text", "direct", "chat-backed"] as const) {
       for (const decision of [
-        "permitted",
-        "policy-deny",
-        "allow-once",
+        ...(installedApp
+          ? (["allow-once", "permitted", "policy-deny"] as const)
+          : (["permitted", "policy-deny", "allow-once"] as const)),
         "deny",
         "cancel",
         "source-revoke",
+        ...(installedApp
+          ? ([
+              "node-ask",
+              "node-deny",
+              "cancel-delivered-after-permit",
+              "cancel-inflight-after-permit",
+            ] as const)
+          : []),
       ] as const) {
         const key = ingress + "-" + decision;
-        const requiresApproval = decision !== "permitted" && decision !== "policy-deny";
+        const postPermitCancel =
+          decision === "cancel-delivered-after-permit" ||
+          decision === "cancel-inflight-after-permit";
+        holdPermit = postPermitCancel;
+        holdCancellation = decision === "cancel-inflight-after-permit";
+        permitReceived = createDeferred();
+        permitRelease = createDeferred();
+        cancelReceived = createDeferred();
+        const cancellationStart = { ...node.cancellations };
+        const permitsEffect =
+          decision === "permitted" || decision === "allow-once" || decision === "node-ask";
+        const requiresApproval =
+          decision !== "permitted" &&
+          decision !== "policy-deny" &&
+          decision !== "node-deny" &&
+          !postPermitCancel;
+        if (installedApp) {
+          saveExecApprovals({
+            version: 1,
+            defaults: { security: "full", ask: "off" },
+            agents: {
+              [agentId]: {
+                security: decision === "node-deny" ? "deny" : "full",
+                ask: decision === "node-ask" ? "always" : "off",
+              },
+            },
+          });
+        }
         const invocationCount = node.invokes.length;
         const nativeCount = native.length;
+        const appCount = appChildren.length;
         await fs.rm(marker, { force: true });
         await replaceSessionEntry(scope(), {
           sessionId,
@@ -190,7 +269,10 @@ export async function runTalkNodePermissionParity({
           execNode: node.nodeId,
           execCwd: workspace,
           permissionMode:
-            decision === "permitted"
+            decision === "permitted" ||
+            decision === "node-ask" ||
+            decision === "node-deny" ||
+            postPermitCancel
               ? "full"
               : decision === "policy-deny"
                 ? "read-only"
@@ -235,7 +317,10 @@ export async function runTalkNodePermissionParity({
           observed.push({
             ingress,
             decision,
-            principal: admission.readOperatorAuthority?.()?.profileId,
+            principal: expectDefined(
+              admission.readOperatorAuthority?.()?.profileId,
+              "authenticated operator source",
+            ),
             reviewer: params.approvalReviewerDeviceId,
             host: policy.host,
             node: params.execOverrides?.node,
@@ -256,7 +341,21 @@ export async function runTalkNodePermissionParity({
               allowBackground: false,
               notifyOnExit: false,
             }),
-            createNodesTool({ agentId, agentSessionKey: params.sessionKey, config: params.config }),
+            createNodesTool({
+              agentId,
+              agentSessionKey: params.sessionKey,
+              config: params.config,
+              execSession: {
+                permissionMode: params.permissionMode,
+                execCwd: params.execOverrides?.nodeCwd,
+              },
+              sessionId: params.sessionId,
+              agentChannel: params.messageProvider,
+              execOverrides: params.execOverrides,
+              approvalReviewerDeviceIds: params.approvalReviewerDeviceId
+                ? [params.approvalReviewerDeviceId]
+                : [],
+            }),
           ]);
           started.resolve(params.runId);
           try {
@@ -266,15 +365,43 @@ export async function runTalkNodePermissionParity({
               params.abortSignal,
             );
             expect(JSON.stringify(lookup)).toContain("/sh");
-            const result = await expectDefined(tool, "bound native exec").execute(
-              "same-native-action",
-              {
-                command: "/usr/bin/touch " + JSON.stringify(marker),
-                workdir: workspace,
-                yieldMs: 10000,
-              },
-              params.abortSignal,
-            );
+            let result;
+            if (installedApp) {
+              const apps = await expectDefined(nodes, "bound Nodes inventory").execute(
+                "inventory",
+                {
+                  action: "app_list",
+                  node: node.nodeId,
+                  query: "Parity app",
+                },
+                params.abortSignal,
+              );
+              const inventory = asOptionalRecord(asOptionalRecord(apps.details)?.payload);
+              const app = Array.isArray(inventory?.apps)
+                ? asOptionalRecord(inventory.apps[0])
+                : undefined;
+              expect(app).toMatchObject({ appId: "linux-desktop:parity.desktop" });
+              result = await expectDefined(nodes, "bound Nodes launch").execute(
+                "same-native-action",
+                {
+                  action: "app_launch",
+                  node: node.nodeId,
+                  appId: app?.appId,
+                  appRevision: app?.appRevision,
+                },
+                params.abortSignal,
+              );
+            } else {
+              result = await expectDefined(tool, "bound native exec").execute(
+                "same-native-action",
+                {
+                  command: "/usr/bin/touch " + JSON.stringify(marker),
+                  workdir: workspace,
+                  yieldMs: 10000,
+                },
+                params.abortSignal,
+              );
+            }
             finished.resolve(result.details);
             return { payloads: [{ text: "Native action finished." }], meta: { durationMs: 0 } };
           } catch (error) {
@@ -357,27 +484,89 @@ export async function runTalkNodePermissionParity({
               invalidateGatewayDeviceRevocation(context, identity.identity.deviceId, "operator");
             } else {
               expect(
-                (await rpcReq(reviewer, "exec.approval.resolve", { id: approvalId, decision })).ok,
+                (
+                  await rpcReq(reviewer, "exec.approval.resolve", {
+                    id: approvalId,
+                    decision: decision === "node-ask" ? "allow-once" : decision,
+                  })
+                ).ok,
               ).toBe(true);
-              await rpcReq(reviewer, "exec.approval.resolve", { id: approvalId, decision });
+              await rpcReq(reviewer, "exec.approval.resolve", {
+                id: approvalId,
+                decision: decision === "node-ask" ? "allow-once" : decision,
+              });
             }
           }
+          if (postPermitCancel) {
+            await Promise.race([
+              permitReceived.promise,
+              finished.promise.then((outcome) => {
+                throw new Error("No native permit: " + JSON.stringify(outcome));
+              }),
+            ]);
+            expect(await effectText()).toBe(before);
+            console.info(
+              "App handoff observed:",
+              JSON.stringify({
+                scenario: key,
+                permitIssued: true,
+                nativeEffects: appChildren.length - appCount,
+              }),
+            );
+            await rpc("chat.abort", { sessionKey, runId });
+            if (testSignal) {
+              await abortable(testSignal, cancelReceived.promise);
+            } else {
+              await cancelReceived.promise;
+            }
+            permitRelease.resolve();
+            await node.drain();
+          }
           const result = await finished.promise;
-          if (ingress === "direct" && (decision === "cancel" || decision === "source-revoke")) {
+          if (
+            ingress === "direct" &&
+            (decision === "cancel" || decision === "source-revoke" || postPermitCancel)
+          ) {
             await expect(task).rejects.toMatchObject({ name: "AbortError" });
           } else {
             await task;
           }
           await waitForDispatchEnd();
-          if (decision === "permitted" || decision === "allow-once") {
-            expect(result, key + ": " + JSON.stringify(result)).toMatchObject({
-              status: "completed",
-              exitCode: 0,
-              nodeId: node.nodeId,
-            });
+          if (permitsEffect) {
+            if (installedApp) {
+              expect(appChildren.slice(appCount), key + ": " + JSON.stringify(result)).toHaveLength(
+                1,
+              );
+              const child = expectDefined(appChildren.at(-1), "actual app child");
+              expect(result).toMatchObject({ status: "process-started", pid: child.pid });
+              expect(child.pid).toBeGreaterThan(0);
+              expect(() =>
+                process.kill(expectDefined(child.pid, "actual app PID"), 0),
+              ).not.toThrow();
+            } else {
+              expect(result, key + ": " + JSON.stringify(result)).toMatchObject({
+                status: "completed",
+                exitCode: 0,
+                nodeId: node.nodeId,
+              });
+            }
             expect(await effectText()).toBe(before + "effect");
+          } else if (decision === "cancel-inflight-after-permit") {
+            const children = appChildren.slice(appCount);
+            expect(children).toHaveLength(1);
+            expect(asOptionalRecord(result)?.status).not.toBe("process-started");
+            expect(() =>
+              process.kill(expectDefined(children[0]?.pid, "in-flight cancellation native PID"), 0),
+            ).not.toThrow();
+            expect(await effectText()).toBe("effect");
           } else {
             expect(await effectText()).toBe(before);
+          }
+          if (postPermitCancel) {
+            expect(node.cancellations.received - cancellationStart.received).toBe(1);
+            expect(node.cancellations.delivered - cancellationStart.delivered).toBe(
+              holdCancellation ? 0 : 1,
+            );
           }
           expect(approvalEvents - eventCount).toBe(requiresApproval ? 1 : 0);
           const cellInvocations = node.invokes.slice(invocationCount);
@@ -388,11 +577,18 @@ export async function runTalkNodePermissionParity({
           if (decision === "policy-deny") {
             // A policy refusal is not an operator rejection (or a failed lookup).
             // The real exec owner refuses before any node execution preparation.
-            expect(result).toEqual({ error: "Error: exec denied: host=node security=deny" });
+            if (installedApp) {
+              expect(asOptionalRecord(result)?.error).toContain(
+                "exec denied: host=node security=deny",
+              );
+            } else {
+              expect(result).toEqual({ error: "Error: exec denied: host=node security=deny" });
+            }
             expect(
               cellInvocations.filter((frame) => frame.command.startsWith("system.run")),
             ).toEqual([]);
             expect(cellNative).toEqual([]);
+            expect(appChildren.slice(appCount)).toEqual([]);
           }
           outcomes.push({
             scenario: key,
@@ -403,13 +599,26 @@ export async function runTalkNodePermissionParity({
             markerPresent: (await effectText()) !== "",
             canonicalExecDenial:
               asOptionalRecord(result)?.error === "Error: exec denied: host=node security=deny",
+            cancellationReceived: node.cancellations.received - cancellationStart.received,
+            cancellationDelivered: node.cancellations.delivered - cancellationStart.delivered,
+            appDispatches: cellInvocations.filter((frame) => frame.command === "device.apps.launch")
+              .length,
+            nativeApps: appChildren.slice(appCount).map((child) => ({
+              pid: child.pid,
+              aliveAtReply: child.exitCode === null && child.signalCode === null,
+            })),
             native: cellNative.map(({ result: completion }) => ({
               pid: completion.pid,
               code: completion.code,
               termination: completion.termination,
             })),
           });
+          if (installedApp) {
+            console.info("App permission cell observed:", JSON.stringify(outcomes.at(-1)));
+          }
         } finally {
+          permitRelease.resolve();
+          node.releaseCancellation();
           invalidateGatewayDeviceRevocation(context, identity.identity.deviceId, "operator");
           await task?.catch(() => {});
           await waitForDispatchEnd();
@@ -420,38 +629,64 @@ export async function runTalkNodePermissionParity({
               connId: connectionId,
             });
           }
+          await cleanupAppChildren();
           source.release();
         }
       }
     }
-    expect(native).toHaveLength(6);
-    for (const invocation of native) {
-      expect(invocation.argv).toEqual(native[0]?.argv);
-      expect(invocation.argv.join(" ")).toContain(marker);
-      expect(invocation.cwd).toBe(workspace);
-      expect(invocation.result.pid).toBeGreaterThan(0);
-      expect(invocation.result).toMatchObject({ code: 0, termination: "exit" });
+    if (!installedApp) {
+      expect(native).toHaveLength(6);
+      for (const invocation of native) {
+        expect(invocation.argv).toEqual(native[0]?.argv);
+        expect(invocation.argv.join(" ")).toContain(marker);
+        expect(invocation.cwd).toBe(workspace);
+        expect(invocation.result.pid).toBeGreaterThan(0);
+        expect(invocation.result).toMatchObject({ code: 0, termination: "exit" });
+      }
+    } else {
+      expect(appChildren).toHaveLength(12);
     }
     for (const row of observed) {
       expect(row).toMatchObject({
-        principal: client.authenticatedUserProfile?.profileId,
+        principal: expectDefined(
+          client.authenticatedUserProfile?.profileId,
+          "fixture's authenticated profile",
+        ),
         reviewer: identity.identity.deviceId,
         host: "node",
         node: node.nodeId,
         cwd: workspace,
       });
     }
-    expect(node.invokes.filter((frame) => frame.command === "system.run")).toHaveLength(6);
-    expect(node.invokes.filter((frame) => frame.command === "system.which")).toHaveLength(18);
-    expect(outcomes).toHaveLength(18);
+    expect(
+      node.invokes.filter(
+        (frame) => frame.command === (installedApp ? "device.apps.launch" : "system.run"),
+      ),
+    ).toHaveLength(installedApp ? 15 : 6);
+    expect(node.invokes.filter((frame) => frame.command === "system.which")).toHaveLength(
+      installedApp ? 30 : 18,
+    );
+    expect(outcomes).toHaveLength(installedApp ? 30 : 18);
     // Observed, public-safe values only: no identities, transcripts, paths or credentials.
-    console.info("Talk permission parity observed:", JSON.stringify(outcomes));
+    if (!installedApp) {
+      console.info("Talk permission parity observed:", JSON.stringify(outcomes));
+    }
   } finally {
+    permitRelease.resolve();
+    node.releaseCancellation();
     context.getClientConnIds = originalConnections;
     provider.restore();
     observeNative.mockRestore();
-    reviewer.off("message", onMessage);
     await node.close();
+    await cleanupAppChildren();
+    appFixture.restore();
+    reviewer.off("message", onMessage);
     reviewer.close();
+    if (installedApp) {
+      if (previousApprovals) {
+        saveExecApprovals(previousApprovals);
+      }
+      await writeConfigFile(current);
+    }
   }
 }

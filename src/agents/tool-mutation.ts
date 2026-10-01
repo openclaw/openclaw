@@ -81,7 +81,7 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
 const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
 const MOBILE_UI_REPLAY_SAFE_ACTIONS = new Set(["observe"]);
 const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
-const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
+const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending", "app_list"]);
 const PRESENCE_REPLAY_SAFE_ACTIONS = new Set(["list", "person", "device"]);
 
 const READ_ONLY_SHELL_COMMANDS = new Set([

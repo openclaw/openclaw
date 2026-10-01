@@ -163,6 +163,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/spawn/acp-spawn.authority.test.ts",
   "src/node-host/invoke-agent-cli-claude.test.ts",
   "src/node-host/invoke-system-run.test.ts",
+  "src/node-host/installed-app-launch.invoke.test.ts",
   "src/node-host/invoke.test.ts",
   "src/node-host/worker-runtime.test.ts",
   "src/skills/workshop/store.test.ts",

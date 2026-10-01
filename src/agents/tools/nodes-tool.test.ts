@@ -186,6 +186,25 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodesCameraMocks.writeCameraPayloadToFile.mockClear();
   });
 
+  it.each([
+    { args: ["--extra"] },
+    { env: { PATH: "/fixture" } },
+    { gatewayUrl: "ws://example.invalid" },
+    { approved: true },
+    { agentId: "another-agent" },
+  ])("rejects authority or argument overrides on app_launch: %j", async (extra) => {
+    await expect(
+      createNodesTool().execute("closed-app-request", {
+        action: "app_launch",
+        node: "exact-node",
+        appId: "linux-desktop:fixture.desktop",
+        appRevision: "a".repeat(64),
+        ...extra,
+      }),
+    ).rejects.toThrow(/Unrecognized key/);
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("bounds durationMs schema to positive values capped at 300000", () => {
     expect(createNodesTool().parameters).toMatchObject({
       properties: { durationMs: { type: "integer", minimum: 1, maximum: 300_000 } },
@@ -953,6 +972,18 @@ describe("createNodesTool screen_record duration guardrails", () => {
         invokeCommand: "system.run",
       }),
     ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
+  });
+
+  it("blocks raw app launch so its ordinary approval adapter cannot be bypassed", async () => {
+    await expect(
+      createNodesTool().execute("raw-app", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "device.apps.launch",
+        invokeParamsJson: "{}",
+      }),
+    ).rejects.toThrow("Use nodes action=app_launch");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("forwards the owning agent session for generic node invokes", async () => {

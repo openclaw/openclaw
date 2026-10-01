@@ -5,6 +5,10 @@ import { readConnectPairingRequiredMessage } from "../../../packages/gateway-pro
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  InstalledAppListToolParamsSchema,
+  InstalledAppLaunchToolParamsSchema,
+} from "../../infra/installed-app-launch.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -19,9 +23,10 @@ import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js"
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction } from "./nodes-tool-commands.js";
+import type { InstalledAppToolContext } from "./nodes-tool-installed-apps.js";
 import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
 import { executeNodeMediaAction } from "./nodes-tool-media.js";
-import { resolveAgentNodeId } from "./nodes-utils.js";
+import { listNodes, resolveAgentNodeId } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -46,6 +51,8 @@ const NODES_TOOL_ACTIONS = [
   "device_health",
   "which",
   "invoke",
+  "app_list",
+  "app_launch",
 ] as const;
 
 const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
@@ -155,19 +162,24 @@ const NodesToolSchema = Type.Object({
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
   invokeTimeoutMs: optionalPositiveIntegerSchema(),
+  query: Type.Optional(Type.String()),
+  appId: Type.Optional(Type.String()),
+  appRevision: Type.Optional(Type.String()),
 });
 
-export function createNodesTool(options?: {
-  agentSessionKey?: string;
-  agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string | number;
-  config?: OpenClawConfig;
-  modelHasVision?: boolean;
-  allowMediaInvokeCommands?: boolean;
-}): AnyAgentTool {
+export function createNodesTool(
+  options?: {
+    agentSessionKey?: string;
+    agentId?: string;
+    agentChannel?: string;
+    agentAccountId?: string;
+    currentChannelId?: string;
+    currentThreadTs?: string | number;
+    config?: OpenClawConfig;
+    modelHasVision?: boolean;
+    allowMediaInvokeCommands?: boolean;
+  } & Partial<InstalledAppToolContext>,
+): AnyAgentTool {
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
@@ -178,15 +190,43 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. app_list: eligible installed Linux apps on an exact node (query/limit optional). app_launch: exact node/appId/appRevision, no arguments or Gateway override; ordinary execution approvals apply; success means process-started, not window ready. File transfer is a separate capability.",
     parameters: NodesToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
       const gatewayOpts = readGatewayCallOptions(params);
 
       try {
         switch (action) {
+          case "app_list": {
+            const request = InstalledAppListToolParamsSchema.parse(params);
+            const node = (await listNodes({})).find((n) => n.nodeId === request.node);
+            if (!node?.commands?.includes("device.apps")) {
+              throw new Error("Exact paired node does not advertise installed-app inventory");
+            }
+            return jsonResult(
+              await callNodesToolNodeInvoke(
+                {},
+                {
+                  nodeId: node.nodeId,
+                  command: "device.apps",
+                  params: { query: request.query, limit: request.limit ?? 20, includeSystem: true },
+                  idempotencyKey: crypto.randomUUID(),
+                },
+              ),
+            );
+          }
+          case "app_launch": {
+            const request = InstalledAppLaunchToolParamsSchema.parse(params);
+            const { executeInstalledAppLaunch } = await import("./nodes-tool-installed-apps.js");
+            return await executeInstalledAppLaunch(
+              request,
+              { ...options, agentId },
+              _toolCallId,
+              signal,
+            );
+          }
           case "status":
             return jsonResult(await callGatewayTool("node.list", gatewayOpts, {}));
           case "describe": {

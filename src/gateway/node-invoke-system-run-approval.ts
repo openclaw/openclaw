@@ -7,7 +7,9 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ExecApprovalDecision, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import type { InstalledAppLaunchRequest } from "../infra/installed-app-launch.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
+import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-plan.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import {
   EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS,
@@ -202,6 +204,7 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
   client: ApprovalClient | null;
   execApprovalManager?: ApprovalLookup;
   nowMs?: number;
+  installedApp?: InstalledAppLaunchRequest;
 }): Promise<
   | {
       ok: true;
@@ -237,7 +240,20 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
   // we re-add trusted fields based on the gateway approval record.
   const next = pickSystemRunParams(p);
 
+  const matchesApp = (plan: SystemRunApprovalPlan | null | undefined) =>
+    opts.installedApp
+      ? plan?.installedApp?.appId === opts.installedApp.appId &&
+        plan.installedApp.appRevision === opts.installedApp.appRevision
+      : plan?.installedApp === undefined;
+  const appMismatch = () =>
+    systemRunApprovalGuardError({
+      code: "APPROVAL_APP_MISMATCH",
+      message: "approval plan does not match the installed-app operation and revision",
+    });
   if (!wantsApprovalOverride) {
+    if (!matchesApp(normalizeSystemRunApprovalPlan(p.systemRunPlan))) {
+      return appMismatch();
+    }
     const cmdTextResolution = resolveSystemRunCommandRequest({
       command: p.command,
       rawCommand: p.rawCommand,
@@ -275,6 +291,9 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
       message: "unknown or expired approval id",
       details: { runId },
     });
+  }
+  if (!matchesApp(snapshot.request.systemRunPlan)) {
+    return appMismatch();
   }
   const recordedResolutionSource = snapshot.resolutionSource ?? "operator";
   if (recordedResolutionSource !== "operator" && recordedResolutionSource !== "auto-review") {

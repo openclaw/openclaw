@@ -2,6 +2,7 @@
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { NODE_INSTALLED_APP_LAUNCH_COMMAND } from "../infra/installed-app-launch.js";
 import { NODE_CLAUDE_SKILLS_MESSAGE_BYTES } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -150,7 +151,7 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableAgentRuns === true || params?.enableDuplexPluginCommands === true;
   const platform = params?.platform ?? process.platform;
   const installedAppsSharingEnabled =
-    platform === "darwin" && params?.installedAppsSharingEnabled === true;
+    (platform === "darwin" || platform === "linux") && params?.installedAppsSharingEnabled === true;
   const desktopHostConfig = resolveNodeDesktopHostConfig({
     config: config.desktop?.host,
     desktopSharingEnabled: params?.desktopSharingEnabled,
@@ -251,6 +252,8 @@ export async function prepareNodeHostRuntime(params?: {
       commandAllowlist,
       claudeEnabled: Boolean(claudePath),
       installedAppsSharingEnabled,
+      installedAppLaunchEnabled:
+        platform === "linux" && installedAppsSharingEnabled && duplexEnabled,
       desktopStreamingEnabled: desktopHostConfig.enabled,
       ephemeral: params?.ephemeral === true,
       pathEnv,
@@ -472,7 +475,10 @@ export async function prepareNodeHostRuntime(params?: {
               frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND &&
               requestsClaudeNodeSkillRuntime(frame.paramsJSON);
             const duplexCommand =
-              duplexEnabled && (claudeSkills || isRegisteredNodeHostCommandDuplex(frame.command));
+              duplexEnabled &&
+              (claudeSkills ||
+                frame.command === NODE_INSTALLED_APP_LAUNCH_COMMAND ||
+                isRegisteredNodeHostCommandDuplex(frame.command));
             const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
             const controller = new AbortController();
             // Every command must remain cancellable after dispatch; only duplex

@@ -425,9 +425,15 @@ export function createOpenClawCodingToolsInternal(
             ...pluginToolOptions,
             sessionPortalTarget,
             sessionPermissionPolicy,
-            execSession: sessionPermissionPolicy
-              ? { permissionMode: sessionPermissionPolicy.mode }
-              : undefined,
+            execSession:
+              sessionPermissionPolicy || options?.exec?.nodeCwd
+                ? {
+                    ...(sessionPermissionPolicy
+                      ? { permissionMode: sessionPermissionPolicy.mode }
+                      : {}),
+                    execCwd: options?.exec?.nodeCwd,
+                  }
+                : undefined,
             execOverrides: {
               host: effectiveExecPolicy.host,
               mode: effectiveExecPolicy.mode,

@@ -4,6 +4,7 @@ import {
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { NODE_INSTALLED_APP_LAUNCH_COMMAND } from "../infra/installed-app-launch.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_BROWSER_PROXY_COMMANDS,
@@ -106,6 +107,7 @@ const UNKNOWN_PLATFORM_COMMANDS = [
 // "High risk" node commands. These can be enabled by explicitly adding them to
 // `gateway.nodes.commands.allow` (and ensuring they're not blocked by commands.deny).
 export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
+  NODE_INSTALLED_APP_LAUNCH_COMMAND,
   ...CAMERA_DANGEROUS_COMMANDS,
   ...SCREEN_DANGEROUS_COMMANDS,
   ...CONTACTS_DANGEROUS_COMMANDS,
@@ -157,7 +159,12 @@ export const PLATFORM_DEFAULTS: Record<PlatformId, string[]> = {
     ...DESKTOP_SCREEN_COMMANDS,
     ...COMPUTER_COMMANDS,
   ],
-  linux: [...SYSTEM_COMMANDS, ...DESKTOP_SCREEN_COMMANDS, ...COMPUTER_COMMANDS],
+  linux: [
+    ...SYSTEM_COMMANDS,
+    ...DESKTOP_SCREEN_COMMANDS,
+    ...COMPUTER_COMMANDS,
+    NODE_DEVICE_APPS_COMMAND,
+  ],
   windows: [
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,

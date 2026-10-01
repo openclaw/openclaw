@@ -4,6 +4,7 @@ import type { ApprovalScope } from "../../packages/gateway-protocol/src/schema/a
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { ExecAllowlistEntry, McpToolGrant } from "./exec-approvals.types.js";
+import type { InstalledAppLaunchRequest } from "./installed-app-launch.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
@@ -173,6 +174,7 @@ export type SystemRunApprovalFileOperand = {
 };
 
 export type SystemRunApprovalPlan = {
+  installedApp?: InstalledAppLaunchRequest;
   argv: string[];
   cwd: string | null;
   commandText: string;

@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listConnectedNodePluginTools } from "../../gateway/node-plugin-tool-snapshot.js";
+import { NODE_INSTALLED_APP_LAUNCH_COMMAND } from "../../infra/installed-app-launch.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../../infra/node-commands.js";
 import { addSafeTimeoutDelayGraceMs } from "../../utils/timer-delay.js";
 import { readPositiveIntegerParam } from "./common.js";
@@ -50,6 +51,9 @@ export async function callNodesToolNodeInvoke<T = Record<string, unknown>>(
   options?: { rawInvoke?: boolean },
 ): Promise<T> {
   const command = normalizeLowercaseStringOrEmpty(params.command);
+  if (command === NODE_INSTALLED_APP_LAUNCH_COMMAND) {
+    throw new Error("Use nodes action=app_launch with an exact installed-app identity");
+  }
   // Node-published agent tools own their model policy. Every Nodes action must
   // stay out of commands omitted from this agent's materialized tool set.
   const dedicatedTool = DEDICATED_TOOL_INVOKE_COMMANDS.get(command);

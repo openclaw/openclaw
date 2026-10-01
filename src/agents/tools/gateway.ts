@@ -286,7 +286,14 @@ function resolveApprovalRuntimeTokenForGatewayTool(params: {
 
 function isApprovalReplayNodeSystemRun(method: string, callParams: unknown): boolean {
   const invoke = method === "node.invoke" ? asNullableRecord(callParams) : null;
-  const run = invoke?.command === "system.run" ? asNullableRecord(invoke.params) : null;
+  const payload = asNullableRecord(invoke?.params);
+  // App launch uses the same stored exec approval and must retain its requester device.
+  const run =
+    invoke?.command === "system.run"
+      ? payload
+      : invoke?.command === "device.apps.launch"
+        ? asNullableRecord(payload?.execution)
+        : null;
   const decision = normalizeOptionalString(run?.approvalDecision);
   return run?.approved === true || decision === "allow-once" || decision === "allow-always";
 }

@@ -88,6 +88,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/node-claude-skill-runtime.test.ts",
   "src/gateway/node-invoke-plugin-policy.private-transport.test.ts",
   "src/gateway/node-invoke-plugin-policy.test.ts",
+  "src/gateway/node-invoke-installed-app-approval.test.ts",
   "src/gateway/node-invoke-system-run-approval.test.ts",
   "src/gateway/node-reapproval-coordinator.test.ts",
   "src/gateway/openresponses-session-store.test.ts",

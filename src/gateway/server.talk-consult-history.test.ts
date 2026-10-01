@@ -16,7 +16,7 @@ import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
-import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { clearConfigCache, getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
@@ -95,6 +95,21 @@ let publications: Promise<void>[] = [];
 let publicationErrors: unknown[] = [];
 
 beforeAll(async () => {
+  // Node command policy is committed at Gateway startup, not by a later reply snapshot.
+  const config = getRuntimeConfig();
+  await writeConfigFile({
+    ...config,
+    gateway: {
+      ...config.gateway,
+      nodes: {
+        ...config.gateway?.nodes,
+        commands: {
+          ...config.gateway?.nodes?.commands,
+          allow: [...(config.gateway?.nodes?.commands?.allow ?? []), "device.apps.launch"],
+        },
+      },
+    },
+  });
   harness = await createGatewaySuiteHarness();
 });
 afterAll(async () => {
@@ -958,29 +973,36 @@ it("preserves the original operator source through chat-backed capability adapta
   expect(admittedSource).toBe(originalSource);
 });
 
-// The isolated native cell uses Linux executables; protocol/policy siblings remain portable.
-it.runIf(process.platform === "linux")(
-  "keeps host-authenticated node approvals and native effects equal across text and Talk",
-  async () => {
-    const { runTalkNodePermissionParity } =
-      await import("./server.talk-permission-parity.test-support.js");
-    await runTalkNodePermissionParity({
-      harness,
-      client,
-      context,
-      agentId,
-      sessionKey,
-      canonicalKey,
-      sessionId,
-      storePath,
-      voiceSessionId,
-      connectionId,
-      runEmbeddedAgent,
-      rpc,
-      waitForDispatchEnd,
-    });
-  },
-);
+// One suite Gateway serves both ordinary exec and its optional app adapter.
+for (const [label, installedApp] of [
+  ["host-authenticated node", false],
+  ["ordinary installed-app", true],
+] as const) {
+  it.runIf(process.platform === "linux")(
+    "keeps " + label + " approvals and native effects equal across text and Talk",
+    async (testContext) => {
+      const { runTalkNodePermissionParity } =
+        await import("./server.talk-permission-parity.test-support.js");
+      await runTalkNodePermissionParity({
+        harness,
+        client,
+        context,
+        agentId,
+        sessionKey,
+        canonicalKey,
+        sessionId,
+        storePath,
+        voiceSessionId,
+        connectionId,
+        runEmbeddedAgent,
+        rpc,
+        waitForDispatchEnd,
+        installedApp,
+        testSignal: testContext.signal,
+      });
+    },
+  );
+}
 
 it.runIf(process.platform === "linux")(
   "isolates registered Talk replay across authenticated callers",

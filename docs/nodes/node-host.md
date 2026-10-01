@@ -74,7 +74,7 @@ still apply. Local exec approvals default to `full` with `ask: "off"`; configure
 them before using the link if that access is too broad. See
 [Node pairing](/gateway/pairing#one-paste-node-pairing).
 
-`node run` also accepts `--pair`, `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
+`node run` also accepts `--pair`, `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS and Linux, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
 
 Pass `--session-host` to enable worker hosting for this foreground process without changing the saved preference. Automatic restarts preserve this choice.
 

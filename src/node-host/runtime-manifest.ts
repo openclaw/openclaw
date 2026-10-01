@@ -1,5 +1,6 @@
 /** The node-local command surface owns both advertised commands and their capabilities. */
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { NODE_INSTALLED_APP_LAUNCH_COMMAND } from "../infra/installed-app-launch.js";
 import { NODE_CLAUDE_SKILLS_CAPABILITY } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -26,6 +27,7 @@ export function buildNodeHostManifest(params: {
   commandAllowlist?: ReadonlySet<string>;
   claudeEnabled: boolean;
   installedAppsSharingEnabled: boolean;
+  installedAppLaunchEnabled?: boolean;
   desktopStreamingEnabled: boolean;
   ephemeral: boolean;
   pathEnv: string;
@@ -43,6 +45,7 @@ export function buildNodeHostManifest(params: {
     ],
     ["mcp", [NODE_MCP_TOOLS_CALL_COMMAND]],
     ["device", params.installedAppsSharingEnabled ? [NODE_DEVICE_APPS_COMMAND] : []],
+    ["device", params.installedAppLaunchEnabled ? [NODE_INSTALLED_APP_LAUNCH_COMMAND] : []],
     [
       NODE_CLAUDE_SKILLS_CAPABILITY,
       params.claudeEnabled ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : [],

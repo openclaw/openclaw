@@ -229,6 +229,7 @@ function formatNodeRunToolResult(params: {
 /** Resolves the node id, platform, argv, env, and timeout for a node-host exec. */
 export async function resolveNodeExecutionTarget(
   params: ExecuteNodeHostCommandParams,
+  argv?: readonly string[],
 ): Promise<NodeExecutionTarget> {
   const nodes = await listNodes({});
   if (nodes.length === 0) {
@@ -283,7 +284,7 @@ export async function resolveNodeExecutionTarget(
   return {
     nodeId,
     platform: nodeInfo.platform,
-    argv: buildNodeShellCommand(params.command, nodeInfo.platform),
+    argv: argv ? [...argv] : buildNodeShellCommand(params.command, nodeInfo.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
     ...resolveNodeExecTimeouts(params.timeoutSec, params.defaultTimeoutSec),
     supportsSystemRunPrepare: nodeInfo.commands?.includes("system.run.prepare") === true,
@@ -352,10 +353,11 @@ export async function dispatchNodeSystemRun(params: {
   target: NodeExecutionTarget;
   invoke: Record<string, unknown>;
   scopes?: Parameters<typeof invokeNodeSystemRun>[0]["scopes"];
+  invokeOperation?: typeof invokeNodeSystemRun;
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
   params.request.signal?.throwIfAborted();
-  const result = await invokeNodeSystemRun({
+  const result = await (params.invokeOperation ?? invokeNodeSystemRun)({
     invokeWaitMs: params.target.invokeWaitMs,
     invoke: params.invoke,
     scopes: params.scopes,
@@ -384,6 +386,7 @@ export async function dispatchNodeSystemRun(params: {
 export async function prepareNodeSystemRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
+  installedApp?: import("../infra/installed-app-launch.js").InstalledAppLaunchRequest;
 }): Promise<PreparedNodeRun> {
   if (!params.target.supportsSystemRunPrepare) {
     throw new Error("exec denied: node approval requires system.run.prepare support");
@@ -397,6 +400,7 @@ export async function prepareNodeSystemRun(params: {
       command: "system.run.prepare",
       params: {
         command: params.target.argv,
+        ...(params.installedApp ? { installedApp: params.installedApp } : {}),
         security: params.request.security,
         ask: params.request.ask,
         rawCommand: params.request.command,

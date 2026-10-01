@@ -44,7 +44,10 @@ import {
   type NodeGatewayDispatchAuthority,
   type NodeGatewayPolicyCheckpoint,
 } from "./bash-tools.exec-host-node-policy.js";
-import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import type {
+  ExecuteNodeHostCommandParams,
+  NodeHostInvocationAdapter,
+} from "./bash-tools.exec-host-node.types.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
 import { createApprovalSlug } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -60,8 +63,9 @@ const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
  */
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
+  adapter?: NodeHostInvocationAdapter,
 ): Promise<AgentToolResult<ExecToolDetails>> {
-  const target = await resolveNodeExecutionTarget(params);
+  const target = await resolveNodeExecutionTarget(params, adapter?.argv);
   params.signal?.throwIfAborted();
   const { hostSecurity, hostAsk, askFallback } = params.bypassHostApprovalFloors
     ? { hostSecurity: params.security, hostAsk: params.ask, askFallback: "deny" as const }
@@ -75,6 +79,7 @@ export async function executeNodeHostCommand(
   const prepared = await prepareNodeSystemRun({
     request: { ...params, security: hostSecurity, ask: hostAsk },
     target,
+    installedApp: adapter?.installedApp,
   });
   const approvalAnalysis = await analyzeNodeApprovalRequirement({
     request: params,
@@ -502,7 +507,8 @@ export async function executeNodeHostCommand(
             }
             // Approved follow-up invocations need approval scopes because they mutate remote node state.
             nodeInvocationStarted = true;
-            const invocation = await invokeNodeSystemRun({
+            const invokeOperation = adapter?.invoke ?? invokeNodeSystemRun;
+            const invocation = await invokeOperation({
               invokeWaitMs: target.invokeWaitMs,
               invoke: buildNodeSystemRunInvoke({
                 target,
@@ -564,7 +570,10 @@ export async function executeNodeHostCommand(
             const summary = output
               ? `Exec finished (node=${target.nodeId} id=${approvalId}, ${exitLabel})\n${output}`
               : `Exec finished (node=${target.nodeId} id=${approvalId}, ${exitLabel})`;
-            await execHostShared.sendExecApprovalFollowupResult(followupTarget, summary);
+            await execHostShared.sendExecApprovalFollowupResult(
+              followupTarget,
+              adapter?.formatFollowup ? adapter.formatFollowup(invocation.raw) : summary,
+            );
           } catch {
             if (params.signal?.aborted || nodeInvocationCompleted) {
               return;
@@ -645,6 +654,7 @@ export async function executeNodeHostCommand(
   });
   params.signal?.throwIfAborted();
   return dispatchNodeSystemRun({
+    invokeOperation: adapter?.invoke,
     request: params,
     target,
     invoke,

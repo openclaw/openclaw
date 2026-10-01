@@ -66,7 +66,10 @@ export function registerNodeCli(program: Command) {
     .addOption(new Option("--no-desktop-sharing").hideHelp())
     .addOption(new Option("--auth-from-env").hideHelp())
     .addOption(new Option("--parent-stdin").hideHelp())
-    .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
+    .option(
+      "--share-installed-apps",
+      "Share installed macOS or eligible Linux applications with the Gateway",
+    )
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .action(async (opts, command: Command) => {
       let pair;
@@ -144,7 +147,10 @@ export function registerNodeCli(program: Command) {
         .description("Install the node host service (launchd/systemd/schtasks)"),
     ),
   )
-    .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
+    .option(
+      "--share-installed-apps",
+      "Share installed macOS or eligible Linux applications with the Gateway",
+    )
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
     .option("--runtime-path <path>", "Pin an absolute Node/Bun executable path")

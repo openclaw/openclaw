@@ -55,9 +55,7 @@ import {
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
 import {
-  APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   prepareSystemRunExecutableIdentityBinding,
-  revalidateSystemRunMutableFileBinding,
   resolveMutableFileOperandSnapshotSync,
   type SystemRunMutableFileBinding,
 } from "../infra/system-run-approval-binding.js";
@@ -69,7 +67,6 @@ import {
   captureApprovedCwdSnapshotSync,
   revalidateApprovedCwdSnapshot,
 } from "../infra/system-run-cwd-binding.js";
-import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
 import { logWarn } from "../logger.js";
 import type { NodeHostClient } from "./client.js";
 import {
@@ -86,6 +83,7 @@ import {
 import {
   buildEnvOverrideRejectionMessage,
   hardenApprovedExecutionPaths,
+  revalidateSystemRunApprovedPathBindings,
 } from "./invoke-system-run-plan.js";
 import type {
   ExecEventPayload,
@@ -841,55 +839,16 @@ async function evaluateSystemRunPolicyPhase(
   };
 }
 
-async function revalidateSystemRunApprovedPathBindings(
-  opts: HandleSystemRunInvokeOptions,
-  phase: SystemRunPolicyPhase,
-): Promise<boolean> {
-  if (phase.approvedCwdSnapshot && !revalidateApprovedCwdSnapshot(phase.approvedCwdSnapshot)) {
-    logWarn(`security: system.run approval cwd drift blocked (runId=${phase.runId})`);
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "approval-required",
-      message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-    });
-    return false;
-  }
-  if (
-    phase.approvalPlan?.mutableFileOperand &&
-    !revalidateApprovedMutableFileOperand({
-      snapshot: phase.approvalPlan.mutableFileOperand,
-      argv: phase.argv,
-      cwd: phase.cwd,
-    })
-  ) {
-    logWarn(`security: system.run approval script drift blocked (runId=${phase.runId})`);
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "approval-required",
-      message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-    });
-    return false;
-  }
-  if (phase.executableBinding) {
-    const revalidated = await revalidateSystemRunMutableFileBinding({
-      binding: phase.executableBinding,
-      cwd: phase.cwd,
-    });
-    if (!revalidated.ok) {
-      logWarn(`security: system.run approval executable drift blocked (runId=${phase.runId})`);
-      await sendSystemRunDenied(opts, phase.execution, {
-        reason: "approval-required",
-        message: revalidated.message,
-      });
-      return false;
-    }
-  }
-  return true;
-}
-
 async function executeSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
   phase: SystemRunPolicyPhase,
 ): Promise<void> {
-  if (!(await revalidateSystemRunApprovedPathBindings(opts, phase))) {
+  const pathFailure = await revalidateSystemRunApprovedPathBindings(phase);
+  if (pathFailure) {
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: pathFailure,
+    });
     return;
   }
   const expectedMutableFileOperand =
@@ -1057,7 +1016,12 @@ async function executeSystemRunPhase(
 
   // Policy commit can yield to another invocation or process. Recheck the
   // approval-bound cwd, executable identities, and mutable operands before local spawn.
-  if (!(await revalidateSystemRunApprovedPathBindings(opts, phase))) {
+  const committedPathFailure = await revalidateSystemRunApprovedPathBindings(phase);
+  if (committedPathFailure) {
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: committedPathFailure,
+    });
     return;
   }
 
@@ -1068,6 +1032,10 @@ async function executeSystemRunPhase(
   const assertCurrent = () => {
     try {
       assertCommittedAuthorization();
+      // A native launch adapter may await invocation admission after preparation.
+      if (phase.approvedCwdSnapshot && !revalidateApprovedCwdSnapshot(phase.approvedCwdSnapshot)) {
+        throw new Error(APPROVAL_CWD_DRIFT_DENIED_MESSAGE);
+      }
     } catch (error) {
       authorizationDenied = true;
       throw error;

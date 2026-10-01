@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import {
   coerceNodeInvokePayload,
+  coerceNodeInvokeInputPayload,
   coerceNodeInvokeCancelPayload,
 } from "../node-host/invoke-payload.js";
 import type { NodeInvokeRequestPayload } from "../node-host/invoke-types.js";
@@ -16,6 +17,12 @@ export async function createTalkParityNodeFixture(
   config: OpenClawConfig,
   port: number,
   token: string,
+  installedApps = false,
+  appHooks?: {
+    beforePermit?: () => Promise<void>;
+    holdCancellation?: () => boolean;
+    onCancellation?: () => void;
+  },
 ) {
   const commands = [
     "system.run",
@@ -23,15 +30,22 @@ export async function createTalkParityNodeFixture(
     "system.which",
     "system.execApprovals.get",
     "system.execApprovals.set",
+    ...(installedApps ? ["device.apps", "device.apps.launch"] : []),
   ];
   const prepared = await prepareNodeHostRuntime({
     config,
     commands,
     enableAgentRuns: false,
     enableWorkerRuns: false,
-    installedAppsSharingEnabled: false,
+    installedAppsSharingEnabled: installedApps,
+    enableDuplexPluginCommands: installedApps,
     desktopSharingEnabled: false,
   });
+  if (installedApps) {
+    expect(prepared.manifest.commands).toEqual(
+      expect.arrayContaining(["device.apps", "device.apps.launch"]),
+    );
+  }
   const identity = await pairDeviceIdentity({
     name: "talk-parity-node",
     role: "node",
@@ -54,6 +68,8 @@ export async function createTalkParityNodeFixture(
   expect(approved).toHaveProperty("node");
   const tasks: Promise<void>[] = [];
   const invokes: NodeInvokeRequestPayload[] = [];
+  const heldCancellations: string[] = [];
+  const cancellations = { received: 0, delivered: 0 };
   const client = await connectGatewayClient({
     url: "ws://127.0.0.1:" + port,
     token,
@@ -66,10 +82,30 @@ export async function createTalkParityNodeFixture(
     caps: prepared.manifest.caps,
     commands: prepared.manifest.commands,
     onEvent: (event) => {
+      if (event.event === "node.invoke.input") {
+        const input = coerceNodeInvokeInputPayload(event.payload);
+        if (input) {
+          const delivery = (async () => {
+            if (JSON.parse(input.payloadJSON)?.type === "installed-app-launch.allow") {
+              await appHooks?.beforePermit?.();
+            }
+            active?.handleInput(input.invokeId, input.seq, input.payloadJSON);
+          })();
+          void delivery.catch(() => {});
+          tasks.push(delivery);
+        }
+      }
       if (event.event === "node.invoke.cancel") {
         const cancel = coerceNodeInvokeCancelPayload(event.payload);
         if (cancel) {
-          active?.cancel(cancel.invokeId);
+          cancellations.received++;
+          if (appHooks?.holdCancellation?.()) {
+            heldCancellations.push(cancel.invokeId);
+          } else {
+            active?.cancel(cancel.invokeId);
+            cancellations.delivered++;
+          }
+          appHooks?.onCancellation?.();
         }
       }
       if (event.event === "node.invoke.request") {
@@ -89,6 +125,15 @@ export async function createTalkParityNodeFixture(
   return {
     nodeId: identity.identity.deviceId,
     invokes,
+    cancellations,
+    drain: async () => {
+      await Promise.all(tasks);
+    },
+    releaseCancellation: () => {
+      for (const id of heldCancellations.splice(0)) {
+        active.cancel(id);
+      }
+    },
     async close() {
       try {
         await active?.close();

@@ -1,6 +1,8 @@
+import { NODE_INSTALLED_APP_LAUNCH_COMMAND } from "../infra/installed-app-launch.js";
 // Node invocation forwarding sanitizer.
 // Strips or validates gateway-only control fields before node transport.
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
+import { prepareInstalledAppForwarding } from "./installed-app-launch.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
@@ -15,6 +17,9 @@ export async function sanitizeNodeInvokeParamsForForwarding(opts: {
   client: GatewayClient | null;
   execApprovalManager?: ExecApprovalManager;
 }): ReturnType<typeof sanitizeSystemRunParamsForForwarding> {
+  if (opts.command === NODE_INSTALLED_APP_LAUNCH_COMMAND) {
+    return await prepareInstalledAppForwarding(opts);
+  }
   if (opts.command === "system.run") {
     return sanitizeSystemRunParamsForForwarding(opts);
   }

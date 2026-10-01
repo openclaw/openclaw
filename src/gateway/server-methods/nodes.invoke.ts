@@ -6,12 +6,14 @@ import {
   validateNodeInvokeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { captureNodePairingGeneration } from "../../infra/device-pairing-node-state.js";
+import { NODE_INSTALLED_APP_LAUNCH_COMMAND } from "../../infra/installed-app-launch.js";
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
   isPrivateNodeInvokeCommand,
 } from "../../infra/node-commands.js";
 import { awaitWithinDeadline, ABSOLUTE_DEADLINE_EXPIRED } from "../../utils/absolute-deadline.js";
+import { prepareInstalledAppInvocation } from "../installed-app-launch.js";
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
@@ -196,6 +198,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       // caller only for dispatched node work; never replace that owner signal.
       const invocationLifecycle = signal ? AbortSignal.any([wakeLifecycle, signal]) : wakeLifecycle;
       let releaseApprovalHandoff: (() => void) | undefined;
+      let closeAppInvocation: (() => void) | undefined;
       try {
         const continuePairingWork = async (): Promise<boolean> => {
           const pairingCurrent = await awaitWithinDeadline(
@@ -518,23 +521,39 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         if (rejectDisabledUpload()) {
           return;
         }
+        const appLaunch =
+          command === NODE_INSTALLED_APP_LAUNCH_COMMAND
+            ? prepareInstalledAppInvocation({
+                nodeId,
+                rawParams: forwardedParams.params,
+                context,
+                client,
+                connId: dispatchSession.connId,
+                approvalAuthority: forwardedParams.approvalAuthority,
+              })
+            : undefined;
+        closeAppInvocation = appLaunch?.close;
         const res = await invokeNodeWithReadinessRetry(context.nodeRegistry, {
           nodeId,
           expectedConnId: nodeSession.connId,
           expectedPairingGeneration: generation.key,
           command,
-          params: forwardedParams.params,
+          params: appLaunch?.dispatchParams ?? forwardedParams.params,
           timeoutMs: dispatchTimeoutMs,
           deadlineAtMs: invokeDeadlineAtMs,
-          signal: invocationLifecycle,
+          signal: appLaunch
+            ? AbortSignal.any([invocationLifecycle, appLaunch.signal])
+            : invocationLifecycle,
           idempotencyKey: p.idempotencyKey,
           ...(sessionKey ? { sessionKey } : {}),
           ...(nodeInvokeStream && {
             onProgress: nodeInvokeStream.onProgress,
             idleTimeoutMs: nodeInvokeStream.idleTimeoutMs,
           }),
+          ...(appLaunch ? { onProgress: appLaunch.onReady, idleTimeoutMs: 30_000 } : {}),
           isDispatchAuthorized: () =>
             isUploadAllowed() &&
+            (appLaunch?.isCurrent() ?? true) &&
             (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
             resolveNodeInvokeRuntimeAuthorityError({
               context,
@@ -542,10 +561,22 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               approvalAuthority: forwardedParams.approvalAuthority,
             }) === undefined,
           onDispatchReady: (invokeId) => {
+            appLaunch?.onDispatchReady(invokeId);
             nodeCommandDispatched = true;
             nodeInvokeStream?.onDispatchReady(invokeId);
           },
         });
+        if (appLaunch?.reason()) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              appLaunch.reason() ?? "Installed-app launch refused",
+            ),
+          );
+          return;
+        }
         if (!(await continuePairingWork())) {
           return;
         }
@@ -652,6 +683,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           undefined,
         );
       } finally {
+        closeAppInvocation?.();
         releaseApprovalHandoff?.();
         releaseNodeWakeLifecycle(nodeId, wakeLifecycle);
       }

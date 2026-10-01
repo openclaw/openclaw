@@ -163,13 +163,15 @@ export async function invokeNodeSystemRun(params: {
   invoke: Record<string, unknown>;
   signal?: AbortSignal;
   scopes?: OperatorScope[];
+  requireAgentRuntimeIdentity?: true;
 }): Promise<NodeSystemRunInvokeResult> {
   try {
     const callOptions =
-      params.scopes || params.signal
+      params.scopes || params.signal || params.requireAgentRuntimeIdentity
         ? {
             ...(params.scopes ? { scopes: params.scopes } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
+            ...(params.requireAgentRuntimeIdentity ? { requireAgentRuntimeIdentity: true } : {}),
           }
         : undefined;
     const raw = await callGatewayTool(

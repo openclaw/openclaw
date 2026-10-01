@@ -127,6 +127,33 @@ describe("gateway/node-command-policy", () => {
     ).toBe(false);
   });
 
+  it("keeps Linux app inventory separate from explicit launch authority", () => {
+    const command = "device.apps.launch";
+    const node = {
+      platform: "linux",
+      deviceFamily: "Linux",
+      commands: ["device.apps", command],
+      approvedCommands: ["device.apps", command],
+    };
+    expect(resolveNodeCommandAllowlist({}, node).has("device.apps")).toBe(true);
+    expect(resolveNodeCommandAllowlist({}, node).has(command)).toBe(false);
+    const enabled = { gateway: { nodes: { commands: { allow: [command] } } } };
+    expect(resolveNodeCommandAllowlist(enabled, node).has(command)).toBe(true);
+    expect(
+      resolveNodeCommandAllowlist(
+        { gateway: { nodes: { commands: { allow: [command], deny: [command] } } } },
+        node,
+      ).has(command),
+    ).toBe(false);
+    expect(
+      isNodeCommandAllowed({
+        command,
+        declaredCommands: ["device.apps"],
+        allowlist: resolveNodeCommandAllowlist(enabled, node),
+      }).ok,
+    ).toBe(false);
+  });
+
   it("normalizes declared node commands against the allowlist", () => {
     const allowlist = new Set(["canvas.snapshot", "system.run"]);
     expect(
@@ -450,6 +477,7 @@ describe("gateway/node-command-policy", () => {
     expect([...allowlist]).toEqual([
       "system.notify",
       "computer.act",
+      "device.apps",
       "remote.policy",
       "remote.shared",
       "remote.echo",
@@ -483,13 +511,18 @@ describe("gateway/node-command-policy", () => {
     ]).toEqual([
       "system.notify",
       "computer.act",
+      "device.apps",
       "remote.policy",
       "remote.echo",
       "remote.dangerous",
     ]);
     setActivePluginRegistry(createEmptyPluginRegistry());
     expect(listDangerousPluginNodeCommands()).toEqual([]);
-    expect([...resolveNodeCommandAllowlist({}, node)]).toEqual(["system.notify", "computer.act"]);
+    expect([...resolveNodeCommandAllowlist({}, node)]).toEqual([
+      "system.notify",
+      "computer.act",
+      "device.apps",
+    ]);
   });
 
   it("does not allow connected node plugin tools without a registry default or config allowlist", () => {

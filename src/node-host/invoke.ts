@@ -10,7 +10,6 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
-  analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
   ensureExecApprovalsSnapshot,
   mergeExecApprovalsSocketDefaults,
@@ -19,7 +18,6 @@ import {
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
   redactExecApprovals,
-  resolveAllowAlwaysPatternCoverage,
   resolveExecApprovalsFromFile,
   updateExecApprovals,
   type ExecAsk,
@@ -28,14 +26,13 @@ import {
   type ExecApprovalsSnapshot,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
-import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import {
   requestExecHostViaSocket,
   type ExecHostRequest,
   type ExecHostResponse,
 } from "../infra/exec-host.js";
-import { extractShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
+import { NODE_INSTALLED_APP_LAUNCH_COMMAND } from "../infra/installed-app-launch.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
@@ -51,6 +48,7 @@ import {
 } from "./client.js";
 import { invokeNodeWorkerComputerCommand, type NodeWorkerComputer } from "./computer-command.js";
 import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
+import { prepareInstalledAppLaunch, prepareInstalledAppApproval } from "./installed-app-launch.js";
 import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
@@ -61,7 +59,10 @@ import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
 import { decodeNodeInvokeParams as decodeParams } from "./invoke-payload.js";
 import { withNodeHostPluginInvocation } from "./invoke-plugin-context.js";
 import { runCommand } from "./invoke-run-command.js";
-import { buildSystemRunPrepareCoverageEnv } from "./invoke-system-run-plan.js";
+import {
+  buildSystemRunPrepareCoverageEnv,
+  buildSystemRunAllowAlwaysCoverage,
+} from "./invoke-system-run-plan.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -119,6 +120,7 @@ type SystemExecApprovalsSetParams = {
 };
 
 type SystemRunPrepareParams = {
+  installedApp?: unknown;
   security?: ExecSecurity;
   ask?: ExecAsk;
   command?: unknown;
@@ -138,57 +140,6 @@ function resolveNodeSkillCwdParam<T extends { cwd?: unknown }>(params: T, nodeId
   // the same canonical node-local directory instead of trusting a URI at exec time.
   const resolved = resolveNodeHostedSkillDirectory(params.cwd, nodeId);
   return resolved ? { ...params, cwd: resolved } : params;
-}
-
-async function buildSystemRunAllowAlwaysCoverage(params: {
-  argv: string[];
-  rawCommand?: string | null;
-  cwd: string | null | undefined;
-  env: Record<string, string> | undefined;
-  strictInlineEval?: boolean;
-}) {
-  const cwd = params.cwd ?? undefined;
-  const shellWrapper = extractShellWrapperCommand(params.argv, params.rawCommand);
-  if (shellWrapper.isWrapper) {
-    if (!shellWrapper.command) {
-      return { complete: false, patterns: [] };
-    }
-    const authorizationPlan = await planShellAuthorization({
-      command: shellWrapper.command,
-      cwd,
-      env: params.env,
-      platform: process.platform,
-    });
-    if (!authorizationPlan.ok) {
-      return { complete: false, patterns: [] };
-    }
-    const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
-    const reusableSegments = candidates
-      .filter((candidate) => candidate.allowAlways)
-      .map((candidate) => candidate.sourceSegment);
-    const coverage = resolveAllowAlwaysPatternCoverage({
-      segments: reusableSegments,
-      cwd,
-      env: params.env,
-      platform: process.platform,
-      strictInlineEval: params.strictInlineEval,
-    });
-    return {
-      ...coverage,
-      complete: coverage.complete && reusableSegments.length === candidates.length,
-    };
-  }
-  const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
-  if (!analysis.ok) {
-    return { complete: false, patterns: [] };
-  }
-  return resolveAllowAlwaysPatternCoverage({
-    segments: analysis.segments,
-    cwd,
-    env: params.env,
-    platform: process.platform,
-    strictInlineEval: params.strictInlineEval,
-  });
 }
 
 export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
@@ -643,6 +594,7 @@ async function dispatchInvoke(
         decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
         frame.nodeId,
       );
+      const installedApp = prepareInstalledAppApproval(params, runtime);
       const { getRuntimeConfig } = await import("../config/config.js");
       const execPolicy = await resolveEffectiveSystemRunExecPolicy({
         cfg: getRuntimeConfig(),
@@ -681,6 +633,7 @@ async function dispatchInvoke(
       }
       const plan = {
         ...prepared.plan,
+        ...(installedApp ? { installedApp } : {}),
         policySnapshot: createExecApprovalPolicySnapshot({
           file: execPolicy.approvals.file,
           agentId: prepared.plan.agentId ?? undefined,
@@ -708,17 +661,29 @@ async function dispatchInvoke(
     return;
   }
 
-  if (command !== "system.run") {
+  if (command !== "system.run" && command !== NODE_INSTALLED_APP_LAUNCH_COMMAND) {
     await response.error("UNAVAILABLE", "command not supported");
     return;
   }
 
   let params: SystemRunParams;
+  let installedLaunch: ReturnType<typeof prepareInstalledAppLaunch> | undefined;
   try {
-    params = resolveNodeSkillCwdParam(
-      decodeParams<SystemRunParams>(frame.paramsJSON),
-      frame.nodeId,
-    );
+    if (command === NODE_INSTALLED_APP_LAUNCH_COMMAND) {
+      installedLaunch = prepareInstalledAppLaunch({
+        io: runtime.pluginCommandIo,
+        paramsJSON: frame.paramsJSON,
+        sessionKey: frame.sessionKey,
+        sharingEnabled: runtime.installedAppsSharingEnabled === true,
+        platform: runtime.installedAppsPlatform ?? process.platform,
+      });
+      params = installedLaunch.params;
+    } else {
+      params = resolveNodeSkillCwdParam(
+        decodeParams<SystemRunParams>(frame.paramsJSON),
+        frame.nodeId,
+      );
+    }
   } catch (err) {
     await response.invalid(err);
     return;
@@ -729,7 +694,7 @@ async function dispatchInvoke(
     return;
   }
 
-  await handleSystemRunInvoke({
+  await (installedLaunch?.invoke ?? handleSystemRunInvoke)({
     client,
     params,
     skillBins,

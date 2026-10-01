@@ -1,9 +1,15 @@
 /** Builds and revalidates system.run approval plans for cwd and executable paths. */
 import fs from "node:fs";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import {
+  analyzeArgvCommand,
+  resolveAllowAlwaysPatternCoverage,
+  type SystemRunApprovalPlan,
+} from "../infra/exec-approvals.js";
+import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import {
+  extractShellWrapperCommand,
   isBlockedShellWrapperCommand,
   isShellWrapperInvocation,
 } from "../infra/exec-wrapper-resolution.js";
@@ -12,13 +18,59 @@ import {
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { resolveMutableFileOperandSnapshotSync } from "../infra/system-run-approval-binding.js";
+import {
+  resolveMutableFileOperandSnapshotSync,
+  APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+  revalidateSystemRunMutableFileBinding,
+  type SystemRunMutableFileBinding,
+} from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import {
   type ApprovedCwdSnapshot,
   captureApprovedCwdSnapshotSync,
+  revalidateApprovedCwdSnapshot,
+  APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
 } from "../infra/system-run-cwd-binding.js";
+import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
 import type { SystemRunBindingFailure } from "../infra/system-run-mutable-file-operand.js";
+import { logWarn } from "../logger.js";
+
+/** Revalidate the approved path facts after the execution-policy commit yields. */
+export async function revalidateSystemRunApprovedPathBindings(phase: {
+  approvedCwdSnapshot?: ApprovedCwdSnapshot;
+  approvalPlan: SystemRunApprovalPlan | null;
+  argv: string[];
+  cwd: string | undefined;
+  executableBinding?: SystemRunMutableFileBinding;
+  runId: string;
+}): Promise<string | undefined> {
+  if (phase.approvedCwdSnapshot && !revalidateApprovedCwdSnapshot(phase.approvedCwdSnapshot)) {
+    logWarn("security: system.run approval cwd drift blocked (runId=" + phase.runId + ")");
+    return APPROVAL_CWD_DRIFT_DENIED_MESSAGE;
+  }
+  if (
+    phase.approvalPlan?.mutableFileOperand &&
+    !revalidateApprovedMutableFileOperand({
+      snapshot: phase.approvalPlan.mutableFileOperand,
+      argv: phase.argv,
+      cwd: phase.cwd,
+    })
+  ) {
+    logWarn("security: system.run approval script drift blocked (runId=" + phase.runId + ")");
+    return APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE;
+  }
+  if (phase.executableBinding) {
+    const revalidated = await revalidateSystemRunMutableFileBinding({
+      binding: phase.executableBinding,
+      cwd: phase.cwd,
+    });
+    if (!revalidated.ok) {
+      logWarn("security: system.run approval executable drift blocked (runId=" + phase.runId + ")");
+      return revalidated.message;
+    }
+  }
+  return undefined;
+}
 
 type SystemRunPrepareEnv =
   | {
@@ -214,4 +266,55 @@ export function buildSystemRunApprovalPlan(
       mutableFileOperand: mutableFileOperand.snapshot ?? undefined,
     },
   };
+}
+
+export async function buildSystemRunAllowAlwaysCoverage(params: {
+  argv: string[];
+  rawCommand?: string | null;
+  cwd: string | null | undefined;
+  env: Record<string, string> | undefined;
+  strictInlineEval?: boolean;
+}) {
+  const cwd = params.cwd ?? undefined;
+  const shellWrapper = extractShellWrapperCommand(params.argv, params.rawCommand);
+  if (shellWrapper.isWrapper) {
+    if (!shellWrapper.command) {
+      return { complete: false, patterns: [] };
+    }
+    const authorizationPlan = await planShellAuthorization({
+      command: shellWrapper.command,
+      cwd,
+      env: params.env,
+      platform: process.platform,
+    });
+    if (!authorizationPlan.ok) {
+      return { complete: false, patterns: [] };
+    }
+    const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
+    const reusableSegments = candidates
+      .filter((candidate) => candidate.allowAlways)
+      .map((candidate) => candidate.sourceSegment);
+    const coverage = resolveAllowAlwaysPatternCoverage({
+      segments: reusableSegments,
+      cwd,
+      env: params.env,
+      platform: process.platform,
+      strictInlineEval: params.strictInlineEval,
+    });
+    return {
+      ...coverage,
+      complete: coverage.complete && reusableSegments.length === candidates.length,
+    };
+  }
+  const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
+  if (!analysis.ok) {
+    return { complete: false, patterns: [] };
+  }
+  return resolveAllowAlwaysPatternCoverage({
+    segments: analysis.segments,
+    cwd,
+    env: params.env,
+    platform: process.platform,
+    strictInlineEval: params.strictInlineEval,
+  });
 }

@@ -242,6 +242,12 @@ export const ExecApprovalRequestParamsSchema = closedObject({
   commandArgv: Type.Optional(Type.Array(Type.String())),
   systemRunPlan: Type.Optional(
     closedObject({
+      installedApp: Type.Optional(
+        closedObject({
+          appId: Type.String({ pattern: "^linux-desktop:[A-Za-z0-9_.-]+\\.desktop$" }),
+          appRevision: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+        }),
+      ),
       argv: Type.Array(Type.String()),
       cwd: Type.Union([Type.String(), Type.Null()]),
       commandText: Type.String(),

@@ -120,13 +120,13 @@ Notes:
 
 ## Device and personal data commands
 
-iOS and Android nodes advertise several read-only data commands by default (see the [Command policy](/nodes/command-policy#command-policy) table); Android additionally exposes a larger family gated by its own in-app settings. A macOS or headless-mac TypeScript node host advertises `device.apps` only after the operator enables installed-app sharing with `--share-installed-apps`.
+iOS and Android nodes advertise several read-only data commands by default (see the [Command policy](/nodes/command-policy#command-policy) table); Android additionally exposes a larger family gated by its own in-app settings. A macOS or Linux TypeScript node host advertises `device.apps` only after the operator enables installed-app sharing with `--share-installed-apps`.
 
 Available families:
 
 - `device.status`, `device.info` — iOS, Android, Windows.
 - `device.permissions`, `device.health` — Android only.
-- `device.apps` — Android, macOS, and headless-mac nodes. Android requires Installed Apps sharing in Settings and returns launcher-visible apps by default. TypeScript node hosts keep sharing off by default and accept `query`, `limit`, and `includeSystem`; macOS results contain `label`, `bundleId`, `path`, and `system`.
+- `device.apps` — Android, macOS, and Linux nodes. Android requires Installed Apps sharing in Settings and returns launcher-visible apps by default. TypeScript node hosts keep sharing off by default and accept `query`, `limit`, and `includeSystem`; macOS results contain `label`, `bundleId`, `path`, and `system`.
 - `notifications.list`, `notifications.actions` — Android only.
 - `photos.latest` — iOS, Android.
 - `contacts.search` — iOS, Android (read-only default); `contacts.add` is dangerous and needs `gateway.nodes.commands.allow`.
@@ -147,3 +147,40 @@ openclaw nodes invoke --node <idOrNameOrIp> --command device.apps --params '{"li
 openclaw nodes invoke --node <idOrNameOrIp> --command notifications.list --params '{}'
 openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"limit":1}'
 ```
+
+## Constrained Linux app launch
+
+The Nodes tool can list and launch eligible installed Linux applications without
+shell discovery. Installed-app sharing is off by default. A capable Linux node
+must enable sharing, advertise the launch command, and have its expanded command
+surface approved. The Gateway must explicitly allow `device.apps.launch` in
+`gateway.nodes.commands.allow`; a matching deny still wins.
+
+Use `app_list` with an exact node ID and optional query/limit (maximum 20), then
+`app_launch` with that same node ID and the returned `appId` and `appRevision`.
+The launch action accepts no arguments, environment, executable path, or Gateway
+override. Launches use the same ordinary tool, host, node, and executable approval
+owners for text and voice. Voice does not add a spoken-confirmation requirement.
+A policy refusal remains a refusal; an execution approval does not grant node
+pairing or command access.
+
+Supported entries are top-level XDG desktop files naming a single native ELF
+executable with no arguments or field codes. Shell/script launchers, terminal or
+DBus activation, visibility conditions, custom working directories, and TryExec
+are outside this narrow capability. A higher-precedence entry masks lower ones,
+including when the higher entry is hidden or ineligible. Inventory reports
+`inventoryComplete` and `truncated`; completeness covers this supported subset,
+not every application or desktop activation mechanism.
+
+A successful launch returns `status: "process-started"` and the actual PID. It
+means the OS started the process, not that a window appeared or initialization
+finished. The invocation returns while a long-lived app remains alive. Ordinary
+exec retains run-to-completion semantics.
+
+Before spawn, the node rechecks the entry revision, executable identity,
+eligibility, empty argument vector, local execution authority, and observed
+cancellation. Changed applications require fresh inventory and authorization.
+The invocation-bound final permit is bounded admission, not a promise of atomic
+distributed revocation: cancellation delivered before the node's final check
+prevents spawn; a cancellation still in transit can lose that race. Closing a
+Gateway source after permit issuance cannot retroactively undo an admitted spawn.

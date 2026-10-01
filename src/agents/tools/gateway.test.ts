@@ -160,19 +160,25 @@ describe("gateway tool defaults", () => {
     expect(resolveGatewayOptions({ gatewayUrl: "wss://gateway.example" }).token).toBeUndefined();
   });
 
-  it("replays approvals with the persisted device", async () => {
-    mocks.deviceIdentityError = new Error("must not create identity during replay");
-    await invokeSystemRun(
-      { approvalDecision: "allow-once", runId: "approval-async" },
-      {
-        scopes: ["operator.write", "operator.approvals"],
-      },
-    );
-    const call = capturedGatewayCall();
-    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
-    expect(call.scopes).toEqual(["operator.write", "operator.approvals"]);
-    expect(call).not.toHaveProperty("approvalRuntimeToken");
-  });
+  it.each(["system.run", "device.apps.launch"])(
+    "replays %s approvals with the persisted device",
+    async (command) => {
+      mocks.deviceIdentityError = new Error("must not create identity during replay");
+      const execution = { approvalDecision: "allow-once", runId: "approval-async" };
+      await callGatewayTool(
+        "node.invoke",
+        {},
+        { ...nodeParams, command, params: command === "system.run" ? execution : { execution } },
+        {
+          scopes: ["operator.write", "operator.approvals"],
+        },
+      );
+      const call = capturedGatewayCall();
+      expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+      expect(call.scopes).toEqual(["operator.write", "operator.approvals"]);
+      expect(call).not.toHaveProperty("approvalRuntimeToken");
+    },
+  );
 
   it("keeps unapproved node runs device-less", async () => {
     await invokeSystemRun({ approved: false });

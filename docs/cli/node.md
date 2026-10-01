@@ -104,7 +104,7 @@ Options:
 - `--session-host`: Host worker sessions for this foreground process without changing the saved worker-hosting preference
 - `--commands <ids>`: Persist an exact comma-separated command allowlist (repeatable); advertise only available matches and their required capabilities. Disables computer use, skills, plugin tools, MCP servers, and worker hosting. Omitting the flag preserves the saved list.
 - `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
-- `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
+- `--share-installed-apps`: On macOS and Linux, advertise installed applications through `device.apps`
 - `--no-share-installed-apps`: Disable installed application sharing
 
 ## Gateway auth for node host
@@ -184,7 +184,7 @@ Options:
 - `--display-name <name>`: Override the node display name
 - `--commands <ids>`: Persist the command allowlist for the installed service (repeatable), with the same restrictions as `node run`.
 - `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
-- `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
+- `--share-installed-apps`: On macOS and Linux, advertise installed applications through `device.apps`
 - `--no-share-installed-apps`: Disable installed application sharing
 - `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--runtime-path <path>`: Pin an absolute Node/Bun executable that passes runtime capability checks.

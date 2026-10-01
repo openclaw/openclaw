@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { SystemRunApprovalFileOperand, SystemRunApprovalPlan } from "./exec-approvals.js";
+import { InstalledAppLaunchRequestSchema } from "./installed-app-launch.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 function normalizeSystemRunApprovalFileOperand(
@@ -34,6 +35,13 @@ export function normalizeSystemRunApprovalPlan(candidate: unknown): SystemRunApp
   if (!isRecord(candidate)) {
     return null;
   }
+  const installedApp =
+    candidate.installedApp === undefined
+      ? undefined
+      : InstalledAppLaunchRequestSchema.safeParse(candidate.installedApp);
+  if (installedApp && !installedApp.success) {
+    return null;
+  }
   const argv = normalizeStringArray(candidate.argv);
   if (argv.length === 0) {
     return null;
@@ -52,6 +60,7 @@ export function normalizeSystemRunApprovalPlan(candidate: unknown): SystemRunApp
     return null;
   }
   return {
+    ...(installedApp?.success ? { installedApp: installedApp.data } : {}),
     argv,
     cwd: normalizeNonEmptyString(candidate.cwd),
     commandText,

@@ -50,3 +50,15 @@ export type ExecuteNodeHostCommandParams = {
   notifyOnExit?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
+
+/** Host-owned native operation: policy, approval and continuation remain with node exec. */
+export type NodeHostInvocationAdapter = {
+  argv: readonly string[];
+  installedApp?: import("../infra/installed-app-launch.js").InstalledAppLaunchRequest;
+  invoke: (
+    request: Parameters<
+      typeof import("./bash-tools.exec-host-node-failure.js").invokeNodeSystemRun
+    >[0],
+  ) => ReturnType<typeof import("./bash-tools.exec-host-node-failure.js").invokeNodeSystemRun>;
+  formatFollowup?: (raw: unknown) => string;
+};
