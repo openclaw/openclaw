@@ -8,7 +8,10 @@ import {
   type BackupRunManifest,
   type BackupRunRecord,
 } from "./backup-run-records.contract.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  isOpenClawStateDatabaseDefinitelyAbsent,
+} from "./openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
@@ -62,6 +65,9 @@ export async function recordBackupRunOutcome(
 
 /** Read ledger rows through the shared SQLite read worker without bootstrapping state. */
 export async function readBackupRuns(env: NodeJS.ProcessEnv): Promise<BackupRunRecord[]> {
+  if (isOpenClawStateDatabaseDefinitelyAbsent(env)) {
+    return [];
+  }
   const result = await executeExistingOpenClawStateRead(
     { env, path: resolveOpenClawStateSqlitePath(env) },
     { type: "backup.runs" },

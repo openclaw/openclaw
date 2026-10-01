@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +14,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { parseBackupRun } from "./backup-run-records.contract.js";
 import {
+  readBackupArchiveDirectories,
   readBackupRunFreshness,
   readBackupRuns,
   summarizeBackupTargets,
@@ -55,6 +57,34 @@ async function testEnv(options?: { bootstrap?: boolean }): Promise<NodeJS.Proces
 }
 
 describe("backup run records", () => {
+  it("skips filesystem canonicalization when scratch discovery has no ledger", async () => {
+    const env = await testEnv();
+    const realpath = vi.spyOn(fsSync.realpathSync, "native").mockImplementation(() => {
+      throw new Error("Scratch discovery must not canonicalize an absent ledger");
+    });
+    await expect(readBackupArchiveDirectories(env)).resolves.toEqual([]);
+    expect(realpath).not.toHaveBeenCalled();
+    await expect(fs.access(resolveOpenClawStateSqlitePath(env))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("discovers native absolute archive parents without requiring them to exist", async () => {
+    const env = await testEnv({ bootstrap: true });
+    const parent = path.join(path.dirname(resolveOpenClawStateSqlitePath(env)), "archives");
+    for (const [kind, archivePath] of [
+      ["archive", path.join(parent, "first.tar.gz")],
+      ["archive", path.join(parent, "second.tar.gz")],
+      ["archive", "storage://offsite/host/backup.tar.gz"],
+      ["archive", "relative.tar.gz"],
+      ["git", path.join(parent, "git")],
+    ] as const) {
+      await recordBackupRunOutcome({ env, kind, archivePath, status: "ok" });
+    }
+    expect(await readBackupArchiveDirectories(env)).toEqual([parent]);
+    await expect(fs.access(parent)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("reads legacy manifests and round trips offsite details and external command outcomes", async () => {
     expect(
       parseBackupRun({

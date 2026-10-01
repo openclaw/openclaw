@@ -704,7 +704,9 @@ Scratch observed by the scan that disappears before cleanup is recorded as
 already reclaimed, without a warning or a claim that this pass removed it.
 
 `openclaw doctor` reports scratch in the active temporary directory and recorded
-archive destination directories. `openclaw doctor --fix` removes recognized
+archive destination directories. When no backup ledger exists, recorded-location
+discovery returns no directories and does not create state. Inspection stays quiet
+when there is no scratch to report. `openclaw doctor --fix` removes recognized
 scratch whose lifetime transaction has ended. Unknown contents, symbolic links,
 and legacy directories without a lifetime token are preserved with guidance for
 inspection. Older releases do not create these tokens, so stop older backup
