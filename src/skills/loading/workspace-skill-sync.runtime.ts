@@ -22,6 +22,7 @@ import type {
   SkillUsagePath,
 } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
+import { ensureWritableSkillDirectories } from "./skill-directory-modes.js";
 import { shouldSyncSkillPath } from "./skill-paths.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { prepareWorkspaceSkills } from "./workspace-skill-loader.js";
@@ -279,7 +280,17 @@ export async function syncWorkspaceSkills(params: {
     );
     for (const child of await fsp.readdir(targetSkillsDir)) {
       if (!preservedDestinations.has(child)) {
-        await fsp.rm(path.join(targetSkillsDir, child), { recursive: true, force: true });
+        const childPath = path.join(targetSkillsDir, child);
+        try {
+          await fsp.rm(childPath, { recursive: true, force: true });
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (process.platform === "win32" || (code !== "EACCES" && code !== "EPERM")) {
+            throw error;
+          }
+          await ensureWritableSkillDirectories(targetSkillsDir, child);
+          await fsp.rm(childPath, { recursive: true, force: true });
+        }
       }
     }
 
@@ -313,6 +324,7 @@ export async function syncWorkspaceSkills(params: {
               force: true,
               filter: shouldSyncSkillPath,
             });
+            await ensureWritableSkillDirectories(targetSkillsDir, path.basename(destinationPath));
           }
         } catch (error) {
           if (entry.skill.source === "openclaw-library") {
