@@ -1,5 +1,5 @@
+import OpenClawKit
 import Testing
-@testable import OpenClaw
 
 @MainActor
 struct DeviceSettingsRequestQueueTests {

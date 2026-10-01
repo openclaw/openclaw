@@ -1,13 +1,13 @@
 import Foundation
 
-enum ChatSendStatus {
-    enum Acceptance: Equatable {
+public enum ChatSendStatus {
+    public enum Acceptance: Equatable {
         case inFlight
         case terminalSuccess
         case terminalFailure
     }
 
-    static func acceptance(of status: String) -> Acceptance {
+    public static func acceptance(of status: String) -> Acceptance {
         switch self.normalized(status) {
         case "ok":
             .terminalSuccess
@@ -18,7 +18,7 @@ enum ChatSendStatus {
         }
     }
 
-    static func normalized(_ status: String) -> String {
+    public static func normalized(_ status: String) -> String {
         status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }

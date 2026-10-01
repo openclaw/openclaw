@@ -63,7 +63,7 @@ final class GatewayConnectionController {
     private var localNetworkAccessRequested: Bool
     private var currentScenePhase: ScenePhase = .inactive
     private var didAutoConnect = false
-    private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
+    private var pendingServiceResolvers: [String: BonjourServiceResolver<(host: String, port: Int)>] = [:]
     private var pendingTrustConnect: GatewayPendingTrustConnect?
     private var preconnectRetryContext: PreconnectRetryContext?
     private var trustProbeGeneration: UInt64 = 0
@@ -1501,12 +1501,20 @@ extension GatewayConnectionController {
         guard case let .service(name, type, domain, _) = endpoint else { return nil }
         let key = "\(domain)|\(type)|\(name)"
         return await withCheckedContinuation { continuation in
-            let resolver = GatewayServiceResolver(name: name, type: type, domain: domain) { [weak self] result in
-                Task { @MainActor in
-                    self?.pendingServiceResolvers[key] = nil
-                    continuation.resume(returning: result)
+            let resolver = BonjourServiceResolver(
+                name: name,
+                type: type,
+                domain: domain,
+                resolve: { service -> (host: String, port: Int)? in
+                    guard let host = BonjourServiceResolverSupport.normalizeHost(service.hostName),
+                          !host.isEmpty, service.port > 0 else { return nil }
+                    return (host: host, port: service.port)
+                }) { [weak self] result in
+                    Task { @MainActor in
+                        self?.pendingServiceResolvers[key] = nil
+                        continuation.resume(returning: result)
+                    }
                 }
-            }
             self.pendingServiceResolvers[key] = resolver
             resolver.start()
         }
