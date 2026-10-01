@@ -10,7 +10,8 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
-import { activeSessions, createTranscriptSessionId } from "../../transcripts/capture.js";
+import { activeSessions } from "../../transcripts/capture-startup.js";
+import { createTranscriptSessionId } from "../../transcripts/capture.js";
 import * as transcriptCapture from "../../transcripts/capture.js";
 import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import * as configuredStartStatus from "../../transcripts/configured-start-status.js";

@@ -325,6 +325,20 @@ export class GitHubPublicationController {
         return;
       }
       this.options = options;
+      if (
+        this.result?.status === "failed" &&
+        this.result.publisher?.source !== "personal" &&
+        options.latestShared === null
+      ) {
+        // The authoritative discovery owner can retire a failure after its work
+        // is published elsewhere. Do not keep the stale browser copy as recovery.
+        this.result = null;
+        this.selection = null;
+        this.owner.release();
+        if (!current()) {
+          return;
+        }
+      }
       let recovered = !this.locked && !this.result ? options.pendingPersonal : null;
       if (
         !recovered &&

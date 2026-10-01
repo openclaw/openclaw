@@ -249,6 +249,8 @@ class OpenClawShell
   storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost {
     const gatewaySnapshot = context.gateway.snapshot;
     return {
+      client: gatewaySnapshot.client,
+      connected: gatewaySnapshot.phase === "connected",
       settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
       assistantAgentId: gatewaySnapshot.assistantAgentId,
       agentsList: context.agents.state.agentsList,

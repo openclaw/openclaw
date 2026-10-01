@@ -75,7 +75,6 @@ const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
-const hasManagedProviderLocalServicesMock = vi.hoisted(() => vi.fn(() => false));
 const hasProviderTransportDispatcherPoolMock = vi.hoisted(() => vi.fn(() => false));
 const stopManagedProviderLocalServicesMock = vi.hoisted(() => vi.fn());
 const closeProviderTransportDispatcherPoolMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -328,7 +327,7 @@ vi.mock("../agents/harness/registry.js", () => ({
 }));
 
 vi.mock("../agents/provider-runtime-lifecycle.js", () => ({
-  hasManagedProviderLocalServices: hasManagedProviderLocalServicesMock,
+  stopActiveManagedProviderLocalServices: stopManagedProviderLocalServicesMock,
   hasProviderTransportDispatcherPool: hasProviderTransportDispatcherPoolMock,
 }));
 
@@ -598,7 +597,6 @@ describe("runCli exit behavior", () => {
     });
     hasMemoryRuntimeMock.mockReturnValue(false);
     listRegisteredAgentHarnessesMock.mockReturnValue([]);
-    hasManagedProviderLocalServicesMock.mockReturnValue(false);
     hasProviderTransportDispatcherPoolMock.mockReturnValue(false);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
@@ -718,7 +716,6 @@ describe("runCli exit behavior", () => {
   it("completes asynchronous teardown before returning to the outer entrypoint", async () => {
     const order: string[] = [];
     listRegisteredAgentHarnessesMock.mockReturnValueOnce([{ harness: { id: "copilot" } }]);
-    hasManagedProviderLocalServicesMock.mockReturnValueOnce(true);
     hasProviderTransportDispatcherPoolMock.mockReturnValueOnce(true);
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
       order.push("harnesses");

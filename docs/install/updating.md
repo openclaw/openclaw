@@ -176,6 +176,15 @@ stops before spawning and records `candidate-config-read-recursion`.
 Both runtimes use the same result channel for synchronous and asynchronous reads;
 config diagnostics stay separate from the result.
 
+The running Gateway retains its shutdown code before an in-place update can
+replace the package's bundled files. Transcript shutdown drains captures and
+persists deterministic notes without starting optional model inference. This
+protection applies to updates **from** a release containing the shutdown fix.
+Older running Gateways, including 2026.9.6, can still fail their first shutdown
+with `ERR_MODULE_NOT_FOUND` after package replacement; installing a fixed
+candidate cannot change code already running in that process. Start the updated
+Gateway with its installation owner if the old process exits without restarting.
+
 When a writable managed Node Gateway service points at another global installation,
 the update keeps the active CLI's installation as its target and refreshes the
 service through `gateway install --force` before verifying the restarted Gateway.
@@ -368,9 +377,12 @@ require registry requests.
 
 This metadata check does not reserve downloads. Plugin-only download, install,
 or load failures remain actionable warnings after an otherwise successful core
-update. Candidate rehearsal also reports a plugin source parse failure as a warning
-with the plugin ID, source path, and parser error, then continues checking other
-plugin entries. Valid ESM plugins can use `import.meta` during dependency inspection.
+update. Snapshot inventory runs from the staged candidate package, so it uses
+the target version's plugin inspector. Snapshot inventory and candidate Doctor
+share plugin source inspection. An unparseable entry produces a warning with the
+plugin ID, source path, and parser error while its files are copied unchanged and
+other entries are checked.
+Valid ESM plugins can use `import.meta` during dependency inspection.
 The updater preserves recorded choices and retains the previous plugin
 payload where possible. Follow the reported `openclaw plugins update <id>` command for a
 failed install or update, or `openclaw doctor --fix` for a load problem. Invalid

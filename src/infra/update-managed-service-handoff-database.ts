@@ -3,11 +3,15 @@ import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sql } from "kysely";
+import { z } from "zod";
+import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
 import {
   executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
 } from "./kysely-sync.js";
@@ -23,13 +27,62 @@ import {
   type SqliteTransactionOptions,
 } from "./sqlite-transaction.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
+import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 import { quarantineManagedHandoffStore } from "./update-managed-service-handoff-store-repair.js";
 import { createPrivateWindowsFile } from "./windows-private-directory.js";
 
 export type LeaseRow = { owner: string; payload_json: string; updated_at: number };
-export type LeaseTable = LeaseRow & { install_root: string };
+export type LeaseTable = LeaseRow & { install_root: string; recovery_json?: string | null };
 export const leaseQueries = (db: HandoffDatabase) =>
   getNodeSqliteKysely<{ managed_update_handoffs: LeaseTable }>(db);
+
+const text = z.string().min(1).max(4096);
+const repairMetadataSchema = z.strictObject({
+  version: z.literal(3),
+  binding: z.string(),
+  source: z.strictObject({
+    owner: text,
+    payload_json: z.string(),
+    updated_at: z.number().int().nonnegative(),
+  }),
+  facts: z.strictObject({
+    runIds: z.array(text).min(1),
+    artifactPaths: z.array(text.refine(path.isAbsolute)),
+    timeoutMs: z.number().int().positive().safe().nullable(),
+  }),
+});
+export type ManagedHandoffRepairFacts = z.infer<typeof repairMetadataSchema>["facts"];
+export const managedHandoffLeaseBinding = (lease: ManagedHandoffLease) =>
+  JSON.stringify([lease.owner, lease.payload, lease.updatedAt]);
+
+const recoveryColumns = new WeakSet<HandoffDatabase>();
+
+export function readManagedHandoffRepairMetadata(
+  db: HandoffDatabase,
+  lease: ManagedHandoffLease,
+  transact: ExistingSqliteTransaction,
+) {
+  if (!recoveryColumns.has(db)) {
+    if (db.isTransaction) {
+      throw new Error("Handoff recovery schema requires a separate writer admission.");
+    }
+    // Commit first-use DDL before caching its admitted fact or reading metadata.
+    transact(() => ensureColumn(db, "managed_update_handoffs", "recovery_json TEXT"));
+    recoveryColumns.add(db);
+  }
+  const retained = executeSqliteQueryTakeFirstSync(
+    db,
+    leaseQueries(db)
+      .selectFrom("managed_update_handoffs")
+      .select("recovery_json")
+      .where("install_root", "=", lease.key),
+  )?.recovery_json;
+  const parsed = retained ? safeParseJsonWithSchema(repairMetadataSchema, retained) : null;
+  if (retained !== null && retained !== undefined && !parsed) {
+    throw new Error("Handoff recovery metadata is unreadable; preserve its retained artifacts.");
+  }
+  return parsed?.binding === managedHandoffLeaseBinding(lease) ? parsed : null;
+}
 
 function initializeLeaseSchema(db: HandoffDatabase): void {
   executeSqliteQuerySync(
@@ -41,6 +94,7 @@ function initializeLeaseSchema(db: HandoffDatabase): void {
       .addColumn("owner", "text", (column) => column.notNull())
       .addColumn("payload_json", "text", (column) => column.notNull())
       .addColumn("updated_at", "integer", (column) => column.notNull())
+      .addColumn("recovery_json", "text")
       .modifyEnd(sql`STRICT`),
   );
 }

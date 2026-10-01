@@ -189,8 +189,3 @@ function stripQuotes(value: string): string {
   }
   return trimmed;
 }
-
-/** Right-pads a string for aligned plain-text process output. */
-export function padProcessStatus(str: string, width: number) {
-  return str.padEnd(width);
-}

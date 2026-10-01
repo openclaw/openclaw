@@ -26,6 +26,12 @@ type ScheduledMessageActionAuthority = {
   channelRequester?: CronAuthenticatedChannelRequester;
 };
 
+/** Host-only delivery restriction; carries no channel, requester, or source privilege. */
+type MessageActionDeliveryAttempt = {
+  beforeAttempt: () => Promise<void>;
+  assertCurrent: () => void;
+};
+
 /** Private handoff from authenticated dashboard admission to the exact reply run. */
 export type DashboardMessageReadAdmission = Readonly<{
   agentId: string;
@@ -41,6 +47,8 @@ export type MessageActionAuthorization = {
   toolContext?: InternalChannelThreadingToolContext;
   /** @internal Redeemed from the process-local turn capability. */
   scheduled?: ScheduledMessageActionAuthority;
+  /** @internal Restricts writes independently of scheduled authorization. */
+  deliveryAttempt?: MessageActionDeliveryAttempt;
   /** @internal Redeemed only by the host; never serialized or passed to plugins. */
   assertDashboardReadCurrent?: () => void;
 };
@@ -92,6 +100,7 @@ type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   runId: string;
   sessionKey: string;
   scheduled?: ScheduledMessageActionAuthority;
+  deliveryAttempt?: MessageActionDeliveryAttempt;
   assertDashboardReadCurrent?: () => void;
 };
 
@@ -187,6 +196,7 @@ export function mintMessageActionTurnCapability(params: {
   requesterSenderE164?: string;
   toolContext?: InternalChannelThreadingToolContext;
   scheduled?: ScheduledMessageActionAuthority;
+  deliveryAttempt?: MessageActionDeliveryAttempt;
   assertDashboardReadCurrent?: () => void;
   expiresWithRun?: boolean;
   ttlMs?: number;
@@ -245,6 +255,22 @@ export function mintMessageActionTurnCapability(params: {
             },
           }
         : {}),
+    };
+  }
+  const deliveryAttempt = params.deliveryAttempt;
+  if (deliveryAttempt) {
+    capability.deliveryAttempt = {
+      assertCurrent: () => {
+        assertActive();
+        deliveryAttempt.assertCurrent();
+      },
+      beforeAttempt: async () => {
+        assertActive();
+        deliveryAttempt.assertCurrent();
+        await deliveryAttempt.beforeAttempt();
+        assertActive();
+        deliveryAttempt.assertCurrent();
+      },
     };
   }
   const assertDashboardReadCurrent = params.assertDashboardReadCurrent;
@@ -326,6 +352,7 @@ export function resolveMessageActionTurnAuthorization(
     ? {
         ...copyMessageActionTurnContext(capability),
         scheduled: capability.scheduled,
+        deliveryAttempt: capability.deliveryAttempt,
         assertDashboardReadCurrent: capability.assertDashboardReadCurrent,
       }
     : undefined;

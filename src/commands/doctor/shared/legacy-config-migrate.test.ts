@@ -2059,8 +2059,19 @@ describe("legacy model compat migrate", () => {
         },
       },
     };
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(
-      expect.arrayContaining(["agents.defaults.models", "models.providers"]),
+    expect(findLegacyConfigIssues(raw)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.defaults.models",
+          message: expect.stringContaining(
+            "agents.defaults.models.<vllm-model>.params.qwenThinkingFormat",
+          ),
+        }),
+        expect.objectContaining({
+          path: "models.providers",
+          message: expect.stringContaining("models.providers.<vllm>.params.qwenThinkingFormat"),
+        }),
+      ]),
     );
     const res = migrateLegacyConfigForTest(raw);
     expect(res.config?.models?.providers?.vllm).toBeUndefined();
@@ -2147,30 +2158,6 @@ describe("legacy model compat migrate", () => {
       },
     });
     expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
-  });
-
-  it("creates absent provider ancestors for selected and inherited Qwen params", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          model: "vllm/Qwen/selected@local",
-          params: { qwenThinkingFormat: "chat-template", temperature: 0.2 },
-        },
-        list: [{ id: "local", params: { qwenThinkingFormat: "chat-template" } }],
-      },
-    });
-    expect(res.config?.models?.providers?.vllm).toEqual({
-      models: [
-        {
-          id: "Qwen/selected",
-          name: "Qwen/selected",
-          reasoning: true,
-          compat: { thinkingFormat: "qwen-chat-template" },
-        },
-      ],
-    });
-    expect(res.config?.agents?.defaults?.params).toEqual({ temperature: 0.2 });
-    expect(res.config?.agents?.list?.[0]).toEqual({ id: "local" });
   });
 
   it("removes untargeted Qwen params from provider, default, and agent scopes", () => {

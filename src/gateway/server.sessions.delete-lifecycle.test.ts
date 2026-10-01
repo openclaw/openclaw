@@ -15,6 +15,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -27,6 +28,7 @@ import {
   acpManagerMocks,
   browserSessionTabMocks,
   bundleMcpRuntimeMocks,
+  sessionLifecycleHookMocks,
   writeSingleLineSession,
   sessionStoreEntry,
   directSessionReq,
@@ -229,6 +231,12 @@ test("sessions.delete removes a locked plugin-owned session from its persisted a
   for (const sessionId of [canonicalSessionId, aliasSessionId]) {
     await replaceTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
       { type: "session", id: sessionId, content: sessionId },
+      {
+        type: "message",
+        id: `${sessionId}-message`,
+        parentId: null,
+        message: { role: "user", content: `content for ${sessionId}` },
+      },
     ]);
   }
 
@@ -253,6 +261,25 @@ test("sessions.delete removes a locked plugin-owned session from its persisted a
       loadTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }),
     ).resolves.toEqual([]);
   }
+  const endCall = sessionLifecycleHookMocks.runSessionEnd.mock.calls.at(0);
+  if (!endCall) {
+    throw new Error("expected session_end hook call");
+  }
+  const [endEvent, endContext] = endCall;
+  const endedTranscript = readAttachedSessionEndTranscriptSourceForTest(endContext);
+  expect(endedTranscript.available).toBe(true);
+  if (!endedTranscript.available || !endEvent?.sessionId) {
+    throw new Error("expected archived ended transcript source");
+  }
+  await expect(
+    endedTranscript.readTail({ maxMessages: 10, maxBytes: 64 * 1_024 }),
+  ).resolves.toMatchObject({
+    messages: [
+      expect.objectContaining({ role: "user", content: `content for ${endEvent.sessionId}` }),
+    ],
+    totalMessages: 1,
+    truncated: false,
+  });
 });
 
 test.each(["session id", "updated at"] as const)(

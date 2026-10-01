@@ -174,6 +174,7 @@ export async function completeSubagentRunAttempt(
         previous: new Map([[currentEntry, previous]]),
         context: stateContext,
         persist: params.persistAsyncOrThrow,
+        withPublication: collectorSession?.withPublication,
         assertCurrent: () => {
           assertCurrent();
           collectorSession?.assertCurrent();

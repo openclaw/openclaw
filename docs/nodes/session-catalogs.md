@@ -23,6 +23,12 @@ rechecks current visibility and local session identity. The one-second budget
 covers provider discovery and queueing, not session-projection preparation or
 time spent waiting for the Gateway event loop.
 
+With diagnostics enabled, slow-provider warnings report elapsed time, including
+queueing and asynchronous I/O. `isMainThread` identifies the calling thread; it
+does not measure CPU time. Debug logging emits each provider ID and its
+`providerIdHash` once per provider registration so warnings can be attributed
+without logging session content.
+
 ## Codex sessions and transcripts
 
 The official `codex` plugin can expose non-archived Codex sessions on a

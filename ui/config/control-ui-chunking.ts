@@ -171,10 +171,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // them (and therefore other routes) into its eagerly imported chunk.
                 priority: 8 - index,
                 includeDependenciesRecursively: true,
-                // Shared and chat groups both contain dense UI modules; keep their
-                // generated chunks within the existing compressed-size budget.
+                // Shared boot needs a smaller partition cap because its dense chat
+                // modules can exceed the compressed-size budget after regrouping.
                 minSize: 16 * 1024,
-                maxSize: 1408 * 1024,
+                maxSize: (route === "shared" ? 1344 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {

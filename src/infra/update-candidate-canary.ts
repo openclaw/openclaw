@@ -228,6 +228,7 @@ export async function validateUpdateCandidateCanary(params: {
       exitCode: 0,
       snapshotCapacity: rehearsal.snapshotCapacity,
       diagnostics: rehearsal.snapshotDiagnostics,
+      warnings: rehearsal.snapshotWarnings,
     };
     await recordStep(snapshotStep);
     env = { ...rehearsal.env };

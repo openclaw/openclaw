@@ -23,7 +23,7 @@ The table compares eleven successful B1/R1 main runs with five later successful 
 | `check-test-types`                                         |             358 [387] |                                   608 [664] | Hosted on admitted main pushes |
 | `check-test-types-core-1` / `-2`                           | 281 [321] / 257 [329] |                       521 [572] / 496 [524] | Hosted when admitted           |
 | `check-dependencies`                                       |             228 [260] |                                   434 [476] | Hosted when admitted           |
-| `check-additional-extension-package-boundary`              |             200 [221] |                                   287 [377] | Hosted when admitted           |
+| `check-additional-extension-package-boundary`              |             200 [221] |                                   287 [377] | Blacksmith; hosted fallback    |
 | `check-additional-runtime-topology-architecture`           |             133 [161] |                                   289 [320] | Hosted when admitted           |
 | `check-additional-boundaries`                              |                     — |                                   217 [232] | Hosted                         |
 | `check-bundled-channel-config-metadata`                    |                     — |                                   107 [140] | Hosted                         |
@@ -38,7 +38,7 @@ The table compares eleven successful B1/R1 main runs with five later successful 
 Independent hosted checks reached at most 664 seconds in this sample. Artifact builds reached 898 seconds before the shared preflight and gate; they retain Blacksmith. Only the gate depends on `build-artifacts`: the workflow does not contain a serial build-to-test job dependency.
 
 The package-boundary check now requests the existing Blacksmith 32-class when
-its unchanged routing policy selects Blacksmith. In successful PR run
+its route selects Blacksmith. In successful PR run
 `36248684656`, its 16-class allocation delivered four CPUs and the existing
 two-CPU reservation admitted two compilers. The 527-second check comprised
 257 seconds of declaration preparation and 268 seconds compiling all 125

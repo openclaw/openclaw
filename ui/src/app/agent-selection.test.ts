@@ -321,6 +321,69 @@ describe("agent selection", () => {
     expect(persistence.save).toHaveBeenLastCalledWith("ws://gateway-a.test", null);
   });
 
+  it("reconciles a saved agent against a roster that excludes the Gateway default", () => {
+    const gateway = createGateway("main");
+    const roster = createRoster();
+    const persistence = { load: () => "private", save: vi.fn() };
+    const selection = createAgentSelectionCapability(gateway.gateway, roster.roster, persistence);
+
+    expect(selection.state).toEqual({ selectedId: "private", scopeId: "private" });
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "shared" }, { id: "research" }],
+    });
+    expect(selection.state).toEqual({ selectedId: "shared", scopeId: "shared" });
+    expect(persistence.save).toHaveBeenLastCalledWith("ws://gateway-a.test", null);
+
+    selection.set("research");
+    gateway.publish({ client: null, assistantAgentId: "private" });
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
+    selection.set("private");
+    expect(selection.state).toEqual({ selectedId: "shared", scopeId: "shared" });
+    selection.dispose();
+  });
+
+  it.each(["chip", "roster"] as const)(
+    "clears selection and remembered %s scope when the loaded roster becomes empty",
+    (mode) => {
+      const gateway = createGateway("main");
+      const roster = createRoster();
+      const preferences = createPreferences();
+      const selection = createAgentSelectionCapability(
+        gateway.gateway,
+        roster.roster,
+        preferences.persistence,
+        preferences,
+      );
+      const result: AgentsListResult = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "shared" }],
+      };
+      roster.publish(result);
+      selection.set("shared");
+      preferences.setMode(mode);
+
+      roster.publish(null);
+      expect(selection.state.selectedId).toBe("shared");
+      roster.publish({ ...result, agents: [] });
+      expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+      expect(loadSettings().selectedAgentId).toBeUndefined();
+      preferences.setMode("chip");
+      expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+
+      gateway.publish({ client: null, assistantAgentId: "private" });
+      selection.set("main");
+      expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+      roster.publish(result);
+      expect(selection.state).toEqual({ selectedId: "shared", scopeId: "shared" });
+      selection.dispose();
+    },
+  );
+
   it("restores selection independently when the Gateway changes", () => {
     const harness = createGateway("Dummy");
     const persistence = {

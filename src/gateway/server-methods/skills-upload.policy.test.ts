@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as locks from "../../infra/json-files.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { KeyedAsyncQueue, type KeyedAsyncQueueHooks } from "../../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
@@ -99,15 +99,24 @@ it.each(["begin", "chunk", "commit"])(
     const before = snapshot();
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const createLock = locks.createAsyncLock;
-    using lock = vi.spyOn(locks, "createAsyncLock").mockImplementation(() => {
-      const run = createLock();
-      return (fn) =>
-        run(async () => {
+    // oxlint-disable-next-line typescript/unbound-method -- The observer calls the original with its queue receiver.
+    const enqueue = KeyedAsyncQueue.prototype.enqueue;
+    using lock = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue").mockImplementation(function <T>(
+      this: KeyedAsyncQueue,
+      key: string,
+      task: () => Promise<T>,
+      hooks?: KeyedAsyncQueueHooks,
+    ) {
+      return (enqueue<T>).call(
+        this,
+        key,
+        async () => {
           entered.resolve();
           await release.promise;
-          return fn();
-        });
+          return task();
+        },
+        hooks,
+      );
     });
     const pending = call(stage, params);
     try {
