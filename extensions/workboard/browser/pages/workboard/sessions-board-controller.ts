@@ -50,7 +50,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     viewerProfileId = undefined;
     restoredBoardId = undefined;
   };
-  const loadIdentity = () =>
+  const loadIdentity = (): Promise<void> =>
     (identityLoad ??= (async () => {
       const receipt = generation;
       const [gateway, viewer] = await Promise.allSettled([
@@ -58,8 +58,12 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
         host.request<UsersSelfResult>("users.self", {}),
       ]);
       if (receipt !== generation) {
-        // A newer activation owns the scope; let its own read load identity again.
+        // A newer activation or board owns the scope now; reload for it so a read that
+        // was already waiting (for example after switching boards) restores the right key.
         identityLoad = undefined;
+        if (active) {
+          await loadIdentity();
+        }
         return;
       }
       if (gateway.status === "fulfilled") {

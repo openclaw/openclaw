@@ -205,6 +205,57 @@ it("renders the people facet, rereads the selected view and restores it only for
   });
 });
 
+it("restores the destination board's saved people filter when boards change while identity is still loading", async () => {
+  localStorage.setItem(
+    `openclaw.workboard.sessions.people:${JSON.stringify(["gateway-one", "viewer", "sessions-b"])}`,
+    "me",
+  );
+  const page = sessionsPage();
+  const boardB = { ...page.board, id: "sessions-b", name: "Sessions B" };
+  const previous = expectDefined(page.request.getMockImplementation(), "request");
+  let releaseIdentity = () => {};
+  const identityGate = new Promise<void>((resolve) => {
+    releaseIdentity = resolve;
+  });
+  page.request.mockImplementation(async (method, params) => {
+    if (method === "gateway.identity.get" || method === "users.self") {
+      await identityGate;
+    }
+    if (method === "workboard.cards.list") {
+      return {
+        cards: [],
+        boards: [page.board, boardB].map((board) => ({
+          ...board,
+          total: 0,
+          active: 0,
+          archived: 0,
+          byStatus: {},
+        })),
+      };
+    }
+    if (method === "workboard.sessionsBoard.read") {
+      const boardId = (params as { boardId: string }).boardId;
+      return {
+        ...structuredClone(page.result),
+        board: boardId === "sessions-b" ? boardB : page.board,
+      };
+    }
+    return previous(method, params);
+  });
+  await page.connect();
+  page.navigate("sessions-b");
+  await vi.advanceTimersByTimeAsync(0);
+  releaseIdentity();
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(peoplePicker(page).value).toBe("me");
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions-b",
+    view: { includePeople: true, involvingMe: true },
+  });
+  page.dispose();
+});
+
 it("ignores a stale view response and keeps filtering when browser storage is unavailable", async () => {
   const page = sessionsPage();
   const unavailable = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
