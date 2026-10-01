@@ -49,6 +49,23 @@ describe("browser tool schema", () => {
     );
   });
 
+  it.each([false, true])("accepts WebMCP action parameters (bound=%s)", (tabBound) => {
+    const schema = createBrowserToolSchema(resolveBrowserToolCapabilities({ tabBound }));
+    for (const args of [
+      { action: "webmcp_list", targetId: "t1" },
+      {
+        action: "webmcp_execute",
+        targetId: "t1",
+        contextId: "t1/document-1",
+        toolName: "increment_counter",
+        input: { amount: 2 },
+      },
+    ]) {
+      expect(Value.Check(schema, args), JSON.stringify(args)).toBe(true);
+    }
+    expect(Value.Check(schema, { action: "webmcp_execute", input: [] })).toBe(false);
+  });
+
   it("hides Playwright-only actions for an existing-session binding", () => {
     const capabilities = resolveBrowserToolCapabilities({
       tabBound: true,

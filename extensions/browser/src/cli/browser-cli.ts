@@ -33,6 +33,16 @@ function browserCommandGroups(
   return [
     {
       placeholders: [
+        command("webmcp_list", "List experimental page WebMCP tools"),
+        command("webmcp_execute", "Execute an experimental page WebMCP tool"),
+      ],
+      register: async () => {
+        const module = await import("./browser-cli-webmcp.js");
+        module.registerBrowserWebMcpCommands(browser, parentOpts);
+      },
+    },
+    {
+      placeholders: [
         command("status", "Show browser status"),
         command("start", "Start the browser (no-op if already running)"),
         command("stop", "Stop the browser (best-effort)"),

@@ -34,6 +34,8 @@ const BROWSER_ACT_KINDS = [
 ] as const;
 
 const BROWSER_TOOL_ACTIONS = [
+  "webmcp_list",
+  "webmcp_execute",
   "doctor",
   "status",
   "start",
@@ -68,7 +70,7 @@ const BROWSER_SNAPSHOT_REFS = ["role", "aria"] as const;
 
 const BROWSER_IMAGE_TYPES = ["png", "jpeg"] as const;
 
-const TAB_REFERENCE_DESCRIPTION = "Prefer suggestedTargetId/tabId/label; raw CDP targetId.";
+const TAB_REFERENCE_DESCRIPTION = "Prefer suggestedTargetId/tabId/label; CDP id.";
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
@@ -142,19 +144,17 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
   return {
     // Common fields
     targetId: Type.Optional(Type.String({ description: TAB_REFERENCE_DESCRIPTION })),
-    ref: Type.Optional(Type.String({ description: "snapshot ref." })),
+    ref: Type.Optional(Type.String({ description: "snapshot" })),
     // batch - permissive children keep the provider schema flat; runtime validates each action.
     actions: Type.Optional(
       Type.Array(
         Type.Object({}, { additionalProperties: true }),
-        supportsBatch ? { description: "batch actions." } : {},
+        supportsBatch ? { description: "batch" } : {},
       ),
     ),
-    stopOnError: Type.Optional(
-      Type.Boolean(supportsBatch ? { description: "Stop on error; default true." } : {}),
-    ),
+    stopOnError: Type.Optional(Type.Boolean(supportsBatch ? { description: "default true" } : {})),
     // click
-    doubleClick: Type.Optional(Type.Boolean({ description: "Double-click/clickCoords." })),
+    doubleClick: Type.Optional(Type.Boolean({ description: "click/clickCoords" })),
     button: Type.Optional(Type.String()),
     modifiers: Type.Optional(Type.Array(Type.String())),
     ...(capabilities.actKinds.includes("clickCoords")
@@ -207,24 +207,28 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
 export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
   const actProperties = createBrowserActProperties(capabilities);
   const actKindDescription = capabilities.actKinds.includes("batch")
-    ? "batch uses actions."
+    ? "batch=actions"
     : "Act kind.";
-  const BrowserActSchema = Type.Object(
-    {
-      kind: stringEnum(capabilities.actKinds, { description: actKindDescription }),
-      ...actProperties,
-    },
-    { description: "act" },
-  );
+  const BrowserActSchema = Type.Object({
+    kind: stringEnum(capabilities.actKinds, { description: actKindDescription }),
+    ...actProperties,
+  });
   return Type.Object({
     action: stringEnum(capabilities.actions),
+    ...(capabilities.actions.includes("webmcp_execute")
+      ? {
+          contextId: Type.Optional(Type.String()),
+          toolName: Type.Optional(Type.String()),
+          input: Type.Optional(Type.Object({}, { additionalProperties: true })),
+        }
+      : {}),
     target: optionalStringEnum(BROWSER_TARGETS),
     ...(!capabilities.tabBound
       ? {
           dashboard: Type.Optional(
             Type.String({
               pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
-              description: "browser:dashboard widget name.",
+              description: "widget name",
             }),
           ),
         }
@@ -232,7 +236,7 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
     node: Type.Optional(Type.String()),
     profile: Type.Optional(
       Type.String({
-        description: capabilities.tabBound ? "Run-bound browser profile." : "default if omitted.",
+        description: capabilities.tabBound ? "Run-bound browser profile." : "default",
       }),
     ),
     browser: Type.Optional(Type.String()),
@@ -258,7 +262,7 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
       : {}),
     ...(capabilities.actions.includes("screenshot")
       ? {
-          labels: Type.Optional(Type.Boolean({ description: "Label snapshot/screenshot." })),
+          labels: Type.Optional(Type.Boolean({ description: "snapshot/screenshot" })),
           fullPage: Type.Optional(Type.Boolean()),
           element: Type.Optional(Type.String()),
           type: optionalStringEnum(BROWSER_IMAGE_TYPES),

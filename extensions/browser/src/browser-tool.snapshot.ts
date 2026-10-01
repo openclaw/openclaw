@@ -32,6 +32,8 @@ import { finalizeRoleSnapshot, findRoleSnapshotLineRef } from "./browser/pw-role
 import { neutralizeMediaDirectives } from "./browser/vision.js";
 
 const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
+  webmcp_list: "\n[truncated — tool metadata is incomplete]",
+  webmcp_execute: "\n[truncated — inspect the page before retrying execution]",
   snapshot: "\n[truncated — retry with a smaller maxChars or limit]",
   console: "\n[truncated — retry with a stricter level or targetId]",
   requests: "\n[truncated — retry with a narrower filter or smaller limit]",

@@ -1,0 +1,42 @@
+<!doctype html><meta charset="utf-8" /><title>Disposable WebMCP counter</title>
+<h1>Disposable counter</h1>
+<output id="counter">0</output><button id="increment">Increment</button>
+<pre id="status"></pre>
+<script>
+  let counter = 0;
+  const render = () => (document.querySelector("#counter").textContent = String(counter));
+  document.querySelector("#increment").onclick = () => {
+    counter++;
+    render();
+  };
+  const context = navigator.modelContext ?? document.modelContext;
+  try {
+    context.registerTool({
+      name: "get_counter",
+      description: "Read the in-memory counter.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true },
+      execute: async () => ({ content: [{ type: "text", text: JSON.stringify({ counter }) }] }),
+    });
+    context.registerTool({
+      name: "increment_counter",
+      description: "Increment the in-memory counter.",
+      inputSchema: {
+        type: "object",
+        properties: { amount: { type: "integer", minimum: 1, maximum: 5 } },
+        required: ["amount"],
+        additionalProperties: false,
+      },
+      execute: async ({ amount }) => {
+        if (!Number.isInteger(amount) || amount < 1 || amount > 5)
+          throw new Error("Invalid amount");
+        counter += amount;
+        render();
+        return { content: [{ type: "text", text: JSON.stringify({ counter }) }] };
+      },
+    });
+    document.querySelector("#status").textContent = "Two WebMCP tools registered";
+  } catch (error) {
+    document.querySelector("#status").textContent = String(error);
+  }
+</script>
