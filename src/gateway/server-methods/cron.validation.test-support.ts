@@ -161,6 +161,7 @@ export function createCronTestContext(
           return { ok: true, enqueued: true, runId: "run-1" };
         },
       ),
+      waitForManualRun: vi.fn(async () => false),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       prepareWake: vi.fn(async () => undefined),

@@ -672,6 +672,8 @@ export const CronRunParamsSchema = cronIdOrJobIdParams({
   ),
   /** Rejects the mutation if the Gateway restarted after the caller's preflight. */
   expectedProcessInstanceId: Type.Optional(NonEmptyString),
+  /** Holds the response until the queued run records its outcome or this many ms pass. */
+  waitTimeoutMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 2_147_483_647 })),
 });
 
 /** Query params for cron run history. */

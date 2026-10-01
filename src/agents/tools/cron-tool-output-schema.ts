@@ -115,6 +115,8 @@ const CronRunOutputSchema = Type.Union([
       enqueued: Type.Literal(true),
       runId: Type.String(),
       processInstanceId,
+      run: Type.Optional(CronRunLogEntrySchema),
+      note: Type.Optional(Type.String()),
     },
     { additionalProperties: false },
   ),

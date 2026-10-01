@@ -4086,6 +4086,39 @@ describe("cron method validation", () => {
     );
   });
 
+  it.each([
+    { sessionTarget: "main", waits: false },
+    { sessionTarget: "session:agent:ops:main", waits: false },
+    { sessionTarget: "isolated", waits: true },
+  ] as const)(
+    "waits for a $sessionTarget run from an agent turn only when it can finish meanwhile",
+    async ({ sessionTarget, waits }) => {
+      const context = createCronContext(
+        createCronJob({ id: "cron-1", agentId: "ops", sessionTarget }),
+      );
+
+      const { respond } = await invokeCron(
+        "cron.run",
+        { id: "cron-1", waitTimeoutMs: 60_000 },
+        { context, client: callerClient("ops") },
+      );
+
+      // The caller's turn holds the main lane and its own session lane, so those runs
+      // only start after this request returns; waiting would just burn the budget.
+      expect(context.cron.waitForManualRun).toHaveBeenCalledTimes(waits ? 1 : 0);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          ok: true,
+          enqueued: true,
+          runId: "run-1",
+          processInstanceId: getGatewayProcessInstanceId(),
+        },
+        undefined,
+      );
+    },
+  );
+
   it("rejects cron.run before enqueue when the Gateway process changed after preflight", async () => {
     const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
 
