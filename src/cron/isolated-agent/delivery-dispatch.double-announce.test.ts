@@ -907,7 +907,7 @@ describe("dispatchCronDelivery", () => {
       expectSessionDeleted();
     });
 
-    it("records a child's AUTOMATION_FAILED report as the run's reported failure", async () => {
+    it("records a child's AUTOMATION_FAILED report as a failure and keeps the transcript", async () => {
       const params = spawnOnlyJob({ mode: "none" });
       childSettlesAt(1_000, {
         disposition: "visible",
@@ -923,6 +923,9 @@ describe("dispatchCronDelivery", () => {
         deliveryState: { status: "not-requested" },
       });
       expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      );
     });
 
     it.each([

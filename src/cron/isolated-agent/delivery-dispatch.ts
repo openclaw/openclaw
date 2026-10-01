@@ -117,16 +117,17 @@ export async function dispatchCronDelivery(
   let deliveryAttempted = verifiedMessageToolDelivery;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = async (disposition?: CronDeliveryDisposition) => {
+    const executionFailed = disposition?.kind === "error" || agentReportedFailure !== undefined;
     const completion = resolveAdmittedCronCompletionStatus(
       params.job,
-      disposition?.kind === "error" || agentReportedFailure ? "error" : params.undeliveredRunStatus,
+      executionFailed ? "error" : params.undeliveredRunStatus,
       deliveryState.status,
       deliveryState.deliverySuppressionReason,
     );
     // Quiet/best-effort successes retire with their jobs; failed executions retain evidence.
     if (
       deliveryState.status === "delivered" ||
-      (deliveryState.status === "not-requested" && disposition?.kind !== "error") ||
+      (deliveryState.status === "not-requested" && !executionFailed) ||
       completion === "succeeded"
     ) {
       await cleanupDirectCronSessionIfNeeded();
