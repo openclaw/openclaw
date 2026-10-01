@@ -121,6 +121,7 @@ scripts/changed-lanes.mts
 scripts/check-changelog-attributions.mjs
 scripts/check-changelog-attributions.mts
 scripts/crabbox-untrusted-bootstrap.sh
+scripts/generate-kysely-types.mts
 scripts/lib/arg-utils.mts
 scripts/lib/arg-utils.runtime.mjs
 scripts/lib/bundled-plugin-paths.mjs
