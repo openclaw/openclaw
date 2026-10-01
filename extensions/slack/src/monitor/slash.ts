@@ -5,7 +5,6 @@ import type {
   SlackCommandMiddlewareArgs,
   SlackOptionsMiddlewareArgs,
 } from "@slack/bolt";
-import type { Block, KnownBlock } from "@slack/web-api";
 import {
   loadPreparedModelCatalog,
   resolveAgentDir,
@@ -1132,25 +1131,16 @@ export async function registerSlackMonitorSlashCommands(params: {
         if (!body.channel?.id || !body.user?.id) {
           return new Response(null, { status: 204 });
         }
-        const payload =
-          typeof message === "string"
-            ? { text: message }
-            : (message as {
-                text?: string;
-                blocks?: (Block | KnownBlock)[];
-                mrkdwn?: boolean;
-              });
-        const threadTs = body.container?.thread_ts ?? body.message?.thread_ts;
-        await args.client.chat.postEphemeral({
+        return await deliverSlackSlashResponseWithWebApi({
+          client: args.client,
           token: ctx.botToken,
-          channel: body.channel.id,
-          user: body.user.id,
-          text: payload.text ?? "",
-          ...(threadTs ? { thread_ts: threadTs } : {}),
-          ...(payload.blocks ? { blocks: payload.blocks } : {}),
-          ...(typeof payload.mrkdwn === "boolean" ? { mrkdwn: payload.mrkdwn } : {}),
+          command: { channel_id: body.channel.id, user_id: body.user.id },
+          threadTs: body.container?.thread_ts ?? body.message?.thread_ts,
+          message: {
+            ...(typeof message === "string" ? { text: message } : message),
+            response_type: "ephemeral",
+          },
         });
-        return new Response(null, { status: 200 });
       });
     const actionValue = action?.value ?? action?.selected_option?.value;
     const parsed = parseSlackCommandArgValue(actionValue);
@@ -1241,6 +1231,7 @@ function createSlackSlashResponderWithFallback(params: {
 
 export async function deliverSlackSlashResponseWithWebApi(params: {
   client: AllMiddlewareArgs["client"];
+  token?: string;
   command: Pick<SlackCommandMiddlewareArgs["command"], "channel_id" | "user_id">;
   threadTs?: string;
   message: Parameters<SlackCommandMiddlewareArgs["respond"]>[0];
@@ -1252,6 +1243,7 @@ export async function deliverSlackSlashResponseWithWebApi(params: {
     "mrkdwn" in payload && typeof payload.mrkdwn === "boolean" ? payload.mrkdwn : undefined;
 
   const message = {
+    ...(params.token !== undefined ? { token: params.token } : {}),
     channel: params.command.channel_id,
     ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
     text,

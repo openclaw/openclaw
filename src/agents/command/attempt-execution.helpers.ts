@@ -3,6 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -20,6 +21,7 @@ import {
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
@@ -30,6 +32,7 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
+import type { AgentCommandOpts } from "./types.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
 
@@ -499,4 +502,45 @@ export function rebaseExecApprovalContinuationPromptRange(params: {
     start: offset + params.range.start,
     end: offset + params.range.end,
   };
+}
+
+export function isClaudeCliProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === "claude-cli";
+}
+
+/** Restores completion tools only on runtimes that enforce the captured requester cap. */
+export function resolveCompletionToolPolicy(params: {
+  run: { sessionEntry: SessionEntry | undefined; opts: AgentCommandOpts };
+  trustedSubagentAnnounceHandoff: boolean;
+  isSubagentAnnounceHandoff: boolean;
+  isRawModelRun: boolean;
+  isCliExecutionProvider: boolean;
+  cliExecutionProvider: string;
+  completionNeedsMessageDelivery: boolean;
+}) {
+  const { run, completionNeedsMessageDelivery, isSubagentAnnounceHandoff } = params;
+  const completionRetainsRequesterTools =
+    params.trustedSubagentAnnounceHandoff &&
+    !params.isRawModelRun &&
+    (!params.isCliExecutionProvider ||
+      (isClaudeCliProvider(params.cliExecutionProvider) &&
+        run.sessionEntry?.execHost !== "node" &&
+        !run.opts.trustedInternalHandoff?.settleBatch &&
+        !messageToolOwnsVisibleReply(run.opts))) &&
+    (!messageToolOwnsVisibleReply(run.opts) || completionNeedsMessageDelivery);
+  // CLI message-only delivery keeps its existing narrow grant. A denied completion
+  // must clear an explicit cap so its owner can relay frozen text tool-free.
+  const runtimeToolsAllow = isSubagentAnnounceHandoff
+    ? completionRetainsRequesterTools
+      ? run.opts.toolsAllow
+      : completionNeedsMessageDelivery
+        ? ["message"]
+        : undefined
+    : run.opts.toolsAllow;
+  const disableTools =
+    run.opts.modelRun === true ||
+    (isSubagentAnnounceHandoff &&
+      !completionRetainsRequesterTools &&
+      !completionNeedsMessageDelivery);
+  return { completionRetainsRequesterTools, runtimeToolsAllow, disableTools };
 }

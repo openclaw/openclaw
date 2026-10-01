@@ -15,6 +15,13 @@ import {
 import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import {
+  linkEmail,
+  setAvatar,
+  setDisplayName,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
@@ -24,11 +31,6 @@ import {
   getUserProfileDisplay,
   getUserProfileListItem,
   getUserProfileRole,
-  linkEmail,
-  setAvatar,
-  setDisplayName,
-  setUserProfileRole,
-  syncGitHubIdentity,
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {

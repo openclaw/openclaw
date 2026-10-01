@@ -65,6 +65,7 @@ import {
   readSharedBatchState,
   isRequesterWakeStateCurrent,
   captureRequesterRunOwner,
+  resolvePrivateSettlePolicy,
   retainedYieldIdentity,
   type RequesterSettleWakeBatchState,
   type RequesterSettleWakeBatchCallbacks,
@@ -411,11 +412,16 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const completionRows = currentCompletionRows(settledBatch);
   // Delivered children remain in yield cohorts. One private result makes the
   // aggregate private; public siblings keep their individual completion route.
-  const privateRows = completionRows.filter((entry) => entry.completionTarget === "parent");
-  const parentOnly = privateRows.length > 0;
-  if (
-    privateRows.some((entry) => entry.completionRequesterSessionId !== requesterEntry.sessionId)
-  ) {
+  const { privateRows, requireVisibleReply, parentOnly, privateBinding, admissionMarker } =
+    resolvePrivateSettlePolicy(
+      completionRows,
+      requesterYieldedAfterDelivery,
+      selectedState,
+      requesterEntry.sessionId,
+    );
+  // `/new` keeps the session id but rotates the lifecycle revision, so compare the
+  // whole incarnation; a deliverable retry must not post old findings into a reset session.
+  if (privateRows.some((entry) => !matchesSubagentRequesterSession(entry, requesterIdentity))) {
     await completeBatch(settledBatch, selectedState, {
       delivered: false,
       path: "none",
@@ -440,8 +446,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const completionChannel = normalizeMessageChannel(directOrigin?.channel);
   const wakeMessage = buildRequesterSettleWakeMessage({
     findings: preparedFindings.text,
-    requireVisibleReply: requesterYieldedAfterDelivery,
+    requireVisibleReply,
     parentOnly,
+    yieldedFinalDeliverable: admissionMarker.yieldedFinalDeliverable,
     children: completionRows,
     recoveryChildren: recoveryRows,
     preserveModelRouteNotice: !completionChannel || !isDeliverableMessageChannel(completionChannel),
@@ -510,6 +517,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         attemptCount: state.attemptCount + 1,
         batchRunIds: retainedBatchRunIds,
         ...retainedYieldIdentity(state),
+        ...admissionMarker,
       };
       await params.transitionBatch(settledBatch, state);
     }
@@ -520,7 +528,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       batchRunIds,
       rearmGeneration: selectedState.rearmGeneration,
       attemptIndex,
-      parentOnly,
+      // Private turns replay under one key; a deliverable yield retries under a
+      // fresh key so a cached terminal failure cannot stand in for a new send.
+      sharedAttemptKey: parentOnly,
       pause: Boolean(pauseNotice),
     });
     const isRequesterSessionCurrent = () => {
@@ -628,15 +638,8 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
                 requesterIsSubagent: requesterDepth >= 1,
                 expectsCompletionMessage: false,
                 requireDirectDelivery: true,
-                ...(parentOnly
-                  ? {
-                      completionTarget: "parent",
-                      completionRequesterSessionId: requesterEntry.sessionId,
-                    }
-                  : {}),
-                ...(!pauseNotice && !parentOnly && requesterYieldedAfterDelivery
-                  ? { requireVisibleReply: true }
-                  : {}),
+                ...privateBinding,
+                ...(!pauseNotice && requireVisibleReply ? { requireVisibleReply } : {}),
                 directIdempotencyKey,
                 signal: params.signal,
                 resolveGatewayContext,

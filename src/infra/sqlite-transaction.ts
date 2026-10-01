@@ -1,5 +1,4 @@
 // Provides SQLite transaction helpers with nested savepoints.
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
@@ -9,7 +8,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // The cache-state module keeps this lifecycle edge off the kysely value graph
 // so cold control-plane paths using transactions do not load kysely.
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
-import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import {
   readSqliteBusyTimeout,
   runWithSqliteBusyTimeout,
@@ -23,6 +21,7 @@ import {
 } from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
 import { captureSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
@@ -55,15 +54,9 @@ function writeAdmissionLocation(database: DatabaseSync): string | null {
   }
   // A native handle's filename is stable; normalize namespace aliases once, without filesystem IO.
   const location = database.location();
-  const canonical = location === null ? null : normalizeWriteAdmissionLocation(location);
+  const canonical = location === null ? null : normalizeDatabasePath(location);
   writeAdmissionLocations.set(database, canonical);
   return canonical;
-}
-
-function normalizeWriteAdmissionLocation(location: string): string {
-  const normalized =
-    process.platform === "win32" ? normalizeWindowsPathPreservingCase(location) : location;
-  return process.platform === "win32" && !path.win32.isAbsolute(normalized) ? location : normalized;
 }
 
 /** Keep worker-owned lock holders serviceable across connections and module graphs. */
@@ -89,7 +82,7 @@ export function retainSqliteWriteAdmissionService(
   nativeLocations: readonly string[],
   service: () => void,
 ): () => void {
-  const locations = new Set(nativeLocations.map(normalizeWriteAdmissionLocation));
+  const locations = new Set(nativeLocations.map(normalizeDatabasePath));
   const registrations = [...locations].map((location) => {
     const services = writeAdmissionServices.get(location) ?? new Set<() => void>();
     // Separate reservations remain valid when the same owner retains two operations.

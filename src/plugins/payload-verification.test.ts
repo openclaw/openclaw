@@ -610,7 +610,12 @@ describe("runPluginPayloadSmokeCheck", () => {
   });
 
   it.each([
-    ["not-json", "Unexpected token 'o', \"not-json\" is not valid JSON"],
+    [
+      "not-json",
+      process.versions.bun
+        ? 'JSON Parse error: Unexpected identifier "not"'
+        : "Unexpected token 'o', \"not-json\" is not valid JSON",
+    ],
     ["null", "package.json must be an object"],
     ["[]", "package.json must be an object"],
     ["42", "package.json must be an object"],

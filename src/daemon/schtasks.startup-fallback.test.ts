@@ -28,6 +28,7 @@ vi.mock("../infra/windows-encoding.js", async () => {
 import {
   createSpawnChild,
   inspectPortUsageMock,
+  isProcessSnapshotQuery,
   killProcessTreeMock,
   makeSpawnSyncResult,
   resetSchtasksBaseMocks,
@@ -128,8 +129,6 @@ const { createMockGatewayService } = await import("./service.test-helpers.js");
 const { readServiceStatusSummary } = await import("../commands/status.service-summary.js");
 const { getStatusOverviewRowValue } = await import("../commands/status.test-support.ts");
 
-const NODE_PROCESS_QUERY =
-  "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress";
 const STARTUP_GATEWAY_COMMAND =
   '"C:\\Program Files\\nodejs\\node.exe" "C:\\openclaw\\dist\\index.js" gateway --port 18789';
 
@@ -149,7 +148,7 @@ function mockProcesses(
   onTaskkill?: () => SpawnSyncResult,
 ): void {
   spawnSync.mockImplementation((command, args) => {
-    if (command === getWindowsPowerShellExePath() && args?.includes(NODE_PROCESS_QUERY)) {
+    if (command === getWindowsPowerShellExePath() && isProcessSnapshotQuery(args)) {
       return makeSpawnSyncResult({ stdout: JSON.stringify(read()) });
     }
     return command.endsWith("taskkill.exe")
@@ -211,7 +210,7 @@ async function writeRunningGatewayScript(
         stdout: !terminated && isRunning() ? `"node.exe","${processId}","Console","1","1 K"` : "",
       });
     }
-    if (command === getWindowsPowerShellExePath() && args?.includes(NODE_PROCESS_QUERY)) {
+    if (command === getWindowsPowerShellExePath() && isProcessSnapshotQuery(args)) {
       return makeSpawnSyncResult({
         stdout: JSON.stringify([
           ...(!terminated && isRunning()
@@ -405,7 +404,7 @@ beforeEach(() => {
   spawn.mockImplementation(() => createSpawnChild(childUnref));
   spawnSync.mockReset();
   spawnSync.mockImplementation((command, args) =>
-    command === getWindowsPowerShellExePath() && args?.includes(NODE_PROCESS_QUERY)
+    command === getWindowsPowerShellExePath() && isProcessSnapshotQuery(args)
       ? makeSpawnSyncResult({
           stdout: JSON.stringify([{ ProcessId: 9999, CommandLine: "powershell.exe" }]),
         })
@@ -643,11 +642,7 @@ describe("Windows startup fallback", () => {
     const startupEntryPath = await writeGatewayFallback(env);
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
     spawnSync.mockImplementation((command, args) => {
-      if (
-        command === getWindowsPowerShellExePath() &&
-        Array.isArray(args) &&
-        args.includes(NODE_PROCESS_QUERY)
-      ) {
+      if (command === getWindowsPowerShellExePath() && isProcessSnapshotQuery(args)) {
         return makeSpawnSyncResult({ status: 1 });
       }
       if (command.endsWith("tasklist.exe")) {
@@ -1004,7 +999,7 @@ describe("Windows startup fallback", () => {
 
   it("does not fall back when a listener appears after the clean task exit", async ({ env }) => {
     spawnSync.mockImplementation((command, args) =>
-      command === getWindowsPowerShellExePath() && args?.includes(NODE_PROCESS_QUERY)
+      command === getWindowsPowerShellExePath() && isProcessSnapshotQuery(args)
         ? makeSpawnSyncResult({ status: 1 })
         : makeSpawnSyncResult(),
     );

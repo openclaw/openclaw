@@ -21,22 +21,6 @@ import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type { ExecApprovalUsageAuthorization } from "./exec-approvals-contracts.js";
 
-export function recordAllowlistUse(
-  approvals: ExecApprovalsFile,
-  agentId: string | undefined,
-  entry: ExecAllowlistEntry,
-  command: string,
-  resolvedPath?: string,
-): void {
-  recordAllowlistMatchesUse({
-    approvals,
-    agentId,
-    matches: [entry],
-    command,
-    resolvedPath,
-  });
-}
-
 export function recordAllowlistMatchesUse(params: {
   approvals: ExecApprovalsFile;
   agentId: string | undefined;

@@ -195,6 +195,7 @@ export async function admitChatSend(
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
   let initialSessionEntry: SessionEntry | undefined;
+  let admittedSessionEntry: SessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
   let assertInitialSkillSelection: (() => void) | undefined;
   let messageInjectionTarget: ReplyMessageInjectionTarget | undefined;
@@ -249,6 +250,7 @@ export async function admitChatSend(
     }
     const latestSession = loadCurrentChatSendSession(session);
     const latestEntry = latestSession.entry;
+    admittedSessionEntry = latestEntry;
     const requestConflict = resolveChatSendRequestConflict({
       ...params,
       session: { ...session, entry: latestEntry },
@@ -678,6 +680,7 @@ export async function admitChatSend(
       sessionBinding,
       onSessionPrepared,
       initialSessionEntry,
+      admittedSessionEntry,
       chatSendTraceAttributes,
       assertInitialSkillSelection,
       assertSessionTargetCurrent,

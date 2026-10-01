@@ -686,6 +686,24 @@ describe("lmstudio-models", () => {
       expected: "LM Studio model load failed (502): proxy rejected *** and ***",
     },
     {
+      name: "redacts URL-encoded proxy credentials without losing diagnostics",
+      params: { headers: { "X-Proxy-Auth": "synthetic+credential:value" } },
+      body: "proxy rejected synthetic%2Bcredential%3Avalue; GPU out of memory",
+      expected: "LM Studio model load failed (502): proxy rejected ***; GPU out of memory",
+    },
+    {
+      name: "redacts JSON-escaped proxy credentials",
+      params: { headers: { "X-Proxy-Auth": 'synthetic"credential' } },
+      body: 'proxy rejected synthetic\\"credential',
+      expected: "LM Studio model load failed (502): proxy rejected ***",
+    },
+    {
+      name: "redacts reflected Basic-auth passwords",
+      params: { headers: { Authorization: "Basic dXNlcjpzeW50aGV0aWMtcGFzc3dvcmQ=" } },
+      body: "proxy rejected synthetic-password; GPU out of memory",
+      expected: "LM Studio model load failed (502): proxy rejected ***; GPU out of memory",
+    },
+    {
       name: "redacts only the authorization value actually sent",
       params: { apiKey: "fresh", headers: { Authorization: "Bearer replaced-old" } },
       body: "stale replaced-old; active fresh",

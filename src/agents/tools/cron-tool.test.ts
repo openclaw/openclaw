@@ -470,6 +470,25 @@ describe("cron tool", () => {
     expect(readGatewayCall().params).toEqual({
       id: "job-primary",
       mode: "force",
+      waitTimeoutMs: 60_000,
+    });
+  });
+
+  it("caps the run wait so one call cannot hold the turn past ten minutes", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true, enqueued: true, runId: "manual:job:1" });
+    const result = await executeCron({
+      action: "run",
+      jobId: "job",
+      runMode: "force",
+      timeoutMs: 3_600_000,
+    });
+
+    expect(readGatewayCall().params).toMatchObject({ waitTimeoutMs: 600_000 });
+    expect(readGatewayOpts()).toMatchObject({ timeoutMs: 660_000 });
+    // A run still going when the wait ends points at runs, not a scheduled check.
+    expect(result.details).toMatchObject({
+      runId: "manual:job:1",
+      note: expect.stringContaining("runs jobId runId"),
     });
   });
 

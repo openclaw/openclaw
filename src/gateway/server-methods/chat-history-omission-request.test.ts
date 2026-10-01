@@ -3,10 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.js";
-import {
-  onDiagnosticEvent,
-  type DiagnosticPayloadLargeEvent,
-} from "../../infra/diagnostic-events.js";
+import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "../test-helpers.js";
@@ -20,15 +17,15 @@ installConnectedControlUiServerSuite((started) => {
 });
 
 describe("chat.history request truncation diagnostic", () => {
-  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-chat-history-omit-");
+  const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-chat-history-omit-");
   test("a real request reports older history omitted by the production budget", async () => {
     const sessionId = "sess-omission-proof";
     const sessionKey = "agent:main:main";
     const messageCount = 70;
     const textBytes = 100_000;
     const budgetBytes = getMaxChatHistoryMessagesBytes();
-    const dir = sessionDirs.make();
-    const captured: DiagnosticPayloadLargeEvent[] = [];
+    const dir = tempDirs.make();
+    const captured: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];
     const unsubscribe = onDiagnosticEvent((event) => {
       if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
         captured.push(event);

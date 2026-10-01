@@ -16,20 +16,22 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
-import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
+import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
-import { readSessionEntryByIdInDatabase } from "./session-accessor.sqlite-exact-read.js";
+import {
+  readSessionEntryByIdInDatabase,
+  readSessionEntryRow,
+} from "./session-accessor.sqlite-entry-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
+import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import {
   readLatestAssistantTextFromDatabase,
   readTranscriptHeaderFromDatabase,
-} from "./session-accessor.sqlite-read.js";
-import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
-import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
+} from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import {
   assertCanonicalSessionKeyWrite,
@@ -170,7 +172,7 @@ export function readExactSessionEntriesWithLifecycle(
             runSqliteDeferredTransactionSync(database.db, () => {
               assertCanonicalSqliteSessionKeysCurrent(database);
               if (request.projection === "creation") {
-                const { identity, filename } = readOpenClawAgentDatabaseIdentity(database);
+                const { identity, canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
                 const sessionKey = request.sessionKeys[0];
                 if (
                   typeof identity !== "string" ||
@@ -192,7 +194,7 @@ export function readExactSessionEntriesWithLifecycle(
                       request.creationLabel,
                     ),
                     databaseIdentity: identity,
-                    databasePath: filename,
+                    databasePath: canonicalPath,
                   },
                 };
               }
@@ -329,11 +331,12 @@ export function readExactSessionEntriesWithLifecycle(
                 ...(request.projection === "lifecycle"
                   ? { pendingArchives: hasPendingSessionTranscriptArchives(database) }
                   : {}),
-                lifecycleTimestamps: resolveSessionLifecycleTimestamps({
+                lifecycleTimestamps: resolveSessionLifecycleTimestampsWithHeader({
                   entry,
                   agentId: database.agentId,
                   sessionKey: request.lifecycleSessionKey,
-                  readHeader: (sessionId) => readTranscriptHeaderFromDatabase(database, sessionId),
+                  readHeader: ({ sessionId }) =>
+                    readTranscriptHeaderFromDatabase(database, sessionId),
                 }),
               };
             }),

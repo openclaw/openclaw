@@ -26,9 +26,8 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import type { RawData } from "ws";
+import { WebSocket, WebSocketServer, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { canonicalizeVoiceCallMediaBase64 } from "./media-base64.js";
-import { WebSocket, WebSocketServer } from "./websocket.js";
 
 export interface MediaStreamConfig {
   /** Realtime transcription provider for streaming STT. */
@@ -605,9 +604,6 @@ export class MediaStreamHandler {
     });
   }
 
-  /**
-   * Send a mark event to track audio playback position.
-   */
   sendMark(streamSid: string, name: string): boolean {
     return this.sendToStream(streamSid, {
       event: "mark",
@@ -680,9 +676,6 @@ export class MediaStreamHandler {
     return acknowledgement;
   }
 
-  /**
-   * Clear audio buffer (interrupt playback).
-   */
   clearAudio(streamSid: string): boolean {
     this.invalidatePlaybackMarks(streamSid);
     return this.sendToStream(streamSid, { event: "clear", streamSid });
@@ -717,9 +710,6 @@ export class MediaStreamHandler {
     return promise;
   }
 
-  /**
-   * Clear TTS queue and interrupt current playback (barge-in).
-   */
   clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
     const queue = this.ttsQueues.get(streamSid);
     if (queue) {

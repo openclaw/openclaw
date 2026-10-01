@@ -215,7 +215,11 @@ describe("resolveGatewayScopedTools", () => {
         requesterSessionKey: "agent:main:telegram:group:-100123",
         requesterTurnRunId: "run-123",
       });
-      expect(onYield).toHaveBeenCalledWith("waiting on subagents", "I’m waiting on the subagents.");
+      expect(onYield).toHaveBeenCalledWith(
+        "waiting on subagents",
+        "I’m waiting on the subagents.",
+        undefined,
+      );
       expect(toolResult.details).toEqual({
         status: "yielded",
         acknowledgment: "I’m waiting on the subagents.",

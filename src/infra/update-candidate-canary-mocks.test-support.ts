@@ -35,3 +35,26 @@ export function mockCanarySnapshotCommands(
     },
   };
 }
+
+export function mockCanarySqliteOperationAdmission(
+  original: typeof import("./sqlite-worker-operation-admission.js"),
+  admission: { active: boolean; beforeGrant?: (stage: string) => void },
+) {
+  return {
+    ...original,
+    createSqliteWorkerOperationAdmission: (
+      ...args: Parameters<typeof original.createSqliteWorkerOperationAdmission>
+    ) => {
+      const [admit, attachment] = args;
+      return original.createSqliteWorkerOperationAdmission((request, grant) => {
+        admission.active = true;
+        try {
+          admission.beforeGrant?.(request.stage);
+          admit(request, grant);
+        } finally {
+          admission.active = false;
+        }
+      }, attachment);
+    },
+  };
+}

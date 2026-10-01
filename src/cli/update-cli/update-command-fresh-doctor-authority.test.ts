@@ -9,6 +9,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { adoptUpdateRun, createUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -175,7 +176,7 @@ it.each(["healthy", "original-owner-replaced"] as const)(
             yes: true,
             json: true,
             workspaceSuggestions: false,
-            nodeRunner: process.execPath,
+            nodeRunner: resolveTestNodeExecPath(),
             timeoutMs: 45_000,
             assertCurrent: fence.assertCurrent,
           };

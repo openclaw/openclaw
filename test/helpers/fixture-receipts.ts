@@ -3,14 +3,17 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { BroadcastChannel } from "node:worker_threads";
 
 /**
- * Receipts are not ordered with the child's other output, including stdout replies and exit.
+ * Socket clients observe product-spawned children; broadcast clients observe worker threads
+ * in the test process. Receipts are not ordered with the fixture's other output or exit.
  * A wait raced against an operation the child's replies can settle must confirm against a durable
  * record the child writes before replying.
  */
 export type FixtureReceiptChannel = {
   readonly endpoint: string;
+  readonly broadcastName: string;
   waitFor(source: string, text: string, count?: number): Promise<void>;
   close(): Promise<void>;
 };
@@ -25,12 +28,18 @@ type Waiter = {
 
 /** Test-owned side channel for children whose process and stdio belong to the product. */
 export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel> {
-  // openclaw-temp-dir: allow short private socket path below macOS's Unix socket limit
+  const tempRoot = os.tmpdir();
+  const socketRoot =
+    Buffer.byteLength(path.join(tempRoot, "oc-r-XXXXXX", "s")) > 100 ? "/tmp" : tempRoot;
+  // openclaw-temp-dir: allow /tmp fallback for nested suites' deep TMPDIRs;
+  // Unix socket paths are capped at 108 bytes on Linux and 104 on macOS.
   const directory =
-    process.platform === "win32" ? undefined : await fs.mkdtemp(path.join(os.tmpdir(), "oc-r-"));
+    process.platform === "win32" ? undefined : await fs.mkdtemp(path.join(socketRoot, "oc-r-"));
   const endpoint = directory
     ? path.join(directory, "s")
     : `\\\\.\\pipe\\openclaw-fixture-receipts-${process.pid}-${randomUUID()}`;
+  const broadcastName = `openclaw-fixture-receipts:${randomUUID()}`;
+  const broadcast = new BroadcastChannel(broadcastName);
   const receipts = new Map<string, string[]>();
   const waiters = new Set<Waiter>();
   const sockets = new Set<net.Socket>();
@@ -47,6 +56,37 @@ export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel
     }
     waiters.clear();
   };
+  const record = (receipt: unknown) => {
+    if (
+      typeof receipt !== "object" ||
+      receipt === null ||
+      !("source" in receipt) ||
+      typeof receipt.source !== "string" ||
+      !("line" in receipt) ||
+      typeof receipt.line !== "string"
+    ) {
+      throw new Error("expected { source: string, line: string }");
+    }
+    const lines = receipts.get(receipt.source) ?? [];
+    lines.push(receipt.line);
+    receipts.set(receipt.source, lines);
+    for (const waiter of waiters) {
+      if (waiter.source === receipt.source && received(waiter)) {
+        waiters.delete(waiter);
+        waiter.resolve();
+      }
+    }
+  };
+  broadcast.addEventListener("message", ({ data }: { data: unknown }) => {
+    if (failure) {
+      return;
+    }
+    try {
+      record(data);
+    } catch (cause) {
+      fail(new Error("Malformed fixture receipt: broadcast message", { cause }));
+    }
+  });
   const server = net.createServer((socket) => {
     sockets.add(socket);
     socket.setEncoding("utf8");
@@ -62,25 +102,7 @@ export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel
         buffer = buffer.slice(newline + 1);
         try {
           const receipt: unknown = JSON.parse(line);
-          if (
-            typeof receipt !== "object" ||
-            receipt === null ||
-            !("source" in receipt) ||
-            typeof receipt.source !== "string" ||
-            !("line" in receipt) ||
-            typeof receipt.line !== "string"
-          ) {
-            throw new Error("expected { source: string, line: string }");
-          }
-          const lines = receipts.get(receipt.source) ?? [];
-          lines.push(receipt.line);
-          receipts.set(receipt.source, lines);
-          for (const waiter of waiters) {
-            if (waiter.source === receipt.source && received(waiter)) {
-              waiters.delete(waiter);
-              waiter.resolve();
-            }
-          }
+          record(receipt);
         } catch (cause) {
           fail(new Error(`Malformed fixture receipt: ${line}`, { cause }));
           return;
@@ -105,6 +127,7 @@ export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel
       });
     });
   } catch (error) {
+    broadcast.close();
     if (directory) {
       await fs.rm(directory, { recursive: true, force: true });
     }
@@ -113,6 +136,7 @@ export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel
 
   return {
     endpoint,
+    broadcastName,
     waitFor(source, text, count = 1) {
       if (failure) {
         return Promise.reject(failure);
@@ -132,6 +156,7 @@ export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel
     },
     close() {
       closing ??= (async () => {
+        broadcast.close();
         for (const waiter of waiters) {
           waiter.reject(
             new Error(
@@ -169,5 +194,18 @@ function sendReceipt(source, line) {
     fixtureReceiptSocket.unref();
   }
   fixtureReceiptSocket.write(JSON.stringify({ source, line }) + "\\n");
+}`;
+}
+
+export function fixtureReceiptWorkerClientSource(broadcastName: string): string {
+  return `import { BroadcastChannel as FixtureReceiptBroadcastChannel } from "node:worker_threads";
+let fixtureReceiptBroadcast;
+function sendReceipt(source, line) {
+  if (!fixtureReceiptBroadcast) {
+    fixtureReceiptBroadcast = new FixtureReceiptBroadcastChannel(${JSON.stringify(broadcastName)});
+    // Test observation must never keep a product-owned fixture alive.
+    fixtureReceiptBroadcast.unref();
+  }
+  fixtureReceiptBroadcast.postMessage({ source, line });
 }`;
 }

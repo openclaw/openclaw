@@ -50,12 +50,12 @@ export type ModelContextTokenProjection = {
 const normalizePositiveContextTokens = (value: number | undefined) =>
   typeof value === "number" && value > 0 ? value : undefined;
 
-export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
-export const ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS = 1_000_000;
-export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
-export const ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS = 1_000_000;
-export const ANTHROPIC_OPUS_5_CONTEXT_TOKENS = 1_000_000;
-export const ANTHROPIC_SONNET_5_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
+const ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS = 1_000_000;
+const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_OPUS_5_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_SONNET_5_CONTEXT_TOKENS = 1_000_000;
 
 function resolveProviderModelRef(params: {
   provider?: string;

@@ -480,13 +480,11 @@ function registerActivePluginToolOwnership(
 function loadGatewayPluginsForTest(
   overrides: Partial<Parameters<ServerPluginsModule["loadGatewayPlugins"]>[0]> = {},
 ) {
-  const log = createTestLog();
   const loaded = serverPluginsModule.loadGatewayPlugins({
     loadIntent: "startup",
     cfg: {},
     autoEnabledReasons: {},
     workspaceDir: "/tmp",
-    log,
     coreGatewayHandlers: {},
     baseMethods: [],
     resolveGatewayContext: () => resolveTestGatewayContext(),
@@ -494,7 +492,6 @@ function loadGatewayPluginsForTest(
   });
   // Runtime dispatch cases use a published fixture; preparation itself never selects it.
   runtimeRegistryModule.setActivePluginRegistry(loaded.pluginRegistry);
-  return log;
 }
 
 function loadStartupPluginFixture(
@@ -731,7 +728,6 @@ describe("loadGatewayPlugins", () => {
             cfg: {},
             autoEnabledReasons: {},
             workspaceDir: stateDir,
-            log: createTestLog(),
             baseMethods: [],
             pluginIds: ["test-channel"],
             resolveGatewayContext: resolver,
@@ -854,7 +850,7 @@ describe("loadGatewayPlugins", () => {
 
   test("routes plugin registration logs through the plugin logger", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    const log = loadGatewayPluginsForTest();
+    loadGatewayPluginsForTest();
 
     const logger = getLastPluginLoadLogger();
     logger.info("plugin ready");
@@ -862,8 +858,6 @@ describe("loadGatewayPlugins", () => {
 
     expect(pluginRuntimeLoaderLogger.info).toHaveBeenCalledWith("plugin ready");
     expect(pluginRuntimeLoaderLogger.warn).toHaveBeenCalledWith("plugin warning");
-    expect(log.info).not.toHaveBeenCalled();
-    expect(log.warn).not.toHaveBeenCalled();
   });
 
   test("can suppress provisional plugin info logs while preserving warnings", () => {
@@ -2070,7 +2064,6 @@ describe("loadGatewayPlugins", () => {
       cfg: {},
       autoEnabledReasons: {},
       workspaceDir: "/tmp",
-      log: createTestLog(),
       coreGatewayHandlers: {},
       baseMethods: [],
       pluginIds: ["duplex-plugin"],

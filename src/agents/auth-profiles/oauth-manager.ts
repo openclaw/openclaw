@@ -358,12 +358,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       profileId: params.profileId,
       updater: (store) => {
         const existing = store.profiles[params.profileId];
-        if (
-          !isExactOAuthCredential(
-            existing?.type === "oauth" ? existing : undefined,
-            params.settledCredential ?? params.fence,
-          )
-        ) {
+        if (!isExactOAuthCredential(existing, params.settledCredential ?? params.fence)) {
           return false;
         }
         store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);
@@ -387,9 +382,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       profileId: params.profileId,
       updater: (store) => {
         const existing = store.profiles[params.profileId];
-        if (
-          !isExactOAuthCredential(existing?.type === "oauth" ? existing : undefined, params.fence)
-        ) {
+        if (!isExactOAuthCredential(existing, params.fence)) {
           return false;
         }
         store.profiles[params.profileId] = { ...params.original };
@@ -646,9 +639,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             updater: (authoritative) => {
               const existing = authoritative.profiles[params.profileId];
               params.signal?.throwIfAborted();
-              if (
-                !isExactOAuthCredential(existing?.type === "oauth" ? existing : undefined, cred)
-              ) {
+              if (!isExactOAuthCredential(existing, cred)) {
                 return false;
               }
               authoritative.profiles[params.profileId] = fence;

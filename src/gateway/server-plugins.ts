@@ -236,12 +236,6 @@ export function loadGatewayPlugins(params: {
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
   workspaceDir?: string;
-  log: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-    debug: (msg: string) => void;
-  };
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
   hostServices?: PluginRegistryParams["hostServices"];

@@ -19,18 +19,22 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
+import { profileCatalogPath } from "../../state/user-profile-identity.read.js";
+import {
+  projectUserProfileDisplay,
+  readResidentUserProfileRevision,
+} from "../../state/user-profile-list.js";
 import {
   linkCanonicalUserProfileEmail,
   mergeCanonicalUserProfiles,
+  setCanonicalUserProfileAvatar,
+  setCanonicalUserProfileDisplayName,
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
 import { UserProfileMergeError, UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import {
-  getUserProfileDisplay,
   getUserProfileListItem,
   listProfiles,
-  setAvatar,
-  setDisplayName,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -48,22 +52,23 @@ import { usersChannelIdentityHandlers } from "./users-channel-identities.js";
 import { usersGitHubHandlers } from "./users-github.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
 import {
+  prepareAuthenticatedProfile,
+  prepareProfileMutationAccess,
   prepareUserProfileAdministration,
-  requireProfileMutationAccess,
-  resolveAuthenticatedProfileId,
 } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
-  profile: { id: string; updatedAt: number },
-  display = getUserProfileDisplay(profile.id),
-): ReturnType<typeof getUserProfileDisplay> {
-  context.refreshConnectedUserProfile?.({
-    ...display,
-    updatedAt: profile.updatedAt,
-  });
-  return display;
+  profileId: string,
+): void {
+  const current = readResidentUserProfileRevision(profileId, profileCatalogPath({}));
+  if (current) {
+    context.refreshConnectedUserProfile?.({
+      ...projectUserProfileDisplay(current),
+      updatedAt: current.updated_at,
+    });
+  }
 }
 
 function profileError(error: unknown) {
@@ -108,7 +113,8 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     respond(true, { profiles: await listProfiles() });
   },
-  "users.self": async ({ client, params, respond }) => {
+  "users.self": async (options) => {
+    const { client, params, respond } = options;
     if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
@@ -128,7 +134,9 @@ export const usersHandlers: GatewayRequestHandlers = {
           // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
         }
       }
-      const profileId = resolveAuthenticatedProfileId(client);
+      const profile = await prepareAuthenticatedProfile(options);
+      profile.assertCurrent();
+      const profileId = profile.profileId;
       if (!profileId) {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
@@ -244,10 +252,11 @@ export const usersHandlers: GatewayRequestHandlers = {
     const targetProfileId = params.targetProfileId;
     try {
       const assertCurrent = await prepareUserProfileAdministration(options);
-      const { profile, display } = await linkCanonicalUserProfileEmail(email, targetProfileId, {
+      const { profile } = await linkCanonicalUserProfileEmail(email, targetProfileId, {
         assertCurrent,
       });
-      refreshConnectedProfile(context, profile, display);
+      assertCurrent();
+      refreshConnectedProfile(context, profile.id);
       broadcastChatMetadataChanged(context);
       respond(true, { profile });
     } catch (error) {
@@ -262,7 +271,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     try {
       const assertCurrent = await prepareUserProfileAdministration(options);
       holdGatewayPolicyResponse(respond);
-      const { profile, display, movedAliasKinds } = await mergeCanonicalUserProfiles(
+      const { profile, movedAliasKinds } = await mergeCanonicalUserProfiles(
         params.sourceProfileId,
         params.targetProfileId,
         {
@@ -275,25 +284,41 @@ export const usersHandlers: GatewayRequestHandlers = {
           },
         },
       );
-      refreshConnectedProfile(context, profile, display);
-      broadcastChatMetadataChanged(context);
+      let canPublish = true;
+      try {
+        assertCurrent();
+      } catch {
+        // A committed merge can revoke its requester; its receipt still completes the held response.
+        canPublish = false;
+      }
+      if (canPublish) {
+        refreshConnectedProfile(context, profile.id);
+        broadcastChatMetadataChanged(context);
+      }
       respond(true, { profile, movedAliasKinds });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setDisplayName": ({ client, context, params, respond }) => {
+  "users.setDisplayName": async (options) => {
+    const { context, params, respond } = options;
     if (
       !assertValidParams(params, validateUsersSetDisplayNameParams, "users.setDisplayName", respond)
     ) {
       return;
     }
     try {
-      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
+      const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
+      if (!assertCurrent) {
         return;
       }
-      const profile = setDisplayName(params.profileId, params.displayName);
-      refreshConnectedProfile(context, profile);
+      const { profile } = await setCanonicalUserProfileDisplayName(
+        params.profileId,
+        params.displayName,
+        { assertCurrent },
+      );
+      assertCurrent();
+      refreshConnectedProfile(context, profile.id);
       respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
@@ -334,7 +359,8 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setAvatar": ({ client, context, params, respond }) => {
+  "users.setAvatar": async (options) => {
+    const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSetAvatarParams, "users.setAvatar", respond)) {
       return;
     }
@@ -349,16 +375,21 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const bytes = Buffer.from(avatarBase64, "base64");
     try {
-      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
+      const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
+      if (!assertCurrent) {
         return;
       }
-      const result = setAvatar(params.profileId, bytes, params.mime);
+      const result = await setCanonicalUserProfileAvatar(params.profileId, bytes, params.mime, {
+        assertCurrent,
+      });
+      assertCurrent();
       if (!result.ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));
         return;
       }
-      const display = refreshConnectedProfile(context, result.value);
-      respond(true, { profile: result.value, avatarRevision: display.avatarRevision });
+      const { profile, display } = result.value;
+      refreshConnectedProfile(context, profile.id);
+      respond(true, { profile, avatarRevision: display.avatarRevision });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

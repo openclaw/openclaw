@@ -16,7 +16,7 @@ import {
 import {
   createOnlineReadOnlyBackup,
   prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSyncInProcess,
+  prepareSqliteReadOnlyCopyInProcess,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
@@ -140,11 +140,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     } else {
       prepared =
         mode === "sync"
-          ? prepareSqliteReadOnlyLocationSyncInProcess(
-              pathname,
-              stagingRoot,
-              expectedSourceIdentity,
-            )
+          ? await prepareSqliteReadOnlyCopyInProcess(pathname, stagingRoot, expectedSourceIdentity)
           : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     }
     releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));

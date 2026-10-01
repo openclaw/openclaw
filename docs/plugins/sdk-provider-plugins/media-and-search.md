@@ -13,6 +13,11 @@ alongside text inference. Register each one inside `register(api)` next to
 your existing `api.registerProvider(...)` call. Part of the [Building provider
 plugins](/plugins/sdk-provider-plugins) guide.
 
+Bundled runtime adapters can create deferred promises with `createDeferred` from
+the private `openclaw/plugin-sdk/concurrency-runtime` subpath. It returns
+`promise`, `resolve`, and `reject` without loading logging or provider auth;
+the adapter retains responsibility for cancellation and terminal settlement.
+
 ## Media and search capabilities
 
 <Tabs>
@@ -76,6 +81,11 @@ plugins](/plugins/sdk-provider-plugins) guide.
     `maxInputVideos` / `maxDurationSeconds` are not enough to advertise
     transform-mode support or disabled modes cleanly. Music generation
     follows the same `generate` / `edit` pattern.
+
+    Bundled providers can use `selectSupportedVideoDuration` from the private
+    `openclaw/plugin-sdk/video-generation` subpath to select the nearest value
+    from a nonempty list, preferring the longer duration on ties. Keep input
+    validation, rounding, bounds, and default durations in the provider.
 
     ```typescript
     api.registerImageGenerationProvider({

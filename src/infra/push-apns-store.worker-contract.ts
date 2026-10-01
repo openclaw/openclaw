@@ -1,29 +1,4 @@
-import type { ApnsRegistration } from "./push-apns-store.types.js";
-import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
+import type { WorkerOperations } from "../state/worker-operation-registry.js";
+import type { apnsOperations } from "./push-apns-store.worker.js";
 
-export type ApnsRegistrationWorkerOperations = {
-  "apns.registration.register": {
-    input: { candidate: ApnsRegistration; expectedPairingGeneration?: string; nowMs: number };
-    output:
-      | { status: "pairing-changed" }
-      | { status: "registered"; registration: ApnsRegistration };
-  };
-  "apns.registration.read": { input: string; output: ApnsRegistration | null };
-  "apns.registration.clearIfCurrent": {
-    input: { nodeId: string; registration: ApnsRegistration; nowMs: number };
-    output: boolean;
-  };
-  "apns.registrations.read": { input: readonly string[]; output: Map<string, ApnsRegistration> };
-};
-
-export function isApnsRegistrationWorkerCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<ApnsRegistrationWorkerOperations> {
-  return (
-    command.type === "apns.registration.register" ||
-    command.type === "apns.registration.read" ||
-    command.type === "apns.registration.clearIfCurrent" ||
-    command.type === "apns.registrations.read"
-  );
-}
+export type ApnsRegistrationWorkerOperations = WorkerOperations<typeof apnsOperations>;
