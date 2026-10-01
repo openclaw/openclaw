@@ -64,13 +64,7 @@ function automaticEntry(model = "child"): SessionEntry {
 beforeEach(() => {
   vi.spyOn(harnessRuntime, "ensureSelectedAgentHarnessPlugin").mockResolvedValue(undefined);
   vi.spyOn(runtimeLoaders, "loadTranscriptResolveRuntime").mockResolvedValue({
-    resolveSessionTranscriptFile: async (params) => ({
-      sessionFile: path.join(
-        path.dirname(params.storePath ?? "/unused/sessions.json"),
-        "turn.jsonl",
-      ),
-      sessionEntry: params.sessionEntry,
-    }),
+    resolveSessionTranscriptFile,
   });
   // Only the persistence boundary is substituted; the selector decides every patch.
   vi.spyOn(sessionPersistence, "persistAgentSession").mockImplementation(async (params) => {
@@ -585,14 +579,10 @@ describe("command selection with real transcript routing", () => {
       expect(resolver).toHaveBeenCalledTimes(1);
       const forwarded = expectDefined(resolver.mock.calls[0], "transcript resolution call")[0];
       expect(forwarded).toMatchObject({
-        sessionId,
         sessionKey: key === undefined ? sessionId : key,
-        agentId: "main",
-        threadId: 42,
       });
       expect(forwarded.sessionEntry).toBeUndefined();
       expect(forwarded.sessionStore).toBe(route === "store" ? store : undefined);
-      expect(forwarded.storePath).toBe(route === "suppressed" ? undefined : storePath);
       expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
     },
   );

@@ -29,35 +29,15 @@ export function commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase(
     database.db,
     () => {
       const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-      const staging = executeSqliteQueryTakeFirstSync(
-        database.db,
-        queueDb
-          .selectFrom("delivery_queue_entries")
-          .select("id")
-          .where("queue_name", "=", params.stagingQueueName)
-          .where("id", "=", params.stagingId)
-          .where("status", "=", "pending"),
+      const staging = loadPendingDeliveryQueueRow(
+        database,
+        params.stagingQueueName,
+        params.stagingId,
       );
       if (!staging) {
         return "missing";
       }
-      const owner = getDeliveryQueueEntryOwnersInDatabase(
-        database,
-        [params.queueName, ...params.conflictQueueNames],
-        params.entry.id,
-      );
-      if (owner.size > 0) {
-        return "existing";
-      }
-      const inserted = upsertDeliveryQueueEntryInDatabase(
-        {
-          queueName: params.queueName,
-          entry: params.entry,
-          insertOnly: true,
-        },
-        database,
-      );
-      if (!inserted) {
+      if (!insertDeliveryQueueOwner(database, params)) {
         return "existing";
       }
       const consumed = executeSqliteQuerySync(
@@ -82,35 +62,39 @@ export function commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase(
   );
 }
 
+type InsertDeliveryQueueOwnerParams = {
+  queueName: string;
+  conflictQueueNames: readonly string[];
+  entry: DeliveryQueueEntryState;
+};
+
+/** The caller holds the write transaction across admission and publication. */
+function insertDeliveryQueueOwner(
+  database: OpenClawStateDatabase,
+  params: InsertDeliveryQueueOwnerParams,
+): boolean {
+  const owners = getDeliveryQueueEntryOwnersInDatabase(
+    database,
+    [params.queueName, ...params.conflictQueueNames],
+    params.entry.id,
+  );
+  return (
+    owners.size === 0 &&
+    upsertDeliveryQueueEntryInDatabase(
+      { queueName: params.queueName, entry: params.entry, insertOnly: true },
+      database,
+    )
+  );
+}
+
 /** Inserts one stable owner only when no current or retired namespace owns its id. */
 export function upsertDeliveryQueueEntryOnceAcrossNamespacesInDatabase(
   database: OpenClawStateDatabase,
-  params: {
-    queueName: string;
-    conflictQueueNames: readonly string[];
-    entry: DeliveryQueueEntryState;
-  },
+  params: InsertDeliveryQueueOwnerParams,
 ): boolean {
   return runSqliteImmediateTransactionSync(
     database.db,
-    () => {
-      const owner = getDeliveryQueueEntryOwnersInDatabase(
-        database,
-        [params.queueName, ...params.conflictQueueNames],
-        params.entry.id,
-      );
-      if (owner.size > 0) {
-        return false;
-      }
-      return upsertDeliveryQueueEntryInDatabase(
-        {
-          queueName: params.queueName,
-          entry: params.entry,
-          insertOnly: true,
-        },
-        database,
-      );
-    },
+    () => insertDeliveryQueueOwner(database, params),
     {
       databaseLabel: database.path,
       operationLabel: "insert stable delivery queue owner",
@@ -129,23 +113,30 @@ type MovePendingDeliveryQueueEntryNamespaceParams = {
   retainSourceCompletionFence?: boolean;
 };
 
+function loadPendingDeliveryQueueRow(
+  database: OpenClawStateDatabase,
+  queueName: string,
+  id: string,
+) {
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    getNodeSqliteKysely<DeliveryQueueDatabase>(database.db)
+      .selectFrom("delivery_queue_entries")
+      .select("entry_json")
+      .where("queue_name", "=", queueName)
+      .where("id", "=", id)
+      .where("status", "=", "pending"),
+  );
+}
+
 function matchesPendingDeliveryQueueEntry(
   database: OpenClawStateDatabase,
   queueName: string,
   expectedEntry: DeliveryQueueEntryState,
 ): boolean {
-  const source = executeSqliteQueryTakeFirstSync(
-    database.db,
-    getNodeSqliteKysely<DeliveryQueueDatabase>(database.db)
-      .selectFrom("delivery_queue_entries")
-      .select(["entry_json", "status"])
-      .where("queue_name", "=", queueName)
-      .where("id", "=", expectedEntry.id),
-  );
   return (
-    source != null &&
-    source.status === "pending" &&
-    source.entry_json === JSON.stringify(expectedEntry)
+    loadPendingDeliveryQueueRow(database, queueName, expectedEntry.id)?.entry_json ===
+    JSON.stringify(expectedEntry)
   );
 }
 
@@ -220,7 +211,6 @@ export function movePendingDeliveryQueueEntryNamespaceInDatabase(
   return runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
       if (
         !matchesPendingDeliveryQueueEntry(
           database,
@@ -239,14 +229,10 @@ export function movePendingDeliveryQueueEntryNamespaceInDatabase(
         return "destination-exists";
       }
       if (params.stagingId && params.stagingQueueName) {
-        const staging = executeSqliteQueryTakeFirstSync(
-          database.db,
-          queueDb
-            .selectFrom("delivery_queue_entries")
-            .select("id")
-            .where("queue_name", "=", params.stagingQueueName)
-            .where("id", "=", params.stagingId)
-            .where("status", "=", "pending"),
+        const staging = loadPendingDeliveryQueueRow(
+          database,
+          params.stagingQueueName,
+          params.stagingId,
         );
         if (!staging) {
           return "staging-missing";

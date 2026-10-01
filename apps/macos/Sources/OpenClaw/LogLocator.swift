@@ -36,10 +36,9 @@ enum LogLocator {
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles])) ?? []
 
-        let prefixes = ["openclaw"]
         return files
             .filter { file in
-                prefixes.contains { file.lastPathComponent.hasPrefix($0) } && file.pathExtension == "log"
+                file.lastPathComponent.hasPrefix("openclaw") && file.pathExtension == "log"
             }
             .max { lhs, rhs in
                 self.modificationDate(for: lhs) < self.modificationDate(for: rhs)

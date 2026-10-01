@@ -14,6 +14,7 @@ import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.locationModeAfterBackgroundSettings
@@ -1015,7 +1016,7 @@ fun OnboardingFlow(
           checkRequested = nodeApprovalCheckRequested,
           ready = ready,
           onBack = ::goBack,
-          onCopyCommand = { command -> copyApprovalCommand(context, command) },
+          onCopyCommand = { command -> copyOnboardingText(context, "OpenClaw pairing approval command", command, nativeText("Approval command copied")) },
           onCheckApproval = ::checkNodeApproval,
           onApprove = { requestId ->
             nodeApprovalCheckRequested = false
@@ -2043,7 +2044,7 @@ private fun GatewayRecoveryScreen(
     GatewayRecoveryDiagnosticDialog(
       diagnosticText = diagnosticText,
       onDismiss = { diagnosticDialogVisible = false },
-      onCopy = { copyGatewayDiagnostic(context = context, diagnosticText = diagnosticText) },
+      onCopy = { copyOnboardingText(context, "OpenClaw gateway diagnostic", diagnosticText, nativeText("Details copied")) },
     )
   }
 
@@ -2086,7 +2087,7 @@ private fun GatewayRecoveryScreen(
         )
         approvalCommand?.let { command ->
           Spacer(modifier = Modifier.height(18.dp))
-          ApprovalCommandBlock(command = command, onCopy = { copyApprovalCommand(context, command) })
+          ApprovalCommandBlock(command = command, onCopy = { copyOnboardingText(context, "OpenClaw pairing approval command", command, nativeText("Approval command copied")) })
         }
         protocolUpdateCommand?.let { command ->
           Spacer(modifier = Modifier.height(18.dp))
@@ -2096,7 +2097,7 @@ private fun GatewayRecoveryScreen(
             color = ClawTheme.colors.textMuted,
           )
           Spacer(modifier = Modifier.height(8.dp))
-          ApprovalCommandBlock(command = command, onCopy = { copyGatewayCommand(context, command) })
+          ApprovalCommandBlock(command = command, onCopy = { copyOnboardingText(context, "OpenClaw gateway command", command, nativeText("Command copied")) })
         }
         if (recoveryProgressItems.isNotEmpty()) {
           Spacer(modifier = Modifier.height(20.dp))
@@ -2166,13 +2167,15 @@ private fun GatewayRecoveryDiagnosticDialog(
   )
 }
 
-private fun copyGatewayDiagnostic(
+private fun copyOnboardingText(
   context: Context,
-  diagnosticText: String,
+  label: String,
+  text: String,
+  confirmation: NativeText,
 ) {
   val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway diagnostic", diagnosticText))
-  Toast.makeText(context, nativeString("Details copied"), Toast.LENGTH_SHORT).show()
+  clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+  Toast.makeText(context, confirmation.resolveNativeText(), Toast.LENGTH_SHORT).show()
 }
 
 @Composable
@@ -3111,24 +3114,6 @@ internal fun permissionContinueNeedsNodeApproval(
       !ready &&
         nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval)
     )
-
-private fun copyApprovalCommand(
-  context: Context,
-  command: String,
-) {
-  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw pairing approval command", command))
-  Toast.makeText(context, nativeString("Approval command copied"), Toast.LENGTH_SHORT).show()
-}
-
-private fun copyGatewayCommand(
-  context: Context,
-  command: String,
-) {
-  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway command", command))
-  Toast.makeText(context, nativeString("Command copied"), Toast.LENGTH_SHORT).show()
-}
 
 /** One permission row plus launcher callback for onboarding's final setup step. */
 private enum class PermissionRowId {

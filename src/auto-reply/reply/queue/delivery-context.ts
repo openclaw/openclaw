@@ -63,7 +63,7 @@ function resolveTurnAdoptionLifecycleDeliveryKey(
 // Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
 // intentionally excluded because they are session-level or not consulted in
 // per-message authorization checks.
-function resolveFollowupAuthorizationKey(run: FollowupRun): string {
+export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
   const execution = run.run;
   return JSON.stringify([
     resolveReplyOperatorAuthorityKey(run.operatorAuthority),

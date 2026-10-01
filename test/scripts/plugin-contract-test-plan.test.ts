@@ -13,19 +13,19 @@ function listContractTests(rootDir = "src/plugins/contracts"): string[] {
 
 describe("scripts/lib/plugin-contract-test-plan.mts", () => {
   it("keeps manual CI compatible with legacy target refs", () => {
-    const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+    const manifestSource = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
 
-    // ci.yml imports the plan through the importTargetPlan fallback helper since
+    // The manifest imports the plan through the importTargetPlan fallback helper since
     // 7ae5996bb3c so historical target refs without the module keep working.
-    expect(workflow).toContain("const pluginContractPlan = await importTargetPlan(");
-    expect(workflow).toContain('? "./scripts/lib/plugin-contract-test-plan.mts"');
-    expect(workflow).toContain(': "./scripts/lib/plugin-contract-test-plan.mjs",');
-    expect(workflow).toContain(
+    expect(manifestSource).toContain("const pluginContractPlan = await importTargetPlan(");
+    expect(manifestSource).toContain('? "./scripts/lib/plugin-contract-test-plan.mts"');
+    expect(manifestSource).toContain(': "./scripts/lib/plugin-contract-test-plan.mjs",');
+    expect(manifestSource).toContain(
       'typeof pluginContractPlan.createPluginContractTestShards === "function"',
     );
-    expect(workflow).toContain("checks-fast-contracts-plugins-legacy");
-    expect(workflow).not.toContain(
-      "createPluginContractTestShards: () => [\n              createPluginContractTestShards",
+    expect(manifestSource).toContain("checks-fast-contracts-plugins-legacy");
+    expect(manifestSource).not.toMatch(
+      /createPluginContractTestShards: \(\) => \[\s+createPluginContractTestShards/u,
     );
   });
 

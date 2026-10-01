@@ -12,7 +12,7 @@ import {
   hasSiblingThreadWork,
   hasThreadOwnership,
   invalidateThreadOwnership,
-  revertRetainedThreadSkillsCatalog,
+  revertRetainedThreadInstructions,
   type RetainedLiveThread,
   type CodexEphemeralThreadPolicy,
   type CodexAppServerLiveThreadOwnership,
@@ -218,11 +218,6 @@ export function ensureCodexAppServerClientRuntime(
         CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
         "Codex app-server ChatGPT token refresh timed out before its external-auth deadline. Retry the request; if it persists, sign in again with OpenClaw.",
       );
-      if (previousAccountId && tokens.chatgptAccountId !== previousAccountId) {
-        throw new Error(
-          "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
-        );
-      }
       if (runtime.closed) {
         throw new Error("Codex app-server client closed during ChatGPT token refresh.");
       }
@@ -640,13 +635,13 @@ function claimCodexAppServerThreadOwnership(
 }
 
 /** Standalone incognito compaction retains its separately owned subscription. */
-export function revertCodexAppServerLiveThreadSkillsCatalog(
+export function revertCodexAppServerLiveThreadInstructions(
   client: CodexAppServerClient,
   threadId: string,
 ): void {
   const runtime = configuredClients.get(client);
   if (runtime && !runtime.closed) {
-    revertRetainedThreadSkillsCatalog(runtime, threadId);
+    revertRetainedThreadInstructions(runtime, threadId);
   }
 }
 

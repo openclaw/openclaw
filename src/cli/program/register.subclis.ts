@@ -1,4 +1,3 @@
-// Sub-CLI registry that lazily wires gateway, models, devices, plugins, and plugin commands.
 import type { Command } from "commander";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
@@ -197,14 +196,7 @@ function resolveSubCliCommandGroups(
   argv: string[],
   context: SubCliRegistrationContext = {},
 ): CommandGroupEntry[] {
-  const descriptors = getSubCliEntriesCore();
-  const descriptorNames = new Set(descriptors.map((descriptor) => descriptor.name));
-  return buildCommandGroupEntries(
-    descriptors,
-    entrySpecs.filter(([commandNames]) => commandNames.every((name) => descriptorNames.has(name))),
-    argv,
-    context,
-  );
+  return buildCommandGroupEntries(getSubCliEntriesCore(), entrySpecs, argv, context);
 }
 
 export function getSubCliCompletionGroups(argv: string[] = process.argv) {

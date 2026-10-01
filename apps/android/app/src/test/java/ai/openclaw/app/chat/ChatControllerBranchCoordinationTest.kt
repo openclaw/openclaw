@@ -293,6 +293,7 @@ class ChatControllerBranchCoordinationTest {
       val branchScope = ChatOutboxScope(key, "main")
       val gateway = ScriptedGateway(json)
       val healthy = AtomicBoolean(false)
+      val healthRequest = AtomicReference<Job?>(null)
       val runningHead = AtomicReference<ChatOutboxItem?>(null)
       val completedHead = AtomicReference<ChatOutboxItem?>(null)
       val retirementEntered = CompletableDeferred<ChatOutboxBranchState?>()
@@ -308,6 +309,7 @@ class ChatControllerBranchCoordinationTest {
           }
         }
       gateway.respond("health") {
+        healthRequest.set(checkNotNull(currentCoroutineContext()[Job]))
         check(healthy.get()) { "health unavailable; transport remains connected" }
         "{}"
       }
@@ -340,7 +342,7 @@ class ChatControllerBranchCoordinationTest {
       runCurrent()
       controller.awaitOutboxRestore()
       controller.load(key)
-      awaitBranchProgress { !controller.healthOk.value && !controller.historyLoading.value && !controller.sessionBranchesLoading.value }
+      awaitBranchProgress { healthRequest.get()?.isCompleted == true && !controller.healthOk.value && !controller.historyLoading.value && !controller.sessionBranchesLoading.value }
       assertNull(outbox.branchState("gateway-a", branchScope)?.lastActiveLeafEntryId)
       assertTrue(controller.sendMessageAwaitAcceptance("submitted head", "off", emptyList()))
       val head = outbox.load("gateway-a").single()
@@ -352,8 +354,14 @@ class ChatControllerBranchCoordinationTest {
 
       // Keep the target's reconciled scope while moving its live run offscreen.
       healthy.set(false)
+      val previousHealthRequest = healthRequest.get()
       controller.switchSession(otherKey)
-      awaitBranchProgress { !controller.healthOk.value && !controller.historyLoading.value && !controller.sessionBranchesLoading.value }
+      // Loading flags can clear before the new health probe starts; settle that probe before recovery.
+      awaitBranchProgress {
+        val request = healthRequest.get()
+        request !== previousHealthRequest && request?.isCompleted == true &&
+          !controller.healthOk.value && !controller.historyLoading.value && !controller.sessionBranchesLoading.value
+      }
       // Live-owned accepted sends intentionally permit successors. Make this head
       // orphaned before a still-finishing flush can observe the new queued row.
       completedHead.set(head)

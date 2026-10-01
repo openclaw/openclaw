@@ -276,6 +276,77 @@ describe("placement recovery session admission with persisted placements", () =>
     },
   );
 
+  it("lent result recovery leaves the admitted Move intent for its owner and later recovery", async () => {
+    const placements = createStore();
+    const claimWaitEntered = createDeferredCore();
+    const releaseClaimWait = createDeferredCore();
+    const interruption = new Error("fixture Move interrupted after claim wait");
+    const harness = createHarness(support.testState.stateDb, placements, {
+      workspacePath: support.testState.root,
+      runMoveBarrier: async ({ sessionId, begin }) => {
+        await begin();
+        await coordinated.awaitTurnClaimRelease(sessionId, () => {
+          claimWaitEntered.resolve();
+          return releaseClaimWait.promise;
+        });
+        throw interruption;
+      },
+    });
+    const active = await harness.placements.seedActive(2);
+    if (active.state !== "active") {
+      throw new Error("Move fixture was not active");
+    }
+    harness.markEnvironmentOwnerEpoch(2);
+    const claim = await placements.claimTurn({
+      ...REQUEST,
+      claimId: "move-wait-claim",
+      runId: "move-wait-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const coordinated = coordinate(harness);
+    const move = coordinated.move({
+      ...REQUEST,
+      source: {
+        generation: active.generation,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" },
+    });
+    void move.catch(claimWaitEntered.reject);
+    let recovery: Promise<void> | undefined;
+    try {
+      await claimWaitEntered.promise;
+      const intent = placements.getPlacementMove(REQUEST.sessionId);
+      expect(intent).toBeDefined();
+      recovery = coordinated.reconcileActive(active.environmentId);
+      await recovery;
+      expect(placements.getPlacementMove(REQUEST.sessionId)).toEqual(intent);
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "draining",
+        turnClaim: { claimId: claim.claimId },
+      });
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+    } finally {
+      try {
+        await placements.releaseTurn(claim);
+      } finally {
+        releaseClaimWait.resolve();
+        await Promise.allSettled([move, recovery]);
+      }
+    }
+    await expect(move).rejects.toBe(interruption);
+    expect(placements.getPlacementMove(REQUEST.sessionId)).toBeDefined();
+    await coordinated.reconcileActive(active.environmentId);
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
+    expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
   it("reads pending results after a same-session Stop has settled", async () => {
     const placements = createStore();
     const observe = prepareTargetedAdmissionObserver(placements);

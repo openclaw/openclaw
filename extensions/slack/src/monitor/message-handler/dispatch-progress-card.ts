@@ -10,16 +10,14 @@ import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
+import { SLACK_TEXT_LIMIT } from "../../limits.js";
 import {
   buildSlackProgressCardBlocks,
   type SlackProgressSessionLink,
 } from "../../progress-blocks.js";
 import { truncateSlackText } from "../../truncate.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
-import {
-  combineProgressHeadlineAndExplanation,
-  resolveStructuredProgressLines,
-} from "./dispatch-progress-render.js";
+import { resolveStructuredProgressLines } from "./dispatch-progress-render.js";
 import type { SlackDispatchSetup } from "./dispatch-setup.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 
@@ -31,6 +29,7 @@ export function createSlackDraftProgressCardRuntime(params: {
   setup: Pick<SlackDispatchSetup, "account" | "cfg" | "ctx" | "prepared" | "slackClient">;
   draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
   enabled: boolean;
+  detailed: boolean;
   progressWorkCounter: ReturnType<typeof createChannelProgressWorkCounter> | undefined;
   explicitTitle: string | undefined;
   maxLineChars: number;
@@ -86,45 +85,35 @@ export function createSlackDraftProgressCardRuntime(params: {
     snapshot: ChannelProgressDraftCompositorSnapshot,
     state: DraftProgressCardState,
   ) => {
-    const title = params.explicitTitle ?? snapshot.statusHeadline;
-    const titleFormat = params.explicitTitle ? undefined : snapshot.statusHeadlineFormat;
-    const narration = params.explicitTitle
-      ? snapshot.statusHeadlineFormat === "plain" || snapshot.planExplanationFormat === "plain"
-        ? [
-            ...(snapshot.statusHeadline &&
-            (snapshot.statusHeadline !== snapshot.planExplanation ||
-              snapshot.statusHeadlineFormat !== snapshot.planExplanationFormat)
-              ? [{ text: snapshot.statusHeadline, format: snapshot.statusHeadlineFormat }]
-              : []),
-            ...(snapshot.planExplanation
-              ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
-              : []),
-          ]
-        : combineProgressHeadlineAndExplanation(snapshot.statusHeadline, snapshot.planExplanation)
-      : snapshot.planExplanation &&
-          (snapshot.planExplanation !== title || snapshot.planExplanationFormat !== titleFormat)
-        ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
-        : undefined;
-    const workCounter = state === "working" ? params.progressWorkCounter : undefined;
-    const sessionLinks = state === "working" ? [] : resolveSessionLinks();
+    const narration = [
+      { text: snapshot.statusHeadline ?? "", format: snapshot.statusHeadlineFormat },
+      { text: snapshot.planExplanation ?? "", format: snapshot.planExplanationFormat },
+    ];
     return buildSlackProgressCardBlocks({
       state,
-      title,
-      titleFormat,
+      detailed: params.detailed,
+      title: params.explicitTitle,
       narration,
       plan: snapshot.plan,
       lines: resolveStructuredProgressLines(snapshot.lines),
       maxLineChars: params.maxLineChars,
       diffStat: snapshot.diffStat,
-      toolCalls: workCounter?.toolCalls,
-      elapsedSeconds: workCounter?.elapsedSeconds,
-      sessionLinks,
+      toolCalls: params.progressWorkCounter?.toolCalls,
+      elapsedSeconds: params.progressWorkCounter?.elapsedSeconds,
+      sessionLinks: state === "working" ? [] : resolveSessionLinks(),
     });
   };
 
+  // Blocks carry the card; its fallback text must fit the draft limit or the stream stops.
+  const resolveCardText = (blocks: ReturnType<typeof resolvePresentation>) =>
+    truncateSlackText(
+      buildSlackCompleteBlocksFallbackText(blocks),
+      Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
+    );
+
   const finalize = async (
     status: Exclude<DraftProgressCardState, "working">,
-    snapshot = params.getSnapshot(),
+    options: { snapshot?: ChannelProgressDraftCompositorSnapshot; postIfMissing?: boolean } = {},
   ): Promise<boolean> => {
     if (!params.draftStream || !params.enabled) {
       return false;
@@ -135,22 +124,36 @@ export function createSlackDraftProgressCardRuntime(params: {
       return true;
     }
     await params.draftStream.flush();
-    const channelId = params.draftStream.channelId();
-    const messageId = params.draftStream.messageId();
+    const snapshot = options.snapshot ?? params.getSnapshot();
+    let channelId = params.draftStream.channelId();
+    let messageId = params.draftStream.messageId();
+    const blocks = resolvePresentation(snapshot, terminalStatus);
+    if ((!channelId || !messageId) && terminalStatus === "error" && options.postIfMissing) {
+      params.draftStream.update({ text: resolveCardText(blocks), blocks });
+      await params.draftStream.flush();
+      channelId = params.draftStream.channelId();
+      messageId = params.draftStream.messageId();
+    }
     if (!channelId || !messageId) {
       return false;
+    }
+    // Nothing left to show (e.g. only a resolved approval): delete here so every
+    // closeout path, including failures without a final reply, drops stale rows.
+    if (blocks.length === 0) {
+      await params.draftStream.clear();
+      finalStatus = terminalStatus;
+      return true;
     }
     await params.draftStream.seal();
     try {
       const finalized = await params.draftStream.finalizeMessage(messageId, async () => {
-        const blocks = resolvePresentation(snapshot, terminalStatus);
         await finalizeSlackPreviewEdit({
           client: slackClient,
           token: ctx.botToken,
           accountId: account.accountId,
           channelId,
           messageId,
-          text: buildSlackCompleteBlocksFallbackText(blocks),
+          text: resolveCardText(blocks),
           blocks,
           threadTs: params.getThreadTs(),
         });
@@ -175,6 +178,7 @@ export function createSlackDraftProgressCardRuntime(params: {
       }
     },
     resolvePresentation,
+    resolveCardText,
     finalize,
     get hasTerminalized() {
       return finalStatus !== undefined;

@@ -1,9 +1,3 @@
-/**
- * Browser filesystem path helpers.
- *
- * Defines browser output roots and resolves upload/media references while
- * enforcing root-scoped path access for Browser tool file inputs.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -35,13 +29,9 @@ function canUseNodeFs(): boolean {
 const DEFAULT_BROWSER_TMP_DIR = canUseNodeFs()
   ? resolvePreferredOpenClawTmpDir()
   : DEFAULT_FALLBACK_BROWSER_TMP_DIR;
-/** Default root directory for browser trace files. */
 export const DEFAULT_TRACE_DIR = DEFAULT_BROWSER_TMP_DIR;
-/** Default root directory for browser downloads. */
 export const DEFAULT_DOWNLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "downloads");
-/** Default root directory for browser upload inputs. */
 export const DEFAULT_UPLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "uploads");
-/** Default root directory for managed inbound media references. */
 const DEFAULT_INBOUND_MEDIA_DIR = path.join(CONFIG_DIR, "media", "inbound");
 
 type ExistingPathsResult = Awaited<ReturnType<typeof resolveExistingPathsWithinRoot>>;
@@ -116,7 +106,7 @@ function resolveManagedInboundMediaRef(
       return { ok: false, error: `Invalid media reference: ${normalizedSource}` };
     }
     const decoded = decodeInboundMediaId(rawPath.slice(1), normalizedSource);
-    return decoded?.ok
+    return decoded.ok
       ? {
           ok: true,
           path: path.join(inboundMediaDir, decoded.path),
@@ -130,7 +120,7 @@ function resolveManagedInboundMediaRef(
     return null;
   }
   const decoded = decodeInboundMediaId(relativeMatch[1], normalizedSource);
-  return decoded?.ok
+  return decoded.ok
     ? {
         ok: true,
         path: path.join(inboundMediaDir, decoded.path),

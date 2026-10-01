@@ -1,7 +1,6 @@
-// Drives a gateway channel-setup wizard session (wizard.start flow "channels")
-// as a step/answer state machine for the Control UI wizard modal.
+import type { WizardStartResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { WizardStep } from "../../api/types.ts";
+import type { WizardNextResult, WizardStep } from "../../api/types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 
@@ -38,20 +37,7 @@ async function requestWithTimeout<T>(
   }
 }
 
-export type ChannelWizardStep = WizardStep;
-
-type WizardNextResult = {
-  sessionId?: string;
-  done: boolean;
-  step?: ChannelWizardStep;
-  status?: "running" | "done" | "cancelled" | "error";
-  error?: string;
-  // What the gateway flow actually configured (terminal result only).
-  channels?: string[];
-  accounts?: Array<{ channel: string; accountId: string }>;
-};
-
-function cancelRunningWizardResult(client: WizardGatewayClient, result: WizardNextResult): void {
+function cancelRunningWizardResult(client: WizardGatewayClient, result: WizardStartResult): void {
   if (!result.sessionId || result.done) {
     return;
   }
@@ -66,8 +52,7 @@ export type ChannelWizardState =
   | {
       phase: "step";
       channel: string | null;
-      step: ChannelWizardStep;
-      stepIndex: number;
+      step: WizardStep;
       busy: boolean;
       validationError: string | null;
     }
@@ -87,7 +72,6 @@ export class ChannelWizardController {
   private currentState: ChannelWizardState = { phase: "idle" };
   private sessionId: string | null = null;
   private channel: string | null = null;
-  private stepIndex = 0;
   private generation = 0;
   private abortController: AbortController | null = null;
   private pendingCancellation: {
@@ -119,7 +103,6 @@ export class ChannelWizardController {
     this.abortController = new AbortController();
     this.sessionId = null;
     this.channel = channel;
-    this.stepIndex = 0;
     this.setState({ phase: "starting", channel });
     try {
       const cancellation = this.pendingCancellation;
@@ -129,7 +112,7 @@ export class ChannelWizardController {
           return;
         }
       }
-      const result = await requestWithTimeout<WizardNextResult>(
+      const result = await requestWithTimeout<WizardStartResult>(
         client,
         "wizard.start",
         {
@@ -240,13 +223,11 @@ export class ChannelWizardController {
 
   private applyResult(result: WizardNextResult): void {
     if (!result.done && result.step) {
-      this.stepIndex += 1;
       const gatewayOwned = result.step.executor === "gateway";
       this.setState({
         phase: "step",
         channel: this.channel,
         step: result.step,
-        stepIndex: this.stepIndex,
         busy: gatewayOwned,
         validationError: result.error ? formatUiExternalText(result.error) : null,
       });
@@ -257,9 +238,9 @@ export class ChannelWizardController {
       }
       return;
     }
+    this.sessionId = null;
+    this.abortController = null;
     if (result.status === "done") {
-      this.sessionId = null;
-      this.abortController = null;
       // The gateway reports what the flow actually configured; the initially
       // requested channel is only a preselection and may have been skipped.
       const channels = result.channels ?? [];
@@ -272,14 +253,10 @@ export class ChannelWizardController {
       return;
     }
     if (result.status === "cancelled") {
-      this.sessionId = null;
-      this.abortController = null;
       this.channel = null;
       this.setState({ phase: "idle" });
       return;
     }
-    this.sessionId = null;
-    this.abortController = null;
     this.setState({
       phase: "error",
       channel: this.channel,

@@ -9,8 +9,9 @@ import type {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runCommandBuffered, withCommandProcessScope } from "openclaw/plugin-sdk/process-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -574,15 +575,7 @@ function readOptionalCount(value: unknown): number | undefined {
 }
 
 function parseJsonRecord(paramsJSON?: string | null): Record<string, unknown> {
-  if (!paramsJSON?.trim()) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(paramsJSON) as unknown;
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
+  return asNonArrayRecord(safeParseJson(paramsJSON ?? ""));
 }
 
 function normalizeLimit(value: unknown): number {

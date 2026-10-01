@@ -42,21 +42,6 @@ function markRestoredCallSkipped(call: CallRecord, endReason: "completed" | "tim
   call.state = endReason;
 }
 
-function incrementRestoreStatusCount(
-  counts: Map<string, number>,
-  status: string | undefined,
-): void {
-  const key = normalizeOptionalString(status) ?? "terminal";
-  counts.set(key, (counts.get(key) ?? 0) + 1);
-}
-
-function resolveRestoredMaxDurationAnchor(call: CallRecord): number | undefined {
-  return (
-    call.answeredAt ??
-    (call.state === "speaking" || call.state === "listening" ? call.startedAt : undefined)
-  );
-}
-
 function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
   const rawOverride = storePath?.trim() || config.store?.trim();
   if (rawOverride) {
@@ -118,12 +103,15 @@ export class CallManager {
       return this.stopPromise;
     }
     this.closing = true;
-    for (const timers of [this.maxDurationTimers, this.notifyHangupTimers]) {
-      for (const timer of timers.values()) {
-        clearTimeout(timer);
+    const clearTimers = () => {
+      for (const timers of [this.maxDurationTimers, this.notifyHangupTimers]) {
+        for (const timer of timers.values()) {
+          clearTimeout(timer);
+        }
+        timers.clear();
       }
-      timers.clear();
-    }
+    };
+    clearTimers();
     for (const waiter of this.transcriptWaiters.values()) {
       clearTimeout(waiter.timeout);
       waiter.reject(new Error("Voice Call runtime stopped"));
@@ -139,12 +127,7 @@ export class CallManager {
           }
         }
       }
-      for (const timers of [this.maxDurationTimers, this.notifyHangupTimers]) {
-        for (const timer of timers.values()) {
-          clearTimeout(timer);
-        }
-        timers.clear();
-      }
+      clearTimers();
       if (failures.length > 0) {
         throw new AggregateError(failures, "Voice Call work failed during shutdown");
       }
@@ -230,12 +213,13 @@ export class CallManager {
     const timers: Array<{ callId: CallId; deadline: number }> = [];
     let skippedAlreadyElapsedTimers = 0;
     for (const [callId, call] of verified) {
-      const maxDurationAnchor = resolveRestoredMaxDurationAnchor(call);
+      const maxDurationAnchor =
+        call.answeredAt ??
+        (call.state === "speaking" || call.state === "listening" ? call.startedAt : undefined);
       if (maxDurationAnchor !== undefined && !TerminalStates.has(call.state)) {
         const elapsed = Date.now() - maxDurationAnchor;
         const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
         if (elapsed >= maxDurationMs) {
-          // Already expired — remove instead of keeping
           verified.delete(callId);
           skippedAlreadyElapsedTimers += 1;
           continue;
@@ -342,7 +326,8 @@ export class CallManager {
         const task = provider.getCallStatus({ providerCallId: call.providerCallId }).then(
           async (result) => {
             if (result.isTerminal) {
-              incrementRestoreStatusCount(skippedTerminalStatuses, result.status);
+              const status = normalizeOptionalString(result.status) ?? "terminal";
+              skippedTerminalStatuses.set(status, (skippedTerminalStatuses.get(status) ?? 0) + 1);
               markRestoredCallSkipped(call, "completed");
               await persistCallRecord(this.storePath, call, this.stateRuntime);
             } else if (result.isUnknown) {
@@ -406,10 +391,6 @@ export class CallManager {
       );
     }
     return verified;
-  }
-
-  getProvider(): VoiceCallProvider | null {
-    return this.provider;
   }
 
   async initiateCall(
@@ -519,14 +500,11 @@ export class CallManager {
       return false;
     }
 
-    const streamAwareProvider = this.provider as VoiceCallProvider & {
-      isConversationStreamConnectEnabled?: () => boolean;
-    };
-    if (typeof streamAwareProvider.isConversationStreamConnectEnabled !== "function") {
+    if (typeof this.provider.isConversationStreamConnectEnabled !== "function") {
       return false;
     }
 
-    return streamAwareProvider.isConversationStreamConnectEnabled();
+    return this.provider.isConversationStreamConnectEnabled();
   }
 
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {

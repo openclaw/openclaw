@@ -1,4 +1,3 @@
-// Registers plugin-provided CLI command groups.
 import type { Command } from "commander";
 import { setCommandJsonMode } from "../cli/program/json-mode.js";
 import {

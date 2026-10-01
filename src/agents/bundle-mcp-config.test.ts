@@ -54,10 +54,9 @@ describe("loadMergedBundleMcpConfig", () => {
   it("preserves Agent Plugins launch ownership for unshadowed bundle servers", () => {
     const merged = loadMergedBundleMcpConfig({
       workspaceDir: "/workspace",
-      mapConfiguredServer: (server) => ({ ...server, mapped: true }),
     });
 
-    expect(merged.config.mcpServers.bundleProbe).toMatchObject({ mapped: true });
+    expect(merged.config.mcpServers.bundleProbe).toMatchObject({ command: "node" });
     expect(merged.prepareDataDirsByServer).toEqual({
       bundleProbe: { pluginId: "bundle-probe", dataDir: "/state/plugin-data/bundle-probe" },
     });
@@ -74,7 +73,10 @@ describe("loadMergedBundleMcpConfig", () => {
       url: "https://mcp.example.com/mcp",
     });
     expect(toCliBundleMcpServerConfig({ type: "sse", transport: "streamable-http" })).toEqual({
-      type: "sse",
+      type: "http",
+    });
+    expect(toCliBundleMcpServerConfig({ type: " CuStOm ", transport: "custom" })).toEqual({
+      type: " CuStOm ",
     });
   });
 

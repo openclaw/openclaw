@@ -1,5 +1,4 @@
 import fs from "node:fs";
-/** Doctor warnings for heartbeat.session values that resolve to missing delivery sessions. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";

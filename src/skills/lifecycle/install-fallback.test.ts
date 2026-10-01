@@ -9,6 +9,7 @@ import { captureEnv } from "../../test-utils/env.js";
 import { hasBinary } from "../loading/config.js";
 import { hasBinaryMock, runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
+import { installSkill, resolveInstallerKindReadiness } from "./install.js";
 
 const skillsMocks = vi.hoisted(() => ({
   loadWorkspaceSkills: vi.fn(),
@@ -31,13 +32,6 @@ vi.mock("../loading/workspace-skill-loader.js", () => {
 vi.mock("../loading/config.js", { spy: true });
 vi.mock("../../infra/brew.js", { spy: true });
 vi.mock("../../infra/container-environment.js", { spy: true });
-
-let installSkill: typeof import("./install.js").installSkill;
-let resolveInstallerKindReadiness: typeof import("./install.js").resolveInstallerKindReadiness;
-
-async function loadSkillsInstallModulesForTest() {
-  ({ installSkill, resolveInstallerKindReadiness } = await import("./install.js"));
-}
 
 function makeSkillEntry(
   workspaceDir: string,
@@ -149,7 +143,6 @@ describe("skills-install fallback edge cases", () => {
         package: "example-package",
       }),
     ]);
-    await loadSkillsInstallModulesForTest();
   });
 
   beforeEach(() => {

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
@@ -217,13 +218,7 @@ function rememberReplay(hash: string, expiresAtMs: number): boolean {
     return false;
   }
   replayCache.set(hash, expiresAtMs);
-  while (replayCache.size > REPLAY_CACHE_LIMIT) {
-    const first = replayCache.keys().next().value;
-    if (!first) {
-      return true;
-    }
-    replayCache.delete(first);
-  }
+  pruneMapToMaxSize(replayCache, REPLAY_CACHE_LIMIT);
   return true;
 }
 

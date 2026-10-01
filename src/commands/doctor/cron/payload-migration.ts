@@ -45,12 +45,8 @@ export function inferPayloadIfMissing(raw: UnknownRecord) {
     raw.payload = { kind: "agentTurn", message };
     return true;
   }
-  if (text) {
-    raw.payload = { kind: "systemEvent", text };
-    return true;
-  }
-  if (command) {
-    raw.payload = { kind: "systemEvent", text: command };
+  if (text || command) {
+    raw.payload = { kind: "systemEvent", text: text || command };
     return true;
   }
   return false;
@@ -59,19 +55,16 @@ export function inferPayloadIfMissing(raw: UnknownRecord) {
 export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: UnknownRecord) {
   let mutated = false;
 
-  const copyTrimmedString = (field: "model" | "thinking") => {
-    const existing = normalizeOptionalString(payload[field]);
-    if (existing) {
-      return;
+  for (const field of ["model", "thinking"] as const) {
+    if (normalizeOptionalString(payload[field])) {
+      continue;
     }
     const value = normalizeOptionalString(raw[field]);
     if (value) {
       payload[field] = value;
       mutated = true;
     }
-  };
-  copyTrimmedString("model");
-  copyTrimmedString("thinking");
+  }
 
   if (
     typeof payload.timeoutSeconds !== "number" &&
@@ -213,7 +206,6 @@ function migrateLegacyOpenAICodexModelRefs(
   return mutated;
 }
 
-/** Normalize legacy cron payload channel/provider and model reference fields in place. */
 export function migrateLegacyCronPayload(
   payload: UnknownRecord,
   options: {

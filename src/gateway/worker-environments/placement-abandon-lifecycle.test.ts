@@ -89,7 +89,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
         runId: "abandoned-run",
         owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
       });
-      placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       const replacementId = "worker-replacement";
       await seedDevice(replacementId);
       const attachReplacement = () =>
@@ -304,7 +304,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
               ownerEpoch: replacement.ownerEpoch,
             },
           });
-          placements.authorizeWorkerTurnTools(replacementClaim, ["sessions_send"]);
+          await placements.authorizeWorkerTurnTools(replacementClaim, ["sessions_send"]);
           const grant = await service.acquireTurnCredential(replacementClaim);
           expect(await service.acknowledgeCredentialDelivery(grant)).toBe(true);
           await tunnels.start({

@@ -1,4 +1,3 @@
-// PNG encode helpers build small PNG files without external image dependencies.
 import { crc32, deflateSync } from "node:zlib";
 
 /** Keep chunk parts separate so final assembly copies compressed data only once. */

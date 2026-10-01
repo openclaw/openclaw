@@ -70,6 +70,7 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
     async () => {
       instance = await createOpenClawTestInstance({
         name: "qa-doctor-auth-secretref",
+        reserveIdlePort: false,
       });
 
       const resolvedValue = "qa-resolved-gateway-value";

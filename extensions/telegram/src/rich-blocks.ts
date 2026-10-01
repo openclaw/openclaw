@@ -58,24 +58,14 @@ type StructuralSegment =
   | { kind: "list"; start: number; end: number; source: MarkdownRichListSource }
   | { kind: "table"; start: number; end: number; table: MarkdownTableMeta };
 
-function resolveHeadingSize(style: MarkdownStyle): 1 | 2 | 3 | 4 | 5 | 6 | undefined {
-  switch (style) {
-    case "heading_1":
-      return 1;
-    case "heading_2":
-      return 2;
-    case "heading_3":
-      return 3;
-    case "heading_4":
-      return 4;
-    case "heading_5":
-      return 5;
-    case "heading_6":
-      return 6;
-    default:
-      return undefined;
-  }
-}
+const HEADING_SIZES: Partial<Record<MarkdownStyle, 1 | 2 | 3 | 4 | 5 | 6>> = {
+  heading_1: 1,
+  heading_2: 2,
+  heading_3: 3,
+  heading_4: 4,
+  heading_5: 5,
+  heading_6: 6,
+};
 
 function isInlineStyle(style: MarkdownStyle): style is InlineStyleKind {
   return Object.hasOwn(INLINE_STYLE_RANK, style);
@@ -372,7 +362,7 @@ function collectStructuralSegments(
     if (span.end <= span.start) {
       continue;
     }
-    const headingSize = resolveHeadingSize(span.style);
+    const headingSize = HEADING_SIZES[span.style];
     if (headingSize) {
       segments.push({ kind: "heading", start: span.start, end: span.end, size: headingSize });
       continue;

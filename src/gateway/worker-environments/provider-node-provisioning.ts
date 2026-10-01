@@ -343,6 +343,8 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         !(await options.store.hasSessionAttachment(record.environmentId));
       assertCurrent();
       nodeBuild = await options.ensureNodeWorkerBundle({
+        reason: "provision",
+        environmentId: record.environmentId,
         deviceId: lease.node.deviceId,
         artifact,
         prewarm,

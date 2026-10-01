@@ -1,6 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   listSessionPendingInputs,
@@ -8,6 +7,7 @@ import {
 } from "../config/sessions/session-accessor.pending-inputs.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
@@ -18,14 +18,13 @@ import { ensureSessionPendingInputsSchema } from "./openclaw-agent-pending-input
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { tableHasColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-input-schema-");
 
 describe("pending input additive schema", () => {
   it("leaves old stores table-free on reads and preserves accepted input through older-reader use and reopen", async () => {
     const options = {
       agentId: "main",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-input-schema-") },
+      env: { OPENCLAW_STATE_DIR: sessionDirs.make() },
     };
     const scope = {
       ...options,
@@ -90,7 +89,7 @@ describe("pending input additive schema", () => {
   it("rejects a drifted optional table rather than treating it as absent", () => {
     const options = {
       agentId: "main",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-input-schema-drift-") },
+      env: { OPENCLAW_STATE_DIR: sessionDirs.make() },
     };
     const filename = openOpenClawAgentDatabase(options).path;
     closeOpenClawAgentDatabasesForTest();
@@ -107,7 +106,7 @@ describe("pending input additive schema", () => {
     async (path) => {
       const options = {
         agentId: "main",
-        env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-input-column-") },
+        env: { OPENCLAW_STATE_DIR: sessionDirs.make() },
       };
       const scope = { ...options, sessionKey: "agent:main:column", sessionId: "column-session" };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });

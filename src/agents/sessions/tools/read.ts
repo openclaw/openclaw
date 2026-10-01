@@ -11,11 +11,6 @@ import {
   normalizeMediaReferenceSource,
   resolveMediaReferenceLocalPath,
 } from "../../../media/media-reference.js";
-/**
- * Built-in read session tool.
- *
- * Reads text and image files through local or injected operations with highlighting, resizing, and bounded output.
- */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
@@ -139,17 +134,6 @@ const defaultReadOperations: ReadOperations = {
   readFile: async (filePath) => (await readRegularFile({ filePath })).buffer,
   access: assertLocalReadableFile,
 };
-
-async function detectReadImageMimeType(
-  ops: ReadOperations,
-  buffer: Buffer,
-  absolutePath: string,
-): Promise<string | null | undefined> {
-  if (ops.detectImageMimeType) {
-    return await ops.detectImageMimeType(absolutePath, buffer);
-  }
-  return detectSupportedImageMimeType(buffer);
-}
 
 export interface ReadToolOptions {
   /** Whether to auto-resize images to 2000x2000 max. Default: true */
@@ -470,7 +454,9 @@ export function createReadToolDefinition(
               });
               return;
             }
-            const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
+            const mimeType = await (ops.detectImageMimeType
+              ? ops.detectImageMimeType(absolutePath, buffer)
+              : detectSupportedImageMimeType(buffer));
             const attachment = mimeType ? undefined : await classifyAttachmentBytes({ buffer });
             let content: (TextContent | ImageContent)[];
             let textDetails: Parameters<typeof createReadToolDetails>[1];
@@ -493,24 +479,15 @@ export function createReadToolDefinition(
                 { data: imageBytes, mimeType },
                 { autoResizeImages },
               );
-              if (!processed.ok) {
-                let textNote = `Read image file [${mimeType}]\n${processed.message}`;
-                if (nonVisionImageNote) {
-                  textNote += `\n${nonVisionImageNote}`;
-                }
-                content = [{ type: "text", text: textNote }];
-              } else {
-                let textNote = `Read image file [${processed.image.mimeType}]`;
-                if (processed.hints.length > 0) {
-                  textNote += `\n${processed.hints.join("\n")}`;
-                }
-                if (nonVisionImageNote) {
-                  textNote += `\n${nonVisionImageNote}`;
-                }
-                content = [{ type: "text", text: textNote }];
-                if (!nonVisionImageNote) {
-                  content.push(processed.image);
-                }
+              const notes = processed.ok
+                ? [`Read image file [${processed.image.mimeType}]`, ...processed.hints]
+                : [`Read image file [${mimeType}]`, processed.message];
+              if (nonVisionImageNote) {
+                notes.push(nonVisionImageNote);
+              }
+              content = [{ type: "text", text: notes.join("\n") }];
+              if (processed.ok && !nonVisionImageNote) {
+                content.push(processed.image);
               }
             } else {
               const decodedText =

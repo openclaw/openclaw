@@ -162,9 +162,9 @@ it("stops listener admission before draining an authenticated response and permi
   try {
     await entered.promise;
     entry.abort.abort();
-    await expect(fetch(url, { headers: { connection: "close" } })).rejects.toMatchObject({
-      cause: { code: "ECONNREFUSED" },
-    });
+    await expect(fetch(url, { headers: { connection: "close" } })).rejects.toMatchObject(
+      process.versions.bun ? { code: "ECONNREFUSED" } : { cause: { code: "ECONNREFUSED" } },
+    );
     expect(stopped).toBe(false);
     release.resolve();
     const accepted = await response;

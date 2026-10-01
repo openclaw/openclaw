@@ -39,10 +39,6 @@ export type ActivePreparedProjection = {
   claimId: number;
   plan: PreparedSessionTranscriptProjectionMetadata;
 };
-function nextProjectionClaimId(): number {
-  return -randomInt(1, 2 ** 47);
-}
-
 export async function runProjectionWrite<T>(
   databaseOptions: ReconcileDatabaseOptions,
   operationLabel: Extract<SqliteSessionWriteOperation, `sessions.transcript-index.${string}`>,
@@ -73,7 +69,7 @@ export async function claimPreparedSessionTranscriptProjection(
   memorySource?: MemoryTranscriptProjectionSource,
   publication?: ProjectionPublisher,
 ): Promise<ActivePreparedProjection | undefined> {
-  const claimId = nextProjectionClaimId();
+  const claimId = -randomInt(1, 2 ** 47);
   const claimed = publication
     ? await publication.execute({ type: "claim", input: { plan, claimId } })
     : await runProjectionWrite(

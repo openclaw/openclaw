@@ -414,17 +414,15 @@ async function editDoc(
   );
   const inserted =
     blocks.length > BATCH_SIZE
-      ? (
-          await insertBlocksInBatches(
-            client,
-            docToken,
-            orderedBlocks,
-            rootIds,
-            logger,
-            target?.parentBlockId,
-            target?.index,
-          )
-        ).children
+      ? await insertBlocksInBatches(
+          client,
+          docToken,
+          orderedBlocks,
+          rootIds,
+          logger,
+          target?.parentBlockId,
+          target?.index,
+        )
       : await insertDocxDescendants(
           client,
           docToken,
@@ -454,28 +452,13 @@ async function editDoc(
 
 async function uploadImageBlock(
   client: Lark.Client,
-  docToken: string,
-  maxBytes: number,
-  imageReadTimeoutMs: number,
-  localRoots?: readonly string[],
-  url?: string,
-  filePath?: string,
-  parentBlockId?: string,
-  filename?: string,
-  index?: number,
-  imageInput?: string, // data URI, plain base64, or local path
+  {
+    doc_token: docToken,
+    parent_block_id: parentBlockId,
+    index,
+  }: Extract<FeishuDocParams, { action: "upload_image" }>,
+  upload: Awaited<ReturnType<typeof resolveDocxUploadInput>>,
 ) {
-  // Resolve first so rejected or stalled input cannot leave an empty document block behind.
-  const upload = await resolveDocxUploadInput({
-    url,
-    filePath,
-    image: imageInput,
-    maxBytes,
-    localRoots,
-    fileName: filename,
-    remoteReadTimeoutMs: imageReadTimeoutMs,
-  });
-
   // Create an empty image block (block_type 27).
   // Per Feishu FAQ: image token cannot be set at block creation time.
   const insertRes = await client.docx.documentBlockChildren.create({
@@ -516,25 +499,15 @@ async function uploadImageBlock(
 
 async function uploadFileBlock(
   client: Lark.Client,
-  docToken: string,
-  maxBytes: number,
-  localRoots?: readonly string[],
-  url?: string,
-  filePath?: string,
-  parentBlockId?: string,
-  filename?: string,
+  {
+    doc_token: docToken,
+    parent_block_id: parentBlockId,
+  }: Extract<FeishuDocParams, { action: "upload_file" }>,
+  upload: Awaited<ReturnType<typeof resolveDocxUploadInput>>,
 ) {
   const blockId = parentBlockId ?? docToken;
 
   // Feishu cannot create empty file blocks, so allocate a temporary Markdown placeholder.
-  const upload = await resolveDocxUploadInput({
-    url,
-    filePath,
-    maxBytes,
-    localRoots,
-    fileName: filename,
-  });
-
   const placeholderMd = "[file](https://example.com/placeholder)";
   const converted = await convertMarkdown(client, placeholderMd);
   const { orderedBlocks } = normalizeConvertedBlockTree(
@@ -1012,34 +985,24 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "write_table_cells":
             return json(await writeTableCells(client, p.doc_token, p.table_block_id, p.values));
           case "upload_image":
+          case "upload_file": {
+            // Resolve input before either upload path can create a document block.
+            const upload = await resolveDocxUploadInput({
+              url: p.url,
+              filePath: p.file_path,
+              maxBytes: mediaMaxBytes,
+              localRoots: mediaLocalRoots,
+              fileName: p.filename,
+              ...(p.action === "upload_image"
+                ? { image: p.image, remoteReadTimeoutMs: imageReadTimeoutMs }
+                : {}),
+            });
             return json(
-              await uploadImageBlock(
-                client,
-                p.doc_token,
-                mediaMaxBytes,
-                imageReadTimeoutMs,
-                mediaLocalRoots,
-                p.url,
-                p.file_path,
-                p.parent_block_id,
-                p.filename,
-                p.index,
-                p.image, // data URI or plain base64
-              ),
+              await (p.action === "upload_image"
+                ? uploadImageBlock(client, p, upload)
+                : uploadFileBlock(client, p, upload)),
             );
-          case "upload_file":
-            return json(
-              await uploadFileBlock(
-                client,
-                p.doc_token,
-                mediaMaxBytes,
-                mediaLocalRoots,
-                p.url,
-                p.file_path,
-                p.parent_block_id,
-                p.filename,
-              ),
-            );
+          }
           case "color_text":
             return json(await updateColorText(client, p.doc_token, p.block_id, p.content));
           case "insert_table_row":

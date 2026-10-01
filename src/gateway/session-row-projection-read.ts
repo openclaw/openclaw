@@ -12,6 +12,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { findSessionRepositoryWorkspaces } from "../state/session-repository-workspaces.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import {
   identity,
@@ -26,7 +28,7 @@ export async function withSessionRowDatabaseFacts(
     rows: ReadonlyMap<string, Row>;
     dirty: ReadonlySet<string>;
     revision: () => number | undefined;
-    registrySnapshot: () => object | undefined;
+    prepareRegistryFacts: () => Promise<void> | undefined;
     env: NodeJS.ProcessEnv;
     cfg: OpenClawConfig;
     selected?: ReadonlySet<string>;
@@ -40,7 +42,6 @@ export async function withSessionRowDatabaseFacts(
   },
 ): Promise<void> {
   const revision = owner.revision();
-  const registrySnapshot = owner.registrySnapshot();
   const ids: string[] = [];
   for (const id of owner.selected ?? owner.dirty) {
     ids.push(id);
@@ -148,7 +149,11 @@ export async function withSessionRowDatabaseFacts(
           for (const row of group.rows) {
             const prepared = byKey.get(row.key);
             if (prepared) {
-              facts.set(identity(row), { ...prepared, acpMeta: prepared.entry?.acp ?? null });
+              facts.set(identity(row), {
+                ...prepared,
+                acpMeta: prepared.entry?.acp ?? null,
+                repositoryWorkspace: null,
+              });
             }
           }
         }
@@ -170,15 +175,37 @@ export async function withSessionRowDatabaseFacts(
         for (const [index, { prepared }] of acpRows.entries()) {
           prepared.acpMeta = acpMetadata[index] ?? null;
         }
+        const repositoryRows = rows.flatMap((row) => {
+          const prepared = facts.get(identity(row));
+          return prepared?.entry?.repositoryWorkspaceId ? [{ row, prepared }] : [];
+        });
+        if (repositoryRows.length) {
+          const workspaces = await findSessionRepositoryWorkspaces(
+            repositoryRows.map(({ row }) => ({ agentId: row.agentId, sessionKey: row.key })),
+            { path: resolveOpenClawStateSqlitePath(env), env },
+          );
+          const byWorkspace = new Map(
+            workspaces.map((workspace) => [workspace.workspaceId, workspace]),
+          );
+          for (const { prepared } of repositoryRows) {
+            prepared.repositoryWorkspace =
+              byWorkspace.get(prepared.entry!.repositoryWorkspaceId!) ?? null;
+          }
+        }
+        // Registry renewal changes presentation, not the captured SQLite facts.
+        // Prepare the current lineage before accepting those facts instead of reading them again.
+        for (
+          let pending = owner.prepareRegistryFacts();
+          pending;
+          pending = owner.prepareRegistryFacts()
+        ) {
+          await pending;
+        }
         for (const databaseOwner of owners) {
           databaseOwner.assertCurrent();
         }
         assertCurrent();
-        if (
-          revision !== undefined &&
-          owner.revision() === revision &&
-          registrySnapshot === owner.registrySnapshot()
-        ) {
+        if (revision !== undefined && owner.revision() === revision) {
           const currentIds = rows
             .filter(
               (row) =>

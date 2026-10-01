@@ -187,8 +187,34 @@ describe("host-prepared embedded tool authority", () => {
             queueReturned = true;
           },
         };
+        const incoming: ReplyToolAuthorityOverlay = {
+          ...own,
+          operatorAuthority: authority("bob"),
+          senderId: "bob-sender",
+          senderName: "Bob",
+          clientCaps: ["ui-commands"],
+          gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
+        };
         let pending: ReturnType<typeof beginReplyMessageInjectionTarget> | undefined;
         try {
+          const restricted = { ...handle, supportsCrossProfileSteering: false };
+          setActiveEmbeddedRun(sessionId, restricted, sessionKey, attempt.sessionFile);
+          const restrictedTarget =
+            replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
+          pending = beginReplyMessageInjectionTarget(restrictedTarget, "Change my view", {
+            isInboundUserMessage: true,
+            toolAuthorityOverlay: incoming,
+          });
+          await expect(pending.acceptance).resolves.toBe(false);
+          await expect(pending.outcome).resolves.toMatchObject({
+            status: "rejected",
+            reason: "tool_authority_mismatch",
+          });
+          expect(
+            getGatewayToolCallerIdentity()?.personalToolParticipants?.resolve()?.profileId,
+          ).toBe("alice");
+          expect(retainSteerer).not.toHaveBeenCalled();
+          setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
           const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
           expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
           if (!target) {
@@ -196,14 +222,7 @@ describe("host-prepared embedded tool authority", () => {
           }
           pending = beginReplyMessageInjectionTarget(target, "Change my view", {
             isInboundUserMessage: true,
-            toolAuthorityOverlay: {
-              ...own,
-              operatorAuthority: authority("bob"),
-              senderId: "bob-sender",
-              senderName: "Bob",
-              clientCaps: ["ui-commands"],
-              gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
-            },
+            toolAuthorityOverlay: incoming,
           });
           await expect(pending.acceptance).resolves.toBe(true);
           const ambiguous = await dispatch();

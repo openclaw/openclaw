@@ -237,6 +237,7 @@ it.each(["missing", "invalid"])(
 it.skipIf(process.platform === "win32").each([false, true])(
   "reports Homebrew guidance across output and existing history (database: %s)",
   async (existingDatabase) => {
+    vi.spyOn(container, "isContainerEnvironment").mockReturnValue(false);
     if (existingDatabase) {
       openOpenClawStateDatabase();
     }

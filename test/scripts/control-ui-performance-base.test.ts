@@ -60,6 +60,10 @@ it("compares real UI builds with canonical compression and keeps artifacts after
     ]) {
       fs.copyFileSync(path.join(repoRoot, "scripts", script), path.join(root, "scripts", script));
     }
+    write(
+      "src/gateway/control-ui-route-preloads.ts",
+      fs.readFileSync(path.join(repoRoot, "src/gateway/control-ui-route-preloads.ts"), "utf8"),
+    );
     write("scripts/tsx.mjs", `await import(${JSON.stringify(tsxImport)});\n`);
     write(".gitignore", "node_modules\ndist/\n");
     write(
@@ -321,7 +325,7 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
     const signaledBaseOutput = `${signaledBaseResult.stdout}${signaledBaseResult.stderr}`;
     expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
     expect(signaledBaseResult.status, signaledBaseOutput).toBe(1);
-    expect(signaledBaseOutput).toContain("node failed (SIGTERM)");
+    expect(signaledBaseOutput).toContain(`${path.basename(process.execPath)} failed (SIGTERM)`);
     expect(signaledBaseOutput).not.toContain(
       "Base Control UI source does not build with the candidate toolchain",
     );

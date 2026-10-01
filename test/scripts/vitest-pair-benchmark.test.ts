@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   analyzeBenchmark,
@@ -25,8 +26,20 @@ import {
   withVitestPairDeadline,
 } from "../../scripts/lib/vitest-pair-benchmark.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
-import { waitForDead, waitForFile } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+// The managed owner joins terminal process groups, but Darwin may retain a foreign zombie
+// until its reaper runs. That PID has no ChildProcess handle in this test.
+async function waitForDescendantReap(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessAlive(pid)) {
+      await delay(5, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`process still alive: ${pid}`, { cause });
+  }
+}
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packageManager = {
@@ -702,8 +715,7 @@ describe("Vitest pair benchmark lifecycle", () => {
         }),
       ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
 
-      await waitForFile(pidFile, 3_000);
-      await waitForDead(Number.parseInt(readFileSync(pidFile, "utf8"), 10), 5_000);
+      expect(isProcessAlive(Number.parseInt(readFileSync(pidFile, "utf8"), 10))).toBe(false);
       expect(existsSync(successor)).toBe(false);
       expect(
         JSON.parse(readFileSync(path.join(output, "terminal-manifest.json"), "utf8")),
@@ -738,7 +750,7 @@ describe("Vitest pair benchmark lifecycle", () => {
 
   it.runIf(process.platform !== "win32")(
     "fails closed and cleans a leaked descendant process",
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("vitest-pair-leak-");
       const pidFile = path.join(root, "child.pid");
       const script = [
@@ -760,9 +772,8 @@ describe("Vitest pair benchmark lifecycle", () => {
         }),
       ).rejects.toThrow(/process group remained active|cleanup could not verify/u);
 
-      await waitForFile(pidFile, 3_000);
       const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-      await waitForDead(pid, 5_000);
+      await waitForDescendantReap(pid, signal);
     },
   );
 

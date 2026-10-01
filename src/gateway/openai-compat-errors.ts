@@ -6,7 +6,7 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
-type OpenAiCompatError = {
+export type OpenAiCompatError = {
   status: number;
   error: {
     message: string;
@@ -130,12 +130,11 @@ export function resolveResponseFormat(value: unknown): Record<string, unknown> |
   if (!isRecord(value)) {
     throw new Error("response_format must be an object");
   }
-  const obj = value;
-  const type = obj.type;
+  const type = value.type;
   if (type !== "text" && type !== "json_object" && type !== "json_schema") {
     throw new Error("response_format.type must be text, json_object, or json_schema");
   }
-  return obj;
+  return value;
 }
 
 export function resolveStopSequences(

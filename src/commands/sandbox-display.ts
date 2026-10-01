@@ -1,7 +1,3 @@
-/**
- * Display utilities for sandbox CLI
- */
-
 import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";

@@ -10,6 +10,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEnabledDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
+import { isDebugProxyCaptureDeferred } from "./runtime-deferral.js";
 import { installDebugProxyGlobalFetchPatch } from "./runtime-fetch-patch.js";
 import {
   reportCapturePersistenceFailure,
@@ -227,11 +228,7 @@ export function prepareHttpCapture(
   return admission
     ? (params: HttpCaptureParams | HttpCaptureErrorParams) => {
         if (admission.current) {
-          if ("response" in params) {
-            void captureOwnedHttpExchange(params, admission.current);
-          } else {
-            void captureOwnedHttpError(params, admission.current);
-          }
+          void captureInstalledFetch(admission.current, params);
         }
       }
     : undefined;
@@ -266,6 +263,9 @@ function runOwnedCapture(
   asynchronous: boolean,
   capture: (execution: CaptureExecution) => void | Promise<void>,
 ): void | Promise<void> {
+  if (isDebugProxyCaptureDeferred()) {
+    return;
+  }
   if (!asynchronous) {
     try {
       owner.maintenanceScope?.assertAdmission();

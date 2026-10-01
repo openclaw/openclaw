@@ -1,12 +1,14 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import type {
-  MockOpenAiCodeModeExecSurface,
-  ResponsesInputItem,
-  StreamEvent,
+import {
+  type MockOpenAiCodeModeExecSurface,
+  type ResponsesInputItem,
+  type StreamEvent,
+  parseJsonObjectBody,
 } from "./mock-openai-contracts.js";
 import {
   findNamedToolDefinition,
+  hasToolErrorOutput,
   hasDeclaredTool,
   hasToolDefinition,
 } from "./mock-openai-directives.js";
@@ -14,6 +16,8 @@ import { extractPlannedToolArgs, extractPlannedToolName } from "./mock-openai-ev
 import {
   extractAllRequestTexts,
   extractToolOutput,
+  extractToolOutputValue,
+  extractLatestToolOutput,
   extractToolOutputCallId,
   extractToolOutputStructuredError,
   parseToolOutputJson,
@@ -25,12 +29,9 @@ import {
 
 export const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
 
-export function stringifyScenarioToolOutput(value: unknown): string {
+function stringifyScenarioToolOutput(value: unknown): string {
   if (typeof value === "string") {
     return value;
-  }
-  if (value === undefined) {
-    return "";
   }
   try {
     return JSON.stringify(value) ?? "";
@@ -51,16 +52,11 @@ function decodeCodeModeTarget(code: string | undefined) {
   if (!marker) {
     return null;
   }
-  try {
-    const encoded = marker.slice(`// ${QA_CODE_MODE_TARGET_MARKER}`.length).trim();
-    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown;
-    if (!isRecord(parsed) || typeof parsed.name !== "string" || !isRecord(parsed.args)) {
-      return null;
-    }
-    return { name: parsed.name, args: parsed.args };
-  } catch {
-    return null;
-  }
+  const encoded = marker.slice(`// ${QA_CODE_MODE_TARGET_MARKER}`.length).trim();
+  const parsed = parseJsonObjectBody(Buffer.from(encoded, "base64url").toString("utf8"));
+  return typeof parsed?.name === "string" && isRecord(parsed.args)
+    ? { name: parsed.name, args: parsed.args }
+    : null;
 }
 
 export function resolveCodeModeExecSurface(
@@ -83,9 +79,7 @@ export function resolveCodeModeExecSurface(
   }
   const properties = schema.properties;
   const required = schema.required;
-  return properties !== null &&
-    typeof properties === "object" &&
-    !Array.isArray(properties) &&
+  return isRecord(properties) &&
     Object.hasOwn(properties, "code") &&
     Array.isArray(required) &&
     required.includes("code")
@@ -116,23 +110,18 @@ export function resolveCurrentToolDeclarationSurface(
   };
 }
 
-export function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
-  return input.toReversed().find((item) => {
-    const type = item.type;
-    return (type === "function_call" || type === "custom_tool_call") && item.call_id === callId;
-  });
+function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
+  return input.findLast(
+    (item) =>
+      (item.type === "function_call" || item.type === "custom_tool_call") &&
+      item.call_id === callId,
+  );
 }
 
 function parseToolCallArguments(toolCall: ResponsesInputItem) {
-  if (typeof toolCall.arguments !== "string") {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(toolCall.arguments) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  return typeof toolCall.arguments === "string" && toolCall.arguments
+    ? parseJsonObjectBody(toolCall.arguments)
+    : null;
 }
 
 function readGeneratedCodeModeExecSource(toolCall: ResponsesInputItem | undefined) {
@@ -148,7 +137,7 @@ function isGeneratedCodeModeExecCall(toolCall: ResponsesInputItem | undefined) {
   return typeof source === "string" && decodeCodeModeTarget(source) !== null;
 }
 
-export function parseNativeCodeModeOutput(
+function parseNativeCodeModeOutput(
   output: unknown,
 ): { status: "waiting"; cellId: string } | { status: "completed"; value: unknown } | null {
   if (!Array.isArray(output)) {
@@ -185,9 +174,12 @@ export function parseNativeCodeModeOutput(
   return null;
 }
 
-function isGeneratedCodeModeWaitCall(input: ResponsesInputItem[], toolCall: ResponsesInputItem) {
+function findGeneratedCodeModeWaitTarget(
+  input: ResponsesInputItem[],
+  toolCall: ResponsesInputItem,
+) {
   if (toolCall.name !== "wait") {
-    return false;
+    return undefined;
   }
   const args = parseToolCallArguments(toolCall);
   const waitId =
@@ -197,24 +189,29 @@ function isGeneratedCodeModeWaitCall(input: ResponsesInputItem[], toolCall: Resp
         ? args.runId
         : undefined;
   if (!waitId) {
-    return false;
+    return undefined;
   }
-  return input.some((item) => {
+  for (const item of input) {
     if (
       (item.type !== "function_call_output" && item.type !== "custom_tool_call_output") ||
       typeof item.call_id !== "string"
     ) {
-      return false;
+      continue;
     }
     const native = parseNativeCodeModeOutput(item.output);
     const parsed = native ?? parseToolOutputJson(stringifyScenarioToolOutput(item.output));
-    return (
+    if (
       parsed?.status === "waiting" &&
       (("cellId" in parsed && parsed.cellId === waitId) ||
-        ("runId" in parsed && parsed.runId === waitId)) &&
-      isGeneratedCodeModeExecCall(findToolCallByCallId(input, item.call_id))
-    );
-  });
+        ("runId" in parsed && parsed.runId === waitId))
+    ) {
+      const target = findToolCallByCallId(input, item.call_id);
+      if (isGeneratedCodeModeExecCall(target)) {
+        return target;
+      }
+    }
+  }
+  return undefined;
 }
 
 export function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
@@ -231,17 +228,14 @@ export function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
       checkpoints.add(Number(match[1]));
     }
   }
-  const waitCount = input.filter((item) => isGeneratedCodeModeWaitCall(input, item)).length;
+  const waitCount = input.filter((item) => findGeneratedCodeModeWaitTarget(input, item)).length;
   return {
     checkpoints: [...checkpoints].toSorted((left, right) => left - right),
     waitCount,
   };
 }
 
-export function isCodeModeControlToolOutput(
-  body: Record<string, unknown>,
-  input: ResponsesInputItem[],
-) {
+function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
   if (!hasCodeModeExecSurface(body)) {
     return false;
   }
@@ -252,7 +246,7 @@ export function isCodeModeControlToolOutput(
   const toolCall = findToolCallByCallId(input, toolOutputCallId);
   return (
     isGeneratedCodeModeExecCall(toolCall) ||
-    (toolCall ? isGeneratedCodeModeWaitCall(input, toolCall) : false)
+    Boolean(toolCall && findGeneratedCodeModeWaitTarget(input, toolCall))
   );
 }
 
@@ -271,15 +265,22 @@ export function canCallScenarioTool(
   );
 }
 
-export function readScenarioCompletedToolName(toolCall: ResponsesInputItem | undefined) {
-  if (toolCall?.name === "tool_call") {
-    const id = parseToolCallArguments(toolCall)?.id;
+function readScenarioCompletedToolName(
+  toolCall: ResponsesInputItem | undefined,
+  input: ResponsesInputItem[] = [],
+) {
+  const call =
+    toolCall?.name === "wait"
+      ? (findGeneratedCodeModeWaitTarget(input, toolCall) ?? toolCall)
+      : toolCall;
+  if (call?.name === "tool_call") {
+    const id = parseToolCallArguments(call)?.id;
     return typeof id === "string" ? id : undefined;
   }
-  if (toolCall?.name === "exec") {
-    return decodeCodeModeTarget(readGeneratedCodeModeExecSource(toolCall))?.name;
+  if (call?.name === "exec") {
+    return decodeCodeModeTarget(readGeneratedCodeModeExecSource(call))?.name;
   }
-  return toolCall?.name;
+  return call?.name;
 }
 
 export function unwrapScenarioCatalogOutput(
@@ -320,6 +321,54 @@ export function unwrapScenarioCatalogOutput(
         .map((part) => part.text)
         .join("\n")
     : output;
+}
+
+export function readScenarioToolCompletion(
+  toolDeclarationBody: Record<string, unknown>,
+  input: ResponsesInputItem[],
+  allInputText: string,
+) {
+  const rawToolOutput = extractToolOutput(input);
+  const codeModeSurface = resolveCodeModeExecSurface(toolDeclarationBody);
+  const hasCodeModeControlOutput = isCodeModeControlToolOutput(toolDeclarationBody, input);
+  const codeModeControlJson = hasCodeModeControlOutput
+    ? codeModeSurface === "native"
+      ? parseNativeCodeModeOutput(extractToolOutputValue(input))
+      : parseToolOutputJson(rawToolOutput)
+    : null;
+  const toolOutput =
+    codeModeControlJson?.status === "completed" && Object.hasOwn(codeModeControlJson, "value")
+      ? stringifyScenarioToolOutput(codeModeControlJson.value)
+      : codeModeSurface === "native" && hasCodeModeControlOutput
+        ? ""
+        : unwrapScenarioCatalogOutput(input, rawToolOutput);
+  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
+  const completedToolName = readScenarioCompletedToolName(completedToolCall, input);
+  const scenarioToolOutput =
+    toolOutput ||
+    (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
+      allInputText,
+    )
+      ? extractLatestToolOutput(input)
+      : "");
+  const toolJson = parseToolOutputJson(scenarioToolOutput);
+  // Code Mode projects the write's details, without its direct-call confirmation text.
+  const hasCompletedStructuredWrite =
+    completedToolName === "write" &&
+    (!hasCodeModeControlOutput || codeModeControlJson?.status === "completed") &&
+    extractToolOutputStructuredError(input) !== true &&
+    !hasToolErrorOutput(toolJson, "") &&
+    typeof toolJson?.changed === "boolean";
+  return {
+    rawToolOutput,
+    hasCodeModeControlOutput,
+    codeModeControlJson,
+    toolOutput,
+    completedToolName,
+    scenarioToolOutput,
+    toolJson,
+    hasCompletedStructuredWrite,
+  };
 }
 
 function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll = false) {

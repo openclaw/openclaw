@@ -2,6 +2,7 @@ import { ChannelType } from "discord-api-types/v10";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { isDiscordThreadChannelType } from "../channel-type.js";
+import { replySilently } from "./agent-components-reply.js";
 import type {
   AgentComponentContext,
   AgentComponentInteraction,
@@ -62,11 +63,7 @@ export async function replyUnavailableComponentInteraction(
   interaction: AgentComponentInteraction,
   content: string,
 ): Promise<void> {
-  try {
-    await interaction.reply({ content, ephemeral: true });
-  } catch {
-    // The interaction may have expired before its failure reply could be delivered.
-  }
+  await replySilently(interaction, { content, ephemeral: true });
 }
 
 export function resolveDiscordChannelContext(

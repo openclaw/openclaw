@@ -55,6 +55,7 @@ import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import {
   expectActiveRollbackIdentity,
   expectDoctorRollback,
+  registerRollbackReportTests,
   writeDoctorRollbackConfig,
   writeDoctorRollbackReceipt,
 } from "./update-command-rollback.test-support.js";
@@ -154,6 +155,7 @@ describe("verified package rollback", () => {
       return "ok";
     });
   });
+  registerRollbackReportTests(() => ({ candidateRoot, previousRoot, stateDir: serviceStateDir }));
   it.each([false, true])(
     "records refused project rollback without an additional stop (during stop=%s)",
     async (duringStop) => {

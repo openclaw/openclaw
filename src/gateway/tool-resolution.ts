@@ -1,5 +1,9 @@
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+} from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
@@ -88,8 +92,7 @@ export function resolveGatewayScopedTools(
     agentTo?: string;
     agentThreadId?: string;
     senderIsOwner?: boolean;
-    /** Host-issued source for limited session controls; execution rechecks its own caller. */
-    sessionControlAuthority?: AdmittedRunOperatorAuthority;
+    admittedRunContext?: AdmittedRunContext;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     allowGatewaySubagentBinding?: boolean;
     allowMediaInvokeCommands?: boolean;
@@ -209,6 +212,11 @@ export function resolveGatewayScopedTools(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
+    sessionId: params.sessionId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
     senderPolicyMode: params.scheduledToolPolicy
       ? "never"
       : nodeExecSurface
@@ -220,6 +228,12 @@ export function resolveGatewayScopedTools(
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  if (
+    params.trustedInternalHandoff &&
+    requesterPolicies.requesterPolicySource !== "completion-handoff"
+  ) {
+    throw new Error("CLI completion tool grant no longer matches its requester policy");
+  }
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -261,16 +275,24 @@ export function resolveGatewayScopedTools(
             ),
         )
       : [];
-  const ownerOnlyGatewayDeny =
-    params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
+  const assignmentAdmitted =
+    surface === "loopback" &&
+    params.admittedRunContext &&
+    getAdmittedRunDelegatedAuthority(params.admittedRunContext);
+  const sessionControlAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
+  const ownerOnlyGatewayDeny = [
+    ...(params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
       ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (name) =>
-            (name !== "portal" || !sessionPortalTarget) &&
-            (name !== "sessions" ||
-              surface !== "loopback" ||
-              !hasSessionControlAuthority(params.sessionControlAuthority)),
+          (name) => name !== "sessions" && (name !== "portal" || !sessionPortalTarget),
         )
-      : [];
+      : []),
+    // Attach grants also use loopback; session binding is not run authority.
+    ...(params.senderIsOwner !== true &&
+    !assignmentAdmitted &&
+    !(surface === "loopback" && hasSessionControlAuthority(sessionControlAuthority))
+      ? ["sessions"]
+      : []),
+  ];
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir =
     params.rootedExecution?.workspaceDir ??
@@ -397,6 +419,7 @@ export function resolveGatewayScopedTools(
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
     requesterSenderId: senderId,
+    sessionControlAuthority,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,
@@ -472,6 +495,7 @@ export function resolveGatewayScopedTools(
           runSessionKey: params.sessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
+          operationalRunInstance: params.admittedRunContext?.operationalRunInstance,
           workspaceDir,
           cwd: params.cwd?.trim() || workspaceDir,
           ...params.rootedExecution,
@@ -500,6 +524,8 @@ export function resolveGatewayScopedTools(
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
+          inputProvenance: params.inputProvenance,
+          trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           sourceReplyDeliveryMode,

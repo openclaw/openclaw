@@ -1,13 +1,8 @@
-// Gateway chat display sanitizer.
-// Removes OpenClaw-only envelopes before messages are shown in UI/RPC results.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { projectChatWorkContextForDisplay } from "../chat/work-context.js";
-// Gateway chat history display strips internal/user envelopes while preserving
-// sender labels for UI rows. The helpers return original object identities when
-// nothing changes so callers can avoid unnecessary snapshot churn.
 export { stripEnvelope } from "../shared/chat-envelope.js";
 
 function extractMessageSenderLabel(entry: Record<string, unknown>): string | null {
@@ -90,27 +85,18 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
     next = { ...entry, senderLabel };
   }
 
-  if (typeof entry.content === "string") {
-    const stripped = stripUserEnvelope
-      ? stripUserEnvelopeForDisplay(entry.content)
-      : stripInternalMetadataForDisplay(entry.content);
-    if (stripped !== entry.content) {
+  const field =
+    typeof entry.content === "string" || Array.isArray(entry.content) ? "content" : "text";
+  const content = entry[field];
+  if (typeof content === "string" || (field === "content" && Array.isArray(content))) {
+    const stripped = Array.isArray(content)
+      ? stripEnvelopeFromContentWithRole(content, role)
+      : stripUserEnvelope
+        ? stripUserEnvelopeForDisplay(content)
+        : stripInternalMetadataForDisplay(content);
+    if (stripped !== content) {
       next ??= { ...entry };
-      next.content = stripped;
-    }
-  } else if (Array.isArray(entry.content)) {
-    const updated = stripEnvelopeFromContentWithRole(entry.content, role);
-    if (updated !== entry.content) {
-      next ??= { ...entry };
-      next.content = updated;
-    }
-  } else if (typeof entry.text === "string") {
-    const stripped = stripUserEnvelope
-      ? stripUserEnvelopeForDisplay(entry.text)
-      : stripInternalMetadataForDisplay(entry.text);
-    if (stripped !== entry.text) {
-      next ??= { ...entry };
-      next.text = stripped;
+      next[field] = stripped;
     }
   }
 

@@ -15,4 +15,3 @@ export {
   dropPreSessionStartAnnouncePairs,
   isAssistantTtsSupplementMessage,
 } from "./chat-display-projection.history.js";
-export { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";

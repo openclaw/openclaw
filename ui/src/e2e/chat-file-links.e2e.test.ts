@@ -16,6 +16,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
@@ -65,7 +66,9 @@ describeControlUiE2e("Control UI chat file links", () => {
     "shows a file tab before completion and honors the %s intent",
     async (intent) => {
       const context = await browser.newContext({
-        recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+        recordVideo: captureUiProof
+          ? { dir: artifactDir, size: { height: 900, width: 1280 } }
+          : undefined,
         viewport: { height: 900, width: 1280 },
       });
       const page = await context.newPage();
@@ -199,7 +202,9 @@ describeControlUiE2e("Control UI chat file links", () => {
       })),
     ];
     const context = await browser.newContext({
-      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+      recordVideo: captureUiProof
+        ? { dir: artifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
       viewport: { height: 900, width: 1280 },
     });
     try {
@@ -344,7 +349,9 @@ describeControlUiE2e("Control UI chat file links", () => {
 
   it("reveals and saves the selected file without losing Files search or focus", async () => {
     const context = await browser.newContext({
-      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+      recordVideo: captureUiProof
+        ? { dir: artifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
@@ -579,7 +586,9 @@ describeControlUiE2e("Control UI chat file links", () => {
       },
     } satisfies Record<string, Record<string, unknown>>;
     const context = await browser.newContext({
-      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+      recordVideo: captureUiProof
+        ? { dir: artifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
       viewport: { height: 900, width: 1280 },
     });
     try {

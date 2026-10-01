@@ -47,33 +47,41 @@ describe("streamWithIdleTimeout caller cancellation", () => {
     expect([providerSignal?.reason, onIdleTimeout.mock.calls.length]).toEqual([callerReason, 0]);
   });
 
-  it("preempts provider stream creation", async () => {
-    vi.useFakeTimers();
-    const callerAbortController = new AbortController();
-    const callerReason = new Error("caller cancelled");
-    const baseFnMock = vi.fn(
-      (_model: unknown, _context: unknown, _options?: { signal?: AbortSignal }) =>
-        new Promise<AssistantMessageEventStream>(() => {}),
-    );
-    const baseFn = baseFnMock as unknown as Parameters<typeof streamWithIdleTimeout>[0];
-    const onIdleTimeout = vi.fn();
-    const pending = streamWithIdleTimeout(baseFn, 50, onIdleTimeout)(
-      {} as Parameters<typeof baseFn>[0],
-      {} as Parameters<typeof baseFn>[1],
-      { signal: callerAbortController.signal },
-    );
+  it.each([false, true])(
+    "preempts provider stream creation (already aborted: %s)",
+    async (alreadyAborted) => {
+      vi.useFakeTimers();
+      const callerAbortController = new AbortController();
+      const callerReason = new Error("caller cancelled");
+      if (alreadyAborted) {
+        callerAbortController.abort(callerReason);
+      }
+      const baseFnMock = vi.fn(
+        (_model: unknown, _context: unknown, options?: { signal?: AbortSignal }) =>
+          options?.signal?.aborted
+            ? Promise.reject(new Error("provider rejected cancelled setup"))
+            : new Promise<AssistantMessageEventStream>(() => {}),
+      );
+      const baseFn = baseFnMock as unknown as Parameters<typeof streamWithIdleTimeout>[0];
+      const onIdleTimeout = vi.fn();
+      const pending = streamWithIdleTimeout(baseFn, 50, onIdleTimeout)(
+        {} as Parameters<typeof baseFn>[0],
+        {} as Parameters<typeof baseFn>[1],
+        { signal: callerAbortController.signal },
+      );
 
-    callerAbortController.abort(callerReason);
+      callerAbortController.abort(callerReason);
 
-    await expect(pending).rejects.toMatchObject({
-      name: "AbortError",
-      message: callerReason.message,
-      cause: callerReason,
-    });
-    await vi.advanceTimersByTimeAsync(50);
-    const providerSignal = (
-      baseFnMock.mock.calls.at(0)?.[2] as { signal?: AbortSignal } | undefined
-    )?.signal;
-    expect([providerSignal?.reason, onIdleTimeout.mock.calls.length]).toEqual([callerReason, 0]);
-  });
+      await expect(pending).rejects.toMatchObject({
+        name: "AbortError",
+        message: callerReason.message,
+        cause: callerReason,
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      const providerSignal = (
+        baseFnMock.mock.calls.at(0)?.[2] as { signal?: AbortSignal } | undefined
+      )?.signal;
+      expect([providerSignal?.reason, onIdleTimeout.mock.calls.length]).toEqual([callerReason, 0]);
+    },
+  );
 });

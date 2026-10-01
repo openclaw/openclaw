@@ -23,7 +23,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTranscriptCaptureAppends } from "./capture-appends.js";
-import { activeSessions } from "./capture.js";
+import { activeSessions } from "./capture-startup.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
 import { readTranscriptLibraryStatus } from "./status.js";
 import { TranscriptsStore, transcriptSessionSelector } from "./store.js";

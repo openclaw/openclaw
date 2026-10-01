@@ -22,6 +22,7 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_NAMES } from "./legacy-config-mig
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_POLICY_CONFLICTS } from "./legacy-config-migrations.runtime.tool-policy-conflicts.js";
 import { LEGACY_CONFIG_MIGRATION_RUNTIME_TOOL_SEARCH } from "./legacy-config-migrations.runtime.tool-search.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
+import { LEGACY_TALK_VOICE_CALL_INHERITANCE } from "./legacy-talk-config-normalizer.js";
 
 /** Ordered runtime legacy config migrations applied by doctor. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
@@ -38,6 +39,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS,
   // Relocate messages.tts before cleanup inspects the canonical TTS owner.
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS,
+  LEGACY_TALK_VOICE_CALL_INHERITANCE,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED,
   LEGACY_CONFIG_MIGRATION_RUNTIME_SECRETS_EGRESS,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION,

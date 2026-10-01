@@ -408,11 +408,11 @@ if (${JSON.stringify(kind)} === "systemd") {
     }
     const fault = ${JSON.stringify(options?.launchdFault)};
     if (state.restored && fault === "missing-restored-pid") {
-      process.stdout.write("state = running\\n");
+      process.stdout.write(args[1] + " = {\\n\\tstate = running\\n}\\n");
     } else {
       const restoredPid = fault === "dead-restored-pid" ? 2147483647 : ${process.pid};
       const currentPid = fault === "wrong-parent" ? ${process.pid} : ${parentPid};
-      process.stdout.write("state = running\\npid = " + (state.restored ? restoredPid : currentPid) + "\\n");
+      process.stdout.write(args[1] + " = {\\n\\tstate = running\\n\\tpid = " + (state.restored ? restoredPid : currentPid) + "\\n}\\n");
     }
   }
 }

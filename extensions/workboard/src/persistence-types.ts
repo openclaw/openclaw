@@ -3,6 +3,9 @@ import type {
   WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardNotificationSubscription,
+  WorkboardSessionPlacement,
+  WorkboardSessionsBoard,
+  WorkboardSessionsBoardSpec,
 } from "@openclaw/workboard-contract";
 
 /**
@@ -40,6 +43,22 @@ export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   lookup(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
   entries(): Promise<Array<{ key: string; value: T }>>;
+};
+
+export type WorkboardSessionPlacementWrite = WorkboardSessionPlacement & {
+  /** Undefined requires an absent row; otherwise compare the last observed revision. */
+  expectedUpdatedAt?: number;
+};
+
+export type WorkboardSessionsBoardStore = {
+  get(boardId: string): Promise<WorkboardSessionsBoard>;
+  update(boardId: string, patch: unknown): Promise<WorkboardSessionsBoard>;
+  listPlacements(boardId: string): Promise<WorkboardSessionPlacement[]>;
+  writePlacements(
+    boardId: string,
+    placements: WorkboardSessionPlacementWrite[],
+    expectedSpec: WorkboardSessionsBoardSpec,
+  ): Promise<boolean>;
 };
 
 export type WorkboardSubscriptionStore = Omit<

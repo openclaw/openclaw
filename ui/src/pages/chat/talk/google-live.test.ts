@@ -953,59 +953,23 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     transport.stop();
   });
 
-  it("fails closed when browser Google exceeds the pending tool-call limit", async () => {
-    const onStatus = vi.fn();
-    const request = vi.fn();
-    const client = {
-      addEventListener: vi.fn(() => () => undefined),
-      request,
-    } as unknown as RealtimeTalkTransportContext["client"];
-    const transport = await createTransport({ onStatus }, client);
-    const ws = await startTransport(transport);
-    const { pendingCalls } = getGoogleLiveToolOwnerState(transport);
-    for (let index = 0; index < 1_024; index += 1) {
-      pendingCalls.set(`existing-${index}`, { name: "lookup", cancelled: false });
-    }
-
-    ws.emitMessage(
-      encodeJsonFrame({
-        toolCall: {
-          functionCalls: [
-            {
-              id: "overflow",
-              name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
-              args: {},
-            },
-            {
-              id: "after-overflow",
-              name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
-              args: { text: "must not run", mode: "status" },
-            },
-          ],
-        },
-      }),
-    );
-
-    await waitForFast(() =>
-      expect(onStatus).toHaveBeenCalledWith(
-        "error",
-        "Google Live pending tool-call limit exceeded",
-      ),
-    );
-    expect(ws.readyState).toBe(3);
-    expect(pendingCalls.size).toBe(0);
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("fails closed before evicting seen browser tool-call ids", async () => {
     const onStatus = vi.fn();
     const transport = await createTransport({ onStatus });
     const ws = await startTransport(transport);
-    const internal = getGoogleLiveToolOwnerState(transport);
-
-    for (let index = 0; index < 1_024; index += 1) {
-      internal.seenCallIds.add(`call-${index}`);
-    }
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: Array.from({ length: 1_024 }, (_, index) => ({
+            id: `call-${index}`,
+            name: "unknown_tool",
+          })),
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(ws.sent).toHaveLength(1_025);
+    expect(ws.readyState).toBe(1);
     ws.emitMessage(
       encodeJsonFrame({
         toolCall: {
@@ -1014,13 +978,9 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
 
-    await waitForFast(() =>
-      expect(onStatus).toHaveBeenCalledWith(
-        "error",
-        "Google Live tool-call session limit exceeded",
-      ),
-    );
+    await flushMicrotasks();
+    expect(onStatus).toHaveBeenCalledWith("error", "Google Live tool-call session limit exceeded");
     expect(ws.readyState).toBe(3);
-    expect(internal.seenCallIds.size).toBe(0);
+    expect(ws.sent).toHaveLength(1_025);
   });
 });

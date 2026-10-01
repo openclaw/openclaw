@@ -22,7 +22,6 @@ import type {
   ExecApprovalsNodeSetParams,
 } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import {
   getTerminalTableWidth,
   renderTerminalSafeTable,
@@ -53,6 +52,7 @@ import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -920,6 +920,20 @@ function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
   defaultRuntime.log(muted(`Precedence: ${params.report.note}`));
 }
 
+function renderApprovalsSummary(rows: Array<{ Field: string; Value: string }>, width: number) {
+  defaultRuntime.log(isRich() ? theme.heading("Approvals") : "Approvals");
+  defaultRuntime.log(
+    renderTerminalSafeTable({
+      width,
+      columns: [
+        { key: "Field", header: "Field", minWidth: 8 },
+        { key: "Value", header: "Value", minWidth: 24, flex: true },
+      ],
+      rows,
+    }).trimEnd(),
+  );
+}
+
 function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
   if (isNativeApprovalsSnapshot(snapshot)) {
     renderNativeApprovalsSnapshot(snapshot, targetLabel);
@@ -991,17 +1005,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     { Field: "MCP tool grants", Value: String(mcpToolRows.length) },
   ];
 
-  defaultRuntime.log(heading("Approvals"));
-  defaultRuntime.log(
-    renderTerminalSafeTable({
-      width: tableWidth,
-      columns: [
-        { key: "Field", header: "Field", minWidth: 8 },
-        { key: "Value", header: "Value", minWidth: 24, flex: true },
-      ],
-      rows: summaryRows,
-    }).trimEnd(),
-  );
+  renderApprovalsSummary(summaryRows, tableWidth);
 
   defaultRuntime.log("");
   if (allowlistRows.length > 0) {
@@ -1057,17 +1061,7 @@ function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, ta
     },
     { Field: "Rules", Value: String(rules.length) },
   ];
-  defaultRuntime.log(heading("Approvals"));
-  defaultRuntime.log(
-    renderTerminalSafeTable({
-      width: getTerminalTableWidth(),
-      columns: [
-        { key: "Field", header: "Field", minWidth: 8 },
-        { key: "Value", header: "Value", minWidth: 24, flex: true },
-      ],
-      rows: summaryRows,
-    }).trimEnd(),
-  );
+  renderApprovalsSummary(summaryRows, getTerminalTableWidth());
   if (rules.length === 0) {
     defaultRuntime.log("");
     defaultRuntime.log(muted("No host-native rules."));
@@ -1194,11 +1188,7 @@ export function registerExecApprovalsCli(program: Command) {
     .command("approvals")
     .alias("exec-approvals")
     .description("Manage approval policy and pending requests")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/approvals"));
 
   const pendingCmd = approvals
     .command("pending")
@@ -1382,7 +1372,7 @@ export function registerExecApprovalsCli(program: Command) {
         )}\n${formatExample(
           'openclaw approvals allowlist remove "~/Projects/**/bin/rg"',
           "Remove an allowlist pattern.",
-        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
+        )}\n${formatDocsHelp("/cli/approvals")}`,
     );
 
   registerAllowlistMutationCommand({

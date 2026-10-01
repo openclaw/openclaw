@@ -2,6 +2,9 @@ import { expect, vi } from "vitest";
 import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
 import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../../state/openclaw-state-db.js";
@@ -10,10 +13,12 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import { persistSubagentRunsToDiskAsyncOrThrow } from "../registry/subagent-registry-state.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 /** Admit the actual worker before tests add deliberate runtime write-failure triggers. */
@@ -105,8 +110,10 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     getRuntimeConfig: () => ({}),
     persist,
     persistOrThrow: persist,
+    persistAsyncOrThrow: (context, callbacks, ...runIds) =>
+      persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, runIds, { context, ...callbacks }),
     clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: () => 0,
+    countPendingDescendantRuns: async () => 0,
     getLatestRunForChildSession: getLatestLiveSubagentRunByChildSessionKey,
     suppressAnnounceForSteerRestart: () => false,
     shouldEmitEndedHookForRun: () => false,
@@ -159,4 +166,15 @@ export function failedRecords(
   input.subagent.execution.outcome = outcome;
   input.subagent.completion!.resultText = "original failure summary";
   return armRequesterWake(input);
+}
+
+export async function reopenCompletionFixtureOwners() {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  subagentRuns.clear();
+  const database = openOpenClawStateDatabase();
+  for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
+    subagentRuns.set(runId, entry);
+  }
+  return database;
 }

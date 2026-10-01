@@ -310,12 +310,6 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
     let terminationReason: Error | undefined;
     let killExitTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const clearKillExitTimer = () => {
-      if (killExitTimer) {
-        clearTimeout(killExitTimer);
-        killExitTimer = undefined;
-      }
-    };
     const settleCaller = (action: () => void) => {
       if (callerSettled) {
         return;
@@ -328,10 +322,6 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
       child.removeListener("error", onError);
       child.removeListener("close", onClose);
       action();
-    };
-    const releaseClosedChild = () => {
-      clearKillExitTimer();
-      params.signal?.removeEventListener("abort", abort);
     };
     const requestTermination = (reason: Error) => {
       if (terminationReason || closed) {
@@ -439,7 +429,11 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
       closed = true;
       // close is the authoritative process/stdio completion; a recycled numeric
       // PID must not turn a successful query into a false cleanup failure.
-      releaseClosedChild();
+      if (killExitTimer) {
+        clearTimeout(killExitTimer);
+        killExitTimer = undefined;
+      }
+      params.signal?.removeEventListener("abort", abort);
       settleCaller(() => {
         if (terminationReason) {
           reject(terminationReason);

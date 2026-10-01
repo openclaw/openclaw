@@ -53,19 +53,31 @@ function createViewerAssetHandler(
   const runtimePath = `${prefix}viewer-runtime.js`;
   let cache: RuntimeAssetCache | null = null;
 
+  const loadRuntimeAssets = async (runtimeUrl: URL): Promise<RuntimeAssetCache> => {
+    const cached = cache;
+    const runtimeFilePath = fileURLToPath(runtimeUrl);
+    const runtimeStat = await fs.stat(runtimeFilePath);
+    if (cached && cached.mtimeMs === runtimeStat.mtimeMs) {
+      return cached;
+    }
+
+    const runtimeBody = await fs.readFile(runtimeFilePath);
+    const hash = crypto.createHash("sha1").update(runtimeBody).digest("hex").slice(0, 12);
+    cache = {
+      mtimeMs: runtimeStat.mtimeMs,
+      runtimeBody,
+      loaderBody: `import "${VIEWER_RUNTIME_RELATIVE_IMPORT_PATH}?v=${hash}";\n`,
+    };
+    return cache;
+  };
+
   return async (pathname) => {
     if (pathname !== loaderPath && pathname !== runtimePath) {
       return null;
     }
     try {
       const runtimeUrl = await resolveRuntimeFileUrl(relativePaths);
-      const assets = await loadRuntimeAssets({
-        runtimeUrl,
-        cache,
-        updateCache: (updated) => {
-          cache = updated;
-        },
-      });
+      const assets = await loadRuntimeAssets(runtimeUrl);
       return {
         body: pathname === loaderPath ? assets.loaderBody : assets.runtimeBody,
         contentType: "text/javascript; charset=utf-8",
@@ -77,28 +89,6 @@ function createViewerAssetHandler(
       throw error;
     }
   };
-}
-
-async function loadRuntimeAssets(params: {
-  cache: RuntimeAssetCache | null;
-  runtimeUrl: URL;
-  updateCache(cache: RuntimeAssetCache): void;
-}): Promise<RuntimeAssetCache> {
-  const runtimePath = fileURLToPath(params.runtimeUrl);
-  const runtimeStat = await fs.stat(runtimePath);
-  if (params.cache && params.cache.mtimeMs === runtimeStat.mtimeMs) {
-    return params.cache;
-  }
-
-  const runtimeBody = await fs.readFile(runtimePath);
-  const hash = crypto.createHash("sha1").update(runtimeBody).digest("hex").slice(0, 12);
-  const cache = {
-    mtimeMs: runtimeStat.mtimeMs,
-    runtimeBody,
-    loaderBody: `import "${VIEWER_RUNTIME_RELATIVE_IMPORT_PATH}?v=${hash}";\n`,
-  };
-  params.updateCache(cache);
-  return cache;
 }
 
 async function resolveRuntimeFileUrl(relativePaths: readonly string[]): Promise<URL> {

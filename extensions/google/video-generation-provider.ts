@@ -11,13 +11,14 @@ import {
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  GeneratedVideoAsset,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
+import {
+  selectSupportedVideoDuration,
+  type GeneratedVideoAsset,
+  type VideoGenerationProvider,
+  type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
-import { parseGeminiAuth, resolveGoogleGenerativeAiApiOrigin } from "./api.js";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
+import { parseGeminiAuth } from "./gemini-auth.js";
 import {
   createGoogleVideoGenerationProviderMetadata,
   DEFAULT_GOOGLE_VIDEO_MODEL,
@@ -28,6 +29,7 @@ import {
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
+import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
@@ -111,17 +113,7 @@ function resolveDurationSeconds(durationSeconds: number | undefined): number | u
     GOOGLE_VIDEO_MAX_DURATION_SECONDS,
     Math.max(GOOGLE_VIDEO_MIN_DURATION_SECONDS, Math.round(durationSeconds)),
   );
-  return GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS.reduce((best, current) => {
-    const currentDistance = Math.abs(current - rounded);
-    const bestDistance = Math.abs(best - rounded);
-    if (currentDistance < bestDistance) {
-      return current;
-    }
-    if (currentDistance === bestDistance && current > best) {
-      return current;
-    }
-    return best;
-  });
+  return selectSupportedVideoDuration(rounded, GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS);
 }
 
 function resolveInputImage(req: VideoGenerationRequest) {
@@ -155,25 +147,14 @@ function resolveGoogleGeneratedVideoDownloadUrl(params: {
   if (!trimmed) {
     return undefined;
   }
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    return undefined;
-  }
-  if (url.protocol !== "https:") {
+  const url = URL.parse(trimmed);
+  if (url?.protocol !== "https:") {
     return undefined;
   }
   const allowedOrigins = new Set(["https://generativelanguage.googleapis.com"]);
-  if (params.configuredBaseUrl) {
-    try {
-      const configuredOrigin = new URL(params.configuredBaseUrl).origin;
-      if (configuredOrigin.startsWith("https://")) {
-        allowedOrigins.add(configuredOrigin);
-      }
-    } catch {
-      // Ignore invalid configured origins; the request base URL is already normalized.
-    }
+  const configuredOrigin = URL.parse(params.configuredBaseUrl ?? "")?.origin;
+  if (configuredOrigin?.startsWith("https://")) {
+    allowedOrigins.add(configuredOrigin);
   }
   if (!allowedOrigins.has(url.origin)) {
     return undefined;

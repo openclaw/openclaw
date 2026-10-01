@@ -153,14 +153,6 @@ function threadIdsEqual(left?: string | number, right?: string | number): boolea
   return normalizedLeft === normalizedRight;
 }
 
-function accountsCompatible(left?: string, right?: string): boolean {
-  return !left || !right || left === right;
-}
-
-function accountsEqual(left?: string, right?: string): boolean {
-  return (left ?? "") === (right ?? "");
-}
-
 /**
  * Checks strict route equality after normalization.
  * Missing account ids are not compatible here; use share-conversation helpers for parent/child
@@ -178,7 +170,7 @@ export function channelRoutesMatchExact(params: {
   return (
     left.channel === right.channel &&
     left.target?.to === right.target?.to &&
-    accountsEqual(left.accountId, right.accountId) &&
+    (left.accountId ?? "") === (right.accountId ?? "") &&
     threadIdsEqual(left.thread?.id, right.thread?.id)
   );
 }
@@ -195,7 +187,7 @@ export function channelRoutesShareConversation(params: {
   if (
     left.channel !== right.channel ||
     left.target?.to !== right.target?.to ||
-    !accountsCompatible(left.accountId, right.accountId)
+    (left.accountId && right.accountId && left.accountId !== right.accountId)
   ) {
     return false;
   }

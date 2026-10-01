@@ -124,13 +124,6 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
         <span class="chat-controls__permission-icon" aria-hidden="true"
           >${params.mode ? PERMISSION_ICONS[params.mode] : icons.shieldCheck}</span
         >
-        <span
-          class="chat-controls__inline-select-label ${
-            fullAccess ? "chat-controls__permission-label--full" : ""
-          }"
-        >
-          ${label}
-        </span>
       </button>
       <wa-dropdown-item
         class="chat-controls__popover-title chat-controls__permission-heading"

@@ -63,12 +63,12 @@ describe("runBootOnce", () => {
   });
 
   const makeDeps = () => ({
-    sendMessageWhatsApp: vi.fn(),
-    sendMessageTelegram: vi.fn(),
-    sendMessageDiscord: vi.fn(),
-    sendMessageSlack: vi.fn(),
-    sendMessageSignal: vi.fn(),
-    sendMessageIMessage: vi.fn(),
+    whatsapp: vi.fn(),
+    telegram: vi.fn(),
+    discord: vi.fn(),
+    slack: vi.fn(),
+    signal: vi.fn(),
+    imessage: vi.fn(),
   });
 
   const withBootWorkspace = async (

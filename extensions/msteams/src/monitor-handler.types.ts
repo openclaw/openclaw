@@ -1,4 +1,3 @@
-// Msteams type declarations define plugin contracts.
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";

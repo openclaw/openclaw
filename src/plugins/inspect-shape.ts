@@ -1,4 +1,3 @@
-// Inspects plugin registry shape for diagnostics and snapshots.
 import type { PluginRegistry } from "./registry.js";
 import { hasKind } from "./slots.js";
 
@@ -53,6 +52,7 @@ function buildPluginCapabilityEntries(
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
     { kind: "migration-provider" as const, ids: plugin.migrationProviderIds },
     { kind: "worker-provider" as const, ids: plugin.contracts?.workerProviders ?? [] },
+    { kind: "storage-provider" as const, ids: plugin.contracts?.storageProviders ?? [] },
     {
       kind: "session-catalog" as const,
       ids: report.sessionCatalogs

@@ -10,7 +10,7 @@ import {
   replaceSessionEntry,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
-import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -96,14 +96,8 @@ export function createChatDirectiveSuiteResources() {
         env,
         sessionKeys: [canonicalKey],
         readOnly: true,
-        onReadSource: (source, physical) => {
-          if (physical) {
-            captured = {
-              ...source,
-              databaseIdentity: physical.identity,
-              databaseBirthtime: physical.birthtime,
-            };
-          }
+        onReadSource: (source) => {
+          captured = source;
         },
       });
       const capturedReadSource = expectDefined(captured, "chat directive fixture database source");

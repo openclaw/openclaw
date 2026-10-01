@@ -52,10 +52,6 @@ function proposedVersionNumber(value: string | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
-function byteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
-}
-
 function stripProposalFrontmatter(content: string): string {
   return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
 }
@@ -68,11 +64,14 @@ function supportFilesFromInspect(
   );
   return (result.supportFiles ?? []).map((file) => ({
     path: file.path,
-    size: formatBytes(Math.max(0, sizes.get(file.path) ?? byteLength(file.content)), {
-      fallback: "0 B",
-      maxUnit: "kilo",
-      fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
-    }),
+    size: formatBytes(
+      Math.max(0, sizes.get(file.path) ?? new TextEncoder().encode(file.content).length),
+      {
+        fallback: "0 B",
+        maxUnit: "kilo",
+        fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
+      },
+    ),
     contents: file.content,
   }));
 }

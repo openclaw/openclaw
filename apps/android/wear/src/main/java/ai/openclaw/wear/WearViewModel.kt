@@ -1885,10 +1885,8 @@ internal fun wearSessionRequestIsCurrent(
   currentSession: WearSession?,
   responsePhoneNodeId: String,
 ): Boolean =
-  currentSession?.key == requestedSession.key &&
-    currentSession.phoneNodeId == requestedSession.phoneNodeId &&
-    responsePhoneNodeId == requestedSession.phoneNodeId &&
-    currentSession.modelRef == requestedSession.modelRef
+  wearTranscriptRequestIsCurrent(requestedSession, currentSession, responsePhoneNodeId) &&
+    currentSession?.modelRef == requestedSession.modelRef
 
 internal fun wearTranscriptRequestIsCurrent(
   requestedSession: WearSession,
@@ -2049,11 +2047,7 @@ internal fun reconcileWearStreamSnapshot(
   if (snapshot.isNullOrEmpty()) return live
   val merged =
     if (liveComplete) {
-      when {
-        live.startsWith(snapshot) -> live
-        snapshot.startsWith(live) -> snapshot
-        else -> live
-      }
+      if (snapshot.startsWith(live)) snapshot else live
     } else {
       if (snapshot.startsWith(live)) {
         snapshot

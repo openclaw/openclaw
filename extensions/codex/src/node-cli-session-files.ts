@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type JsonlHeadWindow,
@@ -475,16 +475,10 @@ function applySessionFileLine(scan: CodexCliSessionFileScan, line: string): void
   if (!isRecord(parsed)) {
     return;
   }
-  if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
-    scan.updatedAt = parsed.timestamp.trim();
-  }
+  scan.updatedAt = normalizeOptionalString(parsed.timestamp) ?? scan.updatedAt;
   if (parsed.type === "session_meta" && isRecord(parsed.payload)) {
-    if (typeof parsed.payload.id === "string" && parsed.payload.id.trim()) {
-      scan.sessionId = parsed.payload.id.trim();
-    }
-    if (typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()) {
-      scan.cwd = parsed.payload.cwd.trim();
-    }
+    scan.sessionId = normalizeOptionalString(parsed.payload.id) ?? scan.sessionId;
+    scan.cwd = normalizeOptionalString(parsed.payload.cwd) ?? scan.cwd;
     return;
   }
   const messageText = readResponseItemMessageText(parsed);

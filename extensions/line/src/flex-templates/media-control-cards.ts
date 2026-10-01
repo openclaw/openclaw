@@ -1,5 +1,5 @@
 import { postbackAction, truncateLineActionLabel } from "../actions.js";
-import { createCardBubble } from "./common.js";
+import { createCardBubble, createCardTitle } from "./common.js";
 import type {
   FlexBox,
   FlexBubble,
@@ -32,16 +32,7 @@ export function createMediaPlayerCard(params: {
   extraActions?: Array<{ label: string; data: string }>;
 }): FlexBubble {
   const { title, subtitle, source, imageUrl, isPlaying, progress, controls, extraActions } = params;
-  const trackInfo: FlexComponent[] = [
-    {
-      type: "text",
-      text: title,
-      weight: "bold",
-      size: "xl",
-      color: "#111111",
-      wrap: true,
-    } as FlexText,
-  ];
+  const trackInfo: FlexComponent[] = [createCardTitle(title)];
 
   if (subtitle) {
     trackInfo.push({
@@ -212,16 +203,7 @@ export function createAppleTvRemoteCard(params: {
 }): FlexBubble {
   const { deviceName, status, actionData } = params;
 
-  const headerContents: FlexComponent[] = [
-    {
-      type: "text",
-      text: deviceName,
-      weight: "bold",
-      size: "xl",
-      color: "#111111",
-      wrap: true,
-    } as FlexText,
-  ];
+  const headerContents: FlexComponent[] = [createCardTitle(deviceName)];
 
   if (status) {
     headerContents.push({
@@ -317,15 +299,10 @@ export function createDeviceControlCard(params: {
           cornerRadius: "5px",
         } as FlexBox,
         {
-          type: "text",
-          text: deviceName,
-          weight: "bold",
-          size: "xl",
-          color: "#111111",
-          wrap: true,
+          ...createCardTitle(deviceName),
           flex: 1,
           margin: "md",
-        } as FlexText,
+        },
       ],
       { alignItems: "center" },
     ),

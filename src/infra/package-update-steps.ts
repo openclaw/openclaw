@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { validRange } from "semver";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
+import { isRegistrySourceInstallSpec } from "./install-spec.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
@@ -78,33 +78,6 @@ type PackageUpdateStepsResult = {
   failedStep: UpdateStepResult | null;
   recovery: UpdateRecovery;
 };
-
-function isRegistrySourceInstallSpec(spec: string): boolean {
-  // Version-only deduplication is reserved for positively identified registry
-  // specs. Explicit and unknown npm source syntax must prove build identity.
-  // npm-package-arg gives unscoped archive names precedence over package names.
-  const archive = /[.](?:tgz|tar[.]gz|tar)$/iu;
-  const packageName = /^(?:@[a-z0-9_][a-z0-9._-]*\/)?[a-z0-9_][a-z0-9._-]*$/iu;
-  const value = spec.trim();
-  const separator = value.indexOf("@", 1);
-  const name = separator > 0 ? value.slice(0, separator) : value;
-  const selector = separator > 0 ? value.slice(separator + 1).trim() : "";
-
-  if (value.startsWith("npm:") || selector.startsWith("npm:")) {
-    // An alias can replace the underlying package at the same version.
-    return false;
-  }
-  if (!packageName.test(name) || (!name.startsWith("@") && archive.test(name))) {
-    return false;
-  }
-  // File suffixes take precedence over dist-tags in npm's resolve contract.
-  // npm treats leading dots as paths and accepts tags unchanged by encodeURIComponent.
-  return (
-    !selector.startsWith(".") &&
-    !archive.test(selector) &&
-    (validRange(selector, true) !== null || encodeURIComponent(selector) === selector)
-  );
-}
 
 async function prepareStagedPackageInstall(
   installTarget: ResolvedGlobalInstallTarget,
@@ -470,6 +443,9 @@ export async function runGlobalPackageUpdateSteps(params: {
         ...(updateCwd ? { cwd: updateCwd } : {}),
         ...installEnv,
         timeoutMs: workTimeoutMs,
+        // Output is captured, so pnpm's build-approval prompt cannot use the terminal.
+        // EOF keeps the install noninteractive without approving additional scripts.
+        ...(installCommandTarget.manager === "pnpm" ? { input: "" } : {}),
       }),
       params.installTarget,
       params.env,

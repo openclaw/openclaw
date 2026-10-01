@@ -1,5 +1,5 @@
 // Owns persistent replay key codecs and per-operation database admission capture.
-import { createHash } from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { resolveNonNegativeIntegerOption } from "../../packages/normalization-core/src/number-coercion.js";
 import { wrapPluginStateError } from "../plugin-state/plugin-state-store.database.js";
 import {
@@ -28,12 +28,8 @@ export function resolveScopedKey(namespace: string, key: string): string {
   return `${namespace}:${key}`;
 }
 
-function shortHash(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 32);
-}
-
 export function resolveEntryKey(key: string): string {
-  return `k.${shortHash(key)}`;
+  return `k.${sha256HexPrefixCore(key, 32)}`;
 }
 
 export function createPersistentDedupeImportEntry(params: {
@@ -59,7 +55,7 @@ function normalizeNamespacePrefix(value: string | undefined): string {
 }
 
 function resolveStateNamespace(prefix: string, namespace: string): string {
-  return `${prefix}.${shortHash(namespace)}`;
+  return `${prefix}.${sha256HexPrefixCore(namespace, 32)}`;
 }
 
 export function resolvePersistentDedupePluginStateNamespace(options: {

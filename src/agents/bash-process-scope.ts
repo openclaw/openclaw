@@ -5,17 +5,9 @@ export function resolveProcessToolScopeKey(params: {
   sessionId?: string;
   agentId?: string;
 }): string | undefined {
-  const explicitScopeKey = params.scopeKey?.trim();
-  if (explicitScopeKey) {
-    return explicitScopeKey;
-  }
-  const sessionKey = params.sessionKey?.trim();
-  if (sessionKey) {
-    return sessionKey;
-  }
-  const sessionId = params.sessionId?.trim();
-  if (sessionId) {
-    return sessionId;
+  const scopeKey = params.scopeKey?.trim() || params.sessionKey?.trim() || params.sessionId?.trim();
+  if (scopeKey) {
+    return scopeKey;
   }
   const agentId = params.agentId?.trim();
   return agentId ? `agent:${agentId}` : undefined;

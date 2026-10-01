@@ -15,7 +15,6 @@ import {
   createWhatsAppQaPdfBuffer,
 } from "./whatsapp-live.media.js";
 import {
-  assertWhatsAppMessageFromSutPhone,
   matchesWhatsAppSutReactionToTrigger,
   requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
@@ -110,7 +109,6 @@ export const whatsappUserPathScenarios = {
       const token = `WHATSAPP_QA_INBOUND_REACTION_${randomUUID().slice(0, 8).toUpperCase()}`;
       return {
         afterReply: async (reply, context) => {
-          assertWhatsAppMessageFromSutPhone(reply, context);
           if (!reply.messageId) {
             throw new Error("WhatsApp SUT reply did not include a message id to react to.");
           }

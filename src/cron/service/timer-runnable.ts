@@ -1,4 +1,6 @@
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
+import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type { CronJob } from "../types.js";
 import {
   computeJobPreviousRunAtOrBeforeMs,
@@ -66,15 +68,23 @@ export function isRunnableJob(params: {
   nowMs: number;
   skipAtIfAlreadyRan?: boolean;
   allowCronMissedRunByLastRun?: boolean;
+  activeInProcess?: boolean;
+  legacyDefaultAgentId?: string;
 }): boolean {
   const { job, nowMs } = params;
   if (!job.state) {
     job.state = {};
   }
-  if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
+  if (
+    !isJobEnabled(job) ||
+    (params.legacyDefaultAgentId !== undefined &&
+      !tryResolveCronJobEffectiveAgentId(job, undefined, params.legacyDefaultAgentId)) ||
+    !hasCanonicalCronDeliveryMode(job.delivery) ||
+    !isTimeScheduledJob(job)
+  ) {
     return false;
   }
-  if (hasActiveCronRun(job)) {
+  if (hasActiveCronRun(job, params.activeInProcess)) {
     return false;
   }
   const next = job.state.nextRunAtMs;
@@ -159,5 +169,13 @@ function isErrorBackoffPending(
 }
 
 export function collectRunnableJobs(state: CronServiceState, nowMs: number): CronJob[] {
-  return state.store?.jobs.filter((job) => isRunnableJob({ job, nowMs })) ?? [];
+  return (
+    state.store?.jobs.filter((job) =>
+      isRunnableJob({
+        job,
+        nowMs,
+        legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
+      }),
+    ) ?? []
+  );
 }

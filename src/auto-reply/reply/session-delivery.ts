@@ -1,4 +1,3 @@
-// Resolves persisted delivery route fields for session-bound replies.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

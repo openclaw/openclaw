@@ -24,9 +24,15 @@ replacement for writing a clear task prompt.
 
 ## Tool: `sessions_spawn`
 
+Pass `user` (the requester's verified `requester_profile.id`) to act for a participant. It is required after several
+people have steered the turn, across native, visible, and ACP spawns. The child
+retains that person's authority independently of the parent turn; later revocation
+still stops it. Codex native `spawn_agent` rejects multi-person turns; use
+`sessions_spawn` with `user` instead.
+
 Starts a sub-agent run on the spawning session's sub-agent queue, with
 [per-session concurrency](/tools/subagents/operations#concurrency). Ordinary one-shot runs
-use `deliver: false` and return through an announce step; collectors, quiet
+use `deliver: false` and return through completion delivery to the requester; collectors, quiet
 runs, and direct thread replies use the
 [completion paths](/tools/subagents/slash-command#spawn-behavior).
 
@@ -49,8 +55,17 @@ session to confirm the effective tool list.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** hidden and visible native sub-agents receive their delegated task in a `[Subagent Task]` message appended after any forked history. The message identifies the current child assignment and treats inherited conversation as background context. The hidden sub-agent system prompt carries runtime rules and routing context, not a duplicate of the task.
 
-Native sub-agent continuations after a Gateway restart or descendant completion
-preserve the recorded run timeout, including `0` for no timeout.
+Native sub-agent continuations after a Gateway restart, descendant completion,
+or a `sessions_send` follow-up preserve the recorded run timeout, including `0`
+for no timeout, while the recorded session identity still matches. A replaced
+session or a registration without a captured identity uses the ordinary agent
+timeout instead. Steering an active turn keeps that turn's existing budget.
+This includes rows persisted by v2026.9.6 without a captured identity: their next
+continuation uses `agents.defaults.timeoutSeconds` (default: 48 hours), even if
+their stored `runTimeoutSeconds` is `0`.
+Completion, give-up, and pause wakes use the requester's own timeout: its recorded
+sub-agent budget if registered, otherwise `agents.defaults.timeoutSeconds`
+(default: 48 hours). A child's timeout never becomes its requester's wake budget.
 
 Accepted native sub-agent spawns report their actual initialized `context`
 (`fork` or `isolated`), including `isolated` when a requested fork exceeds the
@@ -196,7 +211,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Set `false` for fire-and-forget children. When the child finishes, OpenClaw skips the completion handoff to the requester (no announce or steer turn), records the delivery as not required, and still runs child cleanup. Inspect such children with `subagents` or `sessions_history`. `collect: true` always uses `false`.
 </ParamField>
 <ParamField path="completionTarget" type='"parent"'>
-  Return the result in a private requester turn with no automatic channel delivery. The parent may continue work or remain silent. Supported only for hidden native `mode: "run"` children; unavailable with ACP, `collect`, `visible`, `thread`, session mode, or `expectsCompletionMessage: false`. Omit to keep normal completion delivery. See [Private parent completion](/tools/subagents/announce#private-parent-completion).
+  Return the result in a private requester turn with no automatic channel delivery. The parent reviews the result, continues unfinished work, and records the outcome internally. If the parent yielded while waiting, it resumes and answers under the conversation's normal reply rules; message-tool-only rooms still require the `message` tool. Supported only for hidden native `mode: "run"` children; unavailable with ACP, `collect`, `visible`, `thread`, session mode, or `expectsCompletionMessage: false`. Omit to keep normal completion delivery. See [Private parent completion](/tools/subagents/announce#private-parent-completion).
 </ParamField>
 <ParamField path="sandbox" type='"inherit" | "require"' default="inherit">
   `require` rejects the spawn unless the target child runtime is sandboxed.
@@ -235,7 +250,7 @@ With `visible: true`, `group`, `model`, `cwd`, `projectId`, `projectGitUrl`, and
 
 If a call fails with `Parameters require visible=true`, omit the named project, group, or worktree options to keep the hidden or ACP runtime. To create a visible session instead, use `visible: true` with `runtime: "subagent"` and omit `mode`, `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`, swarm options, and the ACP-only `streamTo` and `resumeSessionId`. Worktree names and base refs also require `worktree: true`. Adding `visible: true` alone does not make an ACP call compatible.
 
-A visible spawn is attributed to the requesting agent: the new session's creator and initial owner is that agent, shown with its configured identity name and avatar in the sidebar. The accepted result doubles as a receipt with `childSessionKey`, `runId`, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second so the user can open the session and see who is responsible. Owners can be reassigned later; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
+A visible spawn normally retains the requesting agent as its creator; a required sandbox instead preserves the parent's creator provenance. Its initial owner is the verified active human requester only when that person matches the parent session's human owner; otherwise it is the requesting agent. The accepted result doubles as a receipt with `childSessionKey`, `runId`, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second so the user can open the session and see who is responsible. Owners can be reassigned later; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
 ### Task names and targeting
 
@@ -274,8 +289,9 @@ tool has already finished and its result appears in the transcript.
 
 Use the optional `message` field for private context that the resumed turn
 should receive. OpenClaw sends a default waiting reply when an interactive
-parent turn would otherwise end silently; `acknowledgment` overrides its text. It is not sent from
-sub-agent, heartbeat, or silent turns, and it does not replace a reply or
+parent turn would otherwise end silently; `acknowledgment` overrides its text.
+This waiting reply is not sent to the user from sub-agent, heartbeat, or silent
+turns, and it does not replace a reply or
 message already delivered during the turn. This host-owned waiting status
 bypasses message-tool-only source suppression; ordinary model replies remain
 private unless the model sends them through the message tool.
@@ -296,12 +312,22 @@ This does not schedule that message; an operator or integration must send it.
 Without a real pending child/runtime completion or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses
-the child run instead of completing it, so the requester receives no
-completion event yet and keeps waiting. A plugin can then continue that same run
+the child run instead of completing it. For a child with announced completion,
+`waitFor: "message"` wakes its requester once per pause with a continuation-needed
+notice containing the child's session key, run ID, label, and trimmed
+`acknowledgment` text (up to 12,000 UTF-16 code units, the announce text limit),
+or a default "Paused awaiting continuation." line. The acknowledgment is
+presented as child-provided data using the same escaping as completion results. The
+notice is distinct from a completion and uses the requester's existing message
+queue policy if it is already running. It does not resume the child: send the
+continuation with `sessions_send` to the named child session. Yielding again in
+the requester does not repeat an already delivered pause notice.
+
+A plugin can then continue that same run
 by calling `api.runtime.subagent.run` with the paused `sessionKey`, instead of
 starting a sibling. The requester is announced once such a follow-up finishes
-normally; a follow-up that yields again leaves the run paused and the requester
-waiting.
+normally; a follow-up that yields again with `waitFor: "message"` leaves the run
+paused and sends a new continuation-needed notice.
 
 A yield claim belongs to the turn that spawned the children. When a later turn
 of the same session calls `sessions_yield` while children spawned by an earlier
@@ -314,6 +340,13 @@ completion arrives in the session as a later turn. Do not re-spawn, re-send,
 or poll to wake them. A `paused` child yielded with `waitFor: "message"` and
 will not complete until it receives a continuation; send one with
 `sessions_send` if this session owns that follow-up.
+
+`sessions_yield` only waits for child sessions. With nothing to wait for, it
+returns `status: "nothing_pending"`: guidance for the model, not a tool failure,
+so the conversation gets no failure warning. Detached `image_generate`,
+`video_generate`, and `music_generate` runs deliver their result as a later
+turn; a turn that ends with such a run in flight and no final reply stays
+pending instead of reporting a missing reply.
 
 The controlling parent resumes a paused native child with an ordinary
 `sessions_send` continuation. The runtime preserves the original task and its
@@ -407,7 +440,7 @@ and older queued events can be evicted when the queue fills. Exact-incarnation
 access grants cannot enqueue notifications beyond their lifetime. Omitting
 `mode` preserves automatic routing. Its
 `targetDisposition` describes admission, while its `delivery.status` describes
-the later reply announcement. Neither proves completion. At the Gateway,
+the later reply delivery. Neither proves completion. At the Gateway,
 `chat.send` with `queueMode: "steer"` gives guidance at the supported runtime
 boundary; `queueMode: "interrupt"` replaces active execution. The deprecated
 `sessions.steer` RPC retains its documented interrupt behavior. An operator's

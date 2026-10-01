@@ -142,7 +142,7 @@ const execFileAsync: ExecFileAsync = async (file, args, options) =>
     timeoutMs: options.timeoutMs,
   });
 
-function buildRuntimeProbeEnv(env: Record<string, string | undefined>): NodeJS.ProcessEnv {
+export function buildRuntimeProbeEnv(env: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const probeEnv: NodeJS.ProcessEnv = {};
   for (const key of RUNTIME_PROBE_ENV_KEYS) {
     const value = env[key];
@@ -166,9 +166,11 @@ function buildRuntimeProbeScript(sqliteLibraryModulePath: string | undefined): s
 const selectSqliteLibrary = ${selector};
 let sqliteVersion = null;
 let sqliteSelectionError = null;
+let sqliteLibraryPath = null;
 let sqliteProbe = { available: false, version: null, text: false, blob: false, json: false };
 try {
-  selectSqliteLibrary();
+  const selection = selectSqliteLibrary();
+  if (selection?.path) sqliteLibraryPath = require("node:path").resolve(selection.path);
 } catch (error) {
   sqliteSelectionError = error instanceof Error ? error.message : String(error);
 }
@@ -180,7 +182,7 @@ if (sqliteSelectionError === null) {
 }
 const variables = (process.config && process.config.variables) || {};
 const nodeSharedSqlite = variables.node_shared_sqlite === true || variables.node_shared_sqlite === "true";
-process.stdout.write(JSON.stringify({ nodeVersion: process.versions.node, bunVersion: process.versions.bun ?? null, sqliteVersion, sqliteProbe, sqliteSelectionError, nodeSharedSqlite }));
+process.stdout.write(JSON.stringify({ nodeVersion: process.versions.node, bunVersion: process.versions.bun ?? null, sqliteVersion, sqliteProbe, sqliteSelectionError, sqliteLibraryPath, nodeSharedSqlite }));
 `;
 }
 
@@ -192,6 +194,8 @@ type RuntimeInfo =
       nodeSharedSqlite: boolean;
       /** Set when the runtime's SQLite library selection rejected the operator's override. */
       sqliteSelectionError?: string;
+      /** Absolute library selected by the shared Bun SQLite owner, when applicable. */
+      sqliteLibraryPath?: string;
       sqliteProbe: SqliteCapabilities;
       capabilityError?: string;
       note?: string;
@@ -229,12 +233,17 @@ async function resolveRuntimeInfo(
     const version = parsed[`${runtime}Version`];
     const sqliteVersion = parsed.sqliteVersion;
     const sqliteSelectionError = parsed.sqliteSelectionError;
+    const sqliteLibraryPath = parsed.sqliteLibraryPath;
     const probe = parsed.sqliteProbe;
     if (
       !(typeof version === "string" || (runtime === "bun" && version === null)) ||
       (runtime === "node" && typeof version === "string" && !parseSemver(version)) ||
       !(typeof sqliteVersion === "string" || sqliteVersion === null) ||
       !(typeof sqliteSelectionError === "string" || sqliteSelectionError == null) ||
+      !(
+        sqliteLibraryPath == null ||
+        (typeof sqliteLibraryPath === "string" && path.isAbsolute(sqliteLibraryPath))
+      ) ||
       !isRecord(probe) ||
       typeof probe.available !== "boolean" ||
       probe.version !== sqliteVersion ||
@@ -271,6 +280,7 @@ async function resolveRuntimeInfo(
       ...(note ? { note } : {}),
       nodeSharedSqlite: parsed.nodeSharedSqlite === true || parsed.nodeSharedSqlite === "true",
       ...(sqliteSelectionError ? { sqliteSelectionError } : {}),
+      ...(typeof sqliteLibraryPath === "string" ? { sqliteLibraryPath } : {}),
     };
   } catch (cause) {
     // A failed exec says nothing about runtime support. Preserve its cause and launch context.

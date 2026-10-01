@@ -302,10 +302,8 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.hooksConfig = next.hooksConfig;
       runtimeState.hookClientIpConfig = next.hookClientIpConfig;
     },
-    swapHeartbeatRunner: (next: typeof runtimeState.heartbeatRunner) => {
-      const previous = runtimeState.heartbeatRunner;
+    setHeartbeatRunner: (next: typeof runtimeState.heartbeatRunner) => {
       runtimeState.heartbeatRunner = next;
-      return previous;
     },
     // Stable callbacks keep reload transactions out of retained plugin contexts.
     getCronService: () => runtimeState.cronState.cron,

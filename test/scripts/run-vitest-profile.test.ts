@@ -13,7 +13,7 @@ import {
 } from "../../scripts/run-vitest-profile.mts";
 import { decodeUtf8Tail } from "../helpers/bounded-child-output.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { waitForFixtureFile } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -36,6 +36,7 @@ describe("scripts/run-vitest-profile", () => {
       profiles: string;
       stages: string;
     },
+    observeOutput?: (stdout: string) => void,
   ) {
     let inspectChild: (() => unknown) | undefined;
     let reported = false;
@@ -114,6 +115,9 @@ describe("scripts/run-vitest-profile", () => {
             maxBuffer: 1024 * 1024,
             requireProcessTreeExit: process.platform !== "win32",
             onReady(child, readOutput) {
+              if (observeOutput) {
+                child.stdout?.on("data", () => observeOutput(readOutput().stdout));
+              }
               inspectChild = () => {
                 const output = readOutput();
                 return {
@@ -381,7 +385,7 @@ it("retains the selected execution context", async () => {
   it("cancels an admitted profiling workload before releasing its inputs", ({ signal }) =>
     lifetime.run(async () => {
       const root = createTempDir("oc-profile-cancellation-");
-      const ready = path.join(root, "ready");
+      const ready = createDeferred();
       const release = path.join(root, "release");
       const config = path.join(root, "vitest.config.mjs");
       fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}');
@@ -400,7 +404,7 @@ it("retains the selected execution context", async () => {
 import { setTimeout as tick } from "node:timers/promises";
 import { it } from "vitest";
 it("holds admitted work until the caller releases it", async () => {
-  fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+  console.log("profile-workload-ready");
   while (!fs.existsSync(${JSON.stringify(release)})) await tick(5);
 });`,
       );
@@ -419,9 +423,23 @@ it("holds admitted work until the caller releases it", async () => {
         ],
         root,
         AbortSignal.any([signal, controller.signal]),
+        undefined,
+        undefined,
+        (stdout) => {
+          if (stdout.includes("profile-workload-ready")) {
+            ready.resolve();
+          }
+        },
       );
       try {
-        await waitForFixtureFile(ready, completion, "ready");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            ready.promise,
+            completion,
+            `Child exited before writing ${path.join(root, "ready")}`,
+          ),
+          signal,
+        );
         const aborted = expect(completion).rejects.toMatchObject({ cause: { code: "ABORT_ERR" } });
         controller.abort();
         fs.writeFileSync(release, "released");

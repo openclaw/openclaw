@@ -8,8 +8,14 @@ const mocks = vi.hoisted(() => ({
   search: vi.fn(),
   assertSecret: vi.fn(),
   profile: vi.fn(),
+  assertProfile: vi.fn(),
 }));
-vi.mock("./users-profile-access.js", () => ({ resolveAuthenticatedProfileId: mocks.profile }));
+vi.mock("./users-profile-access.js", () => ({
+  prepareAuthenticatedProfile: async () => ({
+    profileId: mocks.profile(),
+    assertCurrent: mocks.assertProfile,
+  }),
+}));
 vi.mock("./web-search-status.js", () => ({ prepareWebSearchStatus: mocks.prepare }));
 vi.mock("../../web-search/runtime.js", () => ({ runWebSearch: mocks.search }));
 vi.mock("../../secrets/runtime-degraded-state.js", () => ({
@@ -38,6 +44,7 @@ async function invoke(options: GatewayRequestHandlerOptions) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.profile.mockReturnValue(undefined);
+  mocks.assertProfile.mockReset();
   config = { tools: { web: { search: { provider: "example", cacheTtlMinutes: 15 } } } };
   searchStatus = {
     enabled: true,
@@ -175,7 +182,9 @@ describe("Search settings Gateway boundary", () => {
   it("does not start a provider test after the authenticated account changes", async () => {
     mocks.profile.mockReturnValue("original");
     mocks.prepare.mockImplementationOnce(async () => {
-      mocks.profile.mockReturnValue("replacement");
+      mocks.assertProfile.mockImplementation(() => {
+        throw new Error("profile authority changed");
+      });
       return { status: searchStatus, config, agentDir: "/synthetic/agent" };
     });
     expect(await invoke(request("webSearch.test", { query: "query" }))).toHaveBeenCalledWith(

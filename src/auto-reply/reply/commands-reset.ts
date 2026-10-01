@@ -61,21 +61,18 @@ export async function maybeHandleResetCommand(
   }
   const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(params.ctx);
   const softReset = parseSoftResetCommand(params.command.commandBodyNormalized);
+  const commandAction: ResetCommandAction =
+    resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
+  const resetTail = params.command.commandBodyNormalized.slice(resetMatch[0].length).trimStart();
+  const boundAcpSessionKey = await resolveBoundAcpThreadSessionKey(params, commandTargetSessionKey);
+  params.opts?.abortSignal?.throwIfAborted();
+  const boundAcpKey =
+    boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
+      ? boundAcpSessionKey.trim()
+      : undefined;
   if (softReset.matched) {
-    const boundAcpSessionKey = await resolveBoundAcpThreadSessionKey(
-      params,
-      commandTargetSessionKey,
-    );
-    params.opts?.abortSignal?.throwIfAborted();
-    const boundAcpKey =
-      boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
-        ? boundAcpSessionKey.trim()
-        : undefined;
     if (boundAcpKey) {
-      return {
-        shouldContinue: false,
-        reply: { text: "Usage: /reset soft is not available for ACP-bound sessions yet." },
-      };
+      return commandReply("Usage: /reset soft is not available for ACP-bound sessions yet.");
     }
 
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
@@ -103,7 +100,7 @@ export async function maybeHandleResetCommand(
             storePath: params.storePath,
             sessionKey: params.sessionKey,
           },
-          async (entry) => {
+          (entry) => {
             const next = { ...entry };
             clearAllCliSessions(next);
             return {
@@ -139,15 +136,6 @@ export async function maybeHandleResetCommand(
     return null;
   }
 
-  const commandAction: ResetCommandAction =
-    resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
-  const resetTail = params.command.commandBodyNormalized.slice(resetMatch[0].length).trimStart();
-  const boundAcpSessionKey = await resolveBoundAcpThreadSessionKey(params, commandTargetSessionKey);
-  params.opts?.abortSignal?.throwIfAborted();
-  const boundAcpKey =
-    boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
-      ? boundAcpSessionKey.trim()
-      : undefined;
   if (boundAcpKey) {
     const resetResult = await resetConfiguredBindingTargetInPlace({
       cfg: params.cfg,

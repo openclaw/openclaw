@@ -7,10 +7,10 @@ import {
   bindContextEngineCompaction,
   inheritRuntimeCompactionDelegate,
 } from "../../../context-engine/compaction-watchdog.js";
-import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import type { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import {
   resolveCompactionSuccessorTranscript,
+  type ContextEngine,
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
@@ -41,7 +41,6 @@ import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-type ContextEngine = Awaited<ReturnType<typeof resolveContextEngine>>;
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 type CompactionResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 

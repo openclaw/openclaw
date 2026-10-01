@@ -10,8 +10,6 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 
-export { sanitizeInlineImageDataUrl };
-
 /** Builds the replacement text inserted when an inline image payload is invalid. */
 export function invalidInlineImageText(label: string): string {
   return `[${label}] ${IMAGE_OMITTED_TEXT}`;

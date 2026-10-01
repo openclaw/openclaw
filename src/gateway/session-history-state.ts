@@ -188,20 +188,11 @@ export class SessionHistorySseState {
     );
     subagentCoordination?.assertCurrent?.();
     const projectedPrefix = projectedMessages.slice(0, this.sentHistory.messages.length);
+    // A rewritten prefix needs a full refresh; only an unchanged prefix can append inline.
     if (
       projectedMessages.length > this.sentHistory.messages.length &&
-      !isDeepStrictEqual(projectedPrefix, this.sentHistory.messages)
+      isDeepStrictEqual(projectedPrefix, this.sentHistory.messages)
     ) {
-      // A current-profile change can rewrite an already-emitted row while this
-      // append adds only one tail item. Refresh the full history so the client
-      // does not retain a stale prefix beside the newly revisioned message.
-      this.sentHistory = buildPaginatedSessionHistory({
-        messages: projectedMessages,
-        hasMore: false,
-      });
-      return { shouldRefresh: true };
-    }
-    if (projectedMessages.length > this.sentHistory.messages.length) {
       const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
       if (hadPendingTurnBoundary && !this.turnBoundaryPending) {
         const firstAdded = attachOpenClawTranscriptMeta(addedMessages[0], {
@@ -210,25 +201,20 @@ export class SessionHistorySseState {
         addedMessages[0] = firstAdded;
         projectedMessages[this.sentHistory.messages.length] = firstAdded;
       }
-      if (addedMessages.length > 1) {
+      if (addedMessages.length === 1) {
+        const projectedMessage = expectDefined(addedMessages[0], "projected inline message");
+        const emittedMessage: SessionHistoryMessage =
+          resolveMessageSeq(projectedMessage) === undefined
+            ? (attachOpenClawTranscriptMeta(projectedMessage, {
+                seq: this.rawTranscriptSeq,
+              }) as SessionHistoryMessage)
+            : projectedMessage;
         this.sentHistory = buildPaginatedSessionHistory({
-          messages: projectedMessages,
+          messages: [...this.sentHistory.messages, emittedMessage],
           hasMore: false,
         });
-        return { shouldRefresh: true };
+        return { message: emittedMessage, messageSeq: resolveMessageSeq(emittedMessage) };
       }
-      const projectedMessage = expectDefined(addedMessages[0], "projected inline message");
-      const emittedMessage: SessionHistoryMessage =
-        resolveMessageSeq(projectedMessage) === undefined
-          ? (attachOpenClawTranscriptMeta(projectedMessage, {
-              seq: this.rawTranscriptSeq,
-            }) as SessionHistoryMessage)
-          : projectedMessage;
-      this.sentHistory = buildPaginatedSessionHistory({
-        messages: [...this.sentHistory.messages, emittedMessage],
-        hasMore: false,
-      });
-      return { message: emittedMessage, messageSeq: resolveMessageSeq(emittedMessage) };
     }
     if (
       nextProjection.messages.length === 0 &&

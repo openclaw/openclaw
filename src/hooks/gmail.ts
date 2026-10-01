@@ -29,17 +29,7 @@ const GMAIL_WATCH_EXCLUDED_LABELS = "SPAM,TRASH,DRAFT,SENT";
 const GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"]);
 let gogBin: string | undefined;
 
-export type GmailHookOverrides = {
-  account?: string;
-  label?: string;
-  topic?: string;
-  subscription?: string;
-  pushToken?: string;
-  hookToken?: string;
-  hookUrl?: string;
-  includeBody?: boolean;
-  maxBytes?: number;
-  renewEveryMinutes?: number;
+export type GmailHookOverrides = Partial<Omit<GmailHookRuntimeConfig, "serve" | "tailscale">> & {
   serveBind?: string;
   servePort?: number;
   servePath?: string;
@@ -111,8 +101,9 @@ export function buildDefaultHookUrl(
   port: number = DEFAULT_GATEWAY_PORT,
 ): string {
   const basePath = normalizeHooksPath(hooksPath);
-  const baseUrl = `http://127.0.0.1:${port}`;
-  return joinUrl(baseUrl, `${basePath}/gmail`);
+  const url = new URL(`http://127.0.0.1:${port}`);
+  url.pathname = `${basePath}/gmail`;
+  return url.toString();
 }
 
 export function resolveGmailHookRuntimeConfig(
@@ -294,12 +285,4 @@ export function parseTopicPath(topic: string): { projectId: string; topicName: s
     return null;
   }
   return { projectId: match[1] ?? "", topicName: match[2] ?? "" };
-}
-
-function joinUrl(base: string, pathLocal: string): string {
-  const url = new URL(base);
-  const basePath = url.pathname.replace(/\/+$/, "");
-  const extra = pathLocal.startsWith("/") ? pathLocal : `/${pathLocal}`;
-  url.pathname = `${basePath}${extra}`;
-  return url.toString();
 }

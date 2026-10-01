@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { safeStatSync } from "@openclaw/fs-safe/path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
@@ -38,7 +37,6 @@ import {
 } from "../config/sessions/paths.js";
 import {
   applySessionEntryReplacements,
-  iterateDoctorSessionKeyBatches,
   loadExactSessionEntryReadOnly,
   scanDoctorSessionEntriesStrict,
 } from "../config/sessions/session-accessor.js";
@@ -56,6 +54,7 @@ import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migration
 import { preserveDeferredPluginSessionSource } from "../infra/deferred-plugin-session-sources.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
+import { existsDir, migrationFileExists as existsFile } from "../infra/state-migrations.fs.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
@@ -73,31 +72,20 @@ import {
   noteMainSessionRecoveryIntegrity,
   type MainSessionRecoveryIntegrityCandidate,
 } from "./doctor-main-session-recovery.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
 import { countLabel, type OrphanAgentDir } from "./doctor-state-integrity-format.js";
 import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
+import { iterateDoctorSessionKeyBatches } from "./doctor/shared/session-entry-rewrite.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
-type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: {
-    message: string;
-    initialValue?: boolean;
-    requiresInteractiveConfirmation?: boolean;
-  }) => Promise<boolean>;
+type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
   note?: typeof note;
 };
-
-function existsDir(dir: string): boolean {
-  return safeStatSync(dir)?.isDirectory() ?? false;
-}
-
-function existsFile(filePath: string): boolean {
-  return safeStatSync(filePath)?.isFile() ?? false;
-}
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
@@ -325,10 +313,6 @@ function countJsonlLines(filePath: string): number {
   }
 }
 
-function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
-  return isPathUnderRootWithPathOps(targetPath, rootPath, path);
-}
-
 function resolvePathThroughExistingAncestor(
   targetPath: string,
   resolveRealPath: (targetPath: string) => string | null,
@@ -351,36 +335,13 @@ function resolvePathThroughExistingAncestor(
 }
 
 function escapeControlCharsForTerminal(value: string): string {
-  let escaped = "";
-  for (const char of value) {
-    if (char === "\u001b") {
-      escaped += "\\x1b";
-      continue;
-    }
-    if (char === "\r") {
-      escaped += "\\r";
-      continue;
-    }
-    if (char === "\n") {
-      escaped += "\\n";
-      continue;
-    }
-    if (char === "\t") {
-      escaped += "\\t";
-      continue;
-    }
+  const named: Record<string, string> = { "\r": "\\r", "\n": "\\n", "\t": "\\t" };
+  return Array.from(value, (char) => {
     const code = char.charCodeAt(0);
-    if ((code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31)) {
-      escaped += `\\x${code.toString(16).padStart(2, "0")}`;
-      continue;
-    }
-    if (code === 127) {
-      escaped += "\\x7f";
-      continue;
-    }
-    escaped += char;
-  }
-  return escaped;
+    return code <= 31 || code === 127
+      ? (named[char] ?? `\\x${code.toString(16).padStart(2, "0")}`)
+      : char;
+  }).join("");
 }
 
 type LinuxMountInfoEntry = {
@@ -425,10 +386,10 @@ function parseLinuxMountInfo(rawMountInfo: string): LinuxMountInfoEntry[] {
   return entries;
 }
 
-function isPathUnderRootWithPathOps(
+function isPathUnderRoot(
   targetPath: string,
   rootPath: string,
-  pathOps: Pick<typeof path, "resolve" | "sep" | "parse">,
+  pathOps: Pick<typeof path, "resolve" | "sep" | "parse"> = path,
 ): boolean {
   const normalizedTarget = pathOps.resolve(targetPath);
   const normalizedRoot = pathOps.resolve(rootPath);
@@ -450,7 +411,7 @@ function findLinuxMountInfoEntryForPath(
   const normalizedTarget = pathOps.resolve(targetPath);
   let bestMatch: LinuxMountInfoEntry | null = null;
   for (const entry of entries) {
-    if (!isPathUnderRootWithPathOps(normalizedTarget, entry.mountPoint, pathOps)) {
+    if (!isPathUnderRoot(normalizedTarget, entry.mountPoint, pathOps)) {
       continue;
     }
     if (
@@ -724,23 +685,11 @@ function hasPairingPolicy(value: unknown): boolean {
   if (!record) {
     return false;
   }
-  if (isPairingPolicy(record.dmPolicy)) {
-    return true;
-  }
-  const dm = asNullableObjectRecord(record.dm);
-  if (dm && isPairingPolicy(dm.policy)) {
-    return true;
-  }
-  const accounts = asNullableObjectRecord(record.accounts);
-  if (!accounts) {
-    return false;
-  }
-  for (const accountCfg of Object.values(accounts)) {
-    if (hasPairingPolicy(accountCfg)) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    isPairingPolicy(record.dmPolicy) ||
+    isPairingPolicy(asNullableObjectRecord(record.dm)?.policy) ||
+    Object.values(asNullableObjectRecord(record.accounts) ?? {}).some(hasPairingPolicy)
+  );
 }
 
 function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
@@ -808,8 +757,7 @@ export function detectStateIntegrityHealthIssues(
   if (cloudSyncedStateDir) {
     issues.push({
       kind: "mac-cloud-state-dir",
-      path: cloudSyncedStateDir.path,
-      storage: cloudSyncedStateDir.storage,
+      ...cloudSyncedStateDir,
     });
   }
 
@@ -817,8 +765,7 @@ export function detectStateIntegrityHealthIssues(
   if (windowsCloudSyncedStateDir) {
     issues.push({
       kind: "windows-cloud-state-dir",
-      path: windowsCloudSyncedStateDir.path,
-      storage: windowsCloudSyncedStateDir.storage,
+      ...windowsCloudSyncedStateDir,
     });
   }
 
@@ -826,10 +773,7 @@ export function detectStateIntegrityHealthIssues(
   if (linuxSdBackedStateDir) {
     issues.push({
       kind: "linux-sd-state-dir",
-      path: linuxSdBackedStateDir.path,
-      mountPoint: linuxSdBackedStateDir.mountPoint,
-      fsType: linuxSdBackedStateDir.fsType,
-      source: linuxSdBackedStateDir.source,
+      ...linuxSdBackedStateDir,
     });
   }
 
@@ -837,9 +781,7 @@ export function detectStateIntegrityHealthIssues(
   if (linuxVolatileStateDir) {
     issues.push({
       kind: "linux-volatile-state-dir",
-      path: linuxVolatileStateDir.path,
-      mountPoint: linuxVolatileStateDir.mountPoint,
-      fsType: linuxVolatileStateDir.fsType,
+      ...linuxVolatileStateDir,
     });
   }
 
@@ -919,95 +861,82 @@ export function detectStateIntegrityHealthIssues(
 export function stateIntegrityIssueToHealthFinding(
   issue: StateIntegrityHealthIssue,
 ): HealthFinding {
+  const finding = (
+    message: string,
+    fixHint: string,
+    severity: HealthFinding["severity"] = "warning",
+    target?: string,
+  ): HealthFinding => ({
+    checkId: STATE_INTEGRITY_CHECK_ID,
+    severity,
+    message,
+    path: issue.path,
+    ...(target !== undefined ? { target } : {}),
+    fixHint,
+  });
   switch (issue.kind) {
     case "mac-cloud-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory is under macOS cloud-synced storage (${issue.storage}), which can cause slow I/O and sync races.`,
-        path: issue.path,
-        fixHint: "Move OPENCLAW_STATE_DIR to local non-synced storage such as ~/.openclaw.",
-      };
+      return finding(
+        `State directory is under macOS cloud-synced storage (${issue.storage}), which can cause slow I/O and sync races.`,
+        "Move OPENCLAW_STATE_DIR to local non-synced storage such as ~/.openclaw.",
+      );
     case "windows-cloud-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory is under Windows cloud-synced storage (${issue.storage}), which can cause slow I/O, sync races, and Files On-Demand dehydration.`,
-        path: issue.path,
-        fixHint:
-          "Move OPENCLAW_STATE_DIR to local non-synced storage such as %USERPROFILE%\\.openclaw.",
-      };
+      return finding(
+        `State directory is under Windows cloud-synced storage (${issue.storage}), which can cause slow I/O, sync races, and Files On-Demand dehydration.`,
+        "Move OPENCLAW_STATE_DIR to local non-synced storage such as %USERPROFILE%\\.openclaw.",
+      );
     case "linux-sd-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory appears to be on SD/eMMC storage (${issue.source}, ${issue.fsType}), which can hurt startup and durability.`,
-        path: issue.path,
-        target: issue.mountPoint,
-        fixHint: "Move OPENCLAW_STATE_DIR to SSD/NVMe-backed storage.",
-      };
+      return finding(
+        `State directory appears to be on SD/eMMC storage (${issue.source}, ${issue.fsType}), which can hurt startup and durability.`,
+        "Move OPENCLAW_STATE_DIR to SSD/NVMe-backed storage.",
+        "warning",
+        issue.mountPoint,
+      );
     case "linux-volatile-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory is on volatile ${issue.fsType} storage and may disappear on reboot.`,
-        path: issue.path,
-        target: issue.mountPoint,
-        fixHint: "Move OPENCLAW_STATE_DIR to persistent local storage.",
-      };
+      return finding(
+        `State directory is on volatile ${issue.fsType} storage and may disappear on reboot.`,
+        "Move OPENCLAW_STATE_DIR to persistent local storage.",
+        "warning",
+        issue.mountPoint,
+      );
     case "missing-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message:
-          "State directory is missing. Sessions, credentials, logs, and config are stored there.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to create the state directory.",
-      };
+      return finding(
+        "State directory is missing. Sessions, credentials, logs, and config are stored there.",
+        "Run `openclaw doctor --fix` to create the state directory.",
+        "error",
+      );
     case "state-dir-not-writable":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message: issue.hint
+      return finding(
+        issue.hint
           ? `State directory is not writable. ${issue.hint}`
           : "State directory is not writable.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to repair state directory permissions.",
-      };
+        "Run `openclaw doctor --fix` to repair state directory permissions.",
+        "error",
+      );
     case "state-dir-too-open":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: "State directory permissions are too open. Recommend chmod 700.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to tighten state directory permissions.",
-      };
+      return finding(
+        "State directory permissions are too open. Recommend chmod 700.",
+        "Run `openclaw doctor --fix` to tighten state directory permissions.",
+      );
     case "config-file-too-open":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: "Config file is group/world readable. Recommend chmod 600.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to tighten config file permissions.",
-      };
+      return finding(
+        "Config file is group/world readable. Recommend chmod 600.",
+        "Run `openclaw doctor --fix` to tighten config file permissions.",
+      );
     case "missing-runtime-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message: `${issue.label} is missing.`,
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to create missing runtime state directories.",
-      };
+      return finding(
+        `${issue.label} is missing.`,
+        "Run `openclaw doctor --fix` to create missing runtime state directories.",
+        "error",
+      );
     case "runtime-dir-not-writable":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message: issue.hint
+      return finding(
+        issue.hint
           ? `${issue.label} is not writable. ${issue.hint}`
           : `${issue.label} is not writable.`,
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to repair runtime state directory permissions.",
-      };
+        "Run `openclaw doctor --fix` to repair runtime state directory permissions.",
+        "error",
+      );
   }
   return assertNeverStateIntegrityIssue(issue);
 }
@@ -1015,53 +944,28 @@ export function stateIntegrityIssueToHealthFinding(
 export function stateIntegrityIssueToRepairEffect(
   issue: StateIntegrityHealthIssue,
 ): HealthRepairEffect {
+  const effect = (
+    action: string,
+    dryRunSafe = false,
+    kind: HealthRepairEffect["kind"] = "state",
+  ): HealthRepairEffect => ({ kind, action, target: issue.path, dryRunSafe });
   switch (issue.kind) {
     case "mac-cloud-state-dir":
     case "windows-cloud-state-dir":
     case "linux-sd-state-dir":
     case "linux-volatile-state-dir":
-      return {
-        kind: "state",
-        action: "would-recommend-moving-state-dir",
-        target: issue.path,
-        dryRunSafe: true,
-      };
+      return effect("would-recommend-moving-state-dir", true);
     case "missing-state-dir":
-      return {
-        kind: "state",
-        action: "would-create-state-dir",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-create-state-dir");
     case "state-dir-not-writable":
     case "state-dir-too-open":
-      return {
-        kind: "state",
-        action: "would-repair-state-dir-permissions",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-repair-state-dir-permissions");
     case "config-file-too-open":
-      return {
-        kind: "file",
-        action: "would-tighten-config-file-permissions",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-tighten-config-file-permissions", false, "file");
     case "missing-runtime-dir":
-      return {
-        kind: "state",
-        action: "would-create-runtime-state-dir",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-create-runtime-state-dir");
     case "runtime-dir-not-writable":
-      return {
-        kind: "state",
-        action: "would-repair-runtime-state-dir-permissions",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-repair-runtime-state-dir-permissions");
   }
   return assertNeverStateIntegrityIssue(issue);
 }
