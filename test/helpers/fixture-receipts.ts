@@ -4,6 +4,11 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
+/**
+ * Receipts are not ordered with the child's other output, including stdout replies and exit.
+ * A wait raced against an operation the child's replies can settle must confirm against a durable
+ * record the child writes before replying.
+ */
 export type FixtureReceiptChannel = {
   readonly endpoint: string;
   waitFor(source: string, text: string, count?: number): Promise<void>;

@@ -14,11 +14,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   cleanupTempDirs,
   makeTempDir,
@@ -180,15 +176,14 @@ async function writeListToolsMcpServer(params: {
   callToolJsonRpcError?: boolean;
   callToolJsonRpcErrorCode?: number;
   callToolResult?: CallToolResult;
-  callToolDelayMs?: number;
   callToolReleasePath?: string;
   notifyListChangedOnToolCall?: boolean;
-  resourcePageDelayMs?: number;
   resourcePageCursors?: Array<string | null>;
   resourceReadJsonRpcError?: boolean;
   resourceReadResult?: ReadResourceResult;
-  promptPageDelayMs?: number;
   promptPageCursors?: Array<string | null>;
+  /** Holds resources/list and prompts/list replies until this file exists. */
+  utilityListReleasePath?: string;
 }): Promise<void> {
   await writeExecutable(
     params.filePath,
@@ -202,16 +197,16 @@ const {
   logPath, listToolsReleasePath, databasePath, pidPath, hangToolCallsUntilRestartMarkerPath,
   toolsByList, listToolsJsonRpcErrorMessage, toolPageCursors, callToolResult,
   callToolReleasePath, notifyListChangedReleasePath, resourcePageCursors,
-  resourceReadResult, promptPageCursors, ignoreShutdown, hangFirstInitializeMarkerPath,
+  resourceReadResult, promptPageCursors, utilityListReleasePath, ignoreShutdown,
+  hangFirstInitializeMarkerPath,
   delayMs = 0, initializeDelayMs = 0, hang = false, capabilities = { tools: {} },
   inputSchema = { type: "object", properties: {} },
   tools = [{ name: "slow_tool", description: "Returned after a slow catalog response.", inputSchema }],
   notifyListChangedOnInitialized = false, notifyListChangedAfterFirstList = false,
   notifyListChangedBeforeEveryListResponse = false, exitOnListCall = 0,
   listToolsMethodNotFound = false, callToolJsonRpcError = false,
-  callToolJsonRpcErrorCode = -32000, callToolDelayMs = 0,
-  notifyListChangedOnToolCall = false, resourcePageDelayMs = 0,
-  resourceReadJsonRpcError = false, promptPageDelayMs = 0,
+  callToolJsonRpcErrorCode = -32000, notifyListChangedOnToolCall = false,
+  resourceReadJsonRpcError = false,
 } = ${JSON.stringify(params)};
 
 async function waitForPath(filePath) {
@@ -384,57 +379,58 @@ function handle(message) {
     }
     void (async () => {
       await waitForPath(callToolReleasePath);
-      log("delay tools/call " + callToolDelayMs);
-      pendingTimer = setTimeout(() => {
-        send({
-          jsonrpc: "2.0",
-          id: message.id,
-          result: {
-            isError: false,
-            ...(callToolResult ?? {
-              content: [{ type: "text", text: "tool ok" }],
-            }),
-          },
-        });
-      }, callToolDelayMs);
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          isError: false,
+          ...(callToolResult ?? {
+            content: [{ type: "text", text: "tool ok" }],
+          }),
+        },
+      });
     })();
   }
   if (message.method === "resources/list") {
     resourceListCount += 1;
+    const page = resourceListCount;
     log("resources/list cursor " + JSON.stringify(message.params?.cursor));
-    setTimeout(() => {
-      const resourcePageCursor = resourcePageCursors?.[resourceListCount - 1];
+    void (async () => {
+      await waitForPath(utilityListReleasePath);
+      const resourcePageCursor = resourcePageCursors?.[page - 1];
       send({
         jsonrpc: "2.0",
         id: message.id,
         result: {
           resources: resourcePageCursors
-            ? [{ uri: "memo://page-" + resourceListCount, name: "page-" + resourceListCount }]
+            ? [{ uri: "memo://page-" + page, name: "page-" + page }]
             : [],
           ...(resourcePageCursor !== undefined && resourcePageCursor !== null
             ? { nextCursor: resourcePageCursor }
             : {}),
         },
       });
-    }, resourcePageDelayMs);
+    })();
     return;
   }
   if (message.method === "prompts/list") {
     promptListCount += 1;
+    const page = promptListCount;
     log("prompts/list cursor " + JSON.stringify(message.params?.cursor));
-    setTimeout(() => {
-      const promptPageCursor = promptPageCursors?.[promptListCount - 1];
+    void (async () => {
+      await waitForPath(utilityListReleasePath);
+      const promptPageCursor = promptPageCursors?.[page - 1];
       send({
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          prompts: [{ name: "prompt-" + promptListCount }],
+          prompts: [{ name: "prompt-" + page }],
           ...(promptPageCursor !== undefined && promptPageCursor !== null
             ? { nextCursor: promptPageCursor }
             : {}),
         },
       });
-    }, promptPageDelayMs);
+    })();
     return;
   }
   if (message.method === "resources/read") {
@@ -489,6 +485,43 @@ process.stdin.on("end", shutdown);
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);`,
   );
+}
+
+/**
+ * Waits for a fixture event while `operation` may settle. Receipts and MCP replies travel on
+ * separate pipes, so when the operation settles first the fixture log, which `log()` appends
+ * before any reply, decides whether the event happened.
+ */
+async function fixtureEventBeforeSettlement(
+  logPath: string,
+  text: string,
+  operation: PromiseLike<unknown>,
+  count = 1,
+): Promise<void> {
+  const readLog = () =>
+    fs.readFile(logPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") {
+        return "";
+      }
+      throw error;
+    });
+  const settled = Promise.resolve(operation).then(
+    async () => {
+      const log = await readLog();
+      if (log.split(text).length - 1 < count) {
+        throw new Error(
+          `Operation settled before ${text} reached ${logPath}; saw ${JSON.stringify(log)}`,
+        );
+      }
+    },
+    async (error: unknown) => {
+      const log = await readLog();
+      if (log.split(text).length - 1 < count) {
+        throw error;
+      }
+    },
+  );
+  await Promise.race([receipts.waitFor(logPath, text, count), settled]);
 }
 
 // Runtime invalidation/recovery and App expiry expose no completion promise.
@@ -858,10 +891,10 @@ describe("session MCP runtime", () => {
         (error: unknown) => ({ value: undefined, error }),
       );
       await withinTest(
-        awaitGateBeforeSettlement(
-          receipts.waitFor(logPath, "notify tools/list_changed during tools/call"),
+        fixtureEventBeforeSettlement(
+          logPath,
+          "notify tools/list_changed during tools/call",
           calling,
-          `Timed out waiting for notify tools/list_changed during tools/call in ${logPath}`,
         ),
         signal,
       );
@@ -971,11 +1004,7 @@ describe("session MCP runtime", () => {
 
     try {
       await withinTest(
-        awaitGateBeforeSettlement(
-          receipts.waitFor(logPath, "recv tools/list"),
-          catalogResult,
-          `Timed out waiting for recv tools/list in ${logPath}`,
-        ),
+        fixtureEventBeforeSettlement(logPath, "recv tools/list", catalogResult),
         signal,
       );
       const result = await withinTest(catalogResult, signal);
@@ -1591,14 +1620,7 @@ describe("session MCP runtime", () => {
           expect(await fs.readFile(logPath, "utf8")).toContain("recv tools/list");
         } else {
           const received = phase === "initialize" ? "recv initialize" : "recv tools/list";
-          await withinTest(
-            awaitGateBeforeSettlement(
-              receipts.waitFor(logPath, received),
-              pending,
-              `Timed out waiting for ${received} in ${logPath}`,
-            ),
-            signal,
-          );
+          await withinTest(fixtureEventBeforeSettlement(logPath, received, pending), signal);
         }
         const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
         expect(() => process.kill(pid, 0)).not.toThrow();
@@ -1659,14 +1681,7 @@ describe("session MCP runtime", () => {
     });
     let other: Promise<CallToolResult> | undefined;
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          receipts.waitFor(logPath, "recv tools/list"),
-          first,
-          `Timed out waiting for recv tools/list in ${logPath}`,
-        ),
-        signal,
-      );
+      await withinTest(fixtureEventBeforeSettlement(logPath, "recv tools/list", first), signal);
       expect(cancelled).toBe(false);
       other = runtime.callTool("shared", "slow_tool", {});
       controller.abort(reason);
@@ -1693,12 +1708,13 @@ describe("session MCP runtime", () => {
     const tempDir = tempDirTracker.make("bundle-mcp-caller-cancel-");
     const serverPath = path.join(tempDir, "caller-cancel.mjs");
     const logPath = path.join(tempDir, "server.log");
+    const releasePath = path.join(tempDir, "release-replies");
+    // Hold every reply so each request is still in flight when its caller cancels it.
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
-      callToolDelayMs: 250,
-      resourcePageDelayMs: 250,
-      promptPageDelayMs: 250,
+      callToolReleasePath: releasePath,
+      utilityListReleasePath: releasePath,
       capabilities: { tools: {}, resources: {}, prompts: {} },
     });
     const runtime = createSessionMcpRuntime({
@@ -1727,11 +1743,7 @@ describe("session MCP runtime", () => {
           call.toolName,
         ).execute(`cancel-${attempt}`, {}, controller.signal);
         await withinTest(
-          awaitGateBeforeSettlement(
-            receipts.waitFor(logPath, `recv ${call.method}`),
-            pending,
-            `Timed out waiting for MCP ${call.method} request to reach the server`,
-          ),
+          fixtureEventBeforeSettlement(logPath, `recv ${call.method}`, pending),
           signal,
         );
         controller.abort(new Error(`turn cancelled ${attempt}`));
@@ -1739,6 +1751,7 @@ describe("session MCP runtime", () => {
       }
 
       await withinTest(receipts.waitFor(logPath, "recv notifications/cancelled", 3), signal);
+      await fs.writeFile(releasePath, "release", "utf8");
       await expect(runtime.callTool("healthy", "slow_tool", {})).resolves.toMatchObject({
         isError: false,
       });
@@ -3974,11 +3987,7 @@ describe("disposeSession timeout", () => {
         await withinTest(
           Promise.all(
             serverPaths.map(({ logPath }) =>
-              awaitGateBeforeSettlement(
-                receipts.waitFor(logPath, "tools/list cursor"),
-                catalogPromise,
-                `Timed out waiting for tools/list cursor in ${logPath}`,
-              ),
+              fixtureEventBeforeSettlement(logPath, "tools/list cursor", catalogPromise),
             ),
           ),
           signal,
@@ -4053,10 +4062,10 @@ describe("disposeSession timeout", () => {
       try {
         const firstCatalog = runtime.getCatalog();
         await withinTest(
-          awaitGateBeforeSettlement(
-            receipts.waitFor(invalidatingServer.logPath, "notify tools/list_changed"),
+          fixtureEventBeforeSettlement(
+            invalidatingServer.logPath,
+            "notify tools/list_changed",
             firstCatalog,
-            `Timed out waiting for notify tools/list_changed in ${invalidatingServer.logPath}`,
           ),
           signal,
         );
@@ -4127,19 +4136,11 @@ describe("disposeSession timeout", () => {
       try {
         const firstCatalog = runtime.getCatalog();
         await withinTest(
-          awaitGateBeforeSettlement(
-            receipts.waitFor(slowLogPath, "first initialize pid"),
-            firstCatalog,
-            `Timed out waiting for first initialize in ${firstConnectMarkerPath}`,
-          ),
+          fixtureEventBeforeSettlement(slowLogPath, "first initialize pid", firstCatalog),
           signal,
         );
         await withinTest(
-          awaitGateBeforeSettlement(
-            receipts.waitFor(triggerLogPath, "notify tools/list_changed"),
-            firstCatalog,
-            `Timed out waiting for notify tools/list_changed in ${triggerLogPath}`,
-          ),
+          fixtureEventBeforeSettlement(triggerLogPath, "notify tools/list_changed", firstCatalog),
           signal,
         );
 
@@ -4223,19 +4224,11 @@ describe("disposeSession timeout", () => {
       try {
         const firstCatalog = runtime.getCatalog();
         await withinTest(
-          awaitGateBeforeSettlement(
-            receipts.waitFor(logPath, "notify tools/list_changed"),
-            firstCatalog,
-            `Timed out waiting for notify tools/list_changed in ${logPath}`,
-          ),
+          fixtureEventBeforeSettlement(logPath, "notify tools/list_changed", firstCatalog),
           signal,
         );
         await withinTest(
-          awaitGateBeforeSettlement(
-            receipts.waitFor(logPath, "tools/list cursor"),
-            firstCatalog,
-            `Timed out waiting for tools/list cursor in ${logPath}`,
-          ),
+          fixtureEventBeforeSettlement(logPath, "tools/list cursor", firstCatalog),
           signal,
         );
 
