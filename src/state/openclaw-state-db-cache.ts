@@ -590,7 +590,6 @@ export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
 export function publishOpenClawStateDatabaseWorkerAdmission(
   admission: OpenClawStateDatabaseReadAdmission,
 ): void {
-  admission.assertCurrent();
   asyncResources.publish(admission.databasePath);
   admission.assertCurrent();
 }

@@ -1,9 +1,11 @@
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronCompletionStatus } from "../completion-status.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type { CronRunHistorySource } from "../store/run-history.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import { ownsStreamSource } from "../stream-schedule.js";
@@ -273,6 +275,10 @@ async function inspectManualRunPreflight(
   if (!job || (opts?.onExit && !matchesOnExitSchedule(job, opts.onExit.schedule))) {
     return { ok: true, ran: false, reason: "not-due" };
   }
+  if (state.deps.legacyDefaultAgentId) {
+    resolveCronJobEffectiveAgentId(job, undefined, state.deps.legacyDefaultAgentId);
+  }
+  assertCanonicalCronDeliveryMode(job.delivery);
   if (opts?.onExit && (!isJobEnabled(job) || job.state.autoDisabled)) {
     return { ok: true, ran: false, reason: "disabled" };
   }

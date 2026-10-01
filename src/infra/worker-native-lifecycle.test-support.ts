@@ -622,6 +622,7 @@ assert.ok(
     ending === "explicit-unbound" ||
     ending === "supervisor-loss" ||
     ending === "native-resource" ||
+    ending === "resource-idle-broker" ||
     ending === "resource-supervisor-loss" ||
     ending === "resource-auto-close-success" ||
     ending === "resource-auto-close-failure" ||
@@ -643,6 +644,8 @@ if (ending === "generation") {
   await runSupervisorLoss();
 } else if (ending === "native-resource") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil);
+} else if (ending === "resource-idle-broker") {
+  await runNativeResourceLifecycle(directory, serviceNativeUntil, false, false, "idle-broker");
 } else if (ending === "resource-cold-supervisor-loss") {
   await runNativeColdRecovery(directory, serviceNativeUntil);
 } else if (ending === "resource-supervisor-loss") {

@@ -862,7 +862,7 @@ export class NpmUpdateSmoke {
       rerunCommand: this.formatRerun("bash", args, commandEnv),
       startedAt,
     };
-    job.promise = this.spawnLogged(
+    job.promise = spawnLoggedCommand(
       "bash",
       args,
       logPath,
@@ -1089,17 +1089,6 @@ export class NpmUpdateSmoke {
     return platform === "windows" ? this.windowsAuth : this.auth;
   }
 
-  private spawnLogged(
-    command: string,
-    args: string[],
-    logPath: string,
-    env: NodeJS.ProcessEnv = {},
-    onOutput: (text: string) => void = () => undefined,
-    options: SpawnLoggedOptions = {},
-  ): Promise<number> {
-    return spawnLoggedCommand(command, args, logPath, env, onOutput, options);
-  }
-
   private async monitorJobs(label: string, jobs: Job[]): Promise<void> {
     const pending = new Set(jobs.map((job) => job.label));
     while (pending.size > 0) {
@@ -1140,14 +1129,17 @@ export class NpmUpdateSmoke {
       "openclaw-parallels-npm-update-macos",
       { execArgs: macosUpdateExec.execArgs, mode: "700", runCommand: runMacosHostCommand },
     );
-    runMacosHostCommand(
-      "prlctl",
-      ["exec", this.macosVm, "/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath],
-      {
-        timeoutMs: 30_000,
-      },
-    );
+    const cleanup = () => this.removeGuestScript(this.macosVm, scriptPath, runMacosHostCommand);
+    // Checked host commands can exit the process; finally only handles thrown failures.
+    process.once("exit", cleanup);
     try {
+      runMacosHostCommand(
+        "prlctl",
+        ["exec", this.macosVm, "/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath],
+        {
+          timeoutMs: 30_000,
+        },
+      );
       const invocation = resolveMacosPrlctlInvocation(
         "prlctl",
         ["exec", this.macosVm, ...macosUpdateExec.execArgs, "/bin/bash", scriptPath],
@@ -1163,7 +1155,8 @@ export class NpmUpdateSmoke {
         throw new Error(`macOS update command failed with exit code ${status}`);
       }
     } finally {
-      this.removeGuestScript(this.macosVm, scriptPath, runMacosHostCommand);
+      process.off("exit", cleanup);
+      cleanup();
     }
   }
 
@@ -1288,16 +1281,16 @@ export class NpmUpdateSmoke {
     const execArgs = options.execArgs ?? [];
     const mode = options.mode ?? "755";
     const scriptPath = `/tmp/${prefix}-${randomUUID()}.sh`;
-    const write = runCommand("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
-      check: false,
-      input: script,
-      quiet: true,
-      timeoutMs: 120_000,
-    });
-    if (write.status !== 0) {
-      throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
-    }
     try {
+      const write = runCommand("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
+        check: false,
+        input: script,
+        quiet: true,
+        timeoutMs: 120_000,
+      });
+      if (write.status !== 0) {
+        throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
+      }
       const chmod = runCommand(
         "prlctl",
         ["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath],

@@ -27,7 +27,6 @@ export function resolveSessionStatusEntry(params: {
   const internal = resolveInternalSessionKey({
     key: keyRaw,
     alias: params.alias,
-    mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
   });
 

@@ -129,7 +129,7 @@ private actor ReactionTestTransport: OpenClawChatTransport {
         -> OpenClawChatSessionsListResponse
     {
         let entries = ["agent:main:a", "agent:main:b"].map { key in
-            var entry = OpenClawChatSessionEntry.placeholder(key: key)
+            var entry = OpenClawChatSessionEntry(key: key)
             entry.agentId = "main"
             entry.sessionId = "session-\(key)"
             entry.sharingRole = .viewer

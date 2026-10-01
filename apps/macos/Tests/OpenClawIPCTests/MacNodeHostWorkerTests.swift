@@ -6,8 +6,6 @@ import os
 import Testing
 @testable import OpenClaw
 
-private struct WorkerBackpressureTimeout: Error {}
-
 private actor StubMacNodeHostWorker: MacNodeHostWorking {
     let manifest: MacNodeHostManifest
     private var requests: [BridgeInvokeRequest] = []
@@ -47,7 +45,7 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct MacNodeHostWorkerTests {
     @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
         let input = MacNodeHostWorkerRetryPolicy.Input(
@@ -233,11 +231,8 @@ struct MacNodeHostWorkerTests {
                 #expect(await worker.setRoute(nil, authorityGeneration: 2))
                 let receives = socket.snapshotCallbackReceiveCount()
                 socket.emitReceiveSuccess(approval)
-                try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { WorkerBackpressureTimeout() }) {
-                    while socket.snapshotCallbackReceiveCount() <= receives {
-                        try Task.checkCancellation()
-                        await Task.yield()
-                    }
+                try await TestWait.state("approval receive callback") {
+                    socket.snapshotCallbackReceiveCount() > receives
                 }
                 #expect(await worker.setRoute(route, authorityGeneration: 3))
                 await worker.gatewayConnected(ifCurrentRoute: route)
@@ -248,10 +243,7 @@ struct MacNodeHostWorkerTests {
             invoking = activeInvoke
             let workerPID = try await TestProcessSupport.waitForPID(in: invokeReceived)
             socket.emitReceiveSuccess(approval)
-            let response = try await AsyncTimeout.withTimeout(
-                seconds: 5,
-                onTimeout: { WorkerBackpressureTimeout() },
-                operation: { await activeInvoke.value })
+            let response = try await TestWait.value(of: activeInvoke, "inventory refresh response")
             #expect(response.ok)
             #expect(response.payload?.dictionaryValue?["refreshes"]?.intValue == 1)
             #expect(await worker.isWorkerHostingEnabled())
@@ -677,14 +669,13 @@ struct MacNodeHostWorkerTests {
         await worker.cancel(invokeId: "terminal-1")
         var invoking: Task<BridgeInvokeResponse, Never>?
         do {
-            let buffered = try await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { WorkerBackpressureTimeout() },
-                operation: {
-                    await worker.invoke(BridgeInvokeRequest(
-                        id: "terminal-1",
-                        command: "codex.terminal.resume.v1"))
-                })
+            let buffered = await worker.invoke(BridgeInvokeRequest(
+                id: "terminal-1",
+                command: "codex.terminal.resume.v1"))
+            guard !Task.isCancelled else {
+                Issue.record("Still waiting for buffered invocation cancellation")
+                throw CancellationError()
+            }
             #expect(!buffered.ok)
             #expect(buffered.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
 
@@ -700,10 +691,7 @@ struct MacNodeHostWorkerTests {
             } else {
                 await worker.cancel(invokeId: "terminal-2")
             }
-            let active = try await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { WorkerBackpressureTimeout() },
-                operation: { await activeInvoke.value })
+            let active = try await TestWait.value(of: activeInvoke, "active invocation cancellation")
             await worker.stop()
             #expect(!active.ok)
             #expect(active.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
@@ -743,10 +731,7 @@ struct MacNodeHostWorkerTests {
         }
         cancelled.cancel()
         do {
-            let response = try await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { WorkerBackpressureTimeout() },
-                operation: { await cancelled.value })
+            let response = try await TestWait.value(of: cancelled, "pre-cancelled invocation")
             #expect(!response.ok)
             #expect(response.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
             let reused = await worker.invoke(BridgeInvokeRequest(id: "shared", command: "system.run"))
@@ -754,12 +739,11 @@ struct MacNodeHostWorkerTests {
             let barrier = await worker.invoke(BridgeInvokeRequest(id: "barrier", command: "system.run"))
             #expect(barrier.ok)
             if bufferedControls {
-                let other = try await AsyncTimeout.withTimeout(
-                    seconds: 1,
-                    onTimeout: { WorkerBackpressureTimeout() },
-                    operation: {
-                        await worker.invoke(BridgeInvokeRequest(id: "other", command: "system.run"))
-                    })
+                let other = await worker.invoke(BridgeInvokeRequest(id: "other", command: "system.run"))
+                guard !Task.isCancelled else {
+                    Issue.record("Still waiting for other buffered invocation cancellation")
+                    throw CancellationError()
+                }
                 #expect(other.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
             }
             await worker.stop()
@@ -822,7 +806,7 @@ struct MacNodeHostWorkerTests {
 
         worker = nil
 
-        #expect(await TestProcessSupport.waitUntilGone(pid))
+        #expect(try await TestProcessSupport.waitUntilGone(pid))
     }
 
     @Test func `changed worker command replaces the running process`() async throws {
@@ -982,10 +966,10 @@ struct MacNodeHostWorkerTests {
                     command: "system.run",
                     paramsJSON: largeParams))
             }
-            let responses = try await AsyncTimeout.withTimeout(
-                seconds: 5,
-                onTimeout: { WorkerBackpressureTimeout() },
-                operation: { [first, second] in await [first.value, second.value] })
+            let responses = try await [
+                TestWait.value(of: first, "first backpressured response"),
+                TestWait.value(of: second, "second backpressured response"),
+            ]
             await worker.stop()
             let allResponsesSucceeded = responses.allSatisfy(\.ok)
             #expect(allResponsesSucceeded)

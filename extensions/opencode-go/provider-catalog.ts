@@ -2,9 +2,7 @@ import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createUpstreamProviderCatalog,
-  fetchLiveProviderModelIds,
   listProviderCatalogSnapshotEntries,
-  type LiveModelCatalogFetchGuard,
   type ProviderCatalogSnapshot,
   type ProjectedUpstreamProviderCatalogModel as OpencodeGoModelDefinition,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -55,6 +53,7 @@ const opencodeGoCatalog = createUpstreamProviderCatalog({
   timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
   ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
   auditContext: "opencode-go-model-discovery",
+  starterModelAuditContext: "opencode-go-onboarding-model-discovery",
   isStaticEntryActive: (entry) => !entry?.status,
   decorateModel: (model) =>
     model.api === "anthropic-messages" && model.id.startsWith("qwen")
@@ -62,28 +61,11 @@ const opencodeGoCatalog = createUpstreamProviderCatalog({
       : model,
 });
 
-export const { buildStaticProvider: buildStaticOpencodeGoProviderConfig } = opencodeGoCatalog;
-export const buildOpencodeGoLiveProviderConfig =
-  opencodeGoCatalog.buildLiveProvider.bind(opencodeGoCatalog);
-
-export async function resolveOpencodeGoStarterModel(params: {
-  apiKey: string;
-  preferredModelRef: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
-}): Promise<string | undefined> {
-  const liveModelIds = await fetchLiveProviderModelIds({
-    providerId: PROVIDER_ID,
-    endpoint: OPENCODE_GO_MODELS_ENDPOINT,
-    discoveryApiKey: params.apiKey,
-    fetchGuard: params.fetchGuard,
-    signal: params.signal,
-    timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
-    auditContext: "opencode-go-onboarding-model-discovery",
-  });
-  const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
-  return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
-}
+export const {
+  buildStaticProvider: buildStaticOpencodeGoProviderConfig,
+  buildLiveProvider: buildOpencodeGoLiveProviderConfig,
+  resolveStarterModel: resolveOpencodeGoStarterModel,
+} = opencodeGoCatalog;
 
 export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
   return listProviderCatalogSnapshotEntries(opencodeGoCatalog.getSnapshot());

@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
@@ -19,7 +20,6 @@ import { setVoiceCallStateRuntime } from "./runtime-state.js";
 import { CallRecordSchema, type InitiateCallInput } from "./types.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
-import type { WebSocket } from "./websocket.js";
 
 async function withDelayedStore(
   run: (fixture: {

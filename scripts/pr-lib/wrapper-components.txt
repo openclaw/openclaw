@@ -81,6 +81,7 @@ packages/normalization-core/src/code-points.ts
 packages/normalization-core/src/error-coercion.ts
 packages/normalization-core/src/expect.ts
 packages/normalization-core/src/format.ts
+packages/normalization-core/src/grapheme.ts
 packages/normalization-core/src/home-dir.ts
 packages/normalization-core/src/index.ts
 packages/normalization-core/src/json-coercion.ts
@@ -332,6 +333,7 @@ src/commands/doctor/shared/legacy-config-migrations.channels.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot-account.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot.ts
 src/commands/doctor/shared/legacy-config-migrations.queue.ts
+src/commands/doctor/shared/legacy-config-migrations.runtime.agent-policy.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.code-mode.ts
@@ -369,8 +371,10 @@ src/commands/doctor/shared/legacy-model-ref-normalization.ts
 src/commands/doctor/shared/legacy-models-add-metadata.ts
 src/commands/doctor/shared/legacy-runtime-model-policy.ts
 src/commands/doctor/shared/legacy-runtime-model-providers.ts
+src/commands/doctor/shared/legacy-talk-config-normalizer.ts
 src/commands/doctor/shared/legacy-tool-name-migration.ts
 src/commands/doctor/shared/legacy-tool-policy-scopes.ts
+src/commands/doctor/shared/legacy-tools-by-sender.ts
 src/commands/doctor/shared/legacy-web-tools-migrate.ts
 src/compat/legacy-names.ts
 src/config/agent-dirs.ts
@@ -480,6 +484,7 @@ src/config/plugin-auto-enable.prefer-over.ts
 src/config/plugin-install-record-map.ts
 src/config/plugins-allowlist.ts
 src/config/provider-policy.ts
+src/config/provider-settings.ts
 src/config/recovery-policy.ts
 src/config/redact-argv.ts
 src/config/redact-sentinel.ts
@@ -488,6 +493,7 @@ src/config/redact-snapshot.secret-ref.ts
 src/config/redact-snapshot.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
+src/config/runtime-config-snapshot-match.ts
 src/config/runtime-overrides.ts
 src/config/runtime-session-changes.ts
 src/config/runtime-snapshot.ts
@@ -560,6 +566,7 @@ src/config/zod-schema.secret-input.ts
 src/config/zod-schema.sensitive.ts
 src/config/zod-schema.session-config.ts
 src/config/zod-schema.session.ts
+src/config/zod-schema.storage.ts
 src/config/zod-schema.telemetry.ts
 src/config/zod-schema.ts
 src/cron/completion-status.ts
@@ -783,6 +790,7 @@ src/infra/sqlite-backup.ts
 src/infra/sqlite-busy-timeout.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
+src/infra/sqlite-file-copy.ts
 src/infra/sqlite-file-generation.ts
 src/infra/sqlite-files.ts
 src/infra/sqlite-handle-lifecycle.ts
@@ -947,6 +955,7 @@ src/logging/redact-pattern-runtime.ts
 src/logging/redact-patterns.ts
 src/logging/redact-pem.ts
 src/logging/redact-performance.ts
+src/logging/redact-prefilter.ts
 src/logging/redact.ts
 src/logging/secret-redaction-registry.ts
 src/logging/state.ts
@@ -1112,6 +1121,7 @@ src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-instance-owned-values.ts
 src/plugins/plugin-instance-scope.ts
+src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-value-views.ts
 src/plugins/plugin-instance.ts
 src/plugins/plugin-lifecycle-trace.ts
@@ -1235,6 +1245,7 @@ src/process/supervisor/cancellation-policy.ts
 src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
 src/process/supervisor/service-child-windows-job-native.ts
+src/process/windows-command-line.ts
 src/process/windows-command.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts

@@ -144,6 +144,7 @@ serveOwnedWorkerTasks(
         await Promise.all([
           import("../../gateway/session-history-worker-reader.js"),
           import("../../gateway/server-methods/chat-history-page-kernel.js"),
+          import("../../gateway/server-methods/chat-history-response-page.js"),
           import("../../gateway/session-history-snapshot.js"),
         ]);
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -162,19 +163,34 @@ serveOwnedWorkerTasks(
           await import("../../state/openclaw-agent-db-readonly.js");
         const { runSqliteDeferredTransactionSync } =
           await import("../../infra/sqlite-transaction.js");
-        const { readHistoricalSessionIdsInDatabase } =
-          await import("./session-history-eviction-candidates.js");
+        const {
+          readHistoricalSessionIdsInDatabase,
+          readDiskEvictableArchivedSessionBatchInDatabase,
+        } = await import("./session-history-eviction-candidates.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           (database) =>
             runSqliteDeferredTransactionSync(database.db, () =>
-              readHistoricalSessionIdsInDatabase({ ...request, database }),
+              "archived" in request
+                ? {
+                    batch: readDiskEvictableArchivedSessionBatchInDatabase(
+                      database,
+                      request.archived,
+                    ),
+                  }
+                : { sessionIds: readHistoricalSessionIdsInDatabase({ ...request, database }) },
             ),
           { ...request.database, env: request.env },
         );
         if (!result.found) {
+          if ("archived" in request && result.reason === "database-missing") {
+            return {
+              kind: "historical-eviction-candidates",
+              batch: { candidates: [], exhausted: true },
+            };
+          }
           throw new Error(`SQLite history eviction cannot read its database: ${result.reason}`);
         }
-        return { kind: "historical-eviction-candidates" as const, sessionIds: result.value };
+        return { kind: "historical-eviction-candidates" as const, ...result.value };
       }
       if (request.kind === "session-pending-archives") {
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -324,7 +340,7 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "session-entry-read") {
         const { loadSessionEntryReadOnlyResultInScope } =
-          await import("./session-accessor.sqlite-entry.js");
+          await import("./session-accessor.sqlite-exact-read.js");
         let source: SessionTranscriptWorkerValues["session-entry-read"]["source"];
         const read = loadSessionEntryReadOnlyResultInScope(
           {
@@ -364,6 +380,21 @@ serveOwnedWorkerTasks(
               env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
             },
             { continuation: request.continuation },
+          ),
+        };
+      }
+      if (request.kind === "session-store-summary") {
+        const { readSessionStoreSummaryReadOnly } =
+          await import("./session-accessor.sqlite-summary.js");
+        return {
+          kind: "session-store-summary" as const,
+          summary: readSessionStoreSummaryReadOnly(
+            {
+              agentId: request.database.agentId,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.env),
+            },
+            request,
           ),
         };
       }
@@ -472,6 +503,14 @@ serveOwnedWorkerTasks(
         return (
           loadSessionEntryReadOnlyInScope({ ...request.scope, projection: "list" }) !== undefined
         );
+      }
+      if (request.kind === "transcript-watermark") {
+        const { readSessionTranscriptWatermark } =
+          await import("./session-accessor.sqlite-transcript-watermark.js");
+        return {
+          kind: "transcript-watermark",
+          watermark: readSessionTranscriptWatermark(request.scope),
+        };
       }
       return await runWithSessionTranscriptReadFence(
         request.admission,

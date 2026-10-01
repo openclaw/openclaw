@@ -147,7 +147,7 @@ describe("Gemini embedding provider", () => {
     ).rejects.toThrow(/memory\.search\.remote\.apiKey/);
   });
 
-  it.each(["models/", "gemini/", "google/"])(
+  it.each(["models/", "gemini/", "google/", "models/gemini/", "models/google/"])(
     "normalizes the %s model prefix through the provider request",
     async (prefix) => {
       const fetchMock = installFetchMock(() => ({

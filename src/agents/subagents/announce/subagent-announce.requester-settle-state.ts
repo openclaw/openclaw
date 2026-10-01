@@ -19,6 +19,46 @@ export type RequesterSettleWakeBatchCallbacks = {
   ) => void | Promise<void>;
 };
 
+const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
+
+/** Reads stay independent; the first prepared decision owns mutation and delivery. */
+export function createRequesterSettleBatchClaim(
+  key: string,
+  isGatewayCurrent: (() => boolean) | undefined,
+) {
+  const hadGatewayContext = isGatewayCurrent?.() === true;
+  if (isGatewayCurrent && !hadGatewayContext) {
+    return undefined;
+  }
+  const isGatewayClosed = () => {
+    try {
+      return hadGatewayContext && !isGatewayCurrent?.();
+    } catch {
+      // An incompatible captured batch cannot block a fresh Gateway owner.
+      return hadGatewayContext;
+    }
+  };
+  return {
+    isGatewayClosed,
+    claim: (): boolean => {
+      const owner = activeRequesterSettleWakeBatches.get(key);
+      if (owner === isGatewayClosed) {
+        return true;
+      }
+      if (owner?.() === false) {
+        return false;
+      }
+      activeRequesterSettleWakeBatches.set(key, isGatewayClosed);
+      return true;
+    },
+    release(): void {
+      if (activeRequesterSettleWakeBatches.get(key) === isGatewayClosed) {
+        activeRequesterSettleWakeBatches.delete(key);
+      }
+    },
+  };
+}
+
 /** Fence consumed pause notices and completions superseded by a pause. */
 export function isRequesterWakeStateCurrent(
   entry: SubagentRunRecord,
@@ -107,7 +147,7 @@ export function resolvePrivateSettlePolicy(
   completionRows: readonly SubagentRunRecord[],
   requesterYielded: boolean,
   state: RequesterSettleWakeBatchState,
-  requesterSessionId: string,
+  requester: { sessionId: string; lifecycleRevision?: string },
 ) {
   // One private result makes the aggregate private; public siblings keep their own route.
   const privateRows = completionRows.filter((entry) => entry.completionTarget === "parent");
@@ -118,7 +158,12 @@ export function resolvePrivateSettlePolicy(
   // Private findings stay bound to the requester incarnation that produced them.
   const privateBinding = {
     ...(parentOnly ? { completionTarget: "parent" as const } : {}),
-    ...(hasPrivateRows ? { completionRequesterSessionId: requesterSessionId } : {}),
+    ...(hasPrivateRows
+      ? {
+          completionRequesterSessionId: requester.sessionId,
+          completionRequesterLifecycleRevision: requester.lifecycleRevision,
+        }
+      : {}),
   };
   const admissionMarker = yieldedFinalDeliverable ? { yieldedFinalDeliverable: true as const } : {};
   // A yield owes the conversation a visible final unless private findings let the

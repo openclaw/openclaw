@@ -34,11 +34,13 @@ import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model
 import {
   acquireReadOnlyPreparedModelRuntime,
   applyRemoteModelCatalogUpdate,
+  beginPreparedModelRuntimePluginDrain,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
+import { PreparedModelRuntimePublicationQueue } from "./prepared-model-runtime.publication-queue.js";
 
 const fixture = usePreparedModelRuntimeHarness({
   label: "remote-publication",
@@ -136,6 +138,60 @@ async function refresh() {
   return respond.mock.calls[0]?.[1];
 }
 afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
+
+it("keeps downloaded catalogs pending while plugin work drains", async ({ signal }) => {
+  await setup();
+  const preparing = createDeferred();
+  const releasePricing = createDeferred();
+  const preparePricing = pricing.prepareModelPricingContext;
+  const pricingSpy = vi
+    .spyOn(pricing, "prepareModelPricingContext")
+    .mockImplementationOnce(async (...args) => {
+      preparing.resolve();
+      await releasePricing.promise;
+      return await preparePricing(...args);
+    });
+  const attempted = createDeferred();
+  const queueSpy = vi.spyOn(PreparedModelRuntimePublicationQueue.prototype, "enqueue");
+  queueSpy.mockImplementationOnce(function (this: PreparedModelRuntimePublicationQueue, ...args) {
+    queueSpy.mockRestore();
+    const publication = this.enqueue(...args);
+    void publication.then(
+      () => attempted.resolve(),
+      () => attempted.resolve(),
+    );
+    return publication;
+  });
+  const adoption = applyRemoteModelCatalogUpdate(() => config);
+  let drain: ReturnType<typeof beginPreparedModelRuntimePluginDrain> | undefined;
+  try {
+    await withinTest(preparing.promise, signal);
+    drain = beginPreparedModelRuntimePluginDrain();
+    releasePricing.resolve();
+    await withinTest(attempted.promise, signal);
+    const active = await withinTest(
+      loadPreparedGatewayModelCatalogSnapshot({ agentId: "default", getConfig: () => config }),
+      signal,
+    );
+    expect(active.entries.map((entry) => entry.id)).toContain("remote-200");
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
+    // Lifecycle publication must not queue behind adoption's pending drain wait.
+    await withinTest(
+      refreshPreparedModelRuntimeSnapshots(config, { catalogMode: "static" }),
+      signal,
+    );
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
+    drain.release();
+    expect(await withinTest(adoption, signal)).toBe("published");
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
+  } finally {
+    drain?.release();
+    releasePricing.resolve();
+    await adoption;
+    queueSpy.mockRestore();
+    pricingSpy.mockRestore();
+  }
+});
 
 it("does not reuse a dynamic build captured before a remote publication", async () => {
   await setup();

@@ -1,6 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -8,13 +7,14 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import type { UserMessage } from "../../../llm/types.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { stripSessionsYieldArtifacts } from "./attempt-sessions-yield.js";
 
 const interruptType = "openclaw.sessions_yield_interrupt";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-yield-");
 const user = {
   role: "user",
   content: [{ type: "text", text: "continue" }],
@@ -62,7 +62,7 @@ function buildSession(messages: AgentMessage[], sessionManager: SessionManager) 
 }
 
 async function persistentSession(label: string) {
-  const dir = tempDirs.make(`openclaw-sessions-yield-${label}-`);
+  const dir = tempDirs.make();
   const scope = {
     agentId: "main",
     sessionId: `sessions-yield-${label}`,

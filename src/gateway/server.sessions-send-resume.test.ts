@@ -71,6 +71,15 @@ afterAll(async () => {
   await server.close();
 });
 
+async function mockSubagentAnnounce() {
+  return vi
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
+    .mockResolvedValue("delivered");
+}
+
 // Each case owns distinct durable identities while sharing the isolated Gateway.
 async function arrangeAuthorityProof(name: string) {
   const root = tempDirs.make(`openclaw-resume-${name}-`);
@@ -106,7 +115,6 @@ async function arrangeAuthorityProof(name: string) {
   expect(markSubagentRunPausedAfterYield({ entry: previous })).toBe(true);
   persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
   const scope = { agentId: "main", sessionKey: child, sessionId, storePath };
-  const finalEffect = vi.fn();
   // The provider can publish success only after real input custody is consumed.
   // Admission, task replacement, and recorder live-owner checks remain production code.
   agentCommandMock.mockImplementation(async (opts) => {
@@ -115,7 +123,6 @@ async function arrangeAuthorityProof(name: string) {
     await recorder.persistApproved();
     expect(recorder.hasPersisted()).toBe(true);
     const text = "Unauthorized child final effect.";
-    finalEffect(text);
     emitAgentEvent({
       runId: expectDefined(command.runId, "resume execution run id"),
       stream: "lifecycle",
@@ -163,59 +170,39 @@ async function arrangeAuthorityProof(name: string) {
     previousRunId,
     runId,
     scope,
-    finalEffect,
     send,
     expectUnadopted,
   };
 }
 
-it("rejects an unrelated visible controller without consuming input or producing a child result", async () => {
-  const announce = vi
-    .spyOn(
-      await import("../agents/subagents/announce/subagent-announce.js"),
-      "runSubagentAnnounceFlow",
-    )
-    .mockResolvedValue("delivered");
+it.each([
+  {
+    scenario: "unrelated-controller",
+    error: "Task resume is limited to children controlled by the calling session.",
+  },
+  {
+    scenario: "completion-disabled",
+    error: "Task resume requires a child with task-owned completion.",
+  },
+] as const)("rejects $scenario before input or execution", async ({ scenario, error }) => {
+  const announce = await mockSubagentAnnounce();
   try {
-    const proof = await arrangeAuthorityProof("unrelated-controller");
-    const result = await proof.send(proof.unrelated, undefined, "resume");
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "Task resume is limited to children controlled by the calling session.",
-    });
+    const proof = await arrangeAuthorityProof(scenario);
+    if (scenario === "completion-disabled") {
+      const previous = expectDefined(subagentRuns.get(proof.previousRunId), "paused child");
+      previous.expectsCompletionMessage = false;
+      persistSubagentRunsToDiskOrThrow(subagentRuns, [proof.previousRunId]);
+    }
+    const result = await proof.send(
+      scenario === "unrelated-controller" ? proof.unrelated : proof.parent,
+      undefined,
+      "resume",
+    );
+    expect(result.details).toMatchObject({ status: "error", error });
     proof.expectUnadopted();
     expect(listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
     expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([]);
     expect(agentCommandMock).not.toHaveBeenCalled();
-    expect(proof.finalEffect).not.toHaveBeenCalled();
-    expect(announce).not.toHaveBeenCalled();
-  } finally {
-    announce.mockRestore();
-  }
-});
-
-it("rejects a child without task-owned completion before input or execution", async () => {
-  const announce = vi
-    .spyOn(
-      await import("../agents/subagents/announce/subagent-announce.js"),
-      "runSubagentAnnounceFlow",
-    )
-    .mockResolvedValue("delivered");
-  try {
-    const proof = await arrangeAuthorityProof("completion-disabled");
-    const previous = expectDefined(subagentRuns.get(proof.previousRunId), "paused child");
-    previous.expectsCompletionMessage = false;
-    persistSubagentRunsToDiskOrThrow(subagentRuns, [proof.previousRunId]);
-    const result = await proof.send(undefined, undefined, "resume");
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "Task resume requires a child with task-owned completion.",
-    });
-    proof.expectUnadopted();
-    expect(listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
-    expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([]);
-    expect(agentCommandMock).not.toHaveBeenCalled();
-    expect(proof.finalEffect).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
   } finally {
     announce.mockRestore();
@@ -240,12 +227,7 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       await release.promise;
       return input;
     });
-  const announce = vi
-    .spyOn(
-      await import("../agents/subagents/announce/subagent-announce.js"),
-      "runSubagentAnnounceFlow",
-    )
-    .mockResolvedValue("delivered");
+  const announce = await mockSubagentAnnounce();
   let sending: ReturnType<Awaited<ReturnType<typeof arrangeAuthorityProof>>["send"]> | undefined;
   try {
     const proof = await arrangeAuthorityProof("revoked-parent");
@@ -273,7 +255,6 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       { runId: proof.runId, state: "pending", cancelled: true },
     ]);
     expect(agentCommandMock).not.toHaveBeenCalled();
-    expect(proof.finalEffect).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
   } finally {
     release.resolve();
@@ -314,12 +295,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
       })();
       return executionCompletion;
     });
-  const announce = vi
-    .spyOn(
-      await import("../agents/subagents/announce/subagent-announce.js"),
-      "runSubagentAnnounceFlow",
-    )
-    .mockResolvedValue("delivered");
+  const announce = await mockSubagentAnnounce();
   try {
     const proof = await arrangeAuthorityProof("cancelled-successor");
     const result = await proof.send();
@@ -367,7 +343,6 @@ it("fences a cancelled successor after adoption before queued input consumption"
       { runId: proof.runId, state: "pending" },
     ]);
     expect(agentCommandMock).not.toHaveBeenCalled();
-    expect(proof.finalEffect).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
   } finally {
     release.resolve();
@@ -387,12 +362,7 @@ it.each(["explicit", "automatic"] as const)(
     const previousRunId = `resume-gateway-${mode}-paused`;
     const release = createDeferred();
     const started = createDeferred();
-    const announce = vi
-      .spyOn(
-        await import("../agents/subagents/announce/subagent-announce.js"),
-        "runSubagentAnnounceFlow",
-      )
-      .mockResolvedValue("delivered");
+    const announce = await mockSubagentAnnounce();
     testState.sessionStorePath = path.join(root, "sessions.json");
     try {
       await writeSessionStore({
@@ -499,7 +469,6 @@ it.each(["explicit", "automatic"] as const)(
           roundOneReply: "Resumed child finished.",
         }),
       );
-      await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();

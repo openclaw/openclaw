@@ -4569,6 +4569,7 @@ export const en: TranslationMap & {
       mainTimelineMessage: "Main timeline message",
       assistantTaskPrompt: "Prompt",
       deliveryModeLabel: "Mode",
+      selectDeliveryMode: "Choose a delivery mode",
       announceDefault: "Announce summary",
       webhookPost: "Webhook POST",
       noneInternal: "None (internal)",
@@ -4684,6 +4685,8 @@ export const en: TranslationMap & {
       systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
+      deliveryModeRequired:
+        "Choose a delivery mode explicitly, or run openclaw doctor --fix to repair legacy settings.",
       webhookUrlRequired: "Webhook URL is required.",
       webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
       invalidRunTime: "Invalid run time.",

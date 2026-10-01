@@ -6,6 +6,7 @@ import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
 } from "../../process/gateway-work-admission.js";
+import { AgentDatabaseAdmissionError } from "../../state/agent-database-admission.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -157,11 +158,22 @@ async function runPendingMaintenance(
   databasePath: string,
   owner: SessionEntryMaintenanceOwner,
 ): Promise<void> {
-  const isCurrent = () =>
-    !getGatewayRestartDrainSignal().aborted &&
-    maintenanceByStore.get(databasePath) === owner &&
-    owner.database.db.isOpen &&
-    getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(owner.scope)) === owner.database;
+  const isCurrent = () => {
+    try {
+      return (
+        !getGatewayRestartDrainSignal().aborted &&
+        maintenanceByStore.get(databasePath) === owner &&
+        owner.database.db.isOpen &&
+        getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(owner.scope)) === owner.database
+      );
+    } catch (error) {
+      // Refused admission retires discretionary work, including callbacks outside the writer.
+      if (error instanceof AgentDatabaseAdmissionError) {
+        return false;
+      }
+      throw error;
+    }
+  };
   if (!isCurrent()) {
     retireMaintenanceOwner(databasePath, owner);
     return;

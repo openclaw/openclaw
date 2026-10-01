@@ -41,7 +41,7 @@ vi.mock("../../infra/update-managed-service-handoff.js", async (original) => ({
   parkForegroundUpdateHandoff: handoff.park,
 }));
 
-const { executionParams, mocks, schemaContext, successfulUpdate } =
+const { bindExecutionGuards, executionParams, mocks, schemaContext, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const foregroundRunId = "b834d63c-0310-4a9b-9b04-48b6b5da6cfe";
@@ -280,7 +280,7 @@ it.each(["schema", "execution", "already current"] as const)(
     );
     await fs.rm(claimPath);
     if (boundary === "execution") {
-      const result = await executeMutableUpdate(params);
+      const result = await executeMutableUpdate(await bindExecutionGuards(params));
       expect(result?.result).toMatchObject({
         status: "error",
         reason: "managed-service-preflight",
@@ -458,7 +458,7 @@ it.each([
         events.push("prepare");
         admitExecutor(await executor.enter(root));
       });
-      return executeMutableUpdate(params);
+      return executeMutableUpdate(await bindExecutionGuards(params));
     });
     if (!capable && migrating) {
       expect(result?.result).toMatchObject({

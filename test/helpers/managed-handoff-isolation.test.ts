@@ -9,6 +9,7 @@ import {
   assertManagedHandoffTestConsumer,
   createManagedHandoffTestBinding,
 } from "./managed-handoff-isolation.js";
+import { requireNodeTool } from "./node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
 const require = createRequire(import.meta.url);
@@ -57,7 +58,7 @@ describe("explicit managed handoff test binding", () => {
       if (selection !== "inherited") {
         delete env.NODE_OPTIONS;
       }
-      const child = spawnSync(process.execPath, [binding.nodeOption, program], {
+      const child = spawnSync(requireNodeTool("node"), [binding.nodeOption, program], {
         env,
         encoding: "utf8",
         timeout: 15_000,
@@ -91,7 +92,7 @@ describe("explicit managed handoff test binding", () => {
   it("does not credit preload setup as target consumer use", () => {
     const { binding, program, root } = fixture();
     fs.writeFileSync(program, 'process.stdout.write("entrypoint-ran");');
-    const child = spawnSync(process.execPath, [binding.nodeOption, program], {
+    const child = spawnSync(requireNodeTool("node"), [binding.nodeOption, program], {
       env: resolveServiceManagerEnv(),
       encoding: "utf8",
       timeout: 15_000,
@@ -181,7 +182,7 @@ describe("explicit managed handoff test binding", () => {
         "}))));",
       ].join("\n"),
     );
-    const child = spawnSync(process.execPath, [binding.nodeOption, program], {
+    const child = spawnSync(requireNodeTool("node"), [binding.nodeOption, program], {
       env: resolveServiceManagerEnv(),
       encoding: "utf8",
       timeout: 15_000,
@@ -207,7 +208,7 @@ describe("explicit managed handoff test binding", () => {
         `process.stdout.write(resolveSecureTempRoot({ preferredDir: ${JSON.stringify(cache)}, fallbackPrefix: "cache", skipPreferredOnWindows: false }));`,
       ].join("\n"),
     );
-    const child = spawnSync(process.execPath, [binding.nodeOption, program], {
+    const child = spawnSync(requireNodeTool("node"), [binding.nodeOption, program], {
       env: resolveServiceManagerEnv(),
       encoding: "utf8",
       timeout: 15_000,
@@ -253,7 +254,7 @@ describe("explicit managed handoff test binding", () => {
           binding.databasePath + (failure === "wal-symlink" ? "-wal" : ""),
         );
       }
-      const child = spawnSync(process.execPath, [binding.nodeOption, program], {
+      const child = spawnSync(requireNodeTool("node"), [binding.nodeOption, program], {
         env: resolveServiceManagerEnv(),
         encoding: "utf8",
         timeout: 15_000,

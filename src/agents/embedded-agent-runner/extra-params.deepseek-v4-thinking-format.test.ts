@@ -1,11 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import type { ModelCompatConfig } from "../../config/types.models.js";
 import type { Model } from "../../llm/types.js";
+import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
-
-let runExtraParamsCase: typeof import("./extra-params.test-support.js").runExtraParamsCase;
 
 function runDeepSeekV4Case(params: {
   modelId: string;
@@ -39,10 +38,6 @@ function runDeepSeekV4Case(params: {
 describe.each(["DeepSeek-V4-Flash", "deepseek-flash", "deepseek/DeepSeek-Flash:free"])(
   "extra-params: %s OpenAI-compatible thinking fallback",
   (modelId) => {
-    beforeEach(async () => {
-      ({ runExtraParamsCase } = await import("./extra-params.test-support.js"));
-    });
-
     it("injects deepseek-native thinking for unowned proxy providers", () => {
       const payload = runDeepSeekV4Case({ modelId, thinkingLevel: "high" });
       expect(payload.thinking).toEqual({ type: "enabled" });

@@ -47,7 +47,9 @@ describe("sessions_yield orchestration", () => {
       const requesterSettlement =
         await import("../subagents/announce/subagent-announce.requester-settle-wake.js");
       const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
-      const { onSubagentRegistryPersisted, persistSubagentRunsToDiskOrThrow } =
+      const { subscribeSubagentRunChanges } =
+        await import("../subagents/registry/subagent-registry-publication.js");
+      const { persistSubagentRunsToDiskOrThrow } =
         await import("../subagents/registry/subagent-registry-state.js");
       const { loadSubagentRegistryFromSqlite } =
         await import("../subagents/registry/subagent-registry.store.sqlite.js");
@@ -115,7 +117,7 @@ describe("sessions_yield orchestration", () => {
       registry.addSubagentRunForTests(child);
       persistSubagentRunsToDiskOrThrow(subagentRuns, [child.runId]);
       const persisted = vi.fn(() => loadSubagentRegistryFromSqlite().get(child.runId));
-      const unsubscribe = onSubagentRegistryPersisted(persisted);
+      const unsubscribe = subscribeSubagentRunChanges("persistence", persisted);
       const createTranscript = transcriptOwner.createAssistantErrorTranscript;
       const factorySpy = vi
         .spyOn(transcriptOwner, "createAssistantErrorTranscript")
@@ -227,20 +229,20 @@ describe("sessions_yield orchestration", () => {
     "preserves child ownership through transient retries ($agentHarnessId, new child: $spawnOnRetry, candidate: $outerCandidate)",
     async ({ spawnOnRetry, agentHarnessId, outerCandidate }) => {
       const registry = await import("../subagents/registry/subagent-registry.js");
-      const { markRequesterTurnYieldedInRuns, settleRequesterTurnAfterSessionSpawns } =
+      const { settleRequesterTurnAfterSessionSpawns } =
         await import("../subagents/registry/subagent-registry-requester-yield.js");
       const { createReplyOperation } = await import("../../auto-reply/reply/reply-run-registry.js");
       const params = { ...createOverflowRunParams(state), runId: "yield-retry-parent" };
       const runs = new Map<string, SubagentRunRecord>();
       const persistOrThrow = vi.fn();
       const schedule = vi.fn();
-      const { createRequesterInitialTransferFixture } =
+      const { createRequesterInitialTransferFixture, markRequesterTurnYieldedWithAuthority } =
         await import("../subagents/registry/subagent-registry-requester-yield.test-support.js");
       const transfer = createRequesterInitialTransferFixture(runs, persistOrThrow);
       const markYield = vi
         .spyOn(registry, "markRequesterTurnYielded")
         .mockImplementation((claim) =>
-          markRequesterTurnYieldedInRuns({ ...claim, runs, transfer }),
+          markRequesterTurnYieldedWithAuthority({ ...claim, runs, transfer }),
         );
       const settle = vi
         .spyOn(registry, "settleRequesterAfterSessionSpawns")
@@ -406,6 +408,83 @@ describe("sessions_yield orchestration", () => {
   });
 
   describe("yield with continuation evidence", () => {
+    it.each(["accepted", "refused", "unregistered"] as const)(
+      "uses the owner's message wait registration as continuation evidence (%s)",
+      async (registration) => {
+        const registry = await import("../subagents/registry/subagent-registry.test-helpers.js");
+        const { createRequesterYieldCallback } =
+          await import("../openclaw-tools.requester-yield.js");
+        const { createSessionsYieldTool } = await import("../tools/sessions-yield-tool.js");
+        const params = {
+          ...createOverflowRunParams(state),
+          sessionKey: "agent:main:subagent:message-wait",
+          runId: "message-wait-run",
+        };
+        registry.resetSubagentRegistryForTests({ persist: false });
+        if (registration !== "unregistered") {
+          registry.addSubagentRunForTests(
+            createSubagentRunRecord({
+              runId: params.runId,
+              childSessionKey: params.sessionKey,
+              requesterSessionKey: "agent:main:parent",
+              expectsCompletionMessage: true,
+              execution: { status: "running" },
+              completion: { required: true },
+              delivery: { status: "pending" },
+              suppressCompletionDelivery: registration === "refused",
+            }),
+          );
+        }
+        mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+          let yieldMessageWaitRegistered: boolean | undefined;
+          const onYield = vi.fn(
+            (_message: string, _acknowledgment?: string, registered?: boolean) => {
+              yieldMessageWaitRegistered = registered;
+            },
+          );
+          const tool = createSessionsYieldTool({
+            sessionId: params.sessionId,
+            claimYield: createRequesterYieldCallback({
+              requesterSessionKey: params.sessionKey,
+              requesterAgentId: params.agentId,
+              requesterTurnRunId: params.runId,
+            }),
+            onYield,
+          });
+          expect((await tool.execute("yield-message", { waitFor: "message" })).details).toEqual({
+            status: "yielded",
+          });
+          expect(
+            registry.getSubagentRunByRunId(params.runId)?.requesterSettleWake?.pauseNotice,
+          ).toEqual(
+            registration === "accepted"
+              ? { acknowledgment: "Paused awaiting continuation." }
+              : undefined,
+          );
+          return makeAttemptResult({
+            yieldDetected: onYield.mock.calls.length > 0,
+            yieldMessageWaitRegistered,
+            assistantTexts: [],
+          });
+        });
+        try {
+          const result = await runEmbeddedAgent(params);
+          expect(result.meta.yielded).toBe(true);
+          expect(result.payloads ?? []).toEqual(
+            registration === "accepted"
+              ? []
+              : [
+                  {
+                    text: "⚠️ Turn yielded without a continuation source. Send a message to resume.",
+                  },
+                ],
+          );
+        } finally {
+          registry.resetSubagentRegistryForTests({ persist: false });
+        }
+      },
+    );
+
     it("rejects an unregistered accepted child instead of silently yielding", async () => {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({

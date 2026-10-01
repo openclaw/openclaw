@@ -11,7 +11,7 @@ export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session his
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
 export const SESSIONS_SEND_RESULT_GUIDANCE =
-  'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later announcement state, and neither proves target completion.';
+  'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later reply delivery state, and neither proves target completion.';
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY =
   "Spawn hidden subagent (ephemeral) or visible work session (durable).";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
@@ -62,6 +62,9 @@ export function describeSessionVisibilityScope(
   return SESSION_VISIBILITY_SCOPE_COPY[visibility];
 }
 
+export const SESSION_LINK_RULE_DESCRIPTION =
+  "How to build Control UI URLs for sessionKey values in this result.";
+
 type SessionLinkDescriptionOptions = { sessionLinkBase?: string };
 
 export function describeSessionLinkRule(base: string): string {
@@ -101,11 +104,11 @@ export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptio
 export function describeSessionsSendTool(): string {
   return [
     "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
-    "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
+    "A session identifies model context, not an external address. A peer reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message.",
     SESSIONS_SEND_RESULT_GUIDANCE,
     "Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. With timeoutSeconds:0, your own running child is steered into its active run (admission only, no separate completion turn; use mode:followup for one); other sessions use ordinary message delivery. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup starts a separate turn without steering or resuming a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds.",
-    'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
-    "watch:true: notice arrives when others later change target session. A timeoutSeconds:0 followup to your existing native child also lets this turn call sessions_yield for its completion, even while queued. A watched steer can claim that child's existing pending completion.",
+    'Thread chats rejected: target parent channel. Missing configured-agent main created. status "no_reply" is terminal, so do not wait for another reply.',
+    "A timeoutSeconds:0 followup to your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
   ].join(" ");
 }
 
@@ -145,7 +148,7 @@ export function describeSessionsSpawnTool(options?: {
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
     "`agentId` targets a configured agent; `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
-    "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. Omit `visible` or set it false, and report results through the parent.",
+    "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
     '`visible=true`: durable visible session. Use only when the user requests a separate session or needs to revisit and steer the work independently. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
     'Omit `placement` or use `{kind:"local"}` for local execution. `{kind:"profile",profileId,os?,machineClass?}` selects a configured cloud profile and requires `visible=true` and `worktree=true`. Cloud placement creates first, dispatches, then starts the task; failures retain the child for inspection, never fall back locally.',
     visibilityLine,

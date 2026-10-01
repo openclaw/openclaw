@@ -12,6 +12,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
@@ -81,7 +82,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
 }): Promise<CodexWorkspaceBootstrapContext> {
   const availableToolNames = new Set(
     flattenCodexDynamicToolFunctions(params.tools).map((tool) =>
-      normalizeCodexDynamicToolName(tool.name),
+      normalizeLowercaseStringOrEmpty(tool.name),
     ),
   );
   const executionWorkspace = params.executionWorkspace ?? params.resolvedWorkspace;
@@ -250,7 +251,7 @@ function renderCodexWorkspaceMemoryInstructions(params: {
 
 function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string | undefined {
   const memoryToolNames = toolNames
-    .map((name) => normalizeCodexDynamicToolName(name))
+    .map(normalizeLowercaseStringOrEmpty)
     .filter((name) => CODEX_MEMORY_TOOL_NAMES.has(name))
     .toSorted();
   if (memoryToolNames.length === 0) {
@@ -298,10 +299,6 @@ export function getCodexContextFileDisplayBasename(filePath: string): string {
 
 export function getCodexContextFileBasename(filePath: string): string {
   return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
-}
-
-export function normalizeCodexDynamicToolName(name: string): string {
-  return name.trim().toLowerCase();
 }
 
 export function isNonEmptyString(value: unknown): value is string {

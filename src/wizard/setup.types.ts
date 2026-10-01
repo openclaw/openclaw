@@ -23,5 +23,4 @@ export type GatewayWizardSettings = {
   customBindHost?: string;
   authMode: GatewayAuthChoice;
   gatewayToken?: string;
-  tailscaleMode: GatewayTailscaleMode;
 };

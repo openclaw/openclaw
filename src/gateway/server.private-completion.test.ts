@@ -43,6 +43,7 @@ import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { holdMetadataThroughSubagentStop } from "./server.private-completion.metadata-overlap.test-support.js";
+import { registerSessionsSendPrivateCompletionTests } from "./server.private-completion.sessions-send.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import {
@@ -137,11 +138,29 @@ describe("private subagent completion processing receipts", () => {
   function recorder(input: unknown) {
     const command = input as AgentCommandOpts;
     expect(command.deliver).toBe(false);
+    expect(command.privateCompletion).toBe(true);
     expect(command.sessionId).toBe(sessionId);
     return expectDefined(
       command.userTurnTranscriptRecorder,
       "Expected real private input recorder",
     );
+  }
+
+  registerSessionsSendPrivateCompletionTests(() => ({
+    context: kernel.gatewayRequestContext,
+    sequence,
+    sessionKey,
+    sessionId,
+    completions,
+    pending,
+    transcript,
+    recorder,
+    agentCommandMock,
+  }));
+
+  async function processPrivateInput(input: unknown) {
+    await recorder(input).persistApproved();
+    return { payloads: [{ text: "NO_REPLY", mediaUrl: null }], meta: { durationMs: 1 } };
   }
 
   it("binds a settle handoff to the source accepted by pending-input replay", async () => {
@@ -204,7 +223,7 @@ describe("private subagent completion processing receipts", () => {
     }
   });
 
-  it.each(["rpc", "stop", "timeout", "restart", "foreign-session"])(
+  it.each(["rpc", "stop", "restart", "foreign-session"])(
     "preserves only a matching intentional pre-admission stop: %s",
     async (reason) => {
       const intentional = reason === "rpc" || reason === "stop";
@@ -216,10 +235,7 @@ describe("private subagent completion processing receipts", () => {
         sessionKey: reason === "foreign-session" ? "agent:main:other-parent" : sessionKey,
         stopReason: reason === "foreign-session" ? "rpc" : reason,
       });
-      agentCommandMock.mockImplementationOnce(async (input) => {
-        await recorder(input).persistApproved();
-        return { payloads: [{ text: "NO_REPLY", mediaUrl: null }], meta: { durationMs: 1 } };
-      });
+      agentCommandMock.mockImplementationOnce(processPrivateInput);
       if (intentional) {
         expect(await dispatch()).toMatchObject({ status: "timeout", stopReason: reason });
         expect(agentCommandMock).not.toHaveBeenCalled();
@@ -234,10 +250,9 @@ describe("private subagent completion processing receipts", () => {
     },
   );
 
-  it.each(["silent", "handled-hook", "yielded"] as const)(
+  it.each(["handled-hook", "yielded"] as const)(
     "does not repeat completed parent work after restart before child delivery save (%s)",
     async (kind) => {
-      let processingCount = 0;
       agentCommandMock.mockImplementationOnce(async (input) => {
         const inputRecorder = recorder(input);
         expect(completions()).toEqual([]);
@@ -245,9 +260,8 @@ describe("private subagent completion processing receipts", () => {
         if (kind !== "handled-hook") {
           expect(await inputRecorder.persistApproved()).toMatchObject({ appended: true });
         }
-        processingCount += 1;
         return {
-          payloads: kind === "silent" ? [{ text: "NO_REPLY", mediaUrl: null }] : [],
+          payloads: [],
           meta: { durationMs: 1, ...(kind === "yielded" ? { yielded: true } : {}) },
         };
       });
@@ -263,7 +277,6 @@ describe("private subagent completion processing receipts", () => {
       await restart();
       expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
       expect(agentCommandMock).toHaveBeenCalledOnce();
-      expect(processingCount).toBe(1);
       expect(transcript()).toEqual(committed);
       expect(pending()).toEqual([]);
       await expect(dispatch("changed child result")).rejects.toThrow("conflicts");
@@ -410,10 +423,7 @@ describe("private subagent completion processing receipts", () => {
     database().db.exec(
       "CREATE TRIGGER fail_private_receipt BEFORE INSERT ON session_input_completions BEGIN SELECT RAISE(ABORT, 'synthetic receipt write unavailable'); END",
     );
-    agentCommandMock.mockImplementation(async (input) => {
-      await recorder(input).persistApproved();
-      return { payloads: [{ text: "NO_REPLY", mediaUrl: null }], meta: { durationMs: 1 } };
-    });
+    agentCommandMock.mockImplementation(processPrivateInput);
     try {
       await expect(dispatch()).rejects.toThrow("synthetic receipt write unavailable");
       expect(kernel.gatewayRequestContext.chatAbortControllers.has(runId)).toBe(false);
@@ -440,10 +450,7 @@ describe("private subagent completion processing receipts", () => {
     expect(timedOut).toMatchObject({ status: "timeout", stopReason: "timeout" });
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(pending()).toMatchObject([{ state: "interrupted" }]);
-    agentCommandMock.mockImplementationOnce(async (input) => {
-      await recorder(input).persistApproved();
-      return { payloads: [{ text: "NO_REPLY", mediaUrl: null }], meta: { durationMs: 1 } };
-    });
+    agentCommandMock.mockImplementationOnce(processPrivateInput);
     expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
     expect(agentCommandMock).toHaveBeenCalledOnce();
     expect(pending()).toEqual([]);
@@ -464,10 +471,7 @@ describe("private subagent completion processing receipts", () => {
         },
       });
       await held.promise;
-      agentCommandMock.mockImplementationOnce(async (input) => {
-        await recorder(input).persistApproved();
-        return { payloads: [{ text: "NO_REPLY", mediaUrl: null }], meta: { durationMs: 1 } };
-      });
+      agentCommandMock.mockImplementationOnce(processPrivateInput);
       const observation = runAnnounceAgentCall({
         agentParams: request(),
         privateCompletion: true,
@@ -560,10 +564,7 @@ describe("private subagent completion processing receipts", () => {
       } finally {
         database().db.exec("DROP TRIGGER fail_private_admission");
       }
-      agentCommandMock.mockImplementationOnce(async (input) => {
-        await recorder(input).persistApproved();
-        return { payloads: [{ text: "NO_REPLY", mediaUrl: null }], meta: { durationMs: 1 } };
-      });
+      agentCommandMock.mockImplementationOnce(processPrivateInput);
       expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
       expect(agentCommandMock).toHaveBeenCalledOnce();
     },

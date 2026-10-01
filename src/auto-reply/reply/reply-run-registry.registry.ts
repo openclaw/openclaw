@@ -201,9 +201,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
         resolve: (params) => resolveReplyMessageInjectionRejection({ ...params, operation }),
         recordAccepted: (options) => {
           operation.recordActivity();
-          if (options?.inboundAudio) {
-            operation.markAcceptedSteeredInboundAudio();
-          }
+          operation.markSteeredInputAccepted({ inboundAudio: options?.inboundAudio === true });
         },
         abort: () => operation.abortByUser(),
       },

@@ -6,7 +6,6 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
-  type DiagnosticMessageProcessedEvent,
 } from "../infra/diagnostic-events.js";
 import {
   createGatewaySchedulerClock,
@@ -122,7 +121,7 @@ it("retires interrupted diagnostic observations before re-enable without revivin
 });
 
 it("attributes message.processed to the ingesting agent recorded at the lifecycle owner", () => {
-  const processed: DiagnosticMessageProcessedEvent[] = [];
+  const processed: Extract<DiagnosticEventPayload, { type: "message.processed" }>[] = [];
   const unsubscribe = onDiagnosticEvent((event) => {
     if (event.type === "message.processed") {
       processed.push(event);

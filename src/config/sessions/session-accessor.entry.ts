@@ -84,7 +84,6 @@ export {
   upsertSessionEntryCore,
   withSessionEntryReadOnlyScope,
 } from "./session-accessor.sqlite-entry.js";
-export { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
 
 export { resolveSessionEntryFromStore, resolveSessionEntrySelection };
 
@@ -152,14 +151,8 @@ function findCanonicalSessionEntryMatch(
     ...scope,
     sessionKeys: candidateKeys,
     readOnly: options.readOnly !== false,
-    onReadSource: (source, physical) => {
-      readSource = physical
-        ? {
-            ...source,
-            databaseIdentity: physical.identity,
-            databaseBirthtime: physical.birthtime,
-          }
-        : undefined;
+    onReadSource: (source) => {
+      readSource = source;
     },
   })) {
     if (selected) {

@@ -127,7 +127,6 @@ describe("channel ownership startup", () => {
   });
 
   it.each([
-    { authored: "ops", owner: "ops", sibling: "main" },
     { authored: "Ops", owner: "ops", sibling: "main" },
     { authored: "main", owner: "main", sibling: "patricia" },
   ])(

@@ -16,6 +16,7 @@ import {
   getExistingOpenClawStateSchemaPath,
   withExistingOpenClawStateSchema,
 } from "./openclaw-state-db-schema-policy.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -84,6 +85,46 @@ function createExistingState(mutate?: (db: DatabaseSync) => void) {
 }
 
 describe("existing shared-state schema admission", () => {
+  it("observes peer content-marker updates after its pinned read transaction ends", () => {
+    const { options } = createExistingState((db) => {
+      db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
+        "state.schema.contentVersion",
+        String(OPENCLAW_STATE_SCHEMA_VERSION),
+        1,
+      );
+    });
+    withExistingOpenClawStateSchema(options, () => {
+      const { db } = openOpenClawStateDatabase(options);
+      const peer = new DatabaseSync(options.path);
+      try {
+        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        db.exec("BEGIN");
+        expect(
+          db
+            .prepare(
+              "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+            )
+            .get(),
+        ).toEqual({
+          value_json: String(OPENCLAW_STATE_SCHEMA_VERSION),
+        });
+        peer
+          .prepare(
+            "UPDATE config_machine_state SET value_json = ? WHERE state_key = 'state.schema.contentVersion'",
+          )
+          .run(String(OPENCLAW_STATE_SCHEMA_VERSION + 1));
+        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        db.exec("COMMIT");
+        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION + 1);
+      } finally {
+        if (db.isTransaction) {
+          db.exec("ROLLBACK");
+        }
+        peer.close();
+      }
+    });
+  });
+
   it("writes node state and initializes its lazy store without taking over release repair", async () => {
     const { options, before } = createExistingState((db) => {
       db.exec(`

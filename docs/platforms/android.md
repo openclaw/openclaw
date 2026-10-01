@@ -495,6 +495,17 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via Gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the Gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
+#### Reactions
+
+Saved prompts and assistant replies show emoji reaction chips with counts and
+reactor names, highlighting your own reactions. Tap a chip to toggle your
+reaction, or long-press a message (including a media-only message) and choose
+**Add reaction**. The quick palette matches the Control UI; **More…** accepts
+one emoji, including joined emoji and flags. Controls follow the Gateway's
+operator and session-sharing permissions; read-only viewers can still see
+reactions. Updates appear live while the conversation is open and do not create
+notifications. See [Reactions](/concepts/multi-user#reactions).
+
 #### Agent browser in chat
 
 When the Browser plugin returns an identifiable tab, Chat shows a preview of

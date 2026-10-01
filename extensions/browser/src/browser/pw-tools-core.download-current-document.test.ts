@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -10,7 +10,7 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 const expectedUrl = "http://127.0.0.1/inline.png";
-let downloadCurrentDocumentViaPlaywright: typeof import("./pw-tools-core.downloads.js").downloadCurrentDocumentViaPlaywright;
+import { downloadCurrentDocumentViaPlaywright } from "./pw-tools-core.downloads.js";
 
 describe("download current document", () => {
   installPwToolsCoreTestHooks();
@@ -20,10 +20,6 @@ describe("download current document", () => {
   let closed: boolean;
   const mainFrame = {};
   const evaluate = vi.fn(async () => {});
-
-  beforeAll(async () => {
-    ({ downloadCurrentDocumentViaPlaywright } = await import("./pw-tools-core.downloads.js"));
-  });
 
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-current-download-test-"));

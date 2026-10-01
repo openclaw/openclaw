@@ -187,6 +187,7 @@ function applyRemoteModelCatalogUpdateNow(
               signal: host.getCancellationSignal(),
               isPublicationCurrent: () =>
                 isCurrent() &&
+                !host.getPendingReplacement() &&
                 !attempt.signal.aborted &&
                 host.getEpoch() === epoch &&
                 preparedModelRuntimeConfigsMatch(attemptConfig, getConfig()),

@@ -21,7 +21,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -180,7 +180,7 @@ it.each(
     let acpSignal: AbortSignal | undefined;
     let stopSettled = false;
     const nativeTerminal = createDeferred();
-    const stopObservingNative = onSubagentRegistryPersisted(() => {
+    const stopObservingNative = subscribeSubagentRunChanges("persistence", () => {
       if (
         (
           [

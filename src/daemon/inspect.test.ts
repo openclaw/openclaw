@@ -131,131 +131,6 @@ describe("detectMarkerLineWithGateway", () => {
   });
 });
 
-describe("renderGatewayServiceCleanupHints", () => {
-  it("does not suggest removing a gateway when no extra service was detected", () => {
-    expect(renderGatewayServiceCleanupHints([])).toEqual([]);
-  });
-
-  it.each([
-    {
-      title: "targets the detected macOS LaunchAgent instead of the active gateway",
-      platform: "darwin",
-      serviceName: "com.example.openclaw-gateway",
-      source: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-      scope: "user",
-      firstHint: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      secondHint: "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    },
-    {
-      title: "uses the system domain for a detected macOS LaunchDaemon",
-      platform: "darwin",
-      serviceName: "com.example.openclaw-gateway",
-      source: "plist: /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
-      scope: "system",
-      firstHint: "sudo launchctl bootout system/com.example.openclaw-gateway",
-      secondHint: "sudo rm /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
-    },
-    {
-      title: "keeps global macOS LaunchAgents in the GUI domain",
-      platform: "darwin",
-      serviceName: "com.example.openclaw-gateway",
-      source: "plist: /Library/LaunchAgents/com.example.openclaw-gateway.plist",
-      scope: "system",
-      firstHint: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      secondHint: "sudo rm /Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    },
-    {
-      title: "inspects the detected user-level systemd unit without removing it",
-      platform: "linux",
-      serviceName: "custom-gateway.service",
-      source: "unit: /home/test/.config/systemd/user/custom-gateway.service",
-      scope: "user",
-      firstHint: "systemctl --user status -- custom-gateway.service",
-      secondHint: "systemctl --user cat -- custom-gateway.service",
-    },
-    {
-      title: "inspects the detected system-level systemd unit without removing it",
-      platform: "linux",
-      serviceName: "custom-gateway.service",
-      source: "unit: /etc/systemd/system/custom-gateway.service",
-      scope: "system",
-      firstHint: "systemctl --system status -- custom-gateway.service",
-      secondHint: "systemctl --system cat -- custom-gateway.service",
-    },
-    {
-      title: "terminates systemctl options before a detected unit that begins with a dash",
-      platform: "linux",
-      serviceName: "-custom-gateway.service",
-      source: "unit: /home/test/.config/systemd/user/-custom-gateway.service",
-      scope: "user",
-      firstHint: "systemctl --user status -- -custom-gateway.service",
-      secondHint: "systemctl --user cat -- -custom-gateway.service",
-    },
-    {
-      title: "shell-quotes detected POSIX service labels and paths",
-      platform: "darwin",
-      serviceName: "com.example.gateway; touch injected",
-      source: "plist: /Users/test/Launch Agents/example's gateway.plist",
-      scope: "user",
-      firstHint: "launchctl bootout gui/$UID/'com.example.gateway; touch injected'",
-      secondHint: "rm '/Users/test/Launch Agents/example'\\''s gateway.plist'",
-    },
-  ] as const)("$title", ({ platform, serviceName, source, scope, firstHint, secondHint }) => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform,
-          label: serviceName,
-          detail: source,
-          scope,
-        },
-      ]),
-    ).toEqual([firstHint, secondHint]);
-  });
-
-  it("inspects the detected Windows scheduled task without suggesting removal", () => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform: "win32",
-          label: "\\OpenClaw Gateway Backup",
-          detail: "task: \\OpenClaw Gateway Backup",
-          scope: "system",
-        },
-      ]),
-    ).toEqual(['schtasks /Query /TN "\\OpenClaw Gateway Backup" /V /FO LIST']);
-  });
-
-  it.each(["$(Start-Process calc)", "%OPENCLAW_GATEWAY_TASK%", "unsafe&task", "task`name"])(
-    "does not render a Windows task name expandable by cmd.exe or PowerShell: %s",
-    (label) => {
-      expect(
-        renderGatewayServiceCleanupHints([
-          {
-            platform: "win32",
-            label,
-            detail: `task: ${label}`,
-            scope: "system",
-          },
-        ]),
-      ).toEqual([]);
-    },
-  );
-
-  it("does not invent a removal path when service metadata omits it", () => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform: "darwin",
-          label: "com.example.openclaw-gateway",
-          detail: "loaded",
-          scope: "user",
-        },
-      ]),
-    ).toEqual(["launchctl bootout gui/$UID/com.example.openclaw-gateway"]);
-  });
-});
-
 describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem", () => {
   // These tests write real .service files to a temp dir and call findExtraGatewayServices
   // with that dir as HOME. No platform mocking or fs mocking needed.
@@ -299,6 +174,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
           platform: "linux",
           label: "clawdbot-gateway.service",
           detail: `unit: ${unitPath}`,
+          sourcePath: unitPath,
           scope: "user",
           marker: "clawdbot",
           legacy: true,
@@ -343,6 +219,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
         platform: "linux",
         label: "clawdbot-gateway.service",
         detail: `unit: ${unitPath}`,
+        sourcePath: unitPath,
         scope: "user",
         marker: "clawdbot",
         legacy: true,
@@ -382,6 +259,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
           platform: "linux",
           label: "custom-openclaw.service",
           detail: `unit: ${unitPath}`,
+          sourcePath: unitPath,
           scope: "user",
           marker: "openclaw",
           legacy: false,
@@ -507,6 +385,7 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
         platform: "darwin",
         label: "com.example.openclaw-gateway",
         detail: `plist: ${plistPath}`,
+        sourcePath: plistPath,
         scope: "user",
         marker: "openclaw",
         legacy: false,
@@ -722,6 +601,7 @@ describe("managed Gateway inventory projections", () => {
       label: "openclaw@.service",
       scope: "system",
       detail: `unit: ${path.join("/etc/systemd/system", "openclaw@.service")}`,
+      sourcePath: path.join("/etc/systemd/system", "openclaw@.service"),
       marker: "openclaw",
       legacy: false,
     });
@@ -761,7 +641,7 @@ describe("managed Gateway inventory projections", () => {
     }
   });
 
-  it("finds Gateways in XDG, runtime, and systemd control load paths before build admission", async () => {
+  it("keeps discovered native selectors independent of display details", async () => {
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     const home = tempDirs.make("managed-systemd-load-paths-", os.tmpdir());
     const write = isolateNativeRoots(home);
@@ -814,6 +694,25 @@ describe("managed Gateway inventory projections", () => {
       "system-generated-gateway.service",
       "transient-gateway.service",
     ]);
+    const inventory = await import("./inspect.js");
+    for (const service of result.services) {
+      service.detail = "Discovered Gateway";
+    }
+    vi.spyOn(inventory, "listManagedOpenClawGatewayServices").mockResolvedValue(result);
+    const { discoverManagedGatewayBindings } = await import("./managed-gateway-bindings.js");
+    const bindings = await discoverManagedGatewayBindings({ HOME: home });
+    expect(bindings).toHaveLength(7);
+    expect(bindings.map((binding) => binding.systemdReadTarget?.unitPath)).toEqual(
+      expect.arrayContaining([
+        path.join(configHome, "systemd/user/config-gateway.service"),
+        path.join(dataHome, "systemd/user/data-gateway.service"),
+        "/etc/systemd/system.control/system-gateway.service",
+        path.join(runtimeDir, "systemd/generator/generated-gateway.service"),
+        path.join(runtimeDir, "systemd/transient/transient-gateway.service"),
+        "/run/systemd/user/run-gateway.service",
+        "/run/systemd/generator/system-generated-gateway.service",
+      ]),
+    );
   });
 
   it.each([
@@ -864,6 +763,7 @@ describe("managed Gateway inventory projections", () => {
           platform: "darwin",
           label,
           detail: `plist: ${file}`,
+          sourcePath: file,
           scope: "system",
           marker: "openclaw",
           legacy: false,

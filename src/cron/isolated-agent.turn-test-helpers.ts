@@ -17,12 +17,12 @@ export { withTempHome };
 
 export function makeDeps(): CliDeps {
   return {
-    sendMessageSlack: vi.fn(),
-    sendMessageWhatsApp: vi.fn(),
-    sendMessageTelegram: vi.fn(),
-    sendMessageDiscord: vi.fn(),
-    sendMessageSignal: vi.fn(),
-    sendMessageIMessage: vi.fn(),
+    slack: vi.fn(),
+    whatsapp: vi.fn(),
+    telegram: vi.fn(),
+    discord: vi.fn(),
+    signal: vi.fn(),
+    imessage: vi.fn(),
   };
 }
 

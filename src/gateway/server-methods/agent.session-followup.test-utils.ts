@@ -6,7 +6,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   initSubagentRegistry,
   registerSubagentRun,
-  replaceSubagentRunAfterSteerCore,
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { upsertSubagentRunRowInDatabase } from "../../agents/subagents/registry/subagent-registry.store.kernel.js";
 import {
@@ -262,6 +261,9 @@ describe("gateway agent follow-up activity", () => {
             sessionEntry: currentEntry,
           });
           if (replace) {
+            const { replaceSubagentRunAfterSteerCore } = await vi.importActual<
+              typeof import("../../agents/subagents/registry/subagent-registry.js")
+            >("../../agents/subagents/registry/subagent-registry.js");
             expect(
               replaceSubagentRunAfterSteerCore({
                 previousRunId,

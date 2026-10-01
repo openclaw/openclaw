@@ -10,9 +10,13 @@ import {
   isDoctorUpdateRepairMode,
   resolveDoctorRepairMode,
 } from "../commands/doctor-repair-mode.js";
-import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.js";
+import {
+  DOCTOR_SQLITE_NOCOW_REPAIR_ENV,
+  isUpdateDoctorLintPass,
+} from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -375,11 +379,13 @@ async function runDoctorHealthFlowWithResult(
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
       const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
       const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
+      const { noteBunCliLauncherIssues } = await import("../commands/doctor-bun-cli-launcher.js");
       const { noteStalePluginRuntimeSymlinks } =
         await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
       const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
       await maybeRepairUiProtocolFreshness(doctorRuntime, prompter);
       await noteSourceInstallIssues(root);
+      await noteBunCliLauncherIssues({ root, prompter });
       await noteStalePluginRuntimeSymlinks(root);
       noteStartupOptimizationHints();
 
@@ -458,7 +464,6 @@ async function runDoctorHealthFlowWithResult(
         );
         if (!readiness.schemaPublicationDeferred) {
           resumeCapture?.();
-          const { isTruthyEnvValue } = await import("../infra/env.js");
           if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_PROXY_ENABLED)) {
             const { initializeDebugProxyCaptureAsync } =
               await import("../proxy-capture/runtime.js");
@@ -476,7 +481,19 @@ async function runDoctorHealthFlowWithResult(
     try {
       ctx = await (maintenance ? maintenance.run(runChecks) : runChecks());
       if (ctx && maintenance && options.repair === true && sqliteNoCowPaths.length > 0) {
-        await maintenance.repairSqliteNoCow(sqliteNoCowPaths);
+        if (
+          resolveDoctorRepairMode(options).updateInProgress &&
+          !isTruthyEnvValue(process.env[DOCTOR_SQLITE_NOCOW_REPAIR_ENV])
+        ) {
+          effectiveRuntime.log(
+            "SQLite NOCOW repair deferred: the managed updater did not request the store rewrite in this run.",
+          );
+        } else {
+          await maintenance.repairSqliteNoCow(sqliteNoCowPaths);
+        }
+      }
+      if (ctx && maintenance && ctx.prompter.shouldRepair) {
+        await maintenance.cleanupRetainedRuntimes();
       }
     } catch (error) {
       failure = error;

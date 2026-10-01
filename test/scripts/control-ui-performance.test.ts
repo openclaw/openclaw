@@ -89,18 +89,15 @@ function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
     path.resolve("src/gateway/control-ui-route-preloads.ts"),
     path.join(gatewayDir, "control-ui-route-preloads.ts"),
   );
-  fs.copyFileSync(
-    path.resolve("scripts/lib/check-limits.mts"),
-    path.join(scriptLibDir, "check-limits.mts"),
-  );
-  fs.copyFileSync(
-    path.resolve("scripts/lib/control-ui-i18n-config.ts"),
-    path.join(scriptLibDir, "control-ui-i18n-config.ts"),
-  );
-  fs.copyFileSync(
-    path.resolve("scripts/lib/control-ui-i18n-config.json"),
-    path.join(scriptLibDir, "control-ui-i18n-config.json"),
-  );
+  for (const file of [
+    "check-limits.mts",
+    "control-ui-i18n-config.ts",
+    "control-ui-i18n-config.json",
+    "record-shared.mjs",
+    "regexp.mjs",
+  ]) {
+    fs.copyFileSync(path.resolve("scripts/lib", file), path.join(scriptLibDir, file));
+  }
   fs.writeFileSync(
     path.join(scriptsDir, "tsx.mjs"),
     `await import(${JSON.stringify(tsxImport)});\n`,

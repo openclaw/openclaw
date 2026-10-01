@@ -5,7 +5,7 @@ import {
   canonicalSubagentRunFixtures,
   type SubagentRunFixture,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,

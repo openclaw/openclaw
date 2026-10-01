@@ -5,9 +5,22 @@ import path from "node:path";
 
 const require = createRequire(import.meta.url);
 
+export function copyNativeCompilerPackage(source: string, destination: string) {
+  fs.cpSync(source, destination, {
+    recursive: true,
+    dereference: true,
+    mode: fs.constants.COPYFILE_FICLONE,
+    // Sibling Vitest threads may fork during this copy. Keep files on libuv's
+    // close-on-exec path so children cannot inherit writable executable descriptors.
+    filter: () => true,
+  });
+}
+
 /** Availability only; integration assertions still verify the actual kernel scope. */
 export function hasSemanticTestBackend(): boolean {
-  if (process.platform !== "linux") return false;
+  if (process.platform !== "linux") {
+    return false;
+  }
   try {
     return (
       fs
@@ -46,12 +59,7 @@ export function materializeNativeCompiler(rootDir: string) {
     const source = path.dirname(owner.resolve(`${name}/package.json`));
     const destination = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.cpSync(source, destination, {
-      recursive: true,
-      mode: fs.constants.COPYFILE_FICLONE,
-      // Keep file copies on libuv's close-on-exec path on Node 24.19.
-      filter: () => true,
-    });
+    copyNativeCompilerPackage(source, destination);
   }
   const bin = path.join(root, "node_modules/.bin/tsgo");
   fs.mkdirSync(path.dirname(bin), { recursive: true });

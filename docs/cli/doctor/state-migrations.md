@@ -48,6 +48,41 @@ and deferred. Doctor reports the retained source and continues independent migra
 startup reports remaining readiness advisories. An advisory never hides a separate
 required-store refusal.
 
+Doctor also converts older session-row pending-delivery, model-fallback, and
+memory-flush fields to their current structured state. Published
+`v2026.7.2-beta.5` wrote these fields directly into schema-v16 session rows;
+stable `v2026.8.1` upgrades retain those stored values. This durable upgrade
+path needs a migration even though current writers already emit structured state.
+Before rewriting an
+existing database, it saves and reports a verified SQLite backup, including the
+original row values. Pending reply text, destinations, intent IDs, timestamps,
+and memory-flush counts retain their previous meaning; existing current values
+take precedence. Obsolete retry and error details remain in the backup.
+This repair changes only those state fields. Transcript locators, other raw
+metadata, split snapshots, and malformed identity fields remain with their
+existing repair owners; scalar repair never invents or certifies an identity.
+SQLite changes only the affected top-level JSON fields, preserving unrelated
+opaque values, including numeric tokens that JavaScript cannot represent exactly.
+Doctor uses the existing snapshot and bounded rewrite owners. Its captured file
+identity also reaches the normal database admission owner, which checks it before
+changing permissions, journal mode, schema, or rows. Doctor supplies these facts
+through the database owner's internal repair admission; plugin SDK options stay
+unchanged. A repair cannot adopt a replacement file after its backup or begin a
+mutation after its owner has retired.
+Ordinary session reads require this repair instead of converting the old fields
+in memory. A Doctor preview reports the affected rows without changing them and
+defers further session inspection until `doctor --fix` runs. The update-time
+Doctor pass performs the same repair before the candidate resumes sessions.
+The migration prelude upgrades database schemas before retrying deferred scalar
+repairs. Standalone session import keeps its existing `doctor --fix` prerequisite
+for older schemas; session recovery restores or repairs its selected database
+before inspecting and converting scalar state.
+If the recovered database still needs a schema upgrade, recovery reports the
+`doctor --fix` prerequisite instead of claiming success.
+Repair failures stop Doctor instead of becoming optional health warnings. If a
+later batch is interrupted, earlier committed batches stay canonical and the
+original backups remain available; rerunning Doctor repairs the remaining rows.
+
 If Doctor is interrupted during an agent schema or media migration, stop other
 OpenClaw processes using that state and rerun `openclaw doctor --fix`. Doctor
 reclaims a recorded migration owner only when its host, PID, and process start

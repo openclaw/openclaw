@@ -46,9 +46,13 @@ describe("chat transcript geometry", () => {
         requestUpdate: vi.fn(),
         updateComplete: Promise.resolve(true),
       });
+      vi.stubGlobal("innerWidth", 800);
+      vi.stubGlobal("innerHeight", 600);
+      const readHostWidth = vi.fn(() => 800);
+      const readHostHeight = vi.fn(() => 600);
       Object.defineProperties(host, {
-        clientWidth: { value: 800 },
-        clientHeight: { value: 600 },
+        clientWidth: { get: readHostWidth },
+        clientHeight: { get: readHostHeight },
       });
       const transcript = new ChatTranscriptController(host, () => paneId, {
         visuallyPresented: () => presented,
@@ -75,6 +79,8 @@ describe("chat transcript geometry", () => {
       };
       transcript.hostConnected();
       expect(renderWindow([])).toBe(0);
+      expect(readHostWidth).not.toHaveBeenCalled();
+      expect(readHostHeight).not.toHaveBeenCalled();
       flushFrames();
 
       // A saved viewport needs five estimated rows; the implicit end starts
@@ -310,7 +316,12 @@ describe("chat transcript geometry", () => {
       expect(replacement).not.toBe(inner);
       gutter = 100;
       innerWidth = 768;
-      emitResize(replacement, innerWidth, 400);
+      emitResize(
+        expectDefined(replacement.querySelector(".chat-virtual-sizer"), "replacement column"),
+        innerWidth,
+        0,
+      );
+      emitResize(region, 1200, regionHeight);
       flushFrames();
       expect(replacementViewport.hasAttribute("data-position-rail-gutter")).toBe(true);
       expect(replacementViewport.style.getPropertyValue("--chat-transcript-column-width")).toBe(
@@ -333,6 +344,7 @@ describe("chat transcript geometry", () => {
 
       transcript.hostConnected();
       renderTranscript();
+      emitResize(region, 1200, regionHeight);
       flushFrames();
       const restored = expectDefined(transcript.scrollElement, "restored rail viewport");
       expect(restored.hasAttribute("data-position-rail-gutter")).toBe(true);

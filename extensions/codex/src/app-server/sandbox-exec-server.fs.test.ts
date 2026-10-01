@@ -546,15 +546,15 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const copyFile = vi.fn(async () => undefined);
     const mkdirp = vi.fn(async () => undefined);
     const runShellCommand = vi.fn(async (_params?: { args?: string[] }) => ({
-      stdout: Buffer.from("f\tfile.txt\nd\tsubdir\n"),
+      stdout: Buffer.from("ffile.txt\0dsubdir\0"),
       stderr: Buffer.alloc(0),
       code: 0,
     }));
     runShellCommand.mockImplementation(async (params?: { args?: string[] }) => ({
       stdout: Buffer.from(
         params?.args?.[0] === "/workspace/source-dir/subdir"
-          ? "f\tnested.txt\n"
-          : "f\tfile.txt\nd\tsubdir\n",
+          ? "fnested.txt\0"
+          : "ffile.txt\0dsubdir\0",
       ),
       stderr: Buffer.alloc(0),
       code: 0,
@@ -687,7 +687,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   it("rejects recursive directory copies into a canonical source subtree", async () => {
     const mkdirp = vi.fn(async () => undefined);
     const runShellCommand = vi.fn(async () => ({
-      stdout: Buffer.from("f\tchild.txt\n"),
+      stdout: Buffer.from("fchild.txt\0"),
       stderr: Buffer.alloc(0),
       code: 0,
     }));

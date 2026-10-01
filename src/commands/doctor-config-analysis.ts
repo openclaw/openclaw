@@ -134,7 +134,7 @@ export function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
   }
 }
 
-export function formatConfigKeyPath(parts: Array<string | number>): string {
+function formatConfigKeyPath(parts: Array<string | number>): string {
   let out = "";
   for (const part of parts) {
     if (typeof part === "number") {
@@ -147,7 +147,7 @@ export function formatConfigKeyPath(parts: Array<string | number>): string {
 }
 
 /** Resolves a config path against a loose config tree, returning null for invalid traversal. */
-export function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number>): unknown {
+function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number>): unknown {
   let current: unknown = root;
   for (const part of pathLocal) {
     if (typeof part === "number") {

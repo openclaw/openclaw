@@ -34,7 +34,7 @@ auth health, sandbox images, and plugin installs.
 
     When an unavailable plugin still needs legacy session files, Doctor retains those originals after verifying the core import. Startup accepts the retained files only when their session owners have matching verified imports. An unused configured agent does not need an empty database for another agent's history. Changed, unassigned, or unimported source rows still require repair before startup.
 
-    Doctor retains one prepared plugin selection through planning and post-session repair. A deferred external plugin stays deferred while admitted plugins complete their repairs; changing maintenance scopes does not add unplanned actions or block an update with an action-order mismatch. Gateway startup reports pending repairs without executing them.
+    Doctor retains one prepared plugin selection through planning and post-session repair. A deferred external plugin stays deferred while admitted plugins complete their repairs; changing maintenance scopes does not add unplanned actions or block an update with an action-order mismatch. When no plugin migration is deferred and no verified legacy session source is retained, the post-session plugin repair runs its detectors once and skips the completion certification pass. Gateway startup reports pending repairs without executing them.
 
     Before archiving retained originals, Doctor rechecks pending plugin migrations against the current publication transaction. If those obligations changed during repair, the originals remain protected and Doctor reports the conflict for a later repair.
 
@@ -107,6 +107,22 @@ auth health, sandbox images, and plugin installs.
     - top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
     - payload `provider` delivery aliases → explicit `delivery.channel`
     - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from the retired raw `cron.webhook` value when valid; announce jobs keep their chat delivery and get `delivery.completionDestination`. Doctor then removes the old config key. Without a usable legacy webhook, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it.
+
+    Legacy default-agent ownership is repaired only by Doctor. Gateway startup
+    leaves stored cron ownership unchanged. An ownerless job whose config still
+    retains a legacy default marker waits for repair without consuming its due
+    occurrence or disabling a one-shot. Manual runs return `openclaw doctor --fix`
+    guidance; explicitly owned jobs continue normally. Doctor pins the historical
+    owner before removing that marker, preserving the job's definition and runtime
+    state. Unresolved historical jobs also require Doctor before updates or removal,
+    and the current system agent does not gain management access to them. Operator
+    inspection remains available. Current configurations without a legacy marker keep their dynamic
+    system-agent selection.
+
+    Missing interval anchors are repaired by Doctor. Runtime scheduling can
+    calculate the next run without writing an anchor into an old definition.
+    Schedule maintenance and run outcomes preserve stored ownership and authored
+    fields; intentional enable/disable transitions change only the enabled field.
 
     The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Malformed rows are quarantined in the shared SQLite state database in the same transaction that removes them from active scheduling; doctor reports those records and imports any `jobs-quarantine.json` sidecars left by older releases.
 

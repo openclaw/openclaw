@@ -24,6 +24,7 @@ import { setTestEnvValue, withEnvAsync } from "../../../test-utils/env.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import * as registryPersistence from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import * as registryReads from "./subagent-registry-read-cache.js";
 import * as registryRead from "./subagent-registry-read.js";
 import * as registryState from "./subagent-registry-state.js";
@@ -169,7 +170,7 @@ it.each(["announce receipt delete", "announce receipt keep"] as const)(
       createDeferred<Awaited<ReturnType<typeof nativeAnnounce.runSubagentAnnounceFlow>>>();
     let deliveryAllowed: (() => boolean) | undefined;
     const publicationAdmission: boolean[] = [];
-    const stopObserving = nativeState.onSubagentRegistryPersisted(() => {
+    const stopObserving = subscribeSubagentRunChanges("persistence", () => {
       const current = subagentRuns.get(runId);
       if (
         deliveryAllowed &&

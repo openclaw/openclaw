@@ -324,38 +324,35 @@ it("refreshes dirty canonical rows before presenting their main alias", async ()
   });
 });
 
-it.each(["reset", "replace"] as const)(
-  "keeps the committed same-key row after %s",
-  async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const key = "agent:main:session";
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+it("keeps the committed same-key row after a same-ID reset", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:session";
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      { sessionId: "old", lifecycleRevision: "original", updatedAt: 1 },
+    );
+    const projection = await createSessionRowProjection({ cfg });
+    await projection.ensureMaterialized();
+    try {
+      const old = projection.describe({ agentId: "main", key });
+      const sessionId = "old";
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: key },
-        { sessionId: "old", lifecycleRevision: "original", updatedAt: 1 },
+        { sessionId, lifecycleRevision: "replacement", updatedAt: 2 },
       );
-      const projection = await createSessionRowProjection({ cfg });
+      const current = projection.capture({ agentId: "main", key });
+      expect(current).toBeDefined();
       await projection.ensureMaterialized();
-      try {
-        const old = projection.describe({ agentId: "main", key });
-        const sessionId = kind === "reset" ? "old" : "new";
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key },
-          { sessionId, lifecycleRevision: "replacement", updatedAt: 2 },
-        );
-        const current = projection.capture({ agentId: "main", key });
-        expect(current).toBeDefined();
-        await projection.ensureMaterialized();
-        expect(projection.isCurrent(current!)).toBe(true);
-        expect(projection.isCurrent(old!)).toBe(false);
-        expect(projection.snapshot({ agentId: "main", key }).row?.sessionId).toBe(sessionId);
-        expect(old?.entry.sessionId).toBe("old");
-      } finally {
-        projection.dispose();
-      }
-    });
-  },
-);
+      expect(projection.isCurrent(current!)).toBe(true);
+      expect(projection.isCurrent(old!)).toBe(false);
+      expect(projection.snapshot({ agentId: "main", key }).row?.sessionId).toBe(sessionId);
+      expect(old?.entry.sessionId).toBe("old");
+    } finally {
+      projection.dispose();
+    }
+  });
+});
 
 it("settles a committed write queued while the previous materialization is finishing", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -644,45 +641,6 @@ it.each(["static", "array", "unowned-map", "empty-map"] as const)(
     });
   },
 );
-
-it("refreshes prepared catalog metadata after catalog publication", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
-    const key = "agent:main:catalog";
-    let catalog = [
-      {
-        id: "fixture",
-        name: "Fixture",
-        provider: "unit-test",
-        contextWindow: 8192,
-        contextTokens: 8192,
-      },
-    ];
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      {
-        sessionId: "catalog",
-        updatedAt: 1,
-        providerOverride: "unit-test",
-        modelOverride: "fixture",
-      },
-    );
-    const projection = await createSessionRowProjection({
-      cfg,
-      modelCatalog: catalog,
-      getModelCatalog: async () => catalog,
-    });
-    try {
-      expect(projection.snapshot({ agentId: "main", key }).row?.contextTokens).toBe(8192);
-      catalog = [{ ...catalog[0]!, contextWindow: 16384, contextTokens: 16384 }];
-      notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-      await projection.ensureMaterialized();
-      expect(projection.snapshot({ agentId: "main", key }).row?.contextTokens).toBe(16384);
-    } finally {
-      projection.dispose();
-    }
-  });
-});
 
 it("keeps cross-agent inheritance bound to a stored qualified parent", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

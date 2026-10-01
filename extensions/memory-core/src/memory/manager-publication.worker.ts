@@ -14,6 +14,7 @@ import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manag
 import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
+  loadMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
@@ -27,6 +28,7 @@ import type {
 import { assertMemoryShadowIdentity, type MemoryShadowFailure } from "./manager-shadow-task.js";
 import {
   MemorySourceIndexKernel,
+  readMemorySourceHash,
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
@@ -180,6 +182,12 @@ function createPublicationBackend(
       },
       execute(command) {
         assertPath();
+        if (command.type === "source.hash") {
+          return readMemorySourceHash(db, command.input.source, command.input.path);
+        }
+        if (command.type === "cache.read") {
+          return loadMemoryEmbeddingCache({ ...command.input, db });
+        }
         if (command.type === "stage.start" || command.type === "cache.stage.start") {
           if (staged) {
             throw new Error("Memory publication input already belongs to another operation");

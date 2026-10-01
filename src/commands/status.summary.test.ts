@@ -6,6 +6,7 @@ import {
   setActiveCredentialDegradedOwner,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
+import { getStatusSummary } from "../status/summary.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   registerStatusSummarySessionRowCases,
@@ -95,41 +96,43 @@ vi.mock("../config/sessions/paths.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadExactSessionEntryReadOnly: statusSummaryMocks.loadExactSessionEntryReadOnly,
-  readSessionStoreSummaryReadOnly: (
-    scope: Parameters<
-      typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
-    >[0],
-    options: Parameters<
-      typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
-    >[1],
-  ) => {
-    const entries = statusSummaryMocks
-      .listSessionEntriesCore(scope)
-      .filter(({ sessionKey }) => sessionKey.startsWith("agent:"))
-      .map(({ sessionKey, entry }) => ({
-        sessionKey,
-        entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
-      }))
-      .toSorted(
-        (left, right) =>
-          right.entry.updatedAt - left.entry.updatedAt ||
-          (left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0),
-      );
-    const summarize = (rows: typeof entries) => ({
-      count: rows.length,
-      recent: rows.slice(0, options.recentLimit),
-    });
-    return {
-      ...summarize(entries),
-      byAgent: new Map(
-        options.agentIds.map((agentId) => [
-          agentId,
-          summarize(entries.filter(({ sessionKey }) => sessionKey.startsWith(`agent:${agentId}:`))),
-        ]),
-      ),
-    };
-  },
 }));
+
+vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createSessionStoreSummaryReaderStub } =
+    await import("../config/sessions/session-store-summary.test-support.js");
+  return {
+    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub((scope, options) => {
+      const entries = statusSummaryMocks
+        .listSessionEntriesCore(scope)
+        .filter(({ sessionKey }) => sessionKey.startsWith("agent:"))
+        .map(({ sessionKey, entry }) => ({
+          sessionKey,
+          entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+        }))
+        .toSorted(
+          (left, right) =>
+            right.entry.updatedAt - left.entry.updatedAt ||
+            (left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0),
+        );
+      const summarize = (rows: typeof entries) => ({
+        count: rows.length,
+        recent: rows.slice(0, options.recentLimit),
+      });
+      return {
+        ...summarize(entries),
+        byAgent: new Map(
+          options.agentIds.map((agentId) => [
+            agentId,
+            summarize(
+              entries.filter(({ sessionKey }) => sessionKey.startsWith(`agent:${agentId}:`)),
+            ),
+          ]),
+        ),
+      };
+    }),
+  };
+});
 
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(),
@@ -172,7 +175,6 @@ const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
 const { peekSystemEvents } = await import("../infra/system-events.js");
 const { resolveLinkChannelContext } = await import("../status/link-channel.js");
-let getStatusSummary: typeof import("../status/summary.js").getStatusSummary;
 let statusSummaryRuntime: typeof import("../status/summary.runtime.js").statusSummaryRuntime;
 
 function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>) {
@@ -187,7 +189,6 @@ function setSession(entry: Record<string, unknown>) {
 
 describe("getStatusSummary", () => {
   beforeAll(async () => {
-    ({ getStatusSummary } = await import("../status/summary.js"));
     ({ statusSummaryRuntime } = await import("../status/summary.runtime.js"));
   });
 

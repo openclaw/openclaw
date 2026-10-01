@@ -10,7 +10,9 @@ import {
   resolveGatewayOperatorAccessAuthority,
 } from "../gateway/operator-access-policy.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import {
@@ -270,6 +272,7 @@ it.each([
     setUserProfileRole(staff.id, "staff");
     setUserProfileRole(unbound.id, "unbound");
     let registry: Awaited<ReturnType<typeof loadAndActivateRootPluginRegistry>> | undefined;
+    const catalog = await prepareUserProfileCatalog();
     process.on(optionalCheckEvent, optionalChecks);
     try {
       registry = await loadAndActivateRootPluginRegistry({ config, cache: false });
@@ -337,6 +340,7 @@ it.each([
       expect(optionalChecks).not.toHaveBeenCalled();
     } finally {
       process.off(optionalCheckEvent, optionalChecks);
+      catalog.release();
       if (registry) {
         await clearActivePluginRegistry(registry);
       }

@@ -696,7 +696,12 @@ export function createGatewayHttpServer(opts: {
                 parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath)
                   .matched,
             ),
-          async () => (await loadHandler())(req, res, controlUiRouteOptions),
+          async () =>
+            (await loadHandler())(req, res, {
+              ...controlUiRouteOptions,
+              sessionRowProjectionOwner:
+                opts.getGatewayRequestContext?.()?.sessionRowProjectionOwner,
+            }),
         );
       }
       // Authenticated media also serves non-browser clients when dashboard hosting is disabled.

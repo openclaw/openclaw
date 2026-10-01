@@ -8,6 +8,79 @@ read_when:
 
 ## Runners
 
+### Testbox spending limits
+
+The general, high-memory, ARM, build-artifact, and Windows Testbox workflows share 32
+concurrency slots. A GitHub-hosted admission job validates the lease ID, runner,
+and runtime before the Blacksmith job becomes eligible. Dispatches wait in their
+assigned slot without canceling an active lease. Each slot retains one pending
+request; a newer request can cancel and replace that pending request. Hash
+collisions can leave other slots unused; this is a ceiling, not a promise of
+32 busy machines.
+
+Admission expires ten minutes after the workflow was created. A request that
+waits longer fails before checkout or hydration when its runner starts; it can
+still incur runner startup cost. This does not remove the queued job immediately.
+Stop an abandoned lease by its exact ID instead of leaving a warmup pending.
+Do not retry in a loop when the pool is full.
+
+Idle requests are capped at 15 minutes. The existing Testbox monitor continues
+to protect active SSH commands. Stop retained leases when their task finishes;
+the idle limit is not a substitute for caller cleanup.
+
+| Testbox               | Allowed runner        | Default runtime | Maximum requested runtime |
+| --------------------- | --------------------- | --------------- | ------------------------- |
+| General runtime proof | 16-vCPU Ubuntu x64    | 60 minutes      | 240 minutes               |
+| High-memory exception | 32-vCPU Ubuntu x64    | 240 minutes     | 240 minutes               |
+| ARM proof             | 16-vCPU Ubuntu ARM    | 120 minutes     | 120 minutes               |
+| Build artifacts       | 16-vCPU Ubuntu x64    | 35 minutes      | 35 minutes                |
+| Windows               | 8- or 16-vCPU Windows | 75 minutes      | 75 minutes                |
+
+Routine remote proof uses the 16-class. The explicit high-memory workflow can
+use only four of the shared 32 slots; it does not add four more slots. Normal
+leases can also occupy those slots, so hash collisions may queue high-memory
+work below its ceiling. Stop owned leases when done rather than requesting new
+IDs to evade a busy slot.
+
+Use the 32-class only for a named command with measured memory need, a verified
+smaller-runner OOM, or a controlled comparison showing lower total billed cost.
+Record the evidence before allocation. The explicit full-suite Testbox PR gate
+retains this exception; ordinary remote commands and changed gates use 16-class.
+See [remote proof](/reference/test/remote-proof#testbox-runner-sizing) for selection.
+A failed test, queue delay, or generic timeout does not justify promotion.
+
+General proof defaults to 60 minutes including hydration. The existing
+`timeout_minutes` input can request a shorter deadline or explicitly extend a
+known long proof up to 240 minutes; larger values fail before allocation. Native Blacksmith warmup does not expose arbitrary
+workflow inputs, and Crabbox `--ttl` does not enforce a Testbox lifetime.
+The GitHub job timeout is the wall-clock limit.
+
+The October 1 sizing audit favors 16-class over a blanket 8-class default.
+Across the prior seven days, 5,521 32-class runs had a 31-minute median lifetime
+and a 108-minute p95. The memory sampler returned 4,436 eligible runs; sampled
+[median](https://github.com/openclaw/openclaw/actions/runs/36588824988/job/109476238445)
+and [p75](https://github.com/openclaw/openclaw/actions/runs/36593802388/job/109493424473)
+peaks were 6.2 and 12.8 GiB against the 8-class's observed
+7.66 GiB. At those sampled peaks, total RAM minus available RAM was 6.8 and
+13.4 GiB, so reclaimable cache does not explain away the smaller-class risk.
+The separate 6,199-run 16-class population also included 25 OOM-affected jobs;
+these populations are not a controlled size comparison.
+
+Job duration includes hydration, commands, and idle retention. The sampled
+[31-minute job](https://github.com/openclaw/openclaw/actions/runs/36630648805/job/109618719716)
+spent 30 minutes waiting in the Testbox monitor with a 30-minute
+idle setting. Do not treat lease percentiles as active-command percentiles or
+claim a measured timeout rate for the new policy. The 60-minute default is an
+operating choice; remeasure after the 15-minute idle cap is deployed before
+making 30 minutes or 8-class the general default.
+
+These controls cover dispatches using the updated workflows in this repository.
+Historical refs, other repositories, alternate workflows, and Windows probe
+workflows are outside the shared pool. Organization-wide concurrency, per-token
+admission, SKU restrictions, and a hard spending stop require provider controls.
+
+### CI runner routing
+
 Hosted Node 24 setup honors the workflow's existing `NODE_VERSION` pin when the
 setup input is `24.x`. This prevents runner-image refreshes from silently choosing
 a different patch version. Explicit compatibility versions retain their own

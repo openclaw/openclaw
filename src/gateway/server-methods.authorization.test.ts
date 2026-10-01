@@ -31,7 +31,7 @@ const getUserProfileDisplay = vi.hoisted(() =>
     hasAvatar: false,
   })),
 );
-const setDisplayName = vi.hoisted(() => vi.fn());
+const setCanonicalUserProfileDisplayName = vi.hoisted(() => vi.fn());
 
 vi.mock("../state/user-profile-email.js", () => ({ ensureProfileIdForEmail }));
 vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) => ({
@@ -39,13 +39,15 @@ vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) =
   prepareUserProfileRoleAuthority,
 }));
 
+vi.mock("../state/user-profile-writes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-writes.js")>()),
+  setCanonicalUserProfileDisplayName,
+}));
+
 vi.mock("../state/user-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
   getUserProfileDisplay,
   getUserProfileListItem: vi.fn(),
-  linkEmail: vi.fn(),
-  setAvatar: vi.fn(),
-  setDisplayName,
   UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
 }));
 
@@ -54,7 +56,7 @@ afterEach(() => {
   ensureProfileIdForEmail.mockReset();
   prepareUserProfileRoleAuthority.mockClear();
   getUserProfileDisplay.mockClear();
-  setDisplayName.mockReset();
+  setCanonicalUserProfileDisplayName.mockReset();
 });
 
 describe("gateway method authorization", () => {
@@ -249,7 +251,7 @@ describe("gateway method authorization", () => {
   it("allows an identified write caller to edit its own profile", async () => {
     const profile = { id: "profile-1" };
     ensureProfileIdForEmail.mockResolvedValue(profile.id);
-    setDisplayName.mockReturnValue(profile);
+    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile });
 
     expect(
       await dispatchProfileMutation({
@@ -274,7 +276,7 @@ describe("gateway method authorization", () => {
 
   it("allows an admin caller to edit any profile", async () => {
     const profile = { id: "profile-2" };
-    setDisplayName.mockReturnValue(profile);
+    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile });
 
     expect(
       await dispatchProfileMutation({

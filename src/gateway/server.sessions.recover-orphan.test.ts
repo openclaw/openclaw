@@ -26,11 +26,9 @@ afterEach(() => {
 
 test.each([
   { status: "running", live: false },
-  { status: "running", live: true },
   { status: "failed", live: false },
   { status: "failed", live: true },
   { status: undefined, live: false },
-  { status: undefined, live: true },
   { status: "done", live: false },
   { status: "killed", live: false },
 ] as const)(

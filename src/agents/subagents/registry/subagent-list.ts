@@ -28,34 +28,6 @@ import {
   resolveSubagentDisplayStatus,
 } from "./subagent-session-metrics.js";
 
-type SubagentListItem = {
-  index: number;
-  line: string;
-  runId: string;
-  sessionKey: string;
-  taskName?: string;
-  label: string;
-  task: string;
-  status: string;
-  pendingDescendants: number;
-  runtime: string;
-  runtimeMs: number;
-  childSessions?: string[];
-  model?: string;
-  totalTokens?: number;
-  startedAt?: number;
-  endedAt?: number;
-  execution: SubagentExecutionObservation;
-  deliveryStatus?: NonNullable<SubagentRunRecord["delivery"]>["status"];
-};
-
-type BuiltSubagentList = {
-  total: number;
-  active: SubagentListItem[];
-  recent: SubagentListItem[];
-  text: string;
-};
-
 export type SubagentListReadContext = {
   now: number;
   recentMinutes: number;
@@ -77,7 +49,9 @@ export function captureSubagentListReadContext(
   const pendingDescendants = new Map(
     runs.map((entry) => [
       entry.childSessionKey,
-      readIndex.countPendingDescendantRuns(entry.childSessionKey),
+      readIndex.countPendingDescendantRuns(entry.childSessionKey, {
+        excludeSuspendedDelivery: true,
+      }),
     ]),
   );
   const view = buildSubagentRunView({
@@ -142,7 +116,6 @@ export async function readSubagentListSessionEntries(
   return entries;
 }
 
-/** Build child-session indexes from the latest run associated with each child key. */
 function buildChildSessionIndex(
   readIndex: SubagentRunReadIndex<SubagentRunReadRecord>,
   now: number,
@@ -178,12 +151,11 @@ function buildChildSessionIndex(
   return childSessionsByController;
 }
 
-/** Build structured and text views for active and recent subagent runs. */
 export function buildSubagentList(params: {
   context: SubagentListReadContext;
   sessionEntries: ReadonlyMap<string, SessionEntry>;
   taskMaxChars?: number;
-}): BuiltSubagentList {
+}) {
   const { now, view: runView, childSessionsByController } = params.context;
   let index = 1;
   const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
@@ -210,7 +182,7 @@ export function buildSubagentList(params: {
     const taskName = entry.taskName?.trim();
     const taskNamePrefix = taskName ? `${taskName}: ` : "";
     const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
-    const view: SubagentListItem = {
+    const view = {
       index,
       line,
       runId: entry.runId,

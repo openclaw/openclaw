@@ -309,9 +309,12 @@ export function renderChatPullRequests(props: {
   const { publication } = props;
   const published = publication?.result?.status === "published" ? publication.result : undefined;
   const retainedPublication = publication?.result || publication?.locked || publication?.error;
+  // Session-only publishers cannot read the broader PR subscription's branch facts.
+  const sharedAction =
+    publication?.canPublishShared && !publication.canPublishPersonal && publication.options?.shared;
   // Gateway branch facts describe unpublished work, including changes after a merge.
   // PR metadata takes precedence over retained publication history.
-  if (props.branch || (props.pullRequests.length === 0 && retainedPublication)) {
+  if (props.branch || (props.pullRequests.length === 0 && (retainedPublication || sharedAction))) {
     return html`<div class="chat-prs" aria-live="polite">
       ${renderWorkRow(props.branch, props.status, props.onOpenSessionDiff, publication)}
     </div>`;

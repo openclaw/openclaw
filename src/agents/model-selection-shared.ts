@@ -26,6 +26,7 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { isVllmQwenThinkingCompat } from "./model-compat-catalog.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
@@ -861,7 +862,9 @@ export function buildAllowedModelSet(
 
 function prepareModelPolicy(params: ModelPolicyPreparationParams) {
   const visibility = parseConfiguredModelVisibilityEntries(params);
-  const policyAliasAgentId = resolvePolicyAliasAgentId(visibility.configPath, params.agentId);
+  const requestedAgentId = params.agentId;
+  const policyAliasAgentId =
+    visibility.configPath === AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH ? requestedAgentId : undefined;
   const policyAliasIndex = buildModelAliasIndex({ ...params, agentId: policyAliasAgentId });
   // Inherited policy aliases keep their owner's scope; selection and display
   // aliases still honor the selected agent's overrides.
@@ -1248,16 +1251,6 @@ export function buildConfiguredModelCatalog(params: {
   return catalog;
 }
 
-function isVllmQwenThinkingCompat(
-  providerId: string,
-  compat?: { thinkingFormat?: unknown } | null,
-): boolean {
-  return (
-    providerId === "vllm" &&
-    (compat?.thinkingFormat === "qwen" || compat?.thinkingFormat === "qwen-chat-template")
-  );
-}
-
 export function resolveHooksGmailModel(
   params: {
     cfg: OpenClawConfig;
@@ -1289,13 +1282,6 @@ export function resolveHooksGmailModel(
 const DEFAULT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.modelPolicy.allow";
 const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.entries.*.modelPolicy.allow";
 export const LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.models";
-
-function resolvePolicyAliasAgentId(
-  configPath: string | null,
-  agentId: string | undefined,
-): string | undefined {
-  return configPath === AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH ? agentId : undefined;
-}
 
 export function resolveConfiguredModelPolicyAllow(params: {
   cfg?: OpenClawConfig;

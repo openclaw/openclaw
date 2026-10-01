@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   cleanupRuntimeToolFixtureTempRoots,
   mockToolRequests,
@@ -8,7 +8,7 @@ import {
   simulateRuntimePatchHappyTurn,
 } from "../test/runtime-tool-fixture-helpers.js";
 
-afterEach(cleanupRuntimeToolFixtureTempRoots);
+afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("runtime tool fixture mock request linking", () => {
   it("rejects unrelated tool output after a planned mock runtime tool call", async () => {

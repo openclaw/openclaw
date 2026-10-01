@@ -806,6 +806,7 @@ describe("doctor config flow", () => {
   it("migrates legacy toolsBySender keys to typed id entries on repair", async () => {
     const result = await runConfig({
       repair: true,
+      preflightMode: "compat",
       config: {
         channels: {
           whatsapp: {
@@ -831,7 +832,7 @@ describe("doctor config flow", () => {
     );
     expect(toolsBySender.owner).toBeUndefined();
     expect(toolsBySender.alice).toBeUndefined();
-    expect(toolsBySender["id:owner"]).toEqual({ deny: ["exec"] });
+    expect(toolsBySender["id:owner"]).toEqual({ allow: ["exec"] });
     expect(toolsBySender["id:alice"]).toEqual({ deny: ["exec"] });
     expect(toolsBySender["username:@ops-bot"]).toEqual({ allow: ["fs.read"] });
     expect(toolsBySender["*"]).toEqual({ deny: ["exec"] });

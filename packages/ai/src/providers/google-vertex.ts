@@ -2,6 +2,7 @@ import { GoogleGenAI, type HttpOptions, ResourceScope } from "@google/genai";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
+import { buildManagedModelFetch } from "../transports/host-policy.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
@@ -57,7 +58,7 @@ export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStr
 
 function createClient(model: Model<"google-vertex">, options?: GoogleVertexOptions): GoogleGenAI {
   const apiKey = resolveApiKey(options);
-  // @google/genai exposes RequestInit options but no custom fetch; unwrap at construction.
+  // Authentication is resolved before construction; the SDK also retains the host fetch policy.
   const credentials = apiKey
     ? { apiKey: getAiTransportHost().resolveSecretSentinel(apiKey) }
     : { project: resolveProject(options), location: resolveLocation(options) };
@@ -74,6 +75,10 @@ function buildHttpOptions(
   optionsHeaders?: Record<string, string>,
 ): HttpOptions | undefined {
   const httpOptions: HttpOptions = {};
+  const fetcher = buildManagedModelFetch(model);
+  if (fetcher) {
+    httpOptions.fetch = fetcher;
+  }
   const baseUrl = resolveCustomBaseUrl(model.baseUrl);
   if (baseUrl) {
     httpOptions.baseUrl = baseUrl;
@@ -102,12 +107,10 @@ function resolveCustomBaseUrl(baseUrl: string): string | undefined {
 }
 
 function baseUrlIncludesApiVersion(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    return url.pathname.split("/").some((part) => /^v\d+(?:beta\d*)?$/.test(part));
-  } catch {
-    return /(?:^|\/)v\d+(?:beta\d*)?(?:\/|$)/.test(baseUrl);
-  }
+  const url = URL.parse(baseUrl);
+  return url
+    ? url.pathname.split("/").some((part) => /^v\d+(?:beta\d*)?$/.test(part))
+    : /(?:^|\/)v\d+(?:beta\d*)?(?:\/|$)/.test(baseUrl);
 }
 
 function resolveApiKey(options?: GoogleVertexOptions): string | undefined {
