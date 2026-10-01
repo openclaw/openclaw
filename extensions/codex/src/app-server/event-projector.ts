@@ -72,11 +72,18 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     return true;
   }
 
-  getActiveMcpToolCall(serverName: string) {
+  getActiveMcpToolCall(serverName: string, connectorId?: string) {
     if (this.projectionClosed || this.aborted) {
       return undefined;
     }
-    return this.nativeToolLifecycleProjector.getActiveMcpToolCall(serverName);
+    return this.nativeToolLifecycleProjector.getActiveMcpToolCall(serverName, connectorId);
+  }
+
+  getActiveMcpToolCallAttribution(serverName: string) {
+    if (this.projectionClosed || this.aborted) {
+      return undefined;
+    }
+    return this.nativeToolLifecycleProjector.getActiveMcpToolCallAttribution(serverName);
   }
 
   recordMcpToolCallReceipt(notification: CodexServerNotification): void {

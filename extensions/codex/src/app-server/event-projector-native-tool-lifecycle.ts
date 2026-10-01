@@ -50,6 +50,7 @@ export type CodexActiveMcpToolCall = {
   server: string;
   tool: string;
   arguments: JsonValue;
+  actionName?: string;
 };
 
 function isMcpToolCallItemNotification(method: string, params: JsonObject): boolean {
@@ -129,7 +130,60 @@ export class CodexNativeToolLifecycleProjector {
     });
   }
 
-  getActiveMcpToolCall(serverName: string): CodexActiveMcpToolCall | undefined {
+  getActiveMcpToolCall(
+    serverName: string,
+    connectorId?: string,
+  ): CodexActiveMcpToolCall | undefined {
+    const candidate = this.findUniqueActiveMcpToolCall(serverName, connectorId);
+    if (!candidate) {
+      return undefined;
+    }
+    if (connectorId) {
+      if (serverName !== "codex_apps") {
+        return undefined;
+      }
+    } else if (candidate.appContext != null || candidate.pluginId != null) {
+      return undefined;
+    }
+    const actionName = isJsonObject(candidate.appContext)
+      ? readString(candidate.appContext, "actionName")
+      : undefined;
+    return {
+      id: candidate.id,
+      server: candidate.server,
+      tool: candidate.tool,
+      arguments: candidate.arguments,
+      ...(actionName ? { actionName } : {}),
+    };
+  }
+
+  /** A unique live Codex item is the source of plugin attribution.
+   * Null is an explicit non-plugin; undefined is unknown and must not authorize.
+   */
+  getActiveMcpToolCallAttribution(
+    serverName: string,
+  ): (CodexActiveMcpToolCall & { pluginId: string | null }) | undefined {
+    const candidate = this.findUniqueActiveMcpToolCall(serverName);
+    if (!candidate || candidate.appContext != null) {
+      return undefined;
+    }
+    const pluginId = candidate.pluginId;
+    if (pluginId !== null && (typeof pluginId !== "string" || !pluginId.trim())) {
+      return undefined;
+    }
+    return {
+      id: candidate.id,
+      server: candidate.server,
+      tool: candidate.tool,
+      arguments: candidate.arguments,
+      pluginId,
+    };
+  }
+
+  private findUniqueActiveMcpToolCall(
+    serverName: string,
+    connectorId?: string,
+  ): (CodexActiveMcpToolCall & { appContext: unknown; pluginId: unknown }) | undefined {
     if (
       this.finalized ||
       this.turnCompleted ||
@@ -140,7 +194,12 @@ export class CodexNativeToolLifecycleProjector {
     }
     let candidate: CodexThreadItem | undefined;
     for (const { mcpToolCall } of this.activeItems.values()) {
-      if (mcpToolCall?.server !== serverName) {
+      if (
+        mcpToolCall?.server !== serverName ||
+        (connectorId &&
+          (!isJsonObject(mcpToolCall.appContext) ||
+            mcpToolCall.appContext.connectorId !== connectorId))
+      ) {
         continue;
       }
       // Count before validating: excluding an app/plugin or malformed item first
@@ -157,9 +216,7 @@ export class CodexNativeToolLifecycleProjector {
       !candidate.server.trim() ||
       typeof candidate.tool !== "string" ||
       !candidate.tool.trim() ||
-      candidate.arguments === undefined ||
-      candidate.appContext != null ||
-      candidate.pluginId != null
+      candidate.arguments === undefined
     ) {
       return undefined;
     }
@@ -168,6 +225,8 @@ export class CodexNativeToolLifecycleProjector {
       server: candidate.server,
       tool: candidate.tool,
       arguments: candidate.arguments,
+      appContext: candidate.appContext,
+      pluginId: candidate.pluginId,
     };
   }
 

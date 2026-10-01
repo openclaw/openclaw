@@ -207,7 +207,7 @@ forwarding does not change host exec policy.
 For Slack decisions, `approvals.plugin.slack` can restrict reviewers without
 changing the bot's message access list. The default `approvers` list applies to
 all plugin approvals. A `plugins` entry overrides it for one selected native
-tool plugin. A tool entry overrides that plugin's
+tool plugin or configured Codex plugin. A tool entry overrides that plugin's
 list for one exact tool:
 
 ```json5
@@ -233,7 +233,14 @@ list for one exact tool:
 ```
 
 For native OpenClaw tools, use the tool registration's plugin ID and a tool key
-of `encodeURIComponent(rawToolName)`. Only the exact matching list applies:
+of `encodeURIComponent(rawToolName)`. For Codex app tools, use the configured
+plugin key and `encodeURIComponent(appId) + "/" + encodeURIComponent(actionName)`;
+the action name comes from the selected app tool's native metadata, not its
+display title or raw MCP name. For Codex plugin-owned MCP server tools, use the
+configured plugin key and `"mcp/" + encodeURIComponent(serverName) + "/" +
+encodeURIComponent(rawToolName)` from Codex's active MCP tool item.
+
+Only the exact matching list applies:
 tool, then plugin, then default. Slack reviewers accept raw `U…`/`W…` user IDs
 within the selected Slack account, or workspace-qualified IDs as shown above.
 Decisions are bound to the bot's authenticated workspace; qualified reviewers

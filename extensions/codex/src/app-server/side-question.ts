@@ -4,7 +4,6 @@ import {
   buildAgentHookContextChannelFields,
   embeddedAgentLog,
   formatErrorMessage,
-  resolveSandboxContext,
   runAgentCleanupStep,
   type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSideQuestionResult,
@@ -41,15 +40,14 @@ import {
   readCodexPluginConfig,
   readCodexRequirementsToml,
   resolveCodexAppServerHomeScope,
+  resolveCodexPluginsPolicy,
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexModelBackedReviewerPolicyContext,
   shouldAutoApproveCodexAppServerApprovals,
   withMcpElicitationsApprovalPolicy,
 } from "./config.js";
 import {
-  buildDynamicTools,
   resolveCodexExternalSandboxPolicyForOpenClawSandbox,
-  resolveCodexMessageToolProvider,
   resolveCodexSandboxEnvironmentSelection,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldRequireCodexSandboxExecServerEnvironment,
@@ -64,8 +62,6 @@ import {
   resolveDynamicToolCallTimeoutMs,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
-import { resolveCodexDynamicToolsLoading } from "./dynamic-tool-profile.js";
-import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
@@ -112,7 +108,6 @@ import {
   CODEX_SESSION_PERMISSION_EXEC_MODES,
   resolveCodexEffectiveSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
-  type CodexEffectiveSessionPermissionPolicy,
 } from "./session-permission-policy.js";
 import {
   getLeasedSharedCodexAppServerClient,
@@ -123,6 +118,7 @@ import {
 } from "./shared-client.js";
 import { cleanupCodexSideQuestion } from "./side-question-cleanup.js";
 import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
+import { createCodexSideToolBridge } from "./side-question-tools.js";
 import {
   buildCodexRuntimeThreadConfig,
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -137,11 +133,7 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 import { buildCodexTemporalAdditionalContext } from "./turn-params.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 import { buildCodexUserInput } from "./user-input.js";
-import {
-  resolveCodexWebSearchPlan,
-  type CodexNativeWebSearchSupport,
-  type CodexWebSearchPlan,
-} from "./web-search.js";
+import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 
@@ -181,6 +173,14 @@ export async function runCodexAppServerSideQuestion(
     );
   }
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const pluginPolicyEnabled = resolveCodexPluginsPolicy(pluginConfig).enabled;
+  // Legacy bindings cannot attribute a selected MCP server to its plugin. Do
+  // not fork under that stale authority; a normal turn refreshes the owner map.
+  if (pluginPolicyEnabled && !binding.pluginAppPolicyContext?.nativePlugins) {
+    throw new Error(
+      "Codex /btw cannot verify plugin ownership for this older thread. Send a normal message to refresh plugin ownership, then retry /btw.",
+    );
+  }
   const { sessionAgentId } = resolveSessionAgentIdsStrict({
     sessionKey: params.sessionKey,
     config: params.cfg,
@@ -441,7 +441,9 @@ export async function runCodexAppServerSideQuestion(
     // Native app prompts must reach their reviewer even when the side thread's
     // general policy is Never, matching normal plugin-backed turns.
     const approvalPolicy =
+      pluginPolicyEnabled ||
       Object.keys(binding.pluginAppPolicyContext?.apps ?? {}).length > 0 ||
+      Object.keys(binding.pluginAppPolicyContext?.nativePlugins ?? {}).length > 0 ||
       hasCodexMcpToolApprovalOverrides(
         params.cfg?.mcp?.servers,
         Object.keys(projectedMcpServers),
@@ -491,8 +493,10 @@ export async function runCodexAppServerSideQuestion(
           turnId,
           autoApproveMcpTools,
           projectedMcpServers,
-          getActiveMcpToolCall: (serverName) =>
-            nativeToolLifecycleProjector?.getActiveMcpToolCall(serverName),
+          getActiveMcpToolCall: (serverName, connectorId) =>
+            nativeToolLifecycleProjector?.getActiveMcpToolCall(serverName, connectorId),
+          getActiveMcpToolCallAttribution: (serverName) =>
+            nativeToolLifecycleProjector?.getActiveMcpToolCallAttribution(serverName),
           pluginAppPolicyContext,
           signal,
         });
@@ -676,6 +680,7 @@ export async function runCodexAppServerSideQuestion(
           if (binding.pluginAppPolicyContext) {
             const refreshed = await refreshCodexPluginAppApprovalPolicy({
               policyContext: binding.pluginAppPolicyContext,
+              pluginConfig,
               configCwd: executionCwd,
               request: (method, requestParams) => {
                 assertCurrentBinding();
@@ -1021,85 +1026,6 @@ function buildSideRunAttemptParams(
     sandbox: params.sandbox,
   };
   return sideParams as EmbeddedRunAttemptParamsV2;
-}
-
-async function createCodexSideToolBridge(input: {
-  params: EmbeddedRunAttemptParamsV2;
-  cwd: string;
-  resolvedWorkspace: string;
-  pluginConfig: ReturnType<typeof readCodexPluginConfig>;
-  sessionAgentId: string;
-  nativeToolSurfaceEnabled: boolean;
-  nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
-  sessionPermissionPolicy?: CodexEffectiveSessionPermissionPolicy;
-  runAbortController: AbortController;
-}): Promise<{ toolBridge: CodexDynamicToolBridge; webSearchPlan: CodexWebSearchPlan }> {
-  const { params } = input;
-  const sandboxSessionKey =
-    params.sandboxSessionKey?.trim() ||
-    params.sessionKey?.trim() ||
-    params.sessionId ||
-    input.sessionAgentId;
-  const sandbox =
-    params.sandbox !== undefined
-      ? params.sandbox
-      : await resolveSandboxContext({
-          config: params.config,
-          sessionKey: sandboxSessionKey,
-          workspaceDir: input.cwd,
-        });
-  let webSearchAllowed = false;
-  const tools = await buildDynamicTools({
-    params,
-    resolvedWorkspace: input.resolvedWorkspace,
-    effectiveWorkspace: input.cwd,
-    sandboxSessionKey,
-    sandbox,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-    sessionPermissionPolicy: input.sessionPermissionPolicy,
-    runAbortController: input.runAbortController,
-    sessionAgentId: input.sessionAgentId,
-    policyAgentId: input.sessionAgentId,
-    pluginConfig: input.pluginConfig,
-    onYieldDetected: () => {},
-    onWebSearchPolicyResolved: (allowed) => {
-      webSearchAllowed = allowed;
-    },
-  });
-  const requestedWebSearchPlan = resolveCodexWebSearchPlan({
-    config: params.config,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-    webSearchAllowed,
-  });
-  // Forks inherit dynamic declarations; BTW retains its native-only search policy.
-  const webSearchPlan =
-    requestedWebSearchPlan.kind === "managed"
-      ? resolveCodexWebSearchPlan({ config: params.config, webSearchAllowed: false })
-      : requestedWebSearchPlan;
-  // Side threads do not own the compaction lifecycle that expires screenshot coordinates.
-  const exposedTools = tools.filter(
-    (tool) => tool.name !== "web_search" && tool.name !== "computer",
-  );
-  return {
-    toolBridge: createCodexDynamicToolBridge({
-      tools: exposedTools,
-      signal: input.runAbortController.signal,
-      loading: resolveCodexDynamicToolsLoading(input.pluginConfig),
-      hookContext: {
-        agentId: input.sessionAgentId,
-        config: params.config,
-        contextWindowTokens: params.model.contextWindow,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        runId: params.runId,
-        currentChannelProvider: resolveCodexMessageToolProvider(params),
-        ...buildAgentHookContextChannelFields(params),
-      },
-    }),
-    webSearchPlan,
-  };
 }
 
 function isSideUserInputRequest(

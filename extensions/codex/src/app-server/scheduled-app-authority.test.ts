@@ -786,6 +786,31 @@ describe("scheduled Codex app authority", () => {
     expect(narrowed.fingerprint).not.toBe(full.fingerprint);
   });
 
+  it("blocks plugin MCP servers outside the captured app authority", () => {
+    const current = threadConfig();
+    current.policyContext = {
+      ...current.policyContext,
+      mcpServers: { plugin_server: "native/plugin" },
+      nativePlugins: {
+        "native/plugin": {
+          configKey: "plugin",
+          marketplaceName: "openai-curated",
+          pluginName: "plugin",
+          allowDestructiveActions: true,
+          mcpServerNames: ["plugin_server"],
+        },
+      },
+    };
+
+    const narrowed = intersectCodexPluginThreadConfigWithScheduledAuthority(
+      current,
+      authority({ apps: [] }),
+    );
+
+    expect(narrowed.policyContext.mcpServers).toEqual({ plugin_server: null });
+    expect(narrowed.policyContext.nativePlugins).toEqual({ "native/plugin": null });
+  });
+
   it("fails before execution when a captured app has no current connector tools", () => {
     expect(() =>
       intersectCodexPluginThreadConfigWithScheduledAuthority(threadConfig(), authority(), {

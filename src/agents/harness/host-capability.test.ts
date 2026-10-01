@@ -662,6 +662,7 @@ describe("agent harness host capability", () => {
         mcpTool: { server: "docs", tool: "write_note" },
         toolCallId: "item-1",
         detail: "Full review evidence",
+        policySubject: { pluginKey: "docs", mcpServer: "docs", tool: "write_note" },
       });
       expect(payload).not.toHaveProperty("isMcpToolApprovalActive");
       expect(takeMcpToolApprovalBinding({ ...scope, agentId: "other" })).toBeUndefined();
@@ -679,6 +680,7 @@ describe("agent harness host capability", () => {
       timeoutMs: 1_000,
       mcpTool: { server: "docs", tool: "write_note" },
       isMcpToolApprovalActive: () => active,
+      policySubject: { pluginKey: "docs", mcpServer: "docs", tool: "write_note" },
     });
     expect(proof?.()).toBe(true);
     active = false;

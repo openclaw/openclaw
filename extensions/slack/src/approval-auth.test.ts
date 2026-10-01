@@ -251,6 +251,40 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
     },
   );
 
+  it("keeps same-named native MCP tools on different servers under separate reviewer lists", () => {
+    installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+    const cfg: OpenClawConfig = {
+      approvals: {
+        plugin: {
+          slack: {
+            approvers: [defaultReviewer],
+            plugins: {
+              docs: {
+                approvers: [pluginReviewer],
+                tools: {
+                  "mcp/docs%2Fmain/run": { approvers: [toolReviewer] },
+                  "mcp/docs%2Fbackup/run": { approvers: [legacyReviewer] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const main = pluginRequest({ pluginKey: "docs", mcpServer: "docs/main", tool: "run" });
+    const backup = pluginRequest({ pluginKey: "docs", mcpServer: "docs/backup", tool: "run" });
+    const authorized = (request: PluginApprovalRequest, senderId: string) =>
+      isSlackPluginApprovalAuthorizedSender({ cfg, request, senderId });
+
+    expect(authorized(main, toolReviewer)).toBe(true);
+    expect(authorized(main, legacyReviewer)).toBe(false);
+    expect(authorized(backup, legacyReviewer)).toBe(true);
+    expect(authorized(backup, toolReviewer)).toBe(false);
+    expect(authorized(pluginRequest({ pluginKey: "docs", tool: "run" }), pluginReviewer)).toBe(
+      true,
+    );
+  });
+
   it("distinguishes an omitted default from an explicit empty default", () => {
     installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
     const cfg: OpenClawConfig = {

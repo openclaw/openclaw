@@ -602,6 +602,7 @@ export function createAgentHarnessHostCapabilities(params: {
                     severity: request.severity,
                     toolName: request.toolName,
                     toolCallId: request.toolCallId,
+                    ...(request.policySubject ? { policySubject: request.policySubject } : {}),
                     ...(request.mcpTool ? { mcpTool: request.mcpTool } : {}),
                     timeoutMs: request.timeoutMs,
                     twoPhase: true,

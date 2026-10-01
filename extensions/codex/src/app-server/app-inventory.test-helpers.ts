@@ -1,3 +1,4 @@
+import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import type { CodexAppServerRequestParams, CodexAppServerRequestResult, v2 } from "./protocol.js";
 
 type CodexAppInventoryMethod = "app/installed" | "app/read";
@@ -42,4 +43,17 @@ export function codexAppInventoryResponse<Method extends CodexAppInventoryMethod
     })),
     missingAppIds: requestedIds?.filter((id) => !returnedIds.has(id)) ?? [],
   } as CodexAppServerRequestResult<Method>;
+}
+
+export async function cacheCodexAppsForTest(
+  apps: v2.AppInfo[],
+  options?: Parameters<typeof codexAppInventoryResponse>[3],
+): Promise<CodexAppInventoryCache> {
+  const cache = new CodexAppInventoryCache();
+  await cache.refreshNow({
+    key: "runtime",
+    nowMs: 0,
+    request: async (method, params) => codexAppInventoryResponse(method, apps, params, options),
+  });
+  return cache;
 }

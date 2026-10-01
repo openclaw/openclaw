@@ -504,7 +504,18 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
       .map(([key, ids]) => [key, ids.filter((id) => Object.hasOwn(apps, id))] as const)
       .filter(([, ids]) => ids.length > 0),
   );
-  const policyContext = buildPluginAppPolicyContext(apps, pluginAppIds);
+  // A scheduled capture grants app IDs only. Retain plugin IDs and MCP names
+  // as blocked so a native plugin cannot fall through to generic approvals.
+  const policyContext = buildPluginAppPolicyContext(
+    apps,
+    pluginAppIds,
+    Object.fromEntries(
+      Object.keys(config.policyContext.mcpServers ?? {}).map((name) => [name, null]),
+    ),
+    Object.fromEntries(
+      Object.keys(config.policyContext.nativePlugins ?? {}).map((id) => [id, null]),
+    ),
+  );
   const configPatch = disableUnlistedCodexApps(
     buildCodexPluginAppsConfigPatchFromPolicyContext(policyContext),
     currentPolicy.config,

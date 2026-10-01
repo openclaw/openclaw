@@ -490,3 +490,16 @@ export async function runSideQuestionWithManagedWebSearchCall(
   const forkConfig = (forkCall?.[1] as { config?: Record<string, unknown> } | undefined)?.config;
   return { forkConfig, result, toolResponse };
 }
+
+export async function handleClientRequestWhenReady(
+  client: ReturnType<typeof createFakeClient>,
+  request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
+  assertHandled: (response: unknown) => void = (response) => expect(response).not.toBeUndefined(),
+): Promise<unknown> {
+  let response: unknown;
+  await vi.waitFor(async () => {
+    response = await client.handleRequest(request);
+    assertHandled(response);
+  });
+  return response;
+}

@@ -38,6 +38,24 @@ describe("plugin approval protocol validators", () => {
     );
   });
 
+  it.each([
+    ["hosted app", "appId", "app/docs"],
+    ["native MCP server", "mcpServer", "docs/main"],
+  ])("validates the selected %s policy subject", (_label, field, id) => {
+    const request = {
+      title: "Use plugin tool",
+      description: "Run the selected tool",
+      policySubject: { pluginKey: "docs", tool: "run", [field]: id },
+    };
+    expect(validatePluginApprovalRequestParams(request)).toBe(true);
+    expect(
+      validatePluginApprovalRequestParams({
+        ...request,
+        policySubject: { ...request.policySubject, [field]: "" },
+      }),
+    ).toBe(false);
+  });
+
   it.each(nullableMetadataFields)("accepts explicit null for optional %s metadata", (field) => {
     expect(
       validatePluginApprovalRequestParams({

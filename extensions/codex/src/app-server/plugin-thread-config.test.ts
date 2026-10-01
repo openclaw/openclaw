@@ -1,7 +1,7 @@
 // Codex tests cover plugin thread config plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache, defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
-import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
+import { cacheCodexAppsForTest, codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
@@ -175,9 +175,12 @@ describe("Codex plugin thread config", () => {
     { name: "blocked plugin app", plugin: true, account: false, app: true },
     { name: "empty account inventory", plugin: false, account: true, app: false },
   ])("starts with apps disabled for $name when native config is unavailable", async (testCase) => {
-    const appCache = await cacheApps(testCase.app ? [appInfo("google-calendar-app", true)] : [], {
-      callableByAppId: { "google-calendar-app": false },
-    });
+    const appCache = await cacheCodexAppsForTest(
+      testCase.app ? [appInfo("google-calendar-app", true)] : [],
+      {
+        callableByAppId: { "google-calendar-app": false },
+      },
+    );
     const request = vi.fn(async (method: string) => {
       if (method === "plugin/installed") {
         return pluginInstalled([
@@ -305,7 +308,7 @@ describe("Codex plugin thread config", () => {
   });
 
   it("reuses the existing app policy path for an active workspace plugin", async () => {
-    const appCache = await cacheApps([appInfo("workspace-data-app", true)]);
+    const appCache = await cacheCodexAppsForTest([appInfo("workspace-data-app", true)]);
     const methods: string[] = [];
 
     const config = await buildCodexPluginThreadConfig({
@@ -375,7 +378,7 @@ describe("Codex plugin thread config", () => {
   });
 
   it("exposes an owner-installed repository plugin and its authorized GitHub app", async () => {
-    const appCache = await cacheApps([appInfo("github-app", true)]);
+    const appCache = await cacheCodexAppsForTest([appInfo("github-app", true)]);
     const methods: string[] = [];
 
     const config = await buildCodexPluginThreadConfig({
@@ -435,7 +438,7 @@ describe("Codex plugin thread config", () => {
   });
 
   it("does not silently install an uninstalled repository plugin during a model turn", async () => {
-    const appCache = await cacheApps([]);
+    const appCache = await cacheCodexAppsForTest([]);
     const requests: string[] = [];
 
     const config = await buildCodexPluginThreadConfig({
@@ -499,7 +502,7 @@ describe("Codex plugin thread config", () => {
   });
 
   it("does not silently reactivate an owner-installed but disabled repository plugin", async () => {
-    const appCache = await cacheApps([]);
+    const appCache = await cacheCodexAppsForTest([]);
     const methods: string[] = [];
 
     const config = await buildCodexPluginThreadConfig({
@@ -1863,7 +1866,7 @@ describe("Codex plugin thread config", () => {
   });
 
   it("provisionally admits an authorized plugin app disabled by the Codex default", async () => {
-    const appCache = await cacheApps([appInfo("google-calendar-app", true, false)]);
+    const appCache = await cacheCodexAppsForTest([appInfo("google-calendar-app", true, false)]);
 
     const config = await buildCodexPluginThreadConfig({
       pluginConfig: calendarPluginConfig(),
@@ -2154,7 +2157,7 @@ describe("Codex plugin thread config", () => {
   });
 
   it("does not expose plugin apps missing from the app inventory snapshot", async () => {
-    const appCache = await cacheApps([]);
+    const appCache = await cacheCodexAppsForTest([]);
 
     const config = await buildCodexPluginThreadConfig({
       pluginConfig: calendarPluginConfig(),
@@ -2199,7 +2202,7 @@ describe("Codex plugin thread config", () => {
   });
 
   it("does not expose apps for plugins that OpenClaw policy leaves disabled", async () => {
-    const appCache = await cacheApps([appInfo("google-calendar-app", true)]);
+    const appCache = await cacheCodexAppsForTest([appInfo("google-calendar-app", true)]);
 
     const config = await buildCodexPluginThreadConfig({
       pluginConfig: {
@@ -2239,7 +2242,7 @@ describe("Codex plugin thread config", () => {
   });
 
   it("force-refreshes app inventory when proven plugin apps are not ready", async () => {
-    const appCache = await cacheApps([]);
+    const appCache = await cacheCodexAppsForTest([]);
     const installedParams: CodexAppServerRequestParams<"app/installed">[] = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config/read") {
@@ -2539,7 +2542,10 @@ describe("Codex plugin thread config", () => {
   });
 
   it("isolates an admin-disabled remote plugin and keeps unaffected plugin apps available", async () => {
-    const appCache = await cacheApps([appInfo("calendar-app", true), appInfo("github-app", true)]);
+    const appCache = await cacheCodexAppsForTest([
+      appInfo("calendar-app", true),
+      appInfo("github-app", true),
+    ]);
     const calendar = pluginSummary("calendar@openai-curated-remote", {
       name: "calendar",
       remotePluginId: "plugins~Plugin_calendar",
@@ -2663,7 +2669,9 @@ describe("Codex plugin thread config", () => {
   });
 
   it("fails closed when app inventory entries are malformed", async () => {
-    const appCache = await cacheApps([{ ...appInfo("google-calendar-app", true), id: "" }]);
+    const appCache = await cacheCodexAppsForTest([
+      { ...appInfo("google-calendar-app", true), id: "" },
+    ]);
 
     const config = await buildCodexPluginThreadConfig({
       pluginConfig: calendarPluginConfig(),
@@ -3213,19 +3221,6 @@ describe("Codex plugin thread config", () => {
   });
 });
 
-async function cacheApps(
-  apps: v2.AppInfo[],
-  options?: Parameters<typeof codexAppInventoryResponse>[3],
-): Promise<CodexAppInventoryCache> {
-  const cache = new CodexAppInventoryCache();
-  await cache.refreshNow({
-    key: "runtime",
-    nowMs: 0,
-    request: async (method, params) => codexAppInventoryResponse(method, apps, params, options),
-  });
-  return cache;
-}
-
 function calendarPluginConfig(
   policy: Omit<NonNullable<CodexPluginConfig["codexPlugins"]>, "plugins"> = {},
 ): CodexPluginConfig {
@@ -3268,7 +3263,7 @@ function pluginDetail(
 async function buildReadyGoogleCalendarThreadConfig(
   pluginConfig: unknown,
 ): Promise<Awaited<ReturnType<typeof buildCodexPluginThreadConfig>>> {
-  const appCache = await cacheApps([appInfo("google-calendar-app", true)]);
+  const appCache = await cacheCodexAppsForTest([appInfo("google-calendar-app", true)]);
 
   return buildCodexPluginThreadConfig({
     pluginConfig,

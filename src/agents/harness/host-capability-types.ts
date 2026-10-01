@@ -158,6 +158,8 @@ export type AgentHarnessHostCapabilities = Readonly<{
     severity: "info" | "warning";
     toolName: string;
     toolCallId?: string;
+    /** Selected app/tool identity from the harness's verified runtime context. */
+    policySubject?: { pluginKey: string; appId?: string; tool?: string; mcpServer?: string };
     mcpTool?: { server: string; tool: string };
     /** Persistence-only proof; loss of correlation does not cancel a one-shot approval. */
     isMcpToolApprovalActive?: () => boolean;

@@ -50,6 +50,7 @@ const {
   runSideQuestionWithManagedWebSearchCall,
   runCodexAppServerSideQuestionImpl,
   createFakeClient,
+  handleClientRequestWhenReady,
   threadResult,
   turnStartResult,
   agentDelta,
@@ -99,19 +100,6 @@ function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
     throw new Error(`Expected mock call ${index}`);
   }
   return call;
-}
-
-async function handleClientRequestWhenReady(
-  client: ReturnType<typeof createFakeClient>,
-  request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
-  assertHandled: (response: unknown) => void = (response) => expect(response).not.toBeUndefined(),
-): Promise<unknown> {
-  let response: unknown;
-  await vi.waitFor(async () => {
-    response = await client.handleRequest(request);
-    assertHandled(response);
-  });
-  return response;
 }
 
 async function startClientRequestWhenReady(

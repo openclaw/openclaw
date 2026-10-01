@@ -62,6 +62,10 @@ export type PluginAppPolicyContext = {
   fingerprint: string;
   apps: Record<string, CodexAppPolicyContextEntry>;
   pluginAppIds: Record<string, string[]>;
+  /** Exact Codex plugin IDs select policies even when plugin/read has no detail. */
+  nativePlugins?: Record<string, PluginAppPolicyContextEntry | null>;
+  /** Native server names bind to plugin IDs; null blocks ambiguous or narrowed names. */
+  mcpServers?: Record<string, string | null>;
 };
 
 type CodexPluginThreadConfigDiagnostic =
@@ -273,6 +277,8 @@ export async function buildCodexPluginThreadConfig(
   const { apps } = buildDisabledAppsConfigPatch();
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
+  const nativePluginOwners = new Map<string, PluginAppPolicyContextEntry | null>();
+  const mcpServerOwners = new Map<string, string | null>();
   const pluginOwnedAppIds = collectCodexReservedPluginAppIds({
     policy: inventory.policy,
     inventory,
@@ -320,6 +326,28 @@ export async function buildCodexPluginThreadConfig(
     if (activation?.ok === false || (record.activationRequired && !activation?.ok)) {
       continue;
     }
+    const mcpServerNames = [...new Set(record.detail?.mcpServers ?? [])]
+      .filter((serverName) => Boolean(serverName.trim()))
+      .toSorted();
+    const owner: PluginAppPolicyContextEntry = {
+      configKey: record.policy.configKey,
+      marketplaceName: record.policy.marketplaceName,
+      pluginName: record.policy.pluginName,
+      allowDestructiveActions: record.policy.allowDestructiveActions,
+      allowOpenWorld: true,
+      destructiveApprovalMode: record.policy.destructiveApprovalMode,
+      mcpServerNames,
+    };
+    const nativePluginId = record.summary.id;
+    if (nativePluginId.trim()) {
+      nativePluginOwners.set(nativePluginId, nativePluginOwners.has(nativePluginId) ? null : owner);
+    }
+    for (const serverName of mcpServerNames) {
+      mcpServerOwners.set(
+        serverName,
+        mcpServerOwners.has(serverName) || !nativePluginId.trim() ? null : nativePluginId,
+      );
+    }
     if (record.appOwnership !== "proven") {
       continue;
     }
@@ -346,15 +374,7 @@ export async function buildCodexPluginThreadConfig(
           ? buildCodexAppApprovalOverrides(admissionConfig.config, app)
           : undefined,
       );
-      policyApps[app.id] = {
-        configKey: record.policy.configKey,
-        marketplaceName: record.policy.marketplaceName,
-        pluginName: record.policy.pluginName,
-        allowDestructiveActions: record.policy.allowDestructiveActions,
-        allowOpenWorld: true,
-        destructiveApprovalMode: record.policy.destructiveApprovalMode,
-        mcpServerNames: [...(record.detail?.mcpServers ?? [])].toSorted(),
-      };
+      policyApps[app.id] = owner;
     }
   }
 
@@ -395,7 +415,12 @@ export async function buildCodexPluginThreadConfig(
     Object.keys(policyApps).length === 0
       ? buildDisabledAppsConfigPatch()
       : disableUnlistedCodexApps({ apps }, (await getAdmissionConfig()).config);
-  const policyContext = buildPluginAppPolicyContext(policyApps, pluginAppIds);
+  const policyContext = buildPluginAppPolicyContext(
+    policyApps,
+    pluginAppIds,
+    Object.fromEntries(mcpServerOwners),
+    Object.fromEntries(nativePluginOwners),
+  );
   return {
     enabled: true,
     configPatch,
@@ -538,11 +563,34 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
 /** Projects current ask overrides before a side thread replays its bound app policy. */
 export async function refreshCodexPluginAppApprovalPolicy(params: {
   policyContext: PluginAppPolicyContext;
+  pluginConfig: unknown;
   request: CodexPluginRuntimeRequest;
   configCwd?: string;
 }): Promise<
   Pick<CodexPluginThreadConfig, "policyContext" | "diagnostics"> & { configPatch: JsonObject }
 > {
+  const currentPluginPolicies = resolveCodexPluginsPolicy(params.pluginConfig).pluginPolicies;
+  // A side fork replays bound native approval context after config may have
+  // changed; stale owner policy must not authorize an MCP prompt.
+  if (
+    Object.values(params.policyContext.nativePlugins ?? {}).some((owner) => {
+      if (!owner) {
+        return false;
+      }
+      const current = currentPluginPolicies.find((policy) => policy.configKey === owner.configKey);
+      return (
+        !current?.enabled ||
+        current.marketplaceName !== owner.marketplaceName ||
+        current.pluginName !== owner.pluginName ||
+        current.allowDestructiveActions !== owner.allowDestructiveActions ||
+        current.destructiveApprovalMode !== owner.destructiveApprovalMode
+      );
+    })
+  ) {
+    throw new Error(
+      "Codex /btw cannot verify current native plugin policy for this thread. Send a normal message to refresh plugin ownership, then retry /btw.",
+    );
+  }
   if (Object.keys(params.policyContext.apps).length === 0) {
     return {
       policyContext: params.policyContext,
@@ -605,6 +653,8 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
           ids.filter((id) => Object.hasOwn(apps, id)),
         ]),
       ),
+      params.policyContext.mcpServers,
+      params.policyContext.nativePlugins,
     ),
     configPatch,
     diagnostics,
@@ -614,11 +664,21 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
 export function buildPluginAppPolicyContext(
   apps: Record<string, CodexAppPolicyContextEntry>,
   pluginAppIds: Record<string, string[]>,
+  mcpServers: Record<string, string | null> = {},
+  nativePlugins: Record<string, PluginAppPolicyContextEntry | null> = {},
 ): PluginAppPolicyContext {
   return {
-    fingerprint: fingerprintCodexPolicy({ version: 2, apps, pluginAppIds }),
+    fingerprint: fingerprintCodexPolicy({
+      version: 3,
+      apps,
+      pluginAppIds,
+      mcpServers,
+      nativePlugins,
+    }),
     apps,
     pluginAppIds,
+    mcpServers,
+    nativePlugins,
   };
 }
 

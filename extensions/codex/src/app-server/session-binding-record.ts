@@ -131,13 +131,57 @@ const pluginAppPolicyEntrySchema = z
     mcpServerNames: z.array(z.string()),
   })
   .strict();
-const pluginAppPolicyContextSchema = z
-  .object({
-    fingerprint: z.string(),
-    apps: z.record(z.string(), z.union([accountAppPolicyEntrySchema, pluginAppPolicyEntrySchema])),
-    pluginAppIds: z.record(z.string(), z.array(z.string())).default({}),
+const nativePluginPolicyEntrySchema = pluginAppPolicyEntrySchema
+  .extend({
+    configKey: z.string().min(1),
+    pluginName: z.string().min(1),
+    destructiveApprovalMode: z.enum(["allow", "deny", "auto", "ask"]).optional(),
   })
   .strict();
+const nativeOwnershipIdSchema = z.string().refine((value) => Boolean(value.trim()));
+const nativePluginOwnershipSchema = z
+  .object({
+    nativePlugins: z
+      .record(nativeOwnershipIdSchema, z.union([nativePluginPolicyEntrySchema, z.null()]))
+      .optional(),
+    mcpServers: z
+      .record(nativeOwnershipIdSchema, z.union([nativeOwnershipIdSchema, z.null()]))
+      .optional(),
+  })
+  .strict()
+  .superRefine((policyContext, context) => {
+    // Legacy app policy remains usable; native MCP ownership needs both maps.
+    if (
+      !Object.hasOwn(policyContext, "nativePlugins") &&
+      !Object.hasOwn(policyContext, "mcpServers")
+    ) {
+      return;
+    }
+    if (!policyContext.nativePlugins || !policyContext.mcpServers) {
+      context.addIssue({ code: "custom", message: "native plugin ownership is missing" });
+      return;
+    }
+    for (const [serverName, pluginId] of Object.entries(policyContext.mcpServers)) {
+      if (!pluginId) {
+        continue;
+      }
+      const owner = policyContext.nativePlugins[pluginId];
+      if (
+        !Object.hasOwn(policyContext.nativePlugins, pluginId) ||
+        (owner && !owner.mcpServerNames.includes(serverName))
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `MCP server ${serverName} has no matching plugin owner`,
+        });
+      }
+    }
+  });
+const pluginAppPolicyContextSchema = nativePluginOwnershipSchema.safeExtend({
+  fingerprint: z.string(),
+  apps: z.record(z.string(), z.union([accountAppPolicyEntrySchema, pluginAppPolicyEntrySchema])),
+  pluginAppIds: z.record(z.string(), z.array(z.string())).default({}),
+});
 const legacyAppPolicyEntrySchema = z.union([
   accountAppPolicyEntrySchema.strip(),
   pluginAppPolicyEntrySchema.strip(),
@@ -683,10 +727,18 @@ export function readPluginAppPolicyContext(
     }
     parsedPluginAppIds[configKey] = appIds;
   }
+  const nativeOwnership = nativePluginOwnershipSchema.safeParse({
+    ...(Object.hasOwn(record, "nativePlugins") ? { nativePlugins: record.nativePlugins } : {}),
+    ...(Object.hasOwn(record, "mcpServers") ? { mcpServers: record.mcpServers } : {}),
+  });
+  if (!nativeOwnership.success) {
+    return undefined;
+  }
   return {
     fingerprint: record.fingerprint,
     apps: parsedApps,
     pluginAppIds: parsedPluginAppIds,
+    ...nativeOwnership.data,
   };
 }
 
