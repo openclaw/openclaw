@@ -181,7 +181,7 @@ describe("PR failure cancellation", () => {
   });
 
   it.each(["pull_request", "push", "workflow_dispatch"] as const)(
-    "keeps first-attempt continuation within the canonical monitor's scope (%s)",
+    "keeps canonical PR matrices complete and continuation within the first-attempt monitor (%s)",
     (eventName) => {
       const workflow = readCiWorkflow();
       const node = workflow.jobs["checks-node-core-test-nondist-shard"];
@@ -189,7 +189,9 @@ describe("PR failure cancellation", () => {
       for (const [repository, headRepository, runAttempt, nativeFailFast, continuation] of [
         ["openclaw/openclaw", "openclaw/openclaw", 1, false, "1"],
         ["openclaw/openclaw", "contributor/openclaw", 1, false, "1"],
-        ["openclaw/openclaw", "openclaw/openclaw", 2, true, "0"],
+        ["openclaw/openclaw", "openclaw/openclaw", 2, false, "0"],
+        ["openclaw/openclaw", "contributor/openclaw", 2, false, "0"],
+        ["openclaw/openclaw", "openclaw/openclaw", 3, false, "0"],
         ["fork/openclaw", "fork/openclaw", 1, true, "0"],
         ["fork/openclaw", "contributor/openclaw", 1, true, "0"],
         ["fork/openclaw", "fork/openclaw", 2, true, "0"],

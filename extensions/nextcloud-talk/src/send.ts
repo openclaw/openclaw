@@ -11,7 +11,7 @@ import {
   convertMarkdownTables,
   fetchWithSsrFGuard,
   generateNextcloudTalkSignature,
-  getNextcloudTalkRuntime,
+  getOptionalNextcloudTalkRuntime,
   requireRuntimeConfig,
   resolveMarkdownTableMode,
   resolveNextcloudTalkAccount,
@@ -82,20 +82,6 @@ function normalizeRoomToken(to: string): string {
     throw new Error("Room token is required for Nextcloud Talk sends");
   }
   return normalized;
-}
-
-function recordNextcloudTalkOutboundActivity(accountId: string): void {
-  try {
-    getNextcloudTalkRuntime().channel.activity.record({
-      channel: "nextcloud-talk",
-      accountId,
-      direction: "outbound",
-    });
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "Nextcloud Talk runtime not initialized") {
-      throw error;
-    }
-  }
 }
 
 export async function sendMessageNextcloudTalk(
@@ -206,7 +192,11 @@ export async function sendMessageNextcloudTalk(
       console.log(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}`);
     }
 
-    recordNextcloudTalkOutboundActivity(account.accountId);
+    getOptionalNextcloudTalkRuntime()?.channel.activity.record({
+      channel: "nextcloud-talk",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
 
     const receiptMessageId = messageId.trim();
     return {

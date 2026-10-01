@@ -144,21 +144,6 @@ function resolveSignalInboundRoute(params: {
   });
 }
 
-type SignalStatusDispatchResult = {
-  settledReceipt?: {
-    counts: Record<
-      "tool" | "block" | "final",
-      { failedBeforeSend: number; failedAfterSend: number }
-    >;
-  };
-};
-
-function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult): boolean {
-  return Object.values(result.settledReceipt?.counts ?? {}).some(
-    (counts) => counts.failedBeforeSend > 0 || counts.failedAfterSend > 0,
-  );
-}
-
 async function finalizeSignalStatusReaction(params: {
   controller: StatusReactionController;
   outcome: "done" | "error";
@@ -608,7 +593,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           const hasFinalResponse =
             result.dispatched && hasVisibleInboundReplyDispatch(result.dispatchResult);
           const hasDeliveryFailure =
-            result.dispatched && hasSignalStatusReplyDeliveryFailure(result.dispatchResult);
+            result.dispatched &&
+            Object.values(result.dispatchResult.settledReceipt?.counts ?? {}).some(
+              (counts) => counts.failedBeforeSend > 0 || counts.failedAfterSend > 0,
+            );
           const hasAgentRunFailure =
             result.dispatched && readAgentRunTerminalOutcome(result.dispatchResult) === "failed";
           void finalizeSignalStatusReaction({

@@ -102,16 +102,41 @@ Guest admission or restore authority for unfinished work.
 
 ## Invite, inspect, and revoke visitors
 
-| Tool             | Input                                                 | Result                                                                                     |
-| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `visitor_invite` | `github` and/or `email`; optional `days` or `forever` | Adds a grant or refreshes an existing email's expiry.                                      |
-| `visitor_list`   | `{}`                                                  | Shows grant emails, GitHub labels, dates, current Gateway access, and policy/record drift. |
-| `visitor_revoke` | `github` and/or `email`                               | Removes the matching visitor; an unknown email is a clean no-op.                           |
+| Tool             | Input                                                 | Result                                                                               |
+| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `visitor_invite` | `github` and/or `email`; optional `days` or `forever` | Adds a grant or refreshes an existing email's expiry.                                |
+| `visitor_list`   | `{}`                                                  | Shows grants, selection IDs, dates, current Gateway access, and policy/record drift. |
+| `visitor_revoke` | `profileId`, `grantId`, or `github`/`email`           | Removes a person's recorded grants or cancels a selected invitation.                 |
 
 Each tool also returns structured `details`, visible to Code Mode, with the same
-information as its text: invite returns `outcome`, `email`, optional `githubLogin`,
+information as its text: invite returns `outcome`, `email`, `grantId`, optional `githubLogin`,
 `expiresAt`, `gatewayAccess`, and `signInUrl`; revoke returns `outcome`, `emails`,
 and optional `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
+Recorded list rows include `grantId` when the invitation has a qualified lifetime,
+and `profileId` when its email belongs to a current canonical profile.
+
+Use `visitor_revoke` with `profileId` to select the recorded Visitor grants
+associated with that person's verified email aliases in an initial profile snapshot. Use `grantId` to
+cancel only that invitation, including when first sign-in is still pending and
+no profile exists. Copy the IDs from `visitor_list` or the invite result; do not
+combine either ID with another selector. An absent grant ID is a no-op and never
+falls back to another invitation. An unavailable or merged profile ID requires
+listing again and selecting the current canonical profile. Independent staff
+roles, saved work, and existing PRs remain intact. Unmanaged policy entries still
+require explicit email removal; person-wide revocation does not infer ownership
+for them.
+
+Person-wide revocation retains the selected aliases' original profile-binding
+lifetimes. The profile owner revalidates them at local grant commit and immediately
+before each policy request. Reassignment, including a move away and back, stops
+remaining mutations. Already committed expirations remain ended if later cleanup
+fails. An in-flight request may already have been accepted by Cloudflare; the
+existing cleanup path reconciles ended invitations without restoring them.
+This operation requires a Gateway with profile identity preparation support.
+
+An active renewal retains its grant ID. Expiry or revocation ends that lifetime;
+a new invitation gets a different ID, so canceling an old invitation cannot
+remove a later replacement or revive previously accepted queued work.
 
 For example, invite a visitor for seven days:
 

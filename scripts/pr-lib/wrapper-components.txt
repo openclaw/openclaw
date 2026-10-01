@@ -711,6 +711,7 @@ src/infra/json-files.ts
 src/infra/kysely-sync-cache-state.ts
 src/infra/kysely-sync.ts
 src/infra/lifecycle-write-custody.ts
+src/infra/lru-cache.ts
 src/infra/map-size.ts
 src/infra/net/configured-local-origin-bypass.ts
 src/infra/net/fetch-guard.ts
@@ -1106,7 +1107,6 @@ src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-value-views.ts
 src/plugins/plugin-instance.ts
 src/plugins/plugin-lifecycle-trace.ts
-src/plugins/plugin-lru-cache.ts
 src/plugins/plugin-metadata-contributions.ts
 src/plugins/plugin-metadata-env.ts
 src/plugins/plugin-metadata-lifecycle.ts
