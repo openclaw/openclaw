@@ -17,7 +17,7 @@
     "scripts/protocol-gen-kotlin.ts",
     "scripts/runtime-postbuild-shared.mjs",
     "scripts/lib/protocol-codegen-schema.ts",
-    "scripts/lib/protocol-codegen-names.mjs",
+    "scripts/lib/protocol-codegen-names.mts",
     "scripts/lib/record-shared.mjs",
     "scripts/check-protocol-event-coverage.mts",
     "src/gateway/session-method-policy.ts",

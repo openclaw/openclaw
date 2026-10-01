@@ -19,7 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { upperCamel } from "./lib/protocol-codegen-names.mjs";
+import { upperCamel } from "./lib/protocol-codegen-names.mts";
 // Dependency-light seam by design: preflight runs this script without
 // installed dependencies (the dependency-free manifest contract), so the
 // canonical @openclaw/normalization-core import cannot resolve here.

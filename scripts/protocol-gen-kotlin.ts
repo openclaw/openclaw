@@ -7,7 +7,7 @@ import {
 } from "../packages/gateway-protocol/src/version.js";
 import { listCoreGatewayMethodNames } from "../src/gateway/methods/core-method-policy.js";
 import { extractGatewayEventNames } from "./check-protocol-event-coverage.mts";
-import { lowerCamel, upperCamel } from "./lib/protocol-codegen-names.mjs";
+import { lowerCamel, upperCamel } from "./lib/protocol-codegen-names.mts";
 import { type JsonSchema, schemaSignature } from "./lib/protocol-codegen-schema.js";
 
 type EnumSpec = {
