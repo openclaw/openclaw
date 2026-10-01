@@ -49,6 +49,7 @@ const OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX = "dist/plugin-sdk/src/";
 const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
 const OMITTED_PLUGIN_SDK_TEST_FILES = new Set(
   [
+    "acp-runtime-contract-testing",
     "agent-runtime-test-contracts",
     "channel-contract-testing",
     "channel-target-testing",

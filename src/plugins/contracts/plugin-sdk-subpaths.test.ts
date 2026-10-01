@@ -77,6 +77,7 @@ const representativeRuntimeSmokeSubpaths = [
   "conversation-runtime",
 ] as const;
 const PUBLIC_SDK_TEST_HELPER_SUBPATHS = [
+  "acp-runtime-contract-testing",
   "agent-runtime-test-contracts",
   "channel-contract-testing",
   "channel-target-testing",

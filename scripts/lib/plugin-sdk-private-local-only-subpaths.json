@@ -5,6 +5,7 @@
   "acp-binding-runtime",
   "acp-runtime",
   "acp-runtime-backend",
+  "acp-runtime-contract-testing",
   "agent-core",
   "agent-harness-attempt-runtime",
   "agent-harness-exec-review-runtime",

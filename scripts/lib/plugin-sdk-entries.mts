@@ -52,6 +52,7 @@ export const privateQaPluginSdkEntrypoints = [
 // These local-only entries were already omitted from ordinary packaged builds
 // before bundled runtime facades moved behind the same private-local boundary.
 const nonProductionPluginSdkSubpathSet = new Set([
+  "acp-runtime-contract-testing",
   "agent-runtime-test-contracts",
   "channel-contract-testing",
   "channel-ingress-test-runtime",

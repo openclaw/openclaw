@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { RequestedModelUnsupportedError, type AcpxRuntime as UpstreamRuntime } from "acpx/runtime";
+import {
+  installAcpRuntimeTurnContractSuite,
+  type AcpRuntimeTurnContractScenario,
+} from "openclaw/plugin-sdk/acp-runtime-contract-testing";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -105,6 +109,36 @@ function readFirstEnsureSessionInput(ensure: {
   }
   return input as Parameters<AcpRuntime["ensureSession"]>[0];
 }
+
+installAcpRuntimeTurnContractSuite({
+  name: "ACPX wrapper",
+  createHarness(scenario: AcpRuntimeTurnContractScenario) {
+    const { runtime, delegate } = makeRuntime(makeEmptySessionStore());
+    vi.spyOn(delegate, "startTurn").mockReturnValue(
+      makeTurn(
+        { requestId: scenario.requestId },
+        {
+          promptStarted: scenario.promptStarted,
+          events: scenario.events,
+          result: scenario.result,
+          cancel: (input) => scenario.cancel(input),
+          closeStream: (input) => scenario.closeStream(input),
+        },
+      ),
+    );
+    const turn = runtime.startTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:contract",
+        backend: "acpx",
+        runtimeSessionName: "codex",
+      },
+      text: "contract probe",
+      mode: "prompt",
+      requestId: scenario.requestId,
+    });
+    return { turn };
+  },
+});
 
 describe("AcpxRuntime fresh reset wrapper", () => {
   it("projects only core controls while retaining upstream capability metadata", async () => {

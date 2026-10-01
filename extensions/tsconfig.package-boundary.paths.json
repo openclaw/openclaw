@@ -957,6 +957,9 @@
       ],
       "openclaw/plugin-sdk/agent-harness-completion": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-completion.d.ts"
+      ],
+      "openclaw/plugin-sdk/acp-runtime-contract-testing": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/acp-runtime-contract-testing.d.ts"
       ]
     }
   }

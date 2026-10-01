@@ -388,6 +388,7 @@ const CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH = "codex-session-transcript-ru
 const NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH = "native-hook-relay-runtime";
 const CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
 const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
+  "acp-runtime-contract-testing",
   "agent-runtime-test-contracts",
   "channel-contract-testing",
   "channel-ingress-test-runtime",
