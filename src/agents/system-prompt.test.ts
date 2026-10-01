@@ -987,7 +987,7 @@ describe("system prompt memory and runtime cache boundary", () => {
     expect(next.prefix).toBe(first.prefix);
     expect(first.prefix).toContain("## Care");
     expect(first.prefix).toContain(
-      "Large work: `sessions_spawn`; follow the accepted completion mode.",
+      "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
     );
     expect(first.prefix).not.toContain("## Proactive Sub-Agent Orchestration");
     expect(first.suffix).not.toContain("Ultra active");

@@ -112,6 +112,35 @@ Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
 
+## Testbox runner sizing
+
+Use the default 16-class workflow for routine remote proof, with a 60-minute
+total-job deadline including hydration. Keep the 32-class
+rare: record the command and its measured memory need, a smaller-runner OOM,
+or a controlled comparison showing lower total billed cost before selecting it.
+Existing memory-heavy full-suite Testbox PR gates use this exception. A generic
+failure, queue delay, or timeout is not a sizing signal. Keep resource-based
+worker limits; do not force higher parallelism on the smaller machine.
+
+Select the exception explicitly with a fresh lease:
+
+```bash
+node scripts/crabbox-wrapper.mjs run \
+  --blacksmith-workflow .github/workflows/ci-check-high-memory-testbox.yml \
+  --blacksmith-job check --idle-timeout 15m \
+  --label <task-and-memory-reason> --timing-json -- <command>
+```
+
+The high-memory profile uses at most four of the shared 32 Testbox concurrency
+slots. Both profiles cap idle time at 15 minutes. Routine proof defaults to
+60 minutes; the explicit high-memory workflow retains its four-hour deadline
+for known heavy gates. The standard workflow accepts an explicit
+`timeout_minutes` input up to 240 minutes, but Crabbox does not forward arbitrary
+workflow inputs and `--ttl` does not extend a Testbox job. Do not select a larger
+runner merely for more time. Direct-provider `--class` and `--type` flags do not size Testboxes;
+workflow selection owns the runner. A profile change needs a fresh lease.
+See [runner limits](/ci/runners#testbox-spending-limits) for queue behavior.
+
 ## Crabbox repository setup
 
 The shared [Crabbox skill](https://github.com/openclaw/agent-skills/tree/main/skills/crabbox)
@@ -163,7 +192,7 @@ For a selected trusted Testbox lane:
 ```bash
 node scripts/crabbox-wrapper.mjs run --timing-json -- \
   CI=1 NODE_OPTIONS=--max-old-space-size=4096 \
-  OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 \
+  OPENCLAW_VITEST_MAX_WORKERS=1 \
   OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 \
   pnpm test <path-or-filter>
 ```

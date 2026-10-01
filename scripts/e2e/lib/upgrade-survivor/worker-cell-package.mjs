@@ -155,7 +155,7 @@ function inspectTarball(tarball, runtimeRoot) {
 }
 
 async function main() {
-  const [mode, packageRoot, candidateTarball] = process.argv.slice(2);
+  const [mode, packageRoot, candidateTarball, baselineIdentityPath] = process.argv.slice(2);
   const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
   const runtimeRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
   assert(artifacts && runtimeRoot && packageRoot, "Missing isolated worker-cell paths");
@@ -202,12 +202,16 @@ async function main() {
       process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA,
       "Candidate build commit must equal the selected source SHA",
     );
-    const baseline = readJson(path.join(artifacts, "baseline-package-identity.json"));
-    assert.notEqual(
-      expected.buildInfo.commit,
-      baseline.buildInfo.commit,
-      "Candidate still contains published bytes",
-    );
+    // Only audited baseline flows produce this receipt; generic survivor flows
+    // verify the selected source and installed payload without a baseline audit.
+    if (baselineIdentityPath) {
+      const baseline = readJson(baselineIdentityPath);
+      assert.notEqual(
+        expected.buildInfo.commit,
+        baseline.buildInfo.commit,
+        "Candidate still contains published bytes",
+      );
+    }
     writeJson(path.join(artifacts, "candidate-package-identity.json"), expected);
   } else if (mode === "installed") {
     const expected = readJson(path.join(artifacts, "candidate-package-identity.json"));

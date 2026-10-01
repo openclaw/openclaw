@@ -151,7 +151,16 @@ export {
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
+type AdmittedHostCapabilityTestFixtureFactory =
+  typeof import("../agents/harness/host-capability.test-support.js").createAdmittedHostCapabilityTestFixture;
+
+// Keep unrelated consumers of this test barrel out of the host capability runtime.
+export async function createAdmittedHostCapabilityTestFixture(
+  ...args: Parameters<AdmittedHostCapabilityTestFixtureFactory>
+): ReturnType<AdmittedHostCapabilityTestFixtureFactory> {
+  const fixture = await import("../agents/harness/host-capability.test-support.js");
+  return fixture.createAdmittedHostCapabilityTestFixture(...args);
+}
 export async function loadWebFetchToolFactoryForTest() {
   return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;
 }

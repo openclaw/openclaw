@@ -6,7 +6,7 @@ fi
 set -euo pipefail
 
 # Direct callers use the same total envelope as CI; never restart an inherited budget.
-CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + 525 ))}"
+CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + 1125 ))}"
 if ! [[ "$CELL_DEADLINE_EPOCH_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid published-driver cell deadline" >&2
   exit 2

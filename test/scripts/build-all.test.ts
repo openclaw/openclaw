@@ -221,6 +221,34 @@ describe("resolveBuildAllStep", () => {
 });
 
 describe("resolveBuildAllSteps", () => {
+  it.each([
+    ["full", "0"],
+    ["full", "1"],
+    ["package", "0"],
+    ["package", "1"],
+    ["ciArtifacts", "0"],
+  ])(
+    "generates native protocol models before compiling %s with skip-dts=%s",
+    async (profile, skipDts) => {
+      const runner = buildRunner();
+      const result = await runBuildAllSteps(profile, {
+        ...runner,
+        cacheEnabled: false,
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts },
+      });
+      expect(result.exitCode).toBe(0);
+      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const generation = invocations.findIndex(({ args }) =>
+        args.includes("scripts/prepare-native-protocol.mjs"),
+      );
+      const compilation = invocations.findIndex(({ args }) =>
+        args.includes("scripts/tsdown-build.mts"),
+      );
+      expect(generation).toBeGreaterThanOrEqual(0);
+      expect(compilation).toBeGreaterThan(generation);
+    },
+  );
+
   it("rebuilds UI after runtime cleanup without reusing stale build metadata", () => {
     const steps = resolveBuildAllSteps("full");
     const labels = steps.map(({ label }) => label);

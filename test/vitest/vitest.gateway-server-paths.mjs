@@ -78,6 +78,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/http-auth-utils.test.ts",
   "src/gateway/internal-source-reply-persistence.test.ts",
   "src/gateway/link-understanding.product.test.ts",
+  "src/gateway/local-request-context.session-notify.test.ts",
   "src/gateway/local-request-context.session-tools.test.ts",
   "src/gateway/local-request-context.test.ts",
   "src/gateway/managed-image-attachments.authority.test.ts",

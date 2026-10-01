@@ -494,6 +494,7 @@ describe("command CI ownership and parallel timing", () => {
       "src/commands/doctor-session-canonical-keys.memory.test.ts",
       "src/commands/doctor-session-canonical-keys.retention.test.ts",
       "src/commands/doctor-session-delivery-state.test.ts",
+      "src/commands/doctor-session-entry-state.test.ts",
       "src/commands/doctor-session-exec-policy.test.ts",
       "src/commands/doctor-session-incognito-key-repair.test.ts",
       "src/commands/doctor-session-snapshots.test.ts",

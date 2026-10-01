@@ -42,7 +42,7 @@ import { createTlonApprovalRuntime } from "./approval-runtime.js";
 import { createPendingApproval } from "./approval.js";
 import { resolveChannelAuthorization } from "./authorization.js";
 import { createTlonCitationResolver } from "./cites.js";
-import { fetchAllChannels, fetchInitData } from "./discovery.js";
+import { fetchInitData } from "./discovery.js";
 import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
 import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
 import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
@@ -643,7 +643,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const watchedChannels = new Set<string>(groupChannels);
 
   const refreshWatchedChannels = async (): Promise<number> => {
-    const discoveredChannels = await fetchAllChannels(api, runtime);
+    const { channels: discoveredChannels } = await fetchInitData(api, runtime);
     let newCount = 0;
     for (const channelNest of discoveredChannels) {
       if (!watchedChannels.has(channelNest)) {
@@ -1312,7 +1312,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     }
 
     if (effectiveAutoDiscoverChannels) {
-      const discoveredChannels = await fetchAllChannels(api, runtime);
+      const { channels: discoveredChannels } = await fetchInitData(api, runtime);
       for (const channelNest of discoveredChannels) {
         watchedChannels.add(channelNest);
       }
@@ -1334,7 +1334,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           if (!opts.abortSignal?.aborted) {
             try {
               if (effectiveAutoDiscoverChannels) {
-                const discoveredChannels = await fetchAllChannels(api, runtime);
+                const { channels: discoveredChannels } = await fetchInitData(api, runtime);
                 for (const channelNest of discoveredChannels) {
                   if (!watchedChannels.has(channelNest)) {
                     watchedChannels.add(channelNest);

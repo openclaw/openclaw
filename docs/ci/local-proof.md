@@ -369,15 +369,26 @@ Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
-Dispatched check leases request `blacksmith-32vcpu-ubuntu-2404`. A native capacity
-probe measured eight CPUs and 30.95 GiB of memory on that class, compared with
-15.42 GiB on the previous 16-class. This supplies headroom for isolated runtime
-validation without increasing the number of jobs or workers. Workloads still
-admit work from observed resources; the runner label is not a capacity guarantee.
-PR hydration checks remain on `ubuntu-24.04`.
-Its outer GitHub job defaults to 240 minutes. Manual dispatches can override
-`timeout_minutes`. Testbox idle timeouts and individual test deadlines remain
-separate limits.
+Routine dispatched check leases request `blacksmith-16vcpu-ubuntu-2404` through
+`ci-check-testbox.yml`, with a 60-minute total GitHub job deadline including
+hydration. The explicit `ci-check-high-memory-testbox.yml` workflow requests
+`blacksmith-32vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
+gates. Select it only for a justified memory need, not merely for more time; see
+[Testbox runner sizing](/reference/test/remote-proof#testbox-runner-sizing).
+A native capacity probe measured eight CPUs and 30.95 GiB of memory on the
+32-class, compared with 15.42 GiB on the 16-class. This supplies headroom for
+isolated runtime validation without increasing the number of jobs or workers.
+Workloads still admit work from observed resources; the runner label is not a
+capacity guarantee. PR hydration checks remain on `ubuntu-24.04`.
+
+The outer GitHub deadline can terminate active SSH commands. Both profiles have
+a separate 15-minute idle limit; active SSH prevents idle expiry, not the outer
+job deadline. Individual test deadlines also remain separate limits. The standard
+workflow accepts an explicit `timeout_minutes` input up to 240 minutes, but
+managed Crabbox 0.69.0 does not forward arbitrary workflow inputs, including
+`timeout_minutes`, and `--ttl` does not extend a Testbox job. Plan routine proof
+within its total-job budget rather than treating TTL or a larger runner as a
+deadline override.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
 `--no-hydrate`, and use a fresh temporary remote `HOME`; this prevents the repo
 `OPENCLAW_*` allowlist and existing auth profiles from reaching untrusted code.

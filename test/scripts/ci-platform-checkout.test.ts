@@ -99,18 +99,20 @@ const linuxCases =
         { scenario: "non-executable-find", attempts: 0, code: null, checkout: false, deletions: 0 },
       ];
 
-it.concurrent.each([
+it.concurrent.for([
   ...platformCases.map((entry) => Object.assign(entry, { linux: false, deletions: 0 })),
   ...linuxCases.map((entry) => Object.assign(entry, { linux: true })),
 ])(
   "preserves checkout ownership and fixture isolation (Linux=$linux, $scenario)",
-  async ({ scenario, attempts, code, checkout, linux, deletions }) => {
+  { timeout: 55_000 },
+  async ({ scenario, attempts, code, checkout, linux, deletions }, { signal: testSignal }) => {
     const setupFailure = scenario.startsWith("non-executable-");
     const run = readCiCheckoutStep(linux ? "checks-fast-core" : "checks-windows").run;
 
     const policyScenario = `${linux ? "linux:" : ""}${scenario}`;
     await withCiCheckoutFixture(
       policyScenario,
+      testSignal,
       (root) => {
         const workspace = path.join(root, "workspace");
         if (scenario === "cancel-SIGTERM") {
@@ -138,7 +140,14 @@ it.concurrent.each([
           path.join(root, "checkout.sh"),
           setupFailure ? "printf 'unexpected workflow invocation\\n' >&2\nexit 99\n" : accelerated,
         );
-        if (process.platform === "win32" || scenario === "git-exit-124") {
+        // A slow census witness must not replace the workflow's real outcome.
+        const slowWitness = [
+          "timeouts-exhausted",
+          "recovery",
+          "early-leader-exit",
+          "harness-timeout",
+        ].includes(scenario);
+        if (process.platform === "win32" || slowWitness || scenario === "git-exit-124") {
           return censusPreload(
             root,
             scenario === "git-exit-124"
@@ -176,9 +185,7 @@ if (process.argv[2] === "sentinel") {
 syncFixtureBuiltinExports();
 `
               : "",
-            ["timeouts-exhausted", "recovery", "early-leader-exit", "harness-timeout"].includes(
-              scenario,
-            ),
+            slowWitness,
           );
         }
         return undefined;
@@ -312,10 +319,9 @@ syncFixtureBuiltinExports();
       },
     );
   },
-  55_000,
 );
 
-it.concurrent.each([
+it.concurrent.for([
   ...[
     ...(process.platform === "win32" ? [] : [{ kind: "linux-node", retained: false }]),
     ...(process.platform === "win32"
@@ -376,7 +382,8 @@ it.concurrent.each([
       ].map((entry) => Object.assign(entry, { kind: "preflight", retained: false }))),
 ])(
   "materializes $kind trusted harness ($event, workflow=$workflow, target=$target, retained=$retained) without mutating the candidate",
-  async ({ kind, retained, event, workflow, target, code, fetches }) => {
+  { timeout: 55_000 },
+  async ({ kind, retained, event, workflow, target, code, fetches }, { signal }) => {
     const linux = kind !== "platform";
     const preflight = kind === "preflight";
     const posix = process.platform !== "win32";
@@ -441,6 +448,7 @@ it.concurrent.each([
     let readSourceStatus: (() => string[]) | undefined;
     await withCiCheckoutFixture(
       `${linux ? "linux:" : ""}configured`,
+      signal,
       (root) => {
         const source = path.join(root, "source");
         mkdirSync(source);
@@ -743,18 +751,19 @@ it.concurrent.each([
       },
     );
   },
-  55_000,
 );
 
 registerWindowsCensusTests();
 
-it.each(["prepare", "inspect"])(
+it.for(["prepare", "inspect"])(
   "removes checkout artifacts after %s assertion failure",
-  async (phase) => {
+  { timeout: 55_000 },
+  async (phase, { signal }) => {
     let root: string | undefined;
     await expect(
       withCiCheckoutFixture(
         "early-leader-exit",
+        signal,
         (directory) => {
           root = directory;
           expect(phase, "injected prepare assertion").not.toBe("prepare");
@@ -769,10 +778,9 @@ it.each(["prepare", "inspect"])(
     ).rejects.toThrow(`injected ${phase} assertion`);
     expect(existsSync(expectDefined(root, "created checkout root"))).toBe(false);
   },
-  55_000,
 );
 
-it.skipIf(process.platform === "win32").each(["census", "corrupt-report", "timeout"])(
+it.skipIf(process.platform === "win32").each(["census", "corrupt-report", "timeout", "cancel"])(
   "retains checkout artifacts across failed outer-runner cleanup (%s)",
   async (fault) => {
     const preload = String.raw`
@@ -801,6 +809,10 @@ if (process.argv[2] === "supervise") {
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
         });
       });
+    }
+    if (fault === "cancel" && args[1]?.[1] !== "sentinel") {
+      // The detached workflow shell is running; only the supervisor can retire its group.
+      queueMicrotask(() => process.send({ type: "ci-checkout:shell-started", pids: [process.pid, ...children] }));
     }
     return child;
   };
@@ -834,15 +846,18 @@ import fs from "node:fs";
 import { fixturePreloadEnv, syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { mock } from "node:test";
 const timeoutFault = process.argv[2] === "timeout";
+const cancelledFault = timeoutFault || process.argv[2] === "cancel";
+const cancellation = new AbortController();
 let root, failure;
 let supervisor, ready, onReady;
 const fork = cp.fork;
-if (timeoutFault) {
+if (cancelledFault) {
   ready = new Promise(resolve => {
     onReady = message => {
-      if (message?.type === "ci-checkout:sentinel-created") resolve(message.pids);
+      if (message?.type === (timeoutFault ? "ci-checkout:sentinel-created" : "ci-checkout:shell-started")) {
+        resolve(message.pids);
+      }
     };
   });
   cp.fork = (...args) => {
@@ -854,10 +869,9 @@ if (timeoutFault) {
 }
 try {
   const { withCiCheckoutFixture } = await import(process.argv[1]);
-  if (timeoutFault) mock.timers.enable({ apis: ["setTimeout"] });
-  const completed = withCiCheckoutFixture("early-leader-exit", directory => {
+  const completed = withCiCheckoutFixture("early-leader-exit", cancellation.signal, directory => {
     root = directory;
-    fs.writeFileSync(path.join(root, "checkout.sh"), "exit 0\n");
+    fs.writeFileSync(path.join(root, "checkout.sh"), process.argv[2] === "cancel" ? "exec sleep 30\n" : "exit 0\n");
     const preload = path.join(root, "fault.mjs");
     fs.writeFileSync(preload, "const fault = " + JSON.stringify(process.argv[2]) + ";\n" + process.argv[3]);
     return fixturePreloadEnv(preload);
@@ -868,11 +882,11 @@ try {
     failure = String(error);
   });
   try {
-    if (timeoutFault) {
+    if (cancelledFault) {
       const pids = await Promise.race([ready, completed.then(() => {
-        throw new Error("supervisor completed before the timeout probe was ready");
+        throw new Error("supervisor completed before the cancellation probe was ready");
       })]);
-      assert.equal(pids.length, 2);
+      assert.equal(pids.length, timeoutFault ? 2 : 3);
       assert.equal(pids[0], supervisor.pid);
       assert.notEqual(pids[1], supervisor.pid);
       for (const pid of pids) {
@@ -881,11 +895,10 @@ try {
       }
     }
   } finally {
-    if (timeoutFault) {
+    if (cancelledFault) {
       // Creation belongs to the supervisor, not a child's delayed self-registration.
-      // Restore timers before the expired controller deadline starts real cleanup.
-      mock.timers.tick(50_000);
-      mock.timers.reset();
+      // Cancel the run the way a Vitest timeout aborts its owning test.
+      cancellation.abort(new Error("owning test cancelled the supervised run"));
     }
     await completed;
   }
@@ -893,8 +906,7 @@ try {
   console.error(error);
   failure = String(error);
 } finally {
-  if (timeoutFault) {
-    mock.timers.reset();
+  if (cancelledFault) {
     supervisor?.off("message", onReady);
     cp.fork = fork;
     syncFixtureBuiltinExports();
@@ -950,8 +962,15 @@ process.exitCode = 1;
         expect(existsSync(path.join(evidence.root, "report.json"))).toBe(false);
       } else if (fault === "timeout") {
         expect(evidence.pids).toHaveLength(2);
-        expect(evidence.failure).toContain("did not close within 50000ms");
+        expect(evidence.failure).toContain("owning test cancelled the supervised run");
         expect(existsSync(path.join(evidence.root, "report.json"))).toBe(false);
+      } else if (fault === "cancel") {
+        // The detached shell group died, so the live supervisor ran its own cleanup.
+        expect(evidence.pids).toHaveLength(3);
+        expect(evidence.failure).toContain("owning test cancelled the supervised run");
+        expect(
+          JSON.parse(readFileSync(path.join(evidence.root, "report.json"), "utf8")),
+        ).toMatchObject({ error: "test cancelled", cleanupRemaining: [] });
       } else {
         expect(evidence.failure).not.toContain("unexpected completed report");
         expect(readFileSync(path.join(evidence.root, "report.json"), "utf8")).toBe("null");
@@ -967,8 +986,9 @@ process.exitCode = 1;
 
 it.skipIf(process.platform === "win32")(
   "waits for legal slow tree startup before cancellation",
-  async () => {
+  async ({ signal }) => {
     const report = await runCiGitStep({
+      signal,
       job: "checks-windows",
       env: { CHECKOUT_KIND: "platform" },
       fetchResults: ["hang"],
@@ -984,8 +1004,9 @@ it.skipIf(process.platform === "win32")(
 
 it.skipIf(process.platform === "win32")(
   "reports owner exit and output instead of a cleanup readiness timeout",
-  async () => {
+  async ({ signal }) => {
     const report = await runCiGitStep({
+      signal,
       policy: 'print("owner exited before cleanup readiness", flush=True)\nraise SystemExit(23)\n',
       fetchResults: [],
       cancelDuringCleanup: true,
