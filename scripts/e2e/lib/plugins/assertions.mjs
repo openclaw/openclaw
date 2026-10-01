@@ -12,6 +12,7 @@ import {
   assertClawHubExternalInstallContract,
 } from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import {
   readPluginInstallRecords,
@@ -23,7 +24,6 @@ import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 const scratchRoot = process.env.OPENCLAW_PLUGINS_TMP_DIR || os.tmpdir();
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
 

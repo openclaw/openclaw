@@ -123,14 +123,14 @@ export function createComputerToolSchema(
     windowRef: Type.Optional(
       Type.String({
         description:
-          "Opaque window reference for window actions; not valid for screenshot or wait.",
+          "Opaque window reference from list_windows; required for browser_prepare. To discover browser pages, call get_browser_state with windowRef, then pass the returned browserRef and pageRef together for page snapshots and browser actions. Window actions also use windowRef; screenshot and wait do not.",
       }),
     ),
     browserRef: Type.Optional(
-      Type.String({ description: "Opaque browser reference from get_browser_state." }),
+      Type.String({ description: "From get_browser_state(windowRef); requires pageRef." }),
     ),
     pageRef: Type.Optional(
-      Type.String({ description: "Opaque browser page reference from get_browser_state." }),
+      Type.String({ description: "From get_browser_state(windowRef); requires browserRef." }),
     ),
     elementRef: Type.Optional(
       Type.String({ description: "Opaque accessibility element reference from observation." }),

@@ -1948,7 +1948,6 @@ src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
 src/commands/doctor/shared/empty-allowlist-policy.ts	12
 src/commands/doctor/shared/empty-allowlist-scan.ts	4
-src/commands/doctor/shared/legacy-config-compat.ts	1
 src/commands/doctor/shared/legacy-config-core-migrate.ts	1
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	11
 src/commands/doctor/shared/legacy-config-issues.ts	1
@@ -2108,7 +2107,6 @@ src/cron/service/timer.ts	1
 src/cron/session-reaper.ts	1
 src/cron/stagger.ts	1
 src/cron/store/delivery-codec.ts	2
-src/cron/store/quarantine.ts	1
 src/cron/store/row-codec.ts	3
 src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	4

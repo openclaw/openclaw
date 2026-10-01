@@ -1483,6 +1483,20 @@ describe("runTsdownBuildInvocation", () => {
     return supervisor;
   }
 
+  it("recognizes ineffective dynamic imports split across output chunks", () => {
+    const marker = "[INEFFECTIVE_DYNAMIC_IMPORT]";
+    const output = `${marker} synthetic.ts\n`;
+    for (let split = 1; split < marker.length; split += 1) {
+      const scanner = createTsdownOutputScanner({ maxCaptureBytes: 7 });
+      scanner.append(Buffer.from(output.slice(0, split)));
+      scanner.append(Buffer.from(output.slice(split)));
+      expect(scanner.finish(), `split at ${split}`).toMatchObject({
+        captured: output.slice(-7),
+        hasIneffectiveDynamicImport: true,
+      });
+    }
+  });
+
   it("streams output while bounding capture and classifying build diagnostics", () =>
     fixture.run(async () => {
       const output = createWriteSink();

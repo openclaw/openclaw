@@ -572,7 +572,6 @@ export function createReplyDispatcher(
       deliveryOutcomeTracker.tracked = true;
     }
 
-    // Determine if we should add human-like delay (only for block replies after the first).
     const shouldDelay = kind === "block" && sentFirstBlock;
     if (kind === "block") {
       sentFirstBlock = true;

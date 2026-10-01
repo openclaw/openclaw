@@ -394,7 +394,14 @@ export function executeExistingOpenClawStateRead(
 function startExistingOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
-  { context, current, mapError, signal, preferIndependentWarmRead }: OpenClawStateReadOptions = {},
+  {
+    context,
+    current,
+    live,
+    mapError,
+    signal,
+    preferIndependentWarmRead,
+  }: OpenClawStateReadOptions = {},
 ): OpenClawStateReadCompletion {
   const receipt: OpenClawStateReadReceipt = { phase: "before-read" };
   try {
@@ -407,10 +414,16 @@ function startExistingOpenClawStateRead(
         mapError,
         context,
         signal,
-        current,
+        current || live,
         preferIndependentWarmRead,
       );
-    const read = current ? () => stateSnapshotReads.exit(execute) : execute;
+    // Active writer observations use the retained worker connection, not a new
+    // artifact-preserving copy. Admission and canonical close still own it.
+    const read = live
+      ? () => artifactPreservingReads.run(false, () => stateSnapshotReads.exit(execute))
+      : current
+        ? () => stateSnapshotReads.exit(execute)
+        : execute;
     return context?.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(read) : read();
   } catch (error) {
     throw mapError ? mapError(error, receipt.phase) : error;

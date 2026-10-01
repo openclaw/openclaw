@@ -76,7 +76,7 @@ function appearance(input: HTMLInputElement) {
 }
 
 describe("effort bar colour and flow", () => {
-  it("keeps Standard implicit in the chip and only exposes entitled speed choices", async () => {
+  it("keeps speed names accessible without chip labels and only exposes entitled choices", async () => {
     const state = (mode: boolean | "ultrafast", tiers?: string[], supportsFastMode = true) =>
       resolveChatFastModeSelectState({
         activeRunId: null,
@@ -109,7 +109,11 @@ describe("effort bar colour and flow", () => {
       false,
       state("ultrafast", ["priority", "ultrafast"]),
     );
-    expect(host!.querySelector("summary")!.textContent).toContain("Ultrafast");
+    expect(host!.querySelector("summary")!.textContent?.trim()).toBe("High");
+    expect(host!.querySelector("summary")!.getAttribute("aria-label")).toContain(
+      "High · Ultrafast",
+    );
+    expect(host!.querySelector("summary")!.title).toBe("High · Ultrafast");
     expect(
       [...host!.querySelectorAll("[data-chat-speed-option]")].map((option) =>
         option.textContent?.trim(),
@@ -133,7 +137,7 @@ describe("effort bar colour and flow", () => {
     expect(host!.querySelector('[data-chat-speed-option="on"]')).toBeNull();
     await fixture(["low", "medium", "high"], "high", false, state("ultrafast"));
     expect(host!.querySelector('[data-chat-speed-option="ultrafast"]')).toBeNull();
-    expect(host!.querySelector("summary")!.textContent).not.toContain("Ultrafast");
+    expect(host!.querySelector("summary")!.getAttribute("aria-label")).not.toContain("Ultrafast");
     expect(host!.querySelector('[data-chat-speed-option="on"]')?.getAttribute("aria-checked")).toBe(
       "true",
     );

@@ -25,6 +25,7 @@ import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refre
 import {
   applySessionCatalogContinuation,
   archiveSessionCatalog as archiveSessionCatalogData,
+  importSessionCatalog as importSessionCatalogData,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
   applySessionCatalogChanged as applySessionCatalogChangedToData,
   invalidateSessionCatalogs as invalidateSessionCatalogData,
@@ -330,6 +331,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   invalidateSessionCatalogs = () => invalidateSessionCatalogData(this);
 
   archiveSessionCatalog = archiveSessionCatalogData.bind(null, this);
+
+  importSessionCatalog = importSessionCatalogData.bind(null, this);
 
   refreshSessionCatalogs = (): Promise<void> => refreshSessionCatalogData(this);
 

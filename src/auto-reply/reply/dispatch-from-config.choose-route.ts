@@ -555,7 +555,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   };
 
-  // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
   if (
     state.allowInboundHandlers &&
     !admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings) &&

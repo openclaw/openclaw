@@ -15,7 +15,6 @@ const MATTERMOST_QUESTION_CONTEXT_KEY = "oc_question";
 
 export type MattermostQuestionSelection = { questionId: string; optionIndex: number };
 
-/** One interactive button as this plugin hands it to the attachment builder. */
 type MattermostPresentationButton = {
   id: string;
   text: string;

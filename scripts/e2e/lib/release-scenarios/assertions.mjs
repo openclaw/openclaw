@@ -10,6 +10,7 @@ import {
   assertOpenAiEnvAuthProfileStore,
   readCanonicalAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
+import { assert } from "../fixtures/common.mjs";
 import {
   applyMockOpenAiModelConfig,
   parseMockOpenAiPort,
@@ -19,12 +20,6 @@ import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-asser
 import { assertFileContainsText, fileContainsText, readJson } from "../release-assertion-files.mjs";
 
 const command = process.argv[2];
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
 
 function configPath() {
   return (

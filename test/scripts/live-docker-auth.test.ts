@@ -229,7 +229,10 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     ]);
   });
 
-  it("caps default CPU limits to the runner capacity", () => {
+  it.each([
+    ["8", "6", "8"],
+    ["", "6", "6"],
+  ])("caps default CPU limits using live=%s and shared=%s capacity", (live, shared, expected) => {
     const binDir = makeTempBin("openclaw-live-docker-auth-cpus-");
     writeExecutable(
       path.join(binDir, "timeout"),
@@ -250,7 +253,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
         [
           "source scripts/lib/live-docker-auth.sh",
           "ARGS=()",
-          "OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS=8 openclaw_live_init_docker_run_args ARGS 42s",
+          "openclaw_live_init_docker_run_args ARGS 42s",
           "printf '%s\\n' \"${ARGS[@]}\"",
         ].join("\n"),
       ],
@@ -260,6 +263,8 @@ describe("scripts/lib/live-docker-auth.sh", () => {
         env: {
           ...process.env,
           PATH: binDir,
+          OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS: live,
+          OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS: shared,
         },
       },
     );
@@ -275,7 +280,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "--memory",
       "8g",
       "--cpus",
-      "8",
+      expected,
       "--pids-limit",
       "2048",
     ]);
