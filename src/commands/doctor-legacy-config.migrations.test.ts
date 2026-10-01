@@ -1,6 +1,6 @@
 // Load the shared migration mocks before their production consumers.
 // oxfmt-ignore
-import { legacyConfig, useDoctorLegacyConfigFixture } from "./doctor-legacy-config.test-support.js";
+import { legacyConfig, useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
 // Doctor legacy config migration tests cover shipped migration recipes and validation outcomes.
 import fs from "node:fs";
 import path from "node:path";

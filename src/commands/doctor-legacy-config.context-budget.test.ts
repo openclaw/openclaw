@@ -1,6 +1,6 @@
 // Load the shared migration mocks before their production consumers.
 // oxfmt-ignore
-import { legacyConfig, useDoctorLegacyConfigFixture } from "./doctor-legacy-config.test-support.js";
+import { legacyConfig, useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyLegacyDoctorMigrations } from "./doctor/shared/legacy-config-compat.js";

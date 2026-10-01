@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, beforeEach, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
 
-vi.mock("../plugins/setup-registry.js", () => ({
+vi.mock("../../../plugins/setup-registry.js", () => ({
   resolvePluginSetupCliBackend: () => undefined,
   resolvePluginSetupRegistry: () => ({
     providers: [],
@@ -19,7 +19,7 @@ vi.mock("../plugins/setup-registry.js", () => ({
   }),
 }));
 
-vi.mock("../plugins/manifest-registry.js", () => {
+vi.mock("../../../plugins/manifest-registry.js", () => {
   const plugin = (id: string, webSearchProvider: string) => {
     const rootDir = `/plugins/${id}`;
     return {
@@ -54,14 +54,14 @@ vi.mock("../plugins/manifest-registry.js", () => {
   };
 });
 
-vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
+vi.mock("./channel-legacy-config-migrate.js", () => ({
   applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
     next: cfg,
     changes: [],
   }),
 }));
 
-vi.mock("../secrets/target-registry.js", async () => {
+vi.mock("../../../secrets/target-registry.js", async () => {
   const { asNullableRecord: readRecord } =
     await import("@openclaw/normalization-core/record-coerce");
   const entry = {
