@@ -176,6 +176,11 @@ describe("cron timer outcome and failure policy regressions", () => {
 
   it.each([
     { name: "silent job", delivery: { mode: "none" as const }, disables: false },
+    {
+      name: "webhook job",
+      delivery: { mode: "webhook" as const, to: "https://hooks.example.test/cron" },
+      disables: true,
+    },
     { name: "announce job", delivery: undefined, disables: true },
   ])(
     "counts agent-reported failures toward auto-disable only with a notification owner: $name",

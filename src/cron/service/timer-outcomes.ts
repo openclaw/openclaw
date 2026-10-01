@@ -193,7 +193,7 @@ export function applyJobResult(
       result.errorClassification?.kind === "permanent" &&
       result.errorClassification.reportedByAgent === true &&
       alertConfig === null &&
-      !resolveCronDeliveryPlan(job).requested;
+      resolveCronDeliveryPlan(job).mode === "none";
     if (!silentReportedFailure) {
       job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     }
