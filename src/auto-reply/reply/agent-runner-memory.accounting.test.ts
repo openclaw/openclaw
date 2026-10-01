@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptAccountingSnapshot } from "../../config/sessions/session-transcript-accounting.types.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import {
@@ -11,14 +12,18 @@ import {
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
 
-const { accounting, compact, flush, increment } = vi.hoisted(() => ({
+const { accounting, compact, flush, runEntry, increment } = vi.hoisted(() => ({
   accounting: vi.fn<() => Promise<SessionTranscriptAccountingSnapshot>>(),
   compact: vi.fn(),
   flush: vi.fn(),
+  runEntry: vi.fn(),
   increment: vi.fn(),
 }));
 vi.mock("../../gateway/session-transcript-readers.js", () => ({
   readSessionTranscriptAccountingAsync: accounting,
+}));
+vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({
+  runEmbeddedAgentEntry: runEntry,
 }));
 vi.mock("../../agents/embedded-agent.js", () => ({
   compactEmbeddedAgentSession: compact,
@@ -61,8 +66,17 @@ function runAccounting(
       sessionId: "session",
       updatedAt: 1,
       totalTokens: 10000,
-      totalTokensFresh: true,
+      totalTokensFresh: false,
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      ...(kind === "compaction"
+        ? {
+            transcriptByteCompactionLatch: {
+              sessionId: "session",
+              activeBytes: 3000,
+              maxBytes: 1000,
+            },
+          }
+        : {}),
     },
     sessionKey: "main",
     storePath: path.join(followupRun.run.workspaceDir, "sessions.json"),
@@ -88,10 +102,16 @@ it.each(["memory", "compaction"] as const)(
     const entered = createDeferred();
     const release = createDeferred();
     let current = true;
+    const persist = vi.spyOn(sessionAccessor, "updateSessionEntry").mockResolvedValue(null);
     accounting.mockImplementation(async () => {
       entered.resolve();
       await release.promise;
-      return { byteSize: 2000, eventCount: 1, turnTainted: false };
+      return {
+        byteSize: 2000,
+        eventCount: 1,
+        turnTainted: false,
+        usage: { promptTokens: 90000, outputTokens: 7, trailingMessages: [] },
+      };
     });
     const pending = runAccounting(kind, undefined, () => {
       if (!current) {
@@ -102,16 +122,20 @@ it.each(["memory", "compaction"] as const)(
       await awaitGateBeforeSettlement(entered.promise, pending, "accounting was not awaited");
       expect(compact).not.toHaveBeenCalled();
       expect(flush).not.toHaveBeenCalled();
+      expect(runEntry).not.toHaveBeenCalled();
       current = false;
       const rejected = expect(pending).rejects.toThrow("authority retired during accounting");
       release.resolve();
       await rejected;
       expect(increment).not.toHaveBeenCalled();
+      expect(persist).not.toHaveBeenCalled();
       expect(compact).not.toHaveBeenCalled();
       expect(flush).not.toHaveBeenCalled();
+      expect(runEntry).not.toHaveBeenCalled();
     } finally {
       release.resolve();
       await Promise.allSettled([pending]);
+      persist.mockRestore();
     }
   },
 );
@@ -122,4 +146,5 @@ it("keeps failed memory accounting conservative without a native retry", async (
   expect(accounting).toHaveBeenCalledOnce();
   expect(result).toMatchObject({ outcome: "skipped" });
   expect(flush).not.toHaveBeenCalled();
+  expect(runEntry).not.toHaveBeenCalled();
 });
