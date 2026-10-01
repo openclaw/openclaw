@@ -1,7 +1,8 @@
 // Covers git root and HEAD path discovery.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { findGitRoot, readGitHead } from "./git-root.js";
 
@@ -24,6 +25,65 @@ async function expectGitRootResolution(params: {
 }
 
 describe("git-root", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const headLimit = 1024 * 1024;
+  const commit = "abcdef0123456789abcdef0123456789abcdef01";
+
+  it.each([
+    { name: "empty HEAD", contents: "", expected: null },
+    { name: "EOF below the limit", contents: commit, expected: commit },
+    {
+      name: "CRLF followed by an oversized tail",
+      contents: `${commit}\r\n${"x".repeat(headLimit * 2)}`,
+      expected: commit,
+    },
+    {
+      name: "newline at the byte limit",
+      contents: `${commit}${" ".repeat(headLimit - commit.length - 1)}\nignored`,
+      expected: commit,
+    },
+    {
+      name: "newline beyond the byte limit",
+      contents: `${commit}${" ".repeat(headLimit - commit.length)}\n`,
+      expected: null,
+    },
+    {
+      name: "unterminated line at the byte limit",
+      contents: `${commit}${" ".repeat(headLimit - commit.length)}`,
+      expected: null,
+    },
+    {
+      name: "multibyte line beyond the byte limit",
+      contents: "中".repeat(Math.ceil(headLimit / 3)),
+      expected: null,
+    },
+  ])("bounds HEAD reads for $name", async ({ contents, expected }) => {
+    await withTestDir({ prefix: "openclaw-git-head-bound-" }, async (temp) => {
+      await fs.mkdir(path.join(temp, ".git"));
+      const headPath = path.join(temp, ".git", "HEAD");
+      await fs.writeFile(headPath, contents);
+      const positionalReads = vi.spyOn(fsSync, "readSync");
+      const wholeFileReads = vi.spyOn(fsSync, "readFileSync");
+
+      const head = readGitHead(temp, { maxDepth: 1 });
+
+      // Include whole-file reads so the original slurp cannot evade the byte ledger.
+      const bytesRead =
+        positionalReads.mock.results.reduce((sum, result) => sum + result.value, 0) +
+        wholeFileReads.mock.results.reduce(
+          (sum, result, index) =>
+            sum +
+            (wholeFileReads.mock.calls[index]?.[0] === headPath && result.type === "return"
+              ? Buffer.byteLength(result.value)
+              : 0),
+          0,
+        );
+      expect(bytesRead).toBeLessThanOrEqual(headLimit);
+      expect(head).toEqual({ headPath, ref: null, value: expected });
+    });
+  });
+
   it.each([
     {
       name: "starting at the repo root itself",

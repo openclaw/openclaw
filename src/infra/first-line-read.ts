@@ -7,15 +7,20 @@ import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
 const HEADER_CHUNK_BYTES = 8192;
 const HEADER_MAX_CHARS = 1024 * 1024;
 
-/** Reads the first newline-terminated line of a file, or undefined when there is none. */
-export function readFirstLineSync(filePath: string): string | undefined {
+/** Reads a complete first line, including a nonempty final line at EOF. */
+export function readFirstLineSync(
+  filePath: string,
+  options: { maxBytes?: number } = {},
+): string | undefined {
   const fd = fs.openSync(filePath, "r");
   try {
     const decoder = new StringDecoder("utf8");
     const chunk = Buffer.alloc(HEADER_CHUNK_BYTES);
+    const maxBytes = options.maxBytes ?? Infinity;
     let carry = "";
-    for (let position = 0; ;) {
-      const bytesRead = readFileWindowFullySync(fd, chunk, position);
+    for (let position = 0; position < maxBytes;) {
+      const window = chunk.subarray(0, Math.min(chunk.length, maxBytes - position));
+      const bytesRead = readFileWindowFullySync(fd, window, position);
       if (bytesRead <= 0) {
         carry += decoder.end();
         return carry.length > 0 ? carry : undefined;
@@ -30,6 +35,8 @@ export function readFirstLineSync(filePath: string): string | undefined {
         return undefined;
       }
     }
+    // A full byte budget without a newline cannot establish a complete line.
+    return undefined;
   } finally {
     fs.closeSync(fd);
   }

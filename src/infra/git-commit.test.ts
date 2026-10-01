@@ -501,8 +501,9 @@ describe("git commit resolution", () => {
   it("keeps short-read retries within the bounded metadata window", async () => {
     const temp = await makeTempDir("git-commit-bounded-ref");
     const repoRoot = path.join(temp, "repo");
+    const head = "ref: refs/heads/main\n";
     await makeFakeGitRepo(repoRoot, {
-      head: "ref: refs/heads/main\n",
+      head,
       refs: {
         "refs/heads/main": `${"x".repeat(256)}abcdef0123456789`,
       },
@@ -510,7 +511,7 @@ describe("git commit resolution", () => {
     const totalBytesRead = limitPositionalReads(4);
 
     expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    expect(totalBytesRead()).toBe(256);
+    expect(totalBytesRead()).toBe(Buffer.byteLength(head) + 256);
   });
 
   it("falls back to baked metadata when a bounded Git metadata read errors", async () => {
@@ -535,17 +536,47 @@ describe("git commit resolution", () => {
     ).toBe("deadbee");
   });
 
-  it("reads full HEAD refs before parsing long branch names", async () => {
+  it.each([
+    { name: "ASCII", ref: `refs/heads/${"segment/".repeat(160)}main`, padding: " " },
+    { name: "multibyte", ref: `refs/heads/${"中/".repeat(400)}main`, padding: " " },
+    {
+      name: "split UTF-8",
+      ref: "refs/heads/中-main",
+      padding: " ".repeat(8192 - "ref:".length - "refs/heads/".length - 1),
+    },
+  ])("resolves the full $name HEAD ref", async ({ ref, padding }) => {
     const temp = await makeTempDir("git-commit-long-head");
     const repoRootLocal = path.join(temp, "repo");
-    const longRefName = `refs/heads/${"segment/".repeat(40)}main`;
+    const head = `ref:${padding}${ref}\r\n`;
+    const shortenedRef = Buffer.from(head)
+      .subarray(0, 1024)
+      .toString("utf8")
+      .replace(/^ref:\s*/, "")
+      .trim();
     await makeFakeGitRepo(repoRootLocal, {
-      head: `ref: ${longRefName}\n`,
-      refs: {
-        [longRefName]: "cccccccccccccccccccccccccccccccccccccccc",
+      head,
+      packedRefs: {
+        [shortenedRef || "refs/heads/main"]: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        [ref]: "cccccccccccccccccccccccccccccccccccccccc",
       },
     });
 
     expect(resolveCommitHash({ cwd: repoRootLocal, env: {} })).toBe("ccccccc");
+  });
+
+  it("keeps an over-limit HEAD unknown instead of using stale baked metadata", async () => {
+    const repoRoot = await makeTempDir("git-commit-oversized-head");
+    await makeFakeGitRepo(repoRoot, {
+      head: `ref: refs/heads/main${" ".repeat(1024 * 1024)}\n`,
+      refs: { "refs/heads/main": "cccccccccccccccccccccccccccccccccccccccc" },
+    });
+
+    expect(
+      resolveCommitHash({
+        cwd: repoRoot,
+        env: {},
+        readers: { readBuildInfoCommit: () => "deadbee", readPackageJsonCommit: () => "badc0ff" },
+      }),
+    ).toBeNull();
   });
 });

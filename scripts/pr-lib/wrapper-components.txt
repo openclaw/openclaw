@@ -685,6 +685,7 @@ src/infra/file-descriptor.ts
 src/infra/file-lock-manager.ts
 src/infra/file-lock-sync.ts
 src/infra/file-lock.ts
+src/infra/first-line-read.ts
 src/infra/fixed-window-rate-limit.ts
 src/infra/format-time/duration-units.ts
 src/infra/format-time/format-duration-exact.ts
