@@ -10,7 +10,10 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { resolveDeferredCleanupDecision } from "./subagent-registry-cleanup.js";
+import {
+  resolveDeferredCleanupDecision,
+  resolveEffectiveCleanupMode,
+} from "./subagent-registry-cleanup.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
@@ -37,7 +40,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export const finalizeSubagentCleanup = async (
   context: SubagentLifecycleAnnounceCleanupContext,
   entry: SubagentRunRecord,
-  cleanup: "delete" | "keep",
+  requestedCleanup: "delete" | "keep",
   announceOutcome: SubagentAnnounceFlowOutcome,
   cleanupGeneration: number,
   stateContext: OpenClawStateWorkerContext,
@@ -52,6 +55,9 @@ export const finalizeSubagentCleanup = async (
   if (params.runs.get(runId) !== entry) {
     return;
   }
+  // Re-resolved against the committed outcome: an unconfirmed child must not
+  // have its session or attachments destroyed by this attempt.
+  const cleanup = resolveEffectiveCleanupMode(entry, requestedCleanup);
   if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
     await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
     return;

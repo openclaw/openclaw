@@ -10,7 +10,11 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { shouldSuspendPendingFinalDelivery } from "./subagent-registry-cleanup.js";
+import {
+  resolveEffectiveCleanupMode,
+  shouldDeleteSubagentAttachments,
+  shouldSuspendPendingFinalDelivery,
+} from "./subagent-registry-cleanup.js";
 import { logAnnounceGiveUp, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import { retireSupersededCleanupIfNeeded } from "./subagent-registry-lifecycle-attempt.js";
 import { suspendPendingFinalDelivery } from "./subagent-registry-lifecycle-cleanup.js";
@@ -116,7 +120,7 @@ export async function finishSubagentCleanup(
   },
 ): Promise<void> {
   const { runId, entry, cleanup, cleanupGeneration, stateContext, isCurrent } = args;
-  if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
+  if (shouldDeleteSubagentAttachments(entry, cleanup)) {
     await safeRemoveAttachmentsDir(entry, isCurrent);
   }
   if (!isCurrent()) {
@@ -139,7 +143,7 @@ export async function finishSubagentCleanup(
   await context.completeCleanupBookkeeping({
     runId,
     entry,
-    cleanup,
+    cleanup: resolveEffectiveCleanupMode(entry, cleanup),
     completedAt: args.completedAt ?? Date.now(),
     skipRequesterSettleWake: args.skipRequesterSettleWake,
     stateContext,

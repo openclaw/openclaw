@@ -203,7 +203,13 @@ it.each(["end", "error"] as const)(
       ).toEqual({ ok: true, result: { ackedSeq: 2 } });
       const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt + 1_001);
       try {
-        oldWait.resolve({ status: "timeout" });
+        // An *observed* terminal timeout: `endedAt` is the child's own stop
+        // evidence, so the wait settles the predecessor terminally and the
+        // successor-ownership assertions below actually run. A bare
+        // `{ status: "timeout" }` past the stored deadline is clock-only
+        // expiry, which is deliberately nonterminal now — that path has its
+        // own test below.
+        oldWait.resolve({ status: "timeout", endedAt: startedAt + 1_001 });
         await previousSettled.promise;
         expect(previous.execution.outcome?.status).toBe("timeout");
         expect(terminalEvents).toEqual([]);
@@ -274,6 +280,65 @@ it.each(["end", "error"] as const)(
     }
   },
 );
+
+it("keeps a clock-only wait expiry nonterminal so no successor can replace a live predecessor", async () => {
+  // The sibling test above proves the successor-replacement flow under an
+  // *observed* terminal timeout. This one pins the other half of the
+  // distinction: reaching the stored run deadline is arithmetic on our own
+  // budget, not evidence the child stopped, so the row must stay live and
+  // reactivation must not be able to hand its execution to a successor.
+  fixture.announce.mockResolvedValue("delivered");
+  const expiredWait = createDeferred<AgentWaitResult>();
+  fixture.gateway.mockImplementation(async (request) => {
+    expect(request.method).toBe("agent.wait");
+    return await expiredWait.promise;
+  });
+  const childSessionKey = "agent:main:subagent:clock-only-expiry";
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: childSessionKey,
+    defaultSessionId: "clock-only-expiry-session",
+  });
+  await registerSubagentRun({
+    runId: "clock-only-predecessor",
+    childSessionKey,
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "Continue bounded work",
+    cleanup: "keep",
+    spawnMode: "session",
+    expectsCompletionMessage: true,
+    runTimeoutSeconds: 1,
+  });
+  const live = subagentRuns.get("clock-only-predecessor")!;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(live.createdAt + 1_001);
+  try {
+    // Bare timeout: no endedAt, no stopReason, no livenessState.
+    expiredWait.resolve({ status: "timeout" });
+    await expect
+      .poll(() => subagentRuns.get(live.runId)?.waitExpiryObservedAt)
+      .toEqual(expect.any(Number));
+
+    // The parent is woken, but nothing terminal happened to the child.
+    expect(subagentRuns.get(live.runId)?.cleanupCompletedAt).toBeUndefined();
+    expect(live.execution.outcome).toBeUndefined();
+    expect(typeof live.execution.endedAt).not.toBe("number");
+
+    // And because the run never completed, there is no completed session for a
+    // successor to reactivate into — the predecessor keeps its own execution.
+    expect(
+      await reactivateCompletedSubagentSession({
+        sessionKey: childSessionKey,
+        runId: "clock-only-successor",
+      }),
+    ).toBe(false);
+    expect(subagentRuns.get("clock-only-successor")).toBeUndefined();
+    expect(subagentRuns.get(live.runId)).toBe(live);
+  } finally {
+    clock.mockRestore();
+  }
+});
 
 it.each(["successor", "source retirement"] as const)(
   "restores a terminal predecessor when %s persistence rejects replacement",

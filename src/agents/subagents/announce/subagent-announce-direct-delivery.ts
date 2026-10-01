@@ -26,10 +26,6 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   resolveEmbeddedRunAbandonment,
 } from "../../embedded-agent-runner/runs.js";
-import {
-  hasFailedSubagentNoOutputCompletion,
-  hasVisibleCompletionResult,
-} from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   SOURCE_OWNER_CHANGED,
@@ -39,6 +35,8 @@ import {
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
+  isFailedTerminalSubagentCompletion,
+  requiresSubagentNoOutputCompletionReply,
   resolveRequesterRecoveryDelivery,
   runAnnounceAgentCall,
 } from "./subagent-announce-completion-delivery.js";
@@ -161,13 +159,11 @@ export async function sendSubagentAnnounceDirectly(
       internalEvents: params.internalEvents,
     });
     const hasFailedTrustedSubagentCompletion =
-      trustedCompletionEvent !== undefined && trustedCompletionEvent.status !== "ok";
+      isFailedTerminalSubagentCompletion(trustedCompletionEvent);
     const hasRequiredSubagentNoOutputCompletion =
       params.expectsCompletionMessage &&
       isSubagentCompletion &&
-      ((trustedCompletionEvent !== undefined &&
-        !hasVisibleCompletionResult(trustedCompletionEvent)) ||
-        hasFailedSubagentNoOutputCompletion(params.internalEvents));
+      requiresSubagentNoOutputCompletionReply(trustedCompletionEvent, params.internalEvents);
     const hasSuccessfulTrustedSubagentNoOutputCompletion =
       hasRequiredSubagentNoOutputCompletion && trustedCompletionEvent?.status === "ok";
     const textCompletionDirectDeliveryKind = hasFailedTrustedSubagentCompletion
@@ -414,6 +410,7 @@ export async function sendSubagentAnnounceDirectly(
       shouldDeliverAgentFinal,
       requiresMessageToolDelivery,
       isSubagentCompletion,
+      trustedCompletionEvent,
       hasSuccessfulTrustedSubagentNoOutputCompletion,
       hasRequiredSubagentNoOutputCompletion,
       subagentDirectMessageCompletionRequiresMessageTool,

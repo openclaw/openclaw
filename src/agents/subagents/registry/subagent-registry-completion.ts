@@ -12,11 +12,15 @@ import {
   type SubagentLifecycleEndedOutcome,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
-/** Returns terminal execution facts only after completion capture has settled. */
+/**
+ * Returns terminal execution facts only after completion capture has settled
+ * and the child's stop has actually been observed.
+ */
 export function resolveFinalizedSubagentTaskState(
   entry: SubagentRunRecord,
 ): SubagentTerminalState | undefined {
@@ -29,6 +33,13 @@ export function resolveFinalizedSubagentTaskState(
     entry.pauseReason === "sessions_yield" ||
     (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
   ) {
+    return undefined;
+  }
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    // A deadline-only expiry observed nothing about the child, so it must not
+    // read as a terminal fact: a still-running child would otherwise be
+    // reported stopped. Stay nonterminal; promotion resolves through this same
+    // function with an observed outcome.
     return undefined;
   }
   const status =

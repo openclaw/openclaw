@@ -37,7 +37,10 @@ import {
 } from "./subagent-registry.store.sqlite.js";
 import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
+import {
+  isSubagentChildStopUnconfirmed,
+  resolveSubagentDisplayStatus,
+} from "./subagent-session-metrics.js";
 
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 
@@ -655,6 +658,46 @@ describe("subagent registry sqlite store", () => {
       },
     });
   });
+
+  it.each(["observation", "legacy"] as const)(
+    "preserves %s expiry evidence in lean reads until the child's own completion",
+    async (kind) => {
+      const run = createRun({
+        waitExpiryObservedAt: 250,
+        completion: { required: true },
+        delivery: { status: "pending" },
+        execution:
+          kind === "observation"
+            ? { status: "running", startedAt: 110 }
+            : {
+                status: "terminal",
+                startedAt: 110,
+                endedAt: 250,
+                outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+              },
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      closeOpenClawStateDatabaseForTest();
+      const pending = loadSubagentSessionListRunsFromSqlite().get(run.runId);
+      expect(pending?.waitExpiryObservedAt).toBe(250);
+      expect(isSubagentChildStopUnconfirmed(pending)).toBe(true);
+      expect(pending && resolveSubagentDisplayStatus(pending)).toContain("child stop unconfirmed");
+
+      run.execution = {
+        status: "terminal",
+        startedAt: 110,
+        endedAt: 300,
+        outcome: { status: "timeout", disposition: "exited" },
+      };
+      saveSubagentRegistryChangesToSqlite(new Map([[run.runId, run]]), [run.runId]);
+      closeOpenClawStateDatabaseForTest();
+      const completed = loadSubagentSessionListRunsFromSqlite().get(run.runId);
+      expect(completed?.waitExpiryObservedAt).toBe(250);
+      expect(completed?.execution.outcome?.disposition).toBe("exited");
+      expect(isSubagentChildStopUnconfirmed(completed)).toBe(false);
+      expect(completed && resolveSubagentDisplayStatus(completed)).toBe("timeout");
+    },
+  );
 
   it.each([undefined, "parent"] as const)(
     "retains yielded pause reason in cold compact reads (completion target: %s)",

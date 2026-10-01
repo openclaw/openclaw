@@ -6,6 +6,7 @@ const owner = vi.hoisted(() => ({
   runs: [] as SubagentRunRecord[],
   listeners: new Set<() => void>(),
   cancel: vi.fn(),
+  sharedCwdGroups: [] as Array<{ id: number; path: string; runCount: number; runIds: string[] }>,
 }));
 vi.mock("../subagents/registry/subagent-control.js", () => ({
   DEFAULT_RECENT_MINUTES: 30,
@@ -62,6 +63,8 @@ vi.mock("../subagents/registry/subagent-list.js", () => ({
     total: owner.runs.length,
     active: [],
     recent: [],
+    sharedCwdGroupTotal: owner.sharedCwdGroups.length,
+    sharedCwdGroups: owner.sharedCwdGroups,
     text: "native subagents",
   }),
 }));
@@ -69,6 +72,7 @@ beforeEach(() => {
   owner.runs = [];
   owner.listeners.clear();
   owner.cancel.mockReset();
+  owner.sharedCwdGroups = [];
 });
 function run() {
   const entry = createSubagentRunRecord({
@@ -171,5 +175,18 @@ describe("subagents native run contract", () => {
     await expect(
       tool().execute("cancel", { action: "cancel", runId: entry.runId }),
     ).rejects.toThrow("cancellation owner changed");
+  });
+  it("surfaces the shared-cwd advisory in structured list output", async () => {
+    // Rows drop their rendered `line`, so the bounded top-level summary is the
+    // structured source of directory details.
+    owner.sharedCwdGroups = [
+      { id: 1, path: "/work/shared-tree", runCount: 2, runIds: ["run-a", "run-b"] },
+    ];
+
+    expect((await tool().execute("list", { action: "list" })).details).toMatchObject({
+      status: "ok",
+      sharedCwdGroupTotal: 1,
+      sharedCwdGroups: owner.sharedCwdGroups,
+    });
   });
 });

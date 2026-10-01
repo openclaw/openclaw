@@ -24,6 +24,7 @@ import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -283,6 +284,16 @@ export async function safeRemoveAttachmentsDir(
   entry: SubagentRunRecord,
   isCurrent?: () => boolean,
 ): Promise<boolean> {
+  // Fail closed at the destructive call itself, not only at each caller's policy
+  // check. Attachment removal is the one terminal effect a later promotion can
+  // never undo, and eight call sites reach this function; a caller that forgets
+  // the guard (as the suspended-delivery expiry path did) silently destroys a
+  // possibly-live child's output. Returning false means "not removed", so the
+  // callers that treat it as a completion signal retain the row and retry once
+  // observed stop evidence promotes it.
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    return false;
+  }
   if (!entry.attachmentId) {
     // Legacy absolute/workspace paths are untrusted and intentionally retired without traversal.
     return true;
@@ -313,6 +324,13 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
 
 /** Arms retention only after the run or its waitable collector result has completed. */
 export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    if (entry.archiveAtMs === undefined) {
+      return false;
+    }
+    delete entry.archiveAtMs;
+    return true;
+  }
   const endedAt =
     typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
       ? entry.execution.endedAt

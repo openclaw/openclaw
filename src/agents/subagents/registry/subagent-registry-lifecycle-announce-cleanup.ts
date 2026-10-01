@@ -14,6 +14,7 @@ import {
 } from "./subagent-delivery-state.js";
 import {
   resolveAnnounceDeliveryDeadline,
+  resolveEffectiveCleanupMode,
   shouldSuspendPendingFinalDelivery,
 } from "./subagent-registry-cleanup.js";
 import {
@@ -122,7 +123,12 @@ export const startSubagentAnnounceCleanupFlow = (
     // kill. The sweeper re-enters here after durable reconciliation.
     return false;
   }
-  const cleanup = entry.cleanup;
+  // A run completed on its deadline with no observed child stop keeps its child
+  // session: deleting it would destroy a session that may still be in use, and
+  // the announce this flow is about to send says exactly that the child may
+  // still be running. `entry.cleanup` is untouched, so the run's real mode is
+  // restored the moment observed stop evidence promotes the row.
+  const cleanup = resolveEffectiveCleanupMode(entry);
   const skipRequesterDelivery = entry.suppressCompletionDelivery === true;
   // The spawning turn decides between individual review and a yielded batch.
   // Keep private results durable without admitting a competing requester turn.

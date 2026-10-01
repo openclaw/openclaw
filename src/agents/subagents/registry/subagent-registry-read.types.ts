@@ -115,6 +115,8 @@ export type SubagentRunReadRecord = {
   endedReason?: SubagentLifecycleEndedReason;
   pauseReason?: "sessions_yield";
   cleanupCompletedAt?: number;
+  /** First clock-derived wait expiry observed without terminalizing the child. */
+  waitExpiryObservedAt?: number;
   /** Durable outbox marker for parent/external completion delivery. */
   delivery?: SubagentCompletionDeliveryState;
   execution: {
