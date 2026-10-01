@@ -20,8 +20,6 @@ export type ChatTranscriptPendingScrollOffset = {
 };
 
 export type TranscriptCallbacks = {
-  /** Bypass pane frame pacing when scroll offsets require matching rows before paint. */
-  requestImmediateUpdate?: () => void;
   /** Retained panes can remain measurable while visually hidden. */
   visuallyPresented?: () => boolean;
   onViewportResize?: () => void;

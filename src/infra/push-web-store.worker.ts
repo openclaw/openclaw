@@ -1,13 +1,6 @@
-import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
-import type {
-  WorkerOperationContext,
-  WorkerOperationHandlers,
-  WorkerOperations,
-} from "../state/worker-operation-registry.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import * as store from "./push-web-store.kernel.js";
 import { WebPushSubscriptionBindingError } from "./push-web-store.records.js";
-import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
-import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 type Input<Handler extends (input: never) => unknown> = Omit<
   Parameters<Handler>[0],
@@ -74,24 +67,3 @@ export const webPushOperations = {
     { open },
   ) => store.insertVapidKeyPairIfAbsentInDatabase({ ...input, database: open() }),
 } satisfies WorkerOperationHandlers;
-
-type WebPushWorkerOperations = WorkerOperations<typeof webPushOperations>;
-
-// Preserve the direct worker entry point exercised by the existing profile-read contract.
-export function executeWebPushCommand(
-  command: Exclude<
-    SqliteWorkerCommand<WebPushWorkerOperations>,
-    { type: "webPush.readPersistedVapidKeyPair" }
-  >,
-  database: OpenClawStateDatabase,
-) {
-  // SAFETY: The command union correlates the selected handler and its input.
-  const handler = webPushOperations[command.type] as (
-    input: typeof command.input,
-    context: WorkerOperationContext,
-  ) => WebPushWorkerOperations[typeof command.type]["output"];
-  return handler(command.input, {
-    open: () => database,
-    stateOptions: () => ({ path: database.path, env: getSqliteWorkerStateContext().environment }),
-  });
-}

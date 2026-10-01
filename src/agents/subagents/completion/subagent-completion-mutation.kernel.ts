@@ -12,6 +12,7 @@ import {
 import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
 import {
+  consumeSubagentPauseNotice,
   completeRequesterSettleWakeState,
   transitionRequesterSettleWakeState,
   ensureCompletionState,
@@ -22,7 +23,6 @@ import {
   markRequesterSettleWakePending,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
-import { consumeSubagentPauseNotice } from "../registry/subagent-registry-run-pause.js";
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,

@@ -1023,7 +1023,6 @@ extensions/voice-call/setup-api.ts	1
 extensions/voice-call/src/config.ts	2
 extensions/voice-call/src/manager.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
-extensions/voice-call/src/manager/store.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/providers/shared/response-body.ts	1
@@ -1169,7 +1168,7 @@ packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
 packages/ai/src/transports/openai-responses-debug.ts	11
-packages/ai/src/transports/openai-responses-params-internal.ts	8
+packages/ai/src/transports/openai-responses-params-internal.ts	5
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	10
@@ -1181,7 +1180,6 @@ packages/ai/src/transports/openai-responses-stream-terminal-internal.ts	2
 packages/ai/src/transports/openai-responses-websocket.ts	3
 packages/ai/src/transports/openai-transport-params.ts	3
 packages/ai/src/transports/openai-transport-shared.ts	2
-packages/ai/src/transports/provider-compaction-replay.ts	1
 packages/ai/src/transports/provider-transport-stream.ts	2
 packages/ai/src/transports/simple-completion-transport.ts	1
 packages/ai/src/transports/transport-stream-shared.ts	1
@@ -1457,7 +1455,6 @@ src/agents/harness/context-engine-lifecycle.ts	3
 src/agents/harness/context-engine-turn-outbox.ts	3
 src/agents/harness/gateway-question.ts	4
 src/agents/harness/hook-helpers.ts	1
-src/agents/harness/host-capability.ts	3
 src/agents/harness/lifecycle-hook-helpers.ts	1
 src/agents/harness/native-hook-relay-client.ts	2
 src/agents/harness/native-hook-relay-codec.ts	2
@@ -1518,7 +1515,6 @@ src/agents/runtime-plan/tools.ts	3
 src/agents/runtime/proxy.ts	6
 src/agents/sandbox-paths.ts	1
 src/agents/sandbox-tool-policy.ts	1
-src/agents/sandbox/backend.ts	1
 src/agents/sandbox/container-engine.ts	1
 src/agents/sandbox/podman-runtime.ts	1
 src/agents/sandbox/test-args.ts	1
@@ -1660,7 +1656,7 @@ src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
-src/auto-reply/reply/agent-runner-memory.ts	5
+src/auto-reply/reply/agent-runner-memory.ts	4
 src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
@@ -1939,7 +1935,6 @@ src/commands/doctor/cron/warnings.ts	1
 src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
 src/commands/doctor/shared/allowlist-policy-repair.ts	3
 src/commands/doctor/shared/channel-doctor.ts	4
-src/commands/doctor/shared/channel-legacy-config-migrate.ts	3
 src/commands/doctor/shared/codex-native-assets.ts	1
 src/commands/doctor/shared/codex-route-compaction-repair.ts	2
 src/commands/doctor/shared/codex-route-config-repair.ts	1
@@ -2044,7 +2039,7 @@ src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
-src/config/sessions/session-accessor.sqlite-read.ts	6
+src/config/sessions/session-accessor.sqlite-read.ts	4
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
@@ -2095,7 +2090,7 @@ src/cron/persisted-shape.ts	3
 src/cron/retry-hint.ts	3
 src/cron/run-diagnostics-normalize.ts	2
 src/cron/run-diagnostics.ts	3
-src/cron/runtime-authority.ts	3
+src/cron/runtime-authority.ts	2
 src/cron/schedule-identity.ts	2
 src/cron/service/active-run-cancellation.ts	1
 src/cron/service/jobs.ts	4
@@ -2345,8 +2340,6 @@ src/infra/exec-approval-policy-snapshot.ts	2
 src/infra/exec-approval-reply.ts	2
 src/infra/exec-approvals-allowlist.ts	7
 src/infra/exec-approvals-config.ts	4
-src/infra/exec-approvals-socket.ts	1
-src/infra/exec-approvals-store.ts	1
 src/infra/exec-argv-analysis.ts	1
 src/infra/exec-host.ts	3
 src/infra/fetch-headers.ts	3
@@ -2825,7 +2818,6 @@ src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	1
 src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
-src/state/user-profiles.ts	1
 src/status/summary.runtime.ts	1
 src/system-agent/agent-turn.ts	2
 src/system-agent/greeting.ts	1

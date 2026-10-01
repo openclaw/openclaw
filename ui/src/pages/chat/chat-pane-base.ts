@@ -79,9 +79,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // The first Lit update must render even while hidden; later hidden work parks.
   // Disconnect releases the waiter so reconnect can schedule in its new lifecycle.
   private hiddenUpdateResume: (() => void) | undefined;
-  private updateFrame: number | undefined;
-  private frameUpdateResume: (() => void) | undefined;
-  private immediateUpdate = false;
   private readonly handleVisibilityChange = () => {
     // Lit parks hidden updates, but progress watches must follow visibility immediately.
     this.progressCard.hostUpdate();
@@ -89,7 +86,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       this.hiddenUpdateResume?.();
       return;
     }
-    this.releaseUpdateFrame();
     const state = this.state;
     if (!state) {
       return;
@@ -116,51 +112,12 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.paneLifecycleRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
   protected override async scheduleUpdate() {
-    while (this.hasUpdated && this.isConnected) {
-      if (document.visibilityState === "hidden") {
-        await new Promise<void>((resolve) => {
-          this.hiddenUpdateResume = resolve;
-        });
-      } else if (!this.immediateUpdate && this.updateFrame !== undefined) {
-        // Keep Lit's pending update (and changed properties) until the frame opens.
-        await new Promise<void>((resolve) => {
-          this.frameUpdateResume = resolve;
-        });
-      } else {
-        break;
-      }
-    }
-    this.immediateUpdate = false;
-    await super.scheduleUpdate();
-    if (
-      this.isConnected &&
-      document.visibilityState !== "hidden" &&
-      typeof requestAnimationFrame === "function" &&
-      this.updateFrame === undefined
-    ) {
-      this.updateFrame = requestAnimationFrame(() => {
-        this.updateFrame = undefined;
-        this.frameUpdateResume?.();
-        this.frameUpdateResume = undefined;
+    while (this.hasUpdated && this.isConnected && document.visibilityState === "hidden") {
+      await new Promise<void>((resolve) => {
+        this.hiddenUpdateResume = resolve;
       });
     }
-  }
-
-  /** Scroll offsets and their virtual rows must commit together before paint. */
-  requestImmediateUpdate(): void {
-    this.immediateUpdate = true;
-    this.frameUpdateResume?.();
-    this.frameUpdateResume = undefined;
-    this.requestUpdate();
-  }
-
-  private releaseUpdateFrame(): void {
-    if (this.updateFrame !== undefined) {
-      cancelAnimationFrame(this.updateFrame);
-      this.updateFrame = undefined;
-    }
-    this.frameUpdateResume?.();
-    this.frameUpdateResume = undefined;
+    await super.scheduleUpdate();
   }
 
   override disconnectedCallback() {
@@ -170,7 +127,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     );
     this.context?.connectionBootstrap.setForegroundPane(this, null);
     this.hiddenUpdateResume?.();
-    this.releaseUpdateFrame();
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     super.disconnectedCallback();
     // A removed Home pane cannot bubble its final loading edge. Notify its
@@ -392,7 +348,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.requestUpdate(),
   );
   protected readonly transcript = new ChatTranscriptController(this, () => this.paneId, {
-    requestImmediateUpdate: () => this.requestImmediateUpdate(),
     visuallyPresented: () => this.visuallyPresented,
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),

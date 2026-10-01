@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getAgentRunContext, listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../../state/openclaw-state-db-readonly.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -189,6 +190,7 @@ export function resolveCompletionFromSessionEntry(
 /** Resolve child completion by reading its persisted session entry. */
 export async function resolveSubagentSessionCompletion(params: {
   childSessionKey: string;
+  childAgentId?: string;
   fallbackEndedAt: number;
   notBeforeMs?: number;
   cfg?: OpenClawConfig;
@@ -202,12 +204,16 @@ export async function resolveSubagentSessionCompletion(params: {
 }
 
 async function withSubagentSessionEntry<T>(
-  params: { childSessionKey: string; cfg?: OpenClawConfig; assertCurrent?: () => void },
+  params: {
+    childSessionKey: string;
+    childAgentId?: string;
+    cfg?: OpenClawConfig;
+    assertCurrent?: () => void;
+  },
   consume: (entry: SessionEntry | undefined) => T,
 ): Promise<T> {
-  const agentId = resolveAgentIdFromSessionKey(params.childSessionKey);
   const cfg = params.cfg ?? getRuntimeConfig();
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params, cfg);
   return withSessionEntryReadOnlyInWorker(
     { agentId, storePath, sessionKey: params.childSessionKey },
     () => params.assertCurrent?.(),

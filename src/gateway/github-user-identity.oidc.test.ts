@@ -7,12 +7,11 @@ import { getUserPreferences, setUserPreferences } from "../state/user-preference
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { resolveUserProfileGitHubAttribution } from "../state/user-profile-github-identity.js";
 import {
-  ensureProfileForEmail,
-  getUserProfileListItem,
   linkEmail,
   setUserProfileRole,
   syncGitHubIdentity,
-} from "../state/user-profiles.js";
+} from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, getUserProfileListItem } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 import {

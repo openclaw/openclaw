@@ -7,6 +7,7 @@ import {
   parseUpdateRecoveryBackupManifest,
   type UpdateRecoveryBackupManifest,
 } from "../commands/backup-verify-manifest.js";
+import { createDoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
 import { collectDoctorSkillWorkshopBackupResources } from "../commands/doctor-update-rehearsal-workshop.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -153,9 +154,11 @@ export function captureUpdateRecoveryBaseline(params: {
     const env = { ...params.env };
     const sharedStatePath = resolveOpenClawStateSqlitePath(env);
     const assertCaller = params.assertCurrent;
+    const rehearsal = createDoctorRehearsalDatabaseCoverage(params.env);
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
       assertCaller();
+      rehearsal?.assertCurrent();
     };
     assertCurrent();
     const configIO = createConfigIO({
@@ -349,6 +352,7 @@ export function captureUpdateRecoveryBaseline(params: {
         preserveSourceArtifacts: true,
         additionalPaths: [...forcedSqlite],
         additionalFiles: [...files.keys()].filter((pathname) => !configPaths.has(pathname)),
+        rehearsal,
       });
       assertCurrent();
       const databasePaths = new Set([
@@ -414,7 +418,11 @@ export function captureUpdateRecoveryBaseline(params: {
         });
       }
       for (const [pathname, before] of files) {
-        if (databaseSpellings.has(pathname) || sidecars.has(pathname)) {
+        if (
+          databaseSpellings.has(pathname) ||
+          sidecars.has(pathname) ||
+          rehearsal?.excludes(pathname)
+        ) {
           continue;
         }
         assertCurrent();
@@ -517,12 +525,21 @@ export function captureUpdateRecoveryBaseline(params: {
         creator,
         drivers,
         createdAt,
-        roots: [...roots].toSorted(),
-        excludedRoots: [],
-        protectedPaths: [...resources.keys()].toSorted(),
+        roots: [...roots].filter((pathname) => !rehearsal?.excludes(pathname)).toSorted(),
+        excludedRoots: [
+          ...new Set([
+            ...(rehearsal?.paths ?? []),
+            ...[...observed.keys()].filter((pathname) => rehearsal?.excludes(pathname)),
+          ]),
+        ].toSorted(),
+        protectedPaths: [...resources.keys()]
+          .filter((pathname) => !rehearsal?.excludes(pathname))
+          .toSorted(),
         databases: databaseOwners,
         entries: [...entries.values()]
-          .filter((entry) => !sidecars.has(entry.sourcePath))
+          .filter(
+            (entry) => !sidecars.has(entry.sourcePath) && !rehearsal?.excludes(entry.sourcePath),
+          )
           .toSorted((a, b) => a.sourcePath.localeCompare(b.sourcePath)),
         ...(boundedWarnings.length ? { warnings: boundedWarnings } : {}),
       };

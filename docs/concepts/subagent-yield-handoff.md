@@ -35,6 +35,11 @@ The implementation owners are `subagent-registry-requester-yield.ts`,
 `agent-task-tracking.ts`. `adoptPausedSubagentRunForFollowUp` uses the existing
 registry replacement operation; it does not create a second delegated task.
 
+An explicit `waitFor: "message"` counts as continuation evidence after the
+registry accepts the wait. The attempt carries that fact into terminal reply
+presentation, so a registered message wait does not produce a missing-continuation
+warning. Refused or unregistered waits do not provide that evidence.
+
 Private child results wait for their spawning turn to settle before individual
 announcement admission. Normal settlement resumes each finished private child,
 even while siblings are still running. Explicit yield assigns the frozen batch

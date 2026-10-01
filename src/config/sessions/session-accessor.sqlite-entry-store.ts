@@ -83,7 +83,6 @@ export {
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 export {
-  iterateSessionEntryKeys,
   readSessionEntryCount,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-inventory.js";

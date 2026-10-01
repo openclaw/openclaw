@@ -18,14 +18,9 @@ import {
   readUserProfileIdentity,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
+import { linkEmail, setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
-import {
-  adoptTailscaleProfileAvatar,
-  ensureProfileForEmail,
-  linkEmail,
-  setAvatar,
-  setDisplayName,
-} from "./user-profiles.js";
+import { adoptTailscaleProfileAvatar, ensureProfileForEmail } from "./user-profiles.js";
 
 const delivery = vi.hoisted(() => ({
   afterResult: undefined as (() => Promise<void>) | undefined,

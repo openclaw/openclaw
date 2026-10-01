@@ -5,8 +5,16 @@ import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import * as versionManagerPath from "../../shared/version-manager-path.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
+
+export function stubNodeRuntime() {
+  const nodeExecutable = resolveTestNodeExecPath();
+  const versions = { ...process.versions, bun: undefined };
+  vi.spyOn(process, "execPath", "get").mockReturnValue(nodeExecutable);
+  vi.spyOn(process, "versions", "get").mockReturnValue(versions);
+}
 
 export function mockNonContainerSystemRuntime(): void {
   vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");

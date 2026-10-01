@@ -51,7 +51,6 @@ export function resolveDisplaySessionKey(params: { key: string; alias: string; m
 export function resolveInternalSessionKey(params: {
   key: string;
   alias: string;
-  mainKey: string;
   requesterInternalKey?: string;
 }) {
   if (params.key === "current") {
@@ -370,7 +369,6 @@ export async function resolveSessionReference(params: {
   const resolvedKey = resolveInternalSessionKey({
     key: raw,
     alias: params.alias,
-    mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
   });
   const semanticAliasAgentId =

@@ -23,10 +23,8 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
-import type {
-  ConversationDeliveryTarget,
-  DurableDeliveryCompletion,
-} from "./delivery-completion.js";
+import type { ConversationDeliveryTarget } from "./delivery-completion.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import type { MessageBroadcastAccountPlan } from "./message-account-selection.js";
 import type { MessageActionDeniedError } from "./message-action-denial.js";
 import type { OutboundMessageGatewayOptionsInput } from "./message-gateway-options.js";

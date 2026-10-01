@@ -10,12 +10,11 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
   linkEmail,
   setDisplayName,
   setUserProfileRole,
-} from "../state/user-profiles.js";
+} from "../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   readMentionStoreSnapshot,
   writeMentionStoreChanges,

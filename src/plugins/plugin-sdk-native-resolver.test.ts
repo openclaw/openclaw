@@ -34,7 +34,7 @@ function writeFakeOpenClawPackage(root: string): { distRoot: string; loaderModul
     exports: {
       "./cli-entry": "./dist/cli-entry.js",
       "./plugin-sdk/agent-runtime": "./dist/plugin-sdk/agent-runtime.js",
-      "./plugin-sdk/channel-message": "./dist/plugin-sdk/channel-message.js",
+      "./plugin-sdk/channel-inbound": "./dist/plugin-sdk/channel-inbound.js",
       "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",
       "./plugin-sdk/source-only": "./dist/plugin-sdk/source-only.js",
     },
@@ -49,7 +49,7 @@ function writeFakeOpenClawPackage(root: string): { distRoot: string; loaderModul
     "utf8",
   );
   fs.writeFileSync(
-    path.join(pluginSdkDir, "channel-message.js"),
+    path.join(pluginSdkDir, "channel-inbound.js"),
     ['export * from "./channel-outbound.js";', ""].join("\n"),
     "utf8",
   );
@@ -378,11 +378,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     );
 
     installOpenClawPluginSdkNativeResolver(broadOptions);
-    expect(fs.realpathSync(fromNarrow.resolve("openclaw/plugin-sdk/channel-message"))).toBe(
-      expected(narrowHost, "channel-message"),
+    expect(fs.realpathSync(fromNarrow.resolve("openclaw/plugin-sdk/channel-inbound"))).toBe(
+      expected(narrowHost, "channel-inbound"),
     );
-    expect(fs.realpathSync(fromBroad.resolve("openclaw/plugin-sdk/channel-message"))).toBe(
-      expected(broadHost, "channel-message"),
+    expect(fs.realpathSync(fromBroad.resolve("openclaw/plugin-sdk/channel-inbound"))).toBe(
+      expected(broadHost, "channel-inbound"),
     );
   });
 
@@ -433,7 +433,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       };
 
       expect(sdk.defineChannelMessageAdapter?.()).toBe("adapter");
-      expect(() => requireFromPlugin.resolve("openclaw/not-plugin-sdk/channel-message")).toThrow();
+      expect(() => requireFromPlugin.resolve("openclaw/not-plugin-sdk/channel-outbound")).toThrow();
     } finally {
       if (process.platform !== "win32") {
         fs.chmodSync(distRoot, distMode);
