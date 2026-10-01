@@ -166,20 +166,19 @@ struct GatewayChannelRequestTests {
         return lifetime
     }
 
-    private func makeSession(requestSendDelayMs: Int) -> GatewayTestWebSocketSession {
-        GatewayTestWebSocketSession(
+    @Test func `request timeout then send failure does not double resume`() async throws {
+        let timedOut = AsyncTestGate()
+        let sendFailed = AsyncTestGate()
+        let session = GatewayTestWebSocketSession(
             taskFactory: {
                 GatewayTestWebSocketTask(
                     sendHook: { _, _, sendIndex in
                         guard sendIndex == 1 else { return }
-                        try await Task.sleep(nanoseconds: UInt64(requestSendDelayMs) * 1_000_000)
+                        await timedOut.wait()
+                        sendFailed.open()
                         throw URLError(.cannotConnectToHost)
                     })
             })
-    }
-
-    @Test func `request timeout then send failure does not double resume`() async throws {
-        let session = self.makeSession(requestSendDelayMs: 100)
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
@@ -195,7 +194,9 @@ struct GatewayChannelRequestTests {
             #expect(ns.code == 5)
         }
 
-        // Give the delayed send failure task time to run; this used to crash due to a double-resume.
+        timedOut.open()
+        try await sendFailed.wait("late request send failure")
+        // Observe the late send failure for 250 ms; a double resume would crash during this absence window.
         try? await Task.sleep(nanoseconds: 250 * 1_000_000)
     }
 
