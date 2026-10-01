@@ -1509,12 +1509,13 @@ extension GatewayConnectionController {
                     guard let host = BonjourServiceResolverSupport.normalizeHost(service.hostName),
                           !host.isEmpty, service.port > 0 else { return nil }
                     return (host: host, port: service.port)
-                }) { [weak self] result in
+                },
+                completion: { [weak self] result in
                     Task { @MainActor in
                         self?.pendingServiceResolvers[key] = nil
                         continuation.resume(returning: result)
                     }
-                }
+                })
             self.pendingServiceResolvers[key] = resolver
             resolver.start()
         }

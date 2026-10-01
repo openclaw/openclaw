@@ -509,7 +509,8 @@ public final class GatewayDiscoveryModel {
                         "discovery: resolved TXT for \(service.name, privacy: .public): \(payload, privacy: .public)")
                 }
                 return ResolvedGatewayService(txt: txt, host: host, port: port)
-            }) { [weak self] resolved in
+            },
+            completion: { [weak self] resolved in
                 Task { @MainActor in
                     guard let self, self.generation == generation else { return }
                     self.pendingServiceResolvers[stableID] = nil
@@ -518,7 +519,7 @@ public final class GatewayDiscoveryModel {
                     self.updateGatewaysForAllDomains()
                     self.recomputeGateways()
                 }
-            }
+            })
 
         self.pendingServiceResolvers[stableID] = resolver
         resolver.start()
