@@ -1114,8 +1114,8 @@ importers:
         specifier: 0.38.55
         version: 0.38.55
       libopus-wasm:
-        specifier: 0.4.0
-        version: 0.4.0
+        specifier: 0.4.1
+        version: 0.4.1
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
@@ -1871,8 +1871,8 @@ importers:
         specifier: 6.2.12
         version: 6.2.12
       libopus-wasm:
-        specifier: 0.4.0
-        version: 0.4.0
+        specifier: 0.4.1
+        version: 0.4.1
       werift:
         specifier: 0.24.4
         version: 0.24.4(supports-color@10.2.2)
@@ -8062,8 +8062,8 @@ packages:
   libmime@5.4.4:
     resolution: {integrity: sha512-d3zZ2k8s6iO+8u9Vfkl6HfhD5lSVocGcmOViTz/i0CJcwhJADyubEJ/+TkBhuLDUSIBOiG+D8G5kJKwXwKbXXA==}
 
-  libopus-wasm@0.4.0:
-    resolution: {integrity: sha512-k7XznZMcDSgIl7uHdiCdIPaPfVLslf3C90jcJIEiC5OLK2Qy+M2CMmeAokDca6bbYRnSCVZ9/sUEOSfDrX60Qw==}
+  libopus-wasm@0.4.1:
+    resolution: {integrity: sha512-dt2u6KyBe1IONzZA2Q9TXQbmLsZ6l1vLqgt4n9XC/sE70BegLgwC/hcbZp41aJgURAqalYdnPg0wGSI2IwHyvA==}
     engines: {node: '>=22'}
 
   libphonenumber-js@1.13.13:
@@ -15802,7 +15802,7 @@ snapshots:
       libbase64: 1.3.0
       libqp: 2.1.1
 
-  libopus-wasm@0.4.0: {}
+  libopus-wasm@0.4.1: {}
 
   libphonenumber-js@1.13.13: {}
 
