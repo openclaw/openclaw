@@ -9,7 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
+import { normalizeSqliteNumber as normalizeNumber } from "../../infra/sqlite-number.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { hashCronJobDefinition } from "../definition-hash.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
@@ -205,9 +205,7 @@ export function rowToCronJob(
     ...(toolsAllowExecTargetRequirement ? { toolsAllowExecTargetRequirement } : {}),
     createdAtMs,
     updatedAtMs:
-      normalizeSqliteNumber(row.runtime_updated_at_ms) ??
-      normalizeSqliteNumber(row.updated_at) ??
-      createdAtMs,
+      normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at) ?? createdAtMs,
     state,
   } as CronStoredJob;
 }
@@ -731,8 +729,7 @@ export function loadedCronStoreFromRows(
     const job = rowToCronJob(row, parsedJobJson, createdAtMsFallback);
     const configJob = decodeCronJobConfig(parsedJobJson);
     const runtimeEntry = {
-      updatedAtMs:
-        normalizeSqliteNumber(row.runtime_updated_at_ms) ?? normalizeSqliteNumber(row.updated_at),
+      updatedAtMs: normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at),
       scheduleIdentity: row.schedule_identity ?? undefined,
       state: parsedStateJson,
     };
