@@ -31,7 +31,10 @@ import {
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { fingerprintCronJobRows } from "../../../cron/store/row-codec.js";
 import type { CronJob } from "../../../cron/types.js";
-import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
+import {
+  collectErrorGraphCandidates,
+  formatErrorMessage as errorMessage,
+} from "../../../infra/errors.js";
 import { markLegacyMigrationSourceRemoved } from "../../../infra/state-migrations.receipts.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateReadContext } from "../../../state/openclaw-state-worker-context.js";
@@ -476,10 +479,12 @@ export async function applyLegacyCronStoreRepair(params: {
       }
     } catch (err) {
       rethrowSqliteSchemaVersionError(err);
-      const failure =
-        err instanceof CronJobsStoreChangedError
-          ? `Cron store at ${shortenHomePath(state.storePath)} changed while doctor was waiting, so no rows were rewritten; re-run ${formatCliCommand("openclaw doctor --fix")} to repair from a fresh snapshot.`
-          : `Failed writing migrated cron store at ${shortenHomePath(state.storePath)}: ${errorMessage(err)}`;
+      const storeChanged = collectErrorGraphCandidates(err, (current) => [current.cause]).some(
+        (cause) => cause instanceof CronJobsStoreChangedError,
+      );
+      const failure = storeChanged
+        ? `Cron store at ${shortenHomePath(state.storePath)} changed while doctor was waiting, so no rows were rewritten; re-run ${formatCliCommand("openclaw doctor --fix")} to repair from a fresh snapshot.`
+        : `Failed writing migrated cron store at ${shortenHomePath(state.storePath)}: ${errorMessage(err)}`;
       return { changes, warnings: [...warnings, failure] };
     }
   }
