@@ -144,7 +144,7 @@ export function cancelPreparedModelRuntimeRefresh(): void {
 
 async function closeModelRuntime(error: Error): Promise<void> {
   refreshRequestEpoch += 1;
-  configuredRefresh.cancelRemoteModelCatalogAdoption(remoteCatalogPublication, error);
+  remoteCatalogPublication.cancel(error);
   authPublication.reset(error);
   pendingModelRuntimeReplacement?.reject(error);
   pendingModelRuntimeReplacement = undefined;
@@ -392,20 +392,6 @@ const preparedModelRuntimeLeaseContext = {
   getGatewayLifecycleActive: () => gatewayLifecycleActive,
   getPendingReplacement: getBlockingReplacement,
 };
-const remoteCatalogPublication: configuredRefresh.PreparedModelRuntimeCatalogPublicationHost = {
-  ...preparedModelRuntimeLeaseContext,
-  publicationQueue,
-  replyDispatchPublication,
-  getEpoch: () => refreshRequestEpoch,
-  getCancellationSignal: () => refreshCancellation.signal,
-  getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
-  // Declared below this host; resolve it when a retirement fires, not at module load.
-  onPluginGenerationRetired: (owner) => recoverRetiredConfiguredPluginGeneration(owner),
-};
-export const applyRemoteModelCatalogUpdate =
-  configuredRefresh.applyRemoteModelCatalogUpdateNow.bind(null, remoteCatalogPublication);
-export const advancePreparedModelRuntimeConfig =
-  configuredRefresh.advancePreparedModelRuntimeConfigNow.bind(null, remoteCatalogPublication);
 
 /** Acquires a run generation from configured facts; full catalog discovery is explicit. */
 export async function acquireAgentRunPreparedModelRuntime(
@@ -526,6 +512,17 @@ const recoverRetiredConfiguredPluginGeneration = createPreparedModelRuntimePlugi
     !pendingModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 );
+const remoteCatalogPublication = configuredRefresh.createRemoteCatalogPublication({
+  ...preparedModelRuntimeLeaseContext,
+  publicationQueue,
+  replyDispatchPublication,
+  getEpoch: () => refreshRequestEpoch,
+  getCancellationSignal: () => refreshCancellation.signal,
+  getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
+  onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
+});
+export const { applyRemoteModelCatalogUpdate, advancePreparedModelRuntimeConfig } =
+  remoteCatalogPublication;
 
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(

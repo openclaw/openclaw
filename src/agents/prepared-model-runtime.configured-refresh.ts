@@ -68,17 +68,21 @@ export type PreparedModelRuntimeCatalogPublicationHost = {
 // outlasts these attempts defers the catalog to the next scheduled check.
 const MAX_REMOTE_CATALOG_ADOPTION_ATTEMPTS = 3;
 
-/** Runtime close ends a pending adoption, including preparation still awaiting I/O. */
-export function cancelRemoteModelCatalogAdoption(
-  host: PreparedModelRuntimeCatalogPublicationHost,
-  reason: Error,
-): void {
-  host.pending?.controller.abort(reason);
-  host.pending = undefined;
+/** Binds the prepared runtime's publication host to the catalog adoption operations. */
+export function createRemoteCatalogPublication(host: PreparedModelRuntimeCatalogPublicationHost) {
+  return {
+    applyRemoteModelCatalogUpdate: applyRemoteModelCatalogUpdateNow.bind(null, host),
+    advancePreparedModelRuntimeConfig: advancePreparedModelRuntimeConfigNow.bind(null, host),
+    /** Runtime close ends a pending adoption, including preparation still awaiting I/O. */
+    cancel: (reason: Error): void => {
+      host.pending?.controller.abort(reason);
+      host.pending = undefined;
+    },
+  };
 }
 
 /** Advances model-neutral config identity without rebuilding prepared generation artifacts. */
-export function advancePreparedModelRuntimeConfigNow(
+function advancePreparedModelRuntimeConfigNow(
   host: PreparedModelRuntimeCatalogPublicationHost,
   config: OpenClawConfig,
 ): void {
@@ -104,7 +108,7 @@ export function advancePreparedModelRuntimeConfigNow(
 }
 
 /** Downloads become visible only after an independently prepared rows/pricing generation commits. */
-export function applyRemoteModelCatalogUpdateNow(
+function applyRemoteModelCatalogUpdateNow(
   host: PreparedModelRuntimeCatalogPublicationHost,
   getConfig: () => OpenClawConfig,
   signal?: AbortSignal,
