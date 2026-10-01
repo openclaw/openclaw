@@ -661,8 +661,8 @@ describe("grouped chat rendering", () => {
 
     const actions = view.querySelectorAll<HTMLButtonElement>(".chat-group-footer-actions button");
     expect([...actions].map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Reply to message",
       "Copy as markdown",
+      "Reply to message",
     ]);
 
     view.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')?.click();
@@ -692,6 +692,35 @@ describe("grouped chat rendering", () => {
       sourceMessageId: "user-entry-1",
       text: "User reply context.",
     });
+  });
+
+  it("orders user footer actions before the sender name and timestamp", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      createUserMessage("User footer order."),
+      "user",
+      {
+        onReply: vi.fn(),
+        onRewind: vi.fn(),
+        userName: "Jason",
+      },
+      container,
+    );
+
+    const footer = expectElement(container, ".chat-group.user .chat-group-footer", HTMLElement);
+    const order = [
+      ...footer.querySelectorAll<HTMLElement>("button, .chat-sender-name, .chat-group-timestamp"),
+    ].map((element) => {
+      if (element.classList.contains("chat-sender-name")) {
+        return "name";
+      }
+      if (element.classList.contains("chat-group-timestamp")) {
+        return "time";
+      }
+      return element.getAttribute("aria-label");
+    });
+
+    expect(order).toEqual(["Copy as markdown", "Rewind", "Reply to message", "name", "time"]);
   });
 
   it.each([
@@ -741,6 +770,60 @@ describe("grouped chat rendering", () => {
       }
     },
   );
+
+  it("orders peer footer actions after the sender name and timestamp", () => {
+    const container = document.createElement("div");
+    const message = createUserMessage("Peer footer order.");
+    const group = createMessageGroup(message, "user", {
+      sender: { id: "peer-user", name: "Peer User" },
+      senderLabel: "Peer User",
+    });
+    render(
+      renderTestMessageGroup(group, {
+        onReply: vi.fn(),
+        onRewind: vi.fn(),
+        userId: "current-user",
+      }),
+      container,
+    );
+
+    const footer = expectElement(container, ".chat-group--peer .chat-group-footer", HTMLElement);
+    const order = [
+      ...footer.querySelectorAll<HTMLElement>("button, .chat-sender-name, .chat-group-timestamp"),
+    ].map((element) => {
+      if (element.classList.contains("chat-sender-name")) {
+        return "name";
+      }
+      if (element.classList.contains("chat-group-timestamp")) {
+        return "time";
+      }
+      return element.getAttribute("aria-label");
+    });
+
+    expect(order).toEqual(["name", "time", "Copy as markdown", "Rewind", "Reply to message"]);
+  });
+
+  it("keeps hidden assistant thinking out of inline reply context", () => {
+    const container = document.createElement("div");
+    const onReply = vi.fn();
+    renderAssistantMessage(
+      createAssistantMessage("<thinking>private reasoning</thinking>Visible answer.", {
+        timestamp: 1000,
+      }),
+      { onReply },
+      container,
+    );
+
+    container.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')?.click();
+    expect(onReply).toHaveBeenCalledWith(expect.objectContaining({ text: "Visible answer." }));
+
+    renderAssistantMessage(
+      createAssistantMessage("<thinking>private reasoning only</thinking>", { timestamp: 1001 }),
+      { onReply },
+      container,
+    );
+    expect(container.querySelector('[aria-label="Reply to message"]')).toBeNull();
+  });
 
   it("does not replay an arrival animation when a message row mounts", () => {
     renderAssistantMessage(createAssistantMessage("Stable transcript row", { timestamp: 1000 }));

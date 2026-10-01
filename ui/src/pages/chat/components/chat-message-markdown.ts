@@ -1,9 +1,9 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, nothing } from "lit";
+import { html, nothing, svg } from "lit";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
-import { icons } from "../../../components/icons.ts";
+import { strokeIcon } from "../../../components/icons-tools.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatReplyTarget } from "../../../lib/chat/chat-types.ts";
@@ -20,24 +20,24 @@ import {
   type AssistantMessageExpansionState,
 } from "../chat-message-recovery.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
+import { renderRewindButton } from "./chat-message-confirmation.ts";
 import { extractMessageMediaText } from "./chat-message-media.ts";
-import {
-  ownReactionEmoji,
-  type MessageReactionAction,
-  type MessageReactionOptions,
-} from "./chat-message-reactions.ts";
+import type { MessageReactionOptions } from "./chat-message-reactions.ts";
 
 registerChatMessageMetadataEnglish();
+
+const replyIcon = strokeIcon(svg`<path d="m9 5-6 6 6 6M3 11h10a8 8 0 0 1 8 8" />`);
 
 export type MessageReplyTarget = ChatReplyTarget;
 
 export type MessageActionDetails = {
+  /** Canonical saved user/assistant target for the shared reaction/action row. */
+  reactionMessageId?: string;
   /** Source for context copy, independent of footer visibility and reply truncation. */
   copyMarkdown?: string;
   markdown?: string;
   fullMessage?: { messageId: string; state: AssistantMessageExpansionState | undefined };
   replyTarget?: MessageReplyTarget;
-  reactionMessageId?: string;
 };
 
 // Loading and completion each advance the revision: three automatic attempts.
@@ -136,48 +136,31 @@ export function resolveMessageActionDetails(
 /** Whether `renderMessageActionButtons` renders at least one control for these options. */
 export function hasMessageActionButtons(
   details: MessageActionDetails | null | undefined,
-  opts: { onReply?: (target: MessageReplyTarget) => void; onReact?: MessageReactionAction },
+  opts: { onReply?: (target: MessageReplyTarget) => void },
 ): details is MessageActionDetails {
-  return Boolean(
-    details &&
-    (details.markdown ||
-      (details.replyTarget && opts.onReply) ||
-      (details.reactionMessageId && opts.onReact)),
-  );
+  return Boolean(details && (details.markdown || (details.replyTarget && opts.onReply)));
 }
 
 export function renderMessageActionButtons(
   details: MessageActionDetails | null | undefined,
-  opts: MessageReactionOptions & {
+  opts: {
     onReply?: (target: MessageReplyTarget) => void;
+    onRewind?: () => void;
+    rewindDisabled?: boolean;
   },
 ) {
-  if (!details) {
-    return nothing;
-  }
-  const reactionMessageId = details.reactionMessageId;
   return html`
+    ${details?.markdown ? renderCopyAsMarkdownButton(details.markdown) : nothing}
+    ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
     ${
-      details.replyTarget && opts.onReply
+      details?.replyTarget && opts.onReply
         ? renderReplyButton(details.replyTarget, opts.onReply)
-        : nothing
-    }
-    ${details.markdown ? renderCopyAsMarkdownButton(details.markdown) : nothing}
-    ${
-      reactionMessageId && opts.onReact
-        ? html`<openclaw-message-reaction-picker
-            class="chat-reaction-action"
-            placement=${opts.reactionPlacement ?? "bottom-start"}
-            .activeEmoji=${ownReactionEmoji(opts.messageReactions?.get(reactionMessageId), opts.userId)}
-            .onSelect=${(emoji: string, remove: boolean) =>
-              opts.onReact?.(reactionMessageId, emoji, remove)}
-          ></openclaw-message-reaction-picker>`
         : nothing
     }
   `;
 }
 
-export function renderReplyButton(
+function renderReplyButton(
   target: MessageReplyTarget,
   onReply: (target: MessageReplyTarget) => void,
 ) {
@@ -189,8 +172,45 @@ export function renderReplyButton(
         aria-label=${t("chat.messages.replyToMessage")}
         @click=${() => onReply(target)}
       >
-        ${icons.messageSquare}
+        ${replyIcon}
       </button>
     </openclaw-tooltip>
   `;
+}
+
+export type MessageReactionActionOptions = MessageReactionOptions & {
+  isStreaming: boolean;
+  messageActions?: MessageActionDetails | null;
+  onReply?: (target: MessageReplyTarget) => void;
+  onRewind?: () => void;
+  rewindDisabled?: boolean;
+};
+
+export function renderMessageReactionActions(
+  messageKey: string,
+  role: string,
+  opts: MessageReactionActionOptions,
+) {
+  const reactionMessageId = !opts.isStreaming ? opts.messageActions?.reactionMessageId : undefined;
+  if (
+    !reactionMessageId ||
+    (role !== "user" && role !== "assistant") ||
+    (!opts.messageReactions && !opts.onReact)
+  ) {
+    return nothing;
+  }
+  return html`<div class="chat-message-action-line" data-message-actions-for=${messageKey}>
+    <openclaw-chat-message-reactions
+      data-message-id=${reactionMessageId}
+      .messageId=${reactionMessageId}
+      .reactions=${opts.messageReactions?.get(reactionMessageId) ?? []}
+      .userId=${opts.userId}
+      .onReact=${opts.onReact}
+      .pending=${opts.pendingReactionMessageIds?.has(reactionMessageId) ?? false}
+      .layout=${role === "user" ? "user" : "assistant"}
+      .actions=${html`<div class="chat-message-actions-row">
+        ${renderMessageActionButtons(opts.messageActions ?? null, { ...opts, onRewind: role === "user" ? opts.onRewind : undefined })}
+      </div>`}
+    ></openclaw-chat-message-reactions>
+  </div>`;
 }

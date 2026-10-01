@@ -559,6 +559,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       permissionPicker: composerControls?.permissionPicker,
       ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
       messageReactions: this.messageReactions,
+      pendingReactionMessageIds: this.pendingReactionMessageIds,
       onReact: this.canReactToCurrentSession() ? this.handleMessageReaction : undefined,
       pullRequests: this.visibleSessionPullRequests,
       pullRequestsGateway: this.context.gateway,

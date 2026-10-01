@@ -58,6 +58,7 @@ function indexItems(
     transcriptItems: items,
     continuations: new Map(),
     searchActive: false,
+    completedReplyMessageKeys: new Set<string>(),
   };
   return projectTranscriptIndex(chain, new Map(), labels);
 }

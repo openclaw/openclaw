@@ -1,7 +1,6 @@
 // Pane-local search, context menus, selection actions, and presentation resets.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -46,6 +45,7 @@ import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import { isConfirmedActionPopoverFocused } from "./chat-message-confirmation.ts";
 import type { MessageActionDetails } from "./chat-message-markdown.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { MessageReactionOptions } from "./chat-message-reactions.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
@@ -106,108 +106,107 @@ type ReplyMessageAccess = {
   open: (messageId: string) => void;
 };
 
-export type ChatThreadProps = ChatSendStatusActions & {
-  messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
-  onReact?: (messageId: string, emoji: string, remove: boolean) => void;
-  branding?: ThemeBranding;
-  compactionStatus?: CompactionStatus | null;
-  paneId: string;
-  /** Routing for peer sender names in a shared session. */
-  personActivity?: PersonActivityRouting;
-  sessionKey: string;
-  presented?: boolean;
-  /** Mounted transcript visibility, independent of which split pane owns input. */
-  transcriptVisible?: boolean;
-  gatewayClient?: GatewayBrowserClient | null;
-  selectedSession: GatewaySessionRow | undefined;
-  boardProvider?: BoardProvider;
-  announceTranscript?: boolean;
-  loading: boolean;
-  routeLoadingSkeleton?: boolean;
-  /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
-  historyPagination?: ChatHistoryBoundaryProps;
-  messages: unknown[];
-  toolMessages: unknown[];
-  latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
-  guardianNotices?: ChatGuardianNotice[];
-  streamSegments: ChatStreamSegment[];
-  stream: string | null;
-  streamStartedAt: number | null;
-  /** Browser-local active run identity, retained across transient disconnects. */
-  runId?: string | null;
-  runUsageById?: ReadonlyMap<string, RunOutputUsage>;
-  runStatus?: ChatRunUiStatus | null;
-  queue: ChatQueueItem[];
-  initialTurnId?: string;
-  pendingInputs?: ChatPendingInputsPage["items"];
-  showThinking: boolean;
-  showToolCalls: boolean;
-  persistCommentary?: boolean;
-  runActive?: boolean;
-  runWorking?: boolean;
-  startupLabel?: string;
-  waitingApproval?: boolean;
-  questionPrompts?: readonly QuestionPrompt[];
-  asyncQuestions?: AsyncQuestionPresentation;
-  sessions: SessionsListResult | null;
-  /** Host context resolving global-alias session keys (scope=global fleets). */
-  sessionHost?: UiSessionDefaultsHost | null;
-  assistantName: string;
-  assistantAvatar: string | null;
-  senderAgentAvatars?: ReadonlyMap<string, string | null>;
-  agents?: AgentsListResult["agents"];
-  /** Configured main-session key; an agent's main source labels as the agent. */
-  mainKey?: string;
-  currentAgentId?: string;
-  assistantAvatarUrl?: string | null;
-  userId?: string | null;
-  userName?: string | null;
-  userAvatar?: string | null;
-  basePath?: string;
-  sessionPublicOrigin?: string;
-  resourceBasePath?: string;
-  fullMessageAgentId?: string;
-  loadFullAssistantMessage?: SidebarFullMessageLoader | null;
-  mediaPolicyEpoch?: number;
-  connectionEpoch?: number;
-  assistantAttachmentAuthToken?: string | null;
-  resolveArtifactDownload?: ArtifactDownloadResolver;
-  canvasPluginSurfaceUrl?: string | null;
-  embedSandboxMode?: EmbedSandboxMode;
-  allowExternalEmbedUrls?: boolean;
-  fetchLinkFavicon?: LinkFaviconFetcher;
-  pluginToolIcons?: PluginToolIcons;
-  githubRepo?: MarkdownRenderOptions["githubRepo"];
-  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
-  autoExpandToolCalls?: boolean;
-  realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  typingActors?: readonly ChatTypingActorView[];
-  typingOverflow?: ChatTypingOverflow;
-  onOpenSidebar?: (content: SidebarContent) => void;
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
-  onOpenSessionLink?: (target: SessionLinkTarget) => void;
-  onNavigate?: (routeId: "cron", options: { search: string }) => void;
-  onRequestOpenImage?: () => number;
-  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
-  onAssistantAttachmentLoaded?: () => void;
-  onRequestUpdate?: () => void;
-  onChatScroll?: (event: Event) => void;
-  onHistoryIntent?: (event: Event) => void;
-  onDraftChange: (next: string) => void;
-  onSend: () => void;
-  onSetReply?: (target: MessageReplyTarget) => void;
-  replyMessageAccess?: ReplyMessageAccess;
-  onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
-  onForkMessage?: (entryId: string) => Promise<void> | void;
-  onFocusComposer?: () => void;
-  commentAttachments?: readonly ChatAttachment[];
-  commentsDisabled?: boolean;
-  onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-  onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-  onOpenSession?: (sessionKey: string) => void;
-  modelSetupRequired?: boolean;
-  onModelSetup?: () => void;
-};
+export type ChatThreadProps = ChatSendStatusActions &
+  MessageReactionOptions & {
+    branding?: ThemeBranding;
+    compactionStatus?: CompactionStatus | null;
+    paneId: string;
+    /** Routing for peer sender names in a shared session. */
+    personActivity?: PersonActivityRouting;
+    sessionKey: string;
+    presented?: boolean;
+    /** Mounted transcript visibility, independent of which split pane owns input. */
+    transcriptVisible?: boolean;
+    gatewayClient?: GatewayBrowserClient | null;
+    selectedSession: GatewaySessionRow | undefined;
+    boardProvider?: BoardProvider;
+    announceTranscript?: boolean;
+    loading: boolean;
+    routeLoadingSkeleton?: boolean;
+    /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
+    historyPagination?: ChatHistoryBoundaryProps;
+    messages: unknown[];
+    toolMessages: unknown[];
+    latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
+    guardianNotices?: ChatGuardianNotice[];
+    streamSegments: ChatStreamSegment[];
+    stream: string | null;
+    streamStartedAt: number | null;
+    /** Browser-local active run identity, retained across transient disconnects. */
+    runId?: string | null;
+    runUsageById?: ReadonlyMap<string, RunOutputUsage>;
+    runStatus?: ChatRunUiStatus | null;
+    queue: ChatQueueItem[];
+    initialTurnId?: string;
+    pendingInputs?: ChatPendingInputsPage["items"];
+    showThinking: boolean;
+    showToolCalls: boolean;
+    persistCommentary?: boolean;
+    runActive?: boolean;
+    runWorking?: boolean;
+    startupLabel?: string;
+    waitingApproval?: boolean;
+    questionPrompts?: readonly QuestionPrompt[];
+    asyncQuestions?: AsyncQuestionPresentation;
+    sessions: SessionsListResult | null;
+    /** Host context resolving global-alias session keys (scope=global fleets). */
+    sessionHost?: UiSessionDefaultsHost | null;
+    assistantName: string;
+    assistantAvatar: string | null;
+    senderAgentAvatars?: ReadonlyMap<string, string | null>;
+    agents?: AgentsListResult["agents"];
+    /** Configured main-session key; an agent's main source labels as the agent. */
+    mainKey?: string;
+    currentAgentId?: string;
+    assistantAvatarUrl?: string | null;
+    userId?: string | null;
+    userName?: string | null;
+    userAvatar?: string | null;
+    basePath?: string;
+    sessionPublicOrigin?: string;
+    resourceBasePath?: string;
+    fullMessageAgentId?: string;
+    loadFullAssistantMessage?: SidebarFullMessageLoader | null;
+    mediaPolicyEpoch?: number;
+    connectionEpoch?: number;
+    assistantAttachmentAuthToken?: string | null;
+    resolveArtifactDownload?: ArtifactDownloadResolver;
+    canvasPluginSurfaceUrl?: string | null;
+    embedSandboxMode?: EmbedSandboxMode;
+    allowExternalEmbedUrls?: boolean;
+    fetchLinkFavicon?: LinkFaviconFetcher;
+    pluginToolIcons?: PluginToolIcons;
+    githubRepo?: MarkdownRenderOptions["githubRepo"];
+    githubRepositories?: MarkdownRenderOptions["githubRepositories"];
+    autoExpandToolCalls?: boolean;
+    realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+    typingActors?: readonly ChatTypingActorView[];
+    typingOverflow?: ChatTypingOverflow;
+    onOpenSidebar?: (content: SidebarContent) => void;
+    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+    onOpenSessionLink?: (target: SessionLinkTarget) => void;
+    onNavigate?: (routeId: "cron", options: { search: string }) => void;
+    onRequestOpenImage?: () => number;
+    onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+    onAssistantAttachmentLoaded?: () => void;
+    onRequestUpdate?: () => void;
+    onChatScroll?: (event: Event) => void;
+    onHistoryIntent?: (event: Event) => void;
+    onDraftChange: (next: string) => void;
+    onSend: () => void;
+    onSetReply?: (target: MessageReplyTarget) => void;
+    replyMessageAccess?: ReplyMessageAccess;
+    onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
+    onForkMessage?: (entryId: string) => Promise<void> | void;
+    onFocusComposer?: () => void;
+    commentAttachments?: readonly ChatAttachment[];
+    commentsDisabled?: boolean;
+    onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onOpenSession?: (sessionKey: string) => void;
+    modelSetupRequired?: boolean;
+    onModelSetup?: () => void;
+  };
 
 type TranscriptInteractionProps = Pick<
   ChatThreadProps,

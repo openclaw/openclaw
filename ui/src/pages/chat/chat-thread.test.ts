@@ -541,7 +541,7 @@ describe("collapseCompletedTurnWork", () => {
     collapseCompletedTurnWork(coalesceStreamRuns(buildCachedChatItems(createProps(props))), {
       sessionKey: "agent:main:dashboard:test-session",
       runWorking,
-    });
+    }).items;
 
   function requireWorkGroup(value: unknown): WorkGroupItem {
     const record = requireRecord(value);
@@ -622,7 +622,7 @@ describe("collapseCompletedTurnWork", () => {
       }),
     );
 
-    const rendered = collapseCompletedTurnWork(items, { sessionKey, runWorking: false });
+    const rendered = collapseCompletedTurnWork(items, { sessionKey, runWorking: false }).items;
 
     expect(rendered.map((item) => item.kind)).toEqual(["group", "group", "group", "group"]);
   });

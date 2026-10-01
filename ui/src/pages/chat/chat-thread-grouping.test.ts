@@ -199,7 +199,7 @@ describe("reasoning activity boundaries", () => {
       collapseCompletedTurnWork(groups, {
         sessionKey: "agent:main:dashboard:reasoning",
         runWorking: false,
-      }),
+      }).items,
     ).toMatchObject([
       { kind: "group", role: "user" },
       { kind: "work-group", groups: [{ messages: [{ message: messages[1] }] }] },
@@ -387,7 +387,7 @@ describe("cached group content classification", () => {
       collapseCompletedTurnWork(cachedGroups(history), {
         sessionKey: "agent:target:dashboard:history",
         runWorking: false,
-      });
+      }).items;
 
     expect(project()).toMatchObject([
       { kind: "group", role: "user" },
@@ -465,7 +465,7 @@ describe("explicit answer visibility across continuations", () => {
             collapseCompletedTurnWork(cachedGroups(history), {
               sessionKey: "agent:main:dashboard:answers",
               runWorking: false,
-            }),
+            }).items,
           ),
         );
         const parts = items.flatMap((item) =>
@@ -534,7 +534,7 @@ describe("explicit answer visibility across continuations", () => {
             collapseCompletedTurnWork(cachedGroups(history), {
               sessionKey: "agent:main:dashboard:answers",
               runWorking: false,
-            }),
+            }).items,
           ),
         );
         const parts = items.flatMap((item) =>
@@ -625,7 +625,7 @@ describe("explicit answer visibility across continuations", () => {
               sessionKey: "agent:main:dashboard:answers",
               runWorking: false,
             },
-          ),
+          ).items,
         );
         expect(items.map((item) => item.kind)).toEqual(
           ownership === "independent-run"
@@ -682,7 +682,7 @@ describe("explicit answer visibility across continuations", () => {
     const items = collapseCompletedTurnWork(cachedGroups(messages), {
       sessionKey: "agent:main:dashboard:answers",
       runWorking: false,
-    });
+    }).items;
     expect(items.map((item) => item.kind)).toEqual([
       "group",
       "work-group",
@@ -731,7 +731,7 @@ describe("explicit answer visibility across continuations", () => {
         { role: "assistant", phase: "final_answer", content: "Later update", timestamp: 4 },
       ]),
       { sessionKey: "agent:main:dashboard:answers", runWorking: false },
-    );
+    ).items;
     expect(
       items
         .filter((item) => item.kind === "group")

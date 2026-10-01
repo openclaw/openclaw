@@ -162,7 +162,7 @@ export function projectChatTranscript(
   const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
   const transcriptChain = projectTranscriptChain(chatItems, {
     sessionKey: props.sessionKey,
-    runWorking: Boolean(props.runWorking),
+    runWorking: Boolean(props.runWorking || props.runActive),
     searchActive: searchFiltering,
     session: activeSession,
   });
@@ -309,6 +309,8 @@ export function projectChatTranscript(
       ...sharedMessageRenderOptions,
       messageReactions: props.messageReactions,
       onReact: props.onReact,
+      pendingReactionMessageIds: props.pendingReactionMessageIds,
+      completedReplyMessageKeys: transcriptChain.completedReplyMessageKeys,
       transcriptVisible: props.transcriptVisible,
       latestBrowserTabs,
       showReasoning,
@@ -378,7 +380,11 @@ export function projectChatTranscript(
       const recap = turnRecapByGroupKey.get(item.key);
       return `${hasWorkingIndicator ? workingUsageKey : ""}|${
         recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : ""
-      }|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
+      }|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}|${chatItemGroups(item)
+        .flatMap((group) => group.messages)
+        .filter((entry) => transcriptChain.completedReplyMessageKeys.has(entry.key))
+        .map((entry) => entry.key)
+        .join(" ")}`;
     }
     if (item.kind === "stream-run") {
       return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
@@ -397,7 +403,10 @@ export function projectChatTranscript(
     const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
     return `${continuationKey}|${recapKey}|${
       item.key === latestAssistantItemKey ? "latest-assistant" : ""
-    }|${searchFiltering ? "search-result" : ""}`;
+    }|${searchFiltering ? "search-result" : ""}|${item.messages
+      .filter((entry) => transcriptChain.completedReplyMessageKeys.has(entry.key))
+      .map((entry) => entry.key)
+      .join(" ")}`;
   };
   const rowPresentationDependencies = (item: ChatRenderItem): readonly unknown[] => {
     const dependencies: unknown[] = [liveStatusSignature(item)];
@@ -608,6 +617,9 @@ export function projectChatTranscript(
     mediaPolicyKey,
     props.assistantAttachmentAuthToken,
     props.connectionEpoch,
+    props.messageReactions,
+    props.onReact,
+    props.pendingReactionMessageIds,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
@@ -618,8 +630,6 @@ export function projectChatTranscript(
     markdownGitHubAliasSignature(props.githubRepositories, props.githubRepo),
     threadContextWindow,
     Boolean(props.onSetReply),
-    props.messageReactions,
-    Boolean(props.onReact),
     Boolean(props.asyncQuestions?.submit),
     Boolean(props.onRetryQueuedMessage),
     Boolean(props.onDiscardQueuedMessage),

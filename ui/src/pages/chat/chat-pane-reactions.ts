@@ -19,7 +19,11 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
   private reactionGeneration = 0;
   private reactionReadUpdates: Map<string, MessageReactionSummary[]> | undefined;
   private readonly reactionRevisions = new Map<string, number>();
-  private readonly reactionWrites = new Map<string, symbol>();
+  private reactionWrites = new Map<string, symbol>();
+
+  protected get pendingReactionMessageIds(): ReadonlyMap<string, unknown> {
+    return this.reactionWrites;
+  }
 
   protected resetSessionReactions(): void {
     this.reactionGeneration += 1;
@@ -27,7 +31,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
     this.messageReactions = new Map();
     this.reactionReadUpdates = undefined;
     this.reactionRevisions.clear();
-    this.reactionWrites.clear();
+    this.reactionWrites = new Map();
   }
 
   protected canReactToCurrentSession(): boolean {
@@ -147,7 +151,8 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
     const sessionId =
       selectedChatSessionRow(scope.state)?.sessionId ?? scope.state.currentSessionId;
     const operation = Symbol("reaction");
-    this.reactionWrites.set(messageId, operation);
+    this.reactionWrites = new Map(this.reactionWrites).set(messageId, operation);
+    this.requestUpdate();
     const isCurrent = () =>
       generation === this.reactionGeneration &&
       this.reactionWrites.get(messageId) === operation &&
@@ -183,6 +188,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
         generation === this.reactionGeneration &&
         this.reactionWrites.get(messageId) === operation
       ) {
+        this.reactionWrites = new Map(this.reactionWrites);
         this.reactionWrites.delete(messageId);
         this.requestUpdate();
       }

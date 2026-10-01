@@ -29,6 +29,7 @@ import {
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
+import "./chat-message-reactions.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import "./chat-clawhub-card.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
@@ -45,9 +46,9 @@ import { renderMessageWorkContext } from "./chat-message-context.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import type {
   ChatMessageRenderPreparation,
-  MessageActionDetails,
+  MessageReactionActionOptions,
 } from "./chat-message-markdown.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { prepareChatMessageRender, renderMessageReactionActions } from "./chat-message-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
 import {
   projectMessageMedia,
@@ -173,8 +174,7 @@ function renderPairingQrExpiryNotices(count: number) {
 export function renderGroupedMessage(
   preparation: ChatMessageRenderPreparation,
   messageKey: string,
-  opts: {
-    isStreaming: boolean;
+  opts: MessageReactionActionOptions & {
     isForwarded?: boolean;
     sessionKey?: string;
     presented?: boolean;
@@ -192,7 +192,6 @@ export function renderGroupedMessage(
     isUserMessageExpanded?: (messageId: string) => boolean;
     onToggleUserMessageExpanded?: (messageId: string) => void;
     assistantMessageDisclosure?: AssistantMessageDisclosure;
-    messageActions?: MessageActionDetails | null;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
@@ -542,8 +541,7 @@ export function renderGroupedMessage(
     );
   };
   const renderMessageContent = () => (renderInOrder ? renderOrderedContent() : renderText());
-  // Collapsed tool results must not load attachments or render hidden markdown.
-  // Retained panes use opacity, so hidden transcripts must unmount video previews.
+  // Collapsed tools omit hidden content; retained panes unmount videos while hidden.
   const renderBody = () => html`
     ${
       sourceRole === "assistant"
@@ -612,7 +610,8 @@ export function renderGroupedMessage(
     }
   `;
 
-  return html`
+  const reactionActions = renderMessageReactionActions(messageKey, role, opts);
+  const bubble = html`
     <div
       class="${bubbleClasses}"
       ${opts.entryRef ? ref(opts.entryRef) : nothing}
@@ -699,7 +698,12 @@ export function renderGroupedMessage(
             </div>`
           : nothing
       }
+      ${role === "user" ? nothing : reactionActions}
     </div>
-    ${renderMessageWorkContext(message)}
   `;
+  const messageContent =
+    role === "user" && reactionActions !== nothing
+      ? html`<div class="chat-message-with-reactions">${bubble}${reactionActions}</div>`
+      : bubble;
+  return html`${messageContent}${renderMessageWorkContext(message)}`;
 }

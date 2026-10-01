@@ -21,6 +21,7 @@ type ReactionsPane = {
   handleSessionReactionEvent(event: SessionReactionEvent): void;
   setMessageReaction(messageId: string, emoji: string, remove: boolean): Promise<void>;
   messageReactions: Map<string, MessageReactionSummary[]>;
+  pendingReactionMessageIds: ReadonlyMap<string, unknown>;
 };
 
 function fixture(
@@ -69,6 +70,27 @@ function fixture(
 }
 
 describe("pane reaction ownership", () => {
+  it("projects pending writes without optimistic success and keeps existing UI errors", async () => {
+    const set = createDeferred<SessionReactionsSetResult>();
+    const { pane, state, requests, event } = fixture(
+      Promise.resolve({ sessionId: "session-1", reactions: {} }),
+      set.promise,
+    );
+    pane.syncSessionReactions();
+    await Promise.resolve();
+    await Promise.resolve();
+    pane.handleSessionReactionEvent(event());
+    const write = pane.setMessageReaction("message-1", "👍", true);
+    expect(pane.pendingReactionMessageIds.has("message-1")).toBe(true);
+    expect(pane.messageReactions.get("message-1")).toEqual(peerReaction);
+    set.reject(new Error("offline"));
+    await write;
+    expect(pane.pendingReactionMessageIds.has("message-1")).toBe(false);
+    expect(pane.messageReactions.get("message-1")).toEqual(peerReaction);
+    expect(state.chatError).toContain("offline");
+    expect(state.lastError).toBe(state.chatError);
+    expect(requests).toEqual(["session.reactions.list", "session.reactions.set"]);
+  });
   it("loads once per session and retains live events over an older list response", async () => {
     const list = createDeferred<SessionReactionsListResult>();
     const { pane, event, requests } = fixture(list.promise);

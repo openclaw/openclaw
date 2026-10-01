@@ -450,6 +450,7 @@ function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
  * Once a turn is done, collect its activity above the preserved answers in one
  * "Worked for X" disclosure. Each partition retains source order without changing
  * the stored transcript. Live turns stay expanded; structural markers stay anchored.
+ * Return settled reply ownership from the same turn boundaries for message actions.
  */
 export function collapseCompletedTurnWork(
   items: TurnRenderItem[],
@@ -459,7 +460,11 @@ export function collapseCompletedTurnWork(
     searchActive?: boolean;
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
-): Array<TurnRenderItem | WorkGroupRenderItem> {
+): {
+  items: Array<TurnRenderItem | WorkGroupRenderItem>;
+  completedReplyMessageKeys: ReadonlySet<string>;
+} {
+  const completedReplyMessageKeys = new Set<string>();
   const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
     opts.sessionKey,
   ).split(":");
@@ -469,10 +474,9 @@ export function collapseCompletedTurnWork(
     kind === "dashboard" &&
     Boolean(sessionId) &&
     extraParts.length === 0;
-  // Channel sessions can also be opened in the Control UI, but their full
-  // transcript remains the canonical presentation on message surfaces.
-  if (!isDashboardSession || opts.searchActive) {
-    return items;
+  // Filtered search results do not contain the complete turn needed to own actions.
+  if (opts.searchActive) {
+    return { items, completedReplyMessageKeys };
   }
   const turns: TurnRenderItem[][] = [];
   let currentTurn: TurnRenderItem[] = [];
@@ -537,6 +541,25 @@ export function collapseCompletedTurnWork(
     // Without a final reply, the tool rows are the turn's only visible result.
     // Keep them exposed instead of replacing the result with an opaque rollup.
     if (!terminalReply) {
+      result.push(...turn);
+      continue;
+    }
+    // The turn owner supplies eligibility independently of work-log collapsing.
+    // Only its final visible message owns reactions, never an earlier segment or
+    // a reply inherited from a later steer continuation. Keep source groups intact
+    // so unchanged rows retain their render and focus identities.
+    const finalMessage =
+      finalReplyIndex >= 0
+        ? terminalReply.messages.findLast(({ hasVisibleContent }) => hasVisibleContent)
+        : undefined;
+    if (finalMessage && !assistantMessageIsInterrupted(finalMessage.message)) {
+      const stopReason = asRecord(finalMessage.message)?.stopReason;
+      if (stopReason !== "toolUse" && stopReason !== "error") {
+        completedReplyMessageKeys.add(finalMessage.key);
+      }
+    }
+    // Channel sessions keep their full transcript instead of collapsed work.
+    if (!isDashboardSession) {
       result.push(...turn);
       continue;
     }
@@ -619,7 +642,7 @@ export function collapseCompletedTurnWork(
     });
     result.push(...answers, ...turn.slice(segmentEnd + 1));
   }
-  return result;
+  return { items: result, completedReplyMessageKeys };
 }
 
 export type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;

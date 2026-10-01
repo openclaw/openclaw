@@ -32,17 +32,14 @@ import { activityHeadline, selectActivityHeadline } from "./chat-activity-headli
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { renderRewindButton } from "./chat-message-confirmation.ts";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
   renderMessageActionButtons,
-  renderReplyButton,
   prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown.ts";
-import { messageReactionOptions, renderGroupMessageReactions } from "./chat-message-reactions.ts";
 import { renderChatSendStatus } from "./chat-message-send-status.ts";
 import {
   isOwnSenderGroup,
@@ -77,12 +74,19 @@ function prepareGroupMessage(
   opts: RenderMessageGroupOptions,
 ) {
   const source = prepareChatMessageRender(item.message);
-  const details = resolveMessageActionDetails(source, {
+  let details = resolveMessageActionDetails(source, {
     ...opts,
     messageId: item.key,
     canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
     senderLabel: resolveMessageGroupSenderLabel(group, opts),
   });
+  if (
+    group.role === "assistant" &&
+    details?.reactionMessageId &&
+    !opts.completedReplyMessageKeys?.has(item.key)
+  ) {
+    details = { ...details, reactionMessageId: undefined };
+  }
   const messageId = details?.fullMessage?.messageId;
   if (messageId) {
     // Projected rows can share a source ID; a preceding row may have started its load.
@@ -135,9 +139,10 @@ function renderPreparedGroupMessage(
       autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
       assistantMessageDisclosure,
       messageActions: actionDetails,
+      onRewind: index === group.messages.length - 1 ? opts.onRewind : undefined,
     },
     opts.onOpenSidebar,
-  )}${renderGroupMessageReactions(group, actionDetails, isStreaming, opts)}`;
+  )}`;
 }
 
 export function renderActivityGroup(
@@ -453,7 +458,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
 
   const ownsRunFrame = opts.frameContent !== undefined;
   // Tool activity and live narration are blocks of the turn whose answer follows:
-  // no identity, footer or actions of their own, only the run-block gap.
+  // no identity/footer of their own. Saved narration keeps its inline message actions.
   const isTurnBlock =
     normalizedRole === "tool" ||
     (normalizedRole === "assistant" &&
@@ -470,7 +475,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
   const footerActionMessageKey = actionOwners.at(-1)?.key;
+  const hasInlineFooterActions = Boolean(
+    (opts.messageReactions || opts.onReact) && footerActionDetails?.reactionMessageId,
+  );
   const hasUserFooterActions =
+    !hasInlineFooterActions &&
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   const userFooterActions = hasUserFooterActions
@@ -479,13 +488,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           class="chat-group-footer-actions"
           data-message-actions-for=${footerActionMessageKey ?? nothing}
         >
-          ${
-            footerActionDetails?.replyTarget && opts.onReply
-              ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
-              : nothing
-          }
-          ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
-          ${renderMessageActionButtons(footerActionDetails, messageReactionOptions(group, opts))}
+          ${renderMessageActionButtons(footerActionDetails, opts)}
         </div>
       `
     : nothing;
@@ -555,6 +558,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 const { item, actions: actionDetails } = prepared;
                 const actions =
                   hasMessageActionButtons(actionDetails, opts) &&
+                  !((opts.messageReactions || opts.onReact) && actionDetails.reactionMessageId) &&
                   index < lastMessageIndex &&
                   !isTurnBlock
                     ? mobile
@@ -567,14 +571,14 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                             class="chat-group-footer-actions"
                             data-message-actions-for=${item.key}
                           >
-                            ${renderMessageActionButtons(actionDetails, opts)}
+                            ${renderMessageActionButtons(actionDetails, { onReply: opts.onReply })}
                           </div>
                         </div>`
                       : html`<div
                           class="chat-message-actions-row"
                           data-message-actions-for=${item.key}
                         >
-                          ${renderMessageActionButtons(actionDetails, opts)}
+                          ${renderMessageActionButtons(actionDetails, { onReply: opts.onReply })}
                         </div>`
                     : nothing;
                 // Assistant groups carry one line; your own replies keep theirs in the
@@ -665,7 +669,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 ${
                   isPeerGroup
                     ? userFooterActions
-                    : normalizedRole !== "user" && footerActionDetails
+                    : normalizedRole !== "user" && footerActionDetails && !hasInlineFooterActions
                       ? html`
                           <div
                             class="chat-group-footer-actions"

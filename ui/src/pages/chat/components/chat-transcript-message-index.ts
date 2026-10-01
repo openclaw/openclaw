@@ -32,6 +32,8 @@ type TranscriptChain = {
   workGroups: readonly Extract<ChatRenderItem, { kind: "work-group" }>[];
   collapsedItems: readonly ChatRenderItem[];
   transcriptItems: readonly ChatRenderItem[];
+  /** Final visible messages whose complete turn has settled. */
+  completedReplyMessageKeys: ReadonlySet<string>;
   /** Active status parts shown inside the preceding reply, keyed by that reply's group. */
   continuations: ReadonlyMap<string, StreamGroupPart[]>;
 };
@@ -213,6 +215,7 @@ export function projectTranscriptChain(
         collapsedItems,
         transcriptItems,
         workGroups: cached.value.workGroups,
+        completedReplyMessageKeys: cached.value.completedReplyMessageKeys,
         continuations: cached.value.continuations,
         searchActive: cached.value.searchActive,
       };
@@ -228,11 +231,9 @@ export function projectTranscriptChain(
     }
   }
   const build = () => {
+    const completedTurns = collapseCompletedTurnWork(coalesceStreamRuns(chatItems), options);
     const frames = coalesceAgentRunFrames(
-      coalesceActivityRuns(
-        collapseCompletedTurnWork(coalesceStreamRuns(chatItems), options),
-        options,
-      ),
+      coalesceActivityRuns(completedTurns.items, options),
       options,
     );
     const collapsedItems = options.searchActive ? frames : coalesceInterSessionUpdates(frames);
@@ -266,6 +267,7 @@ export function projectTranscriptChain(
       collapsedItems,
       transcriptItems,
       workGroups: transcriptItems.filter((item) => item.kind === "work-group"),
+      completedReplyMessageKeys: completedTurns.completedReplyMessageKeys,
       continuations,
       searchActive: options.searchActive,
     };

@@ -40,23 +40,29 @@ Busy sessions keep the first two people’s preview bubbles in arrival order, in
 
 ## Reactions
 
-Hover a saved prompt or assistant reply and select **Add reaction** beside the
-message actions, or the **+** chip at the end of an existing reaction row. The
-quick palette offers **👍**, **❤️**, **🎉**, **👀**, **🚀**, and **😂**; an emoji
-you already placed shows pressed, and selecting it again removes it. Arrow keys
-move through the palette and Escape closes it.
+Select **Add reaction**, the last control after Copy, Rewind (when available),
+and Reply, to open a compact picker beside the message actions. Choose a quick
+emoji or search for another. Arrow keys move through the choices and Escape
+closes the picker. An emoji you already placed shows pressed; selecting it again
+removes your reaction.
 
-Select **…** for any other emoji. Type or paste one, or open the system emoji
-picker with **⌃⌘Space** on macOS or **Win+.** on Windows: a complete emoji is
-applied as soon as it lands in the field, so the system picker needs no extra
-keystroke. Anything that is not a single emoji stays in the field with a hint.
-Backspace in an empty field returns to the palette.
+Reaction chips stay below the text instead of covering the bubble. For your
+right-aligned prompts they sit left of the action controls; for other people's
+left-aligned prompts they sit on the right. Assistant reactions appear below the
+final answer after the turn ends, not on intermediate or streaming updates.
+Single reactions show just the emoji, while counts appear from two onward.
+Crowded rows show **+N** for the remaining emoji types; expand it to inspect all
+of them without moving the action controls.
 
-Reaction chips appear directly below each message with a count and animate when
-the count changes. Hover a chip to see who reacted, with you listed first.
-Select a chip to add your reaction, or select a pressed chip again to remove
-yours. Viewers can read the chips; adding or toggling requires permission to
-send or suggest in that session. See
+Hover a chip briefly or focus it with the keyboard to see who reacted. The hover
+delay avoids flashing names while moving across the row. Select the names bubble
+to open **Who reacted**, a scrollable list using the identities already returned
+with the session's reactions. On touch screens, tap once to reveal the names,
+then tap the names for details or tap the chip again to toggle your reaction.
+
+Viewers can inspect reactions; adding or toggling still requires the existing
+permission to send or suggest in that session. The Gateway's reaction storage,
+APIs, events, agent notices, and channel mirroring are unchanged. See
 [Multi-user reactions](/concepts/multi-user#reactions) for agent and channel behavior.
 
 ## Session rail and side chat
