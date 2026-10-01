@@ -220,8 +220,10 @@ export type EmbeddedAgentSubscribeState = {
   messageToolOnlySourceReplyDelivered: boolean;
   sourceReplyDelivered?: true;
   sourceReplyDeliveryState?: ReplyDeliveryState;
-  /** Latest tool batch: "open" before any result, "progress" while it only sent source progress. */
-  toolBatchSourceProgress?: "open" | "progress";
+  /** Whether the current provider turn's finished tools were only complete source progress. */
+  turnToolsOnlySourceProgress?: boolean;
+  /** The same fact for the latest provider turn that finished any tool. */
+  lastToolTurnOnlySourceProgress?: boolean;
   successfulCronAdds: number;
   pendingToolMediaUrls: string[];
   pendingToolMediaAttachments?: ReplyMediaAttachment[];
@@ -390,7 +392,8 @@ type ToolHandlerState = Pick<
   | "messageToolOnlySourceReplyDelivered"
   | "sourceReplyDelivered"
   | "sourceReplyDeliveryState"
-  | "toolBatchSourceProgress"
+  | "turnToolsOnlySourceProgress"
+  | "lastToolTurnOnlySourceProgress"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"

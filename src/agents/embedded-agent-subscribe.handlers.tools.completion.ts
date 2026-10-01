@@ -391,14 +391,13 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-  ctx.state.toolBatchSourceProgress =
+  ctx.state.turnToolsOnlySourceProgress =
+    (ctx.state.turnToolsOnlySourceProgress ?? true) &&
     sourceReplyFinal === false &&
     isMessagingSend &&
     !isToolError &&
-    !messageDelivery?.partialDelivery &&
-    ctx.state.toolBatchSourceProgress
-      ? "progress"
-      : undefined;
+    !messageDelivery?.partialDelivery;
+  ctx.state.lastToolTurnOnlySourceProgress = ctx.state.turnToolsOnlySourceProgress;
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&

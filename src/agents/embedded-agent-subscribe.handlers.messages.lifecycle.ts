@@ -73,7 +73,7 @@ export function handleMessageEnd(
     ctx.state.deterministicApprovalPromptPending = false;
     ctx.state.deterministicApprovalPromptSent = false;
     ctx.state.currentSourceMessagingToolSentTextsNormalized.length = 0;
-    ctx.state.toolBatchSourceProgress = undefined;
+    ctx.state.lastToolTurnOnlySourceProgress = undefined;
     ctx.state.lastAssistant = undefined;
     return;
   }
@@ -94,12 +94,6 @@ export function handleMessageEnd(
     emitReasoningEnd(ctx);
   }
   ctx.noteLastAssistant(assistantMessage);
-  if (
-    Array.isArray(assistantMessage.content) &&
-    assistantMessage.content.some((block) => block.type === "toolCall")
-  ) {
-    ctx.state.toolBatchSourceProgress = "open";
-  }
   if (suppressVisibleAssistantOutput) {
     appendRawStream(
       () => ({
