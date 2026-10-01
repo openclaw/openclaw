@@ -4059,6 +4059,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         String.raw`src\plugins\tools.optional.test.ts`,
         "src/plugins/tools.optional.test.ts",
         PLUGIN_PRERELEASE_NPM_SPEC_TEST,
+        "src/plugins/runtime.test.ts",
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
         "src/plugins/loader.test.ts",
         "src/plugins/install.npm-spec.e2e.test.ts",
@@ -4066,9 +4067,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     };
     const shards = createNodeTestShards(options);
     expect(shards.find((shard) => shard.shardName === "agentic-plugins")?.includePatterns).toEqual([
-      PLUGIN_PRERELEASE_NPM_SPEC_TEST,
+      "src/plugins/runtime.test.ts",
       "src/plugins/tools.optional.test.ts",
     ]);
+    expect(
+      shards.flatMap(
+        (shard) =>
+          shard.includePatterns
+            ?.filter((file) => file === PLUGIN_PRERELEASE_NPM_SPEC_TEST)
+            .map(() => shard.configs) ?? [],
+      ),
+    ).toEqual([["test/vitest/vitest.infra.config.ts"]]);
     expect(shards.filter((shard) => shard.shardName !== "agentic-plugins")).toEqual(
       createNodeTestShards({ includeReleaseOnlyPluginShards: false }),
     );
