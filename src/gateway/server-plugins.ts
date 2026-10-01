@@ -43,6 +43,7 @@ import {
   dispatchGatewayMethodInProcessRaw,
   getInProcessGatewayRequestContext,
 } from "./server-plugin-in-process-dispatch.js";
+import { readTrustedPluginSessionFacts } from "./server-plugin-session-facts.js";
 import {
   canTrustedOfficialPluginRequestScopes,
   createGatewaySubagentRuntime,
@@ -64,6 +65,7 @@ export {
 export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-dispatch.js";
 export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
+export { readTrustedPluginSessionFacts };
 export { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
 
 export async function dispatchTrustedPluginGatewayMethod<T>(
@@ -216,6 +218,8 @@ function createGatewayPluginRuntimeBindings(
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
+        readSessionFacts: (params) =>
+          readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
       },
       hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, signal),

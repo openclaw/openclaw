@@ -92,7 +92,6 @@ export async function executeNodeHostCommand(
     nodeSecurity,
     nodeAsk,
     inlineEvalHit,
-    requiresSecurityAuditSuppressionApproval,
     autoReviewBlockedByShellStartup,
     autoReviewEligibility,
     autoReviewArgv,
@@ -123,9 +122,7 @@ export async function executeNodeHostCommand(
       analysisOk,
       allowlistSatisfied,
       durableApprovalSatisfied,
-    }) ||
-    inlineEvalHit !== null ||
-    requiresSecurityAuditSuppressionApproval;
+    }) || inlineEvalHit !== null;
   if (
     !requiresAsk &&
     effectiveSecurity === "allowlist" &&
@@ -147,11 +144,6 @@ export async function executeNodeHostCommand(
         cwd: prepared.cwd,
       },
     };
-  }
-  if (requiresSecurityAuditSuppressionApproval) {
-    params.warnings.push(
-      "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
-    );
   }
   const registerNodeApproval = async (
     approvalId: string,
@@ -223,9 +215,7 @@ export async function executeNodeHostCommand(
         hostSecurity: current.hostSecurity,
         hostAsk: current.hostAsk,
         askFallback: current.askFallback,
-        requiresExplicitApproval:
-          currentAnalysis.inlineEvalHit !== null ||
-          currentAnalysis.requiresSecurityAuditSuppressionApproval,
+        requiresExplicitApproval: currentAnalysis.inlineEvalHit !== null,
       };
     } catch {
       return {
@@ -269,16 +259,14 @@ export async function executeNodeHostCommand(
       autoReviewBlockedByNodePolicy ||
       (params.autoReview === true && autoReviewBlockedByShellStartup) ||
       (params.autoReview === true && !autoReviewEligibility.eligible) ||
-      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
-      requiresSecurityAuditSuppressionApproval;
+      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand);
     if (
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
       !autoReviewBlockedByShellStartup &&
-      autoReviewEligibility.eligible &&
-      !requiresSecurityAuditSuppressionApproval
+      autoReviewEligibility.eligible
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const autoReviewReason =
@@ -653,8 +641,7 @@ export async function executeNodeHostCommand(
       (current.hostSecurity !== "allowlist" ||
         durableApprovalSatisfied ||
         (analysisOk && allowlistSatisfied)) &&
-      inlineEvalHit === null &&
-      !requiresSecurityAuditSuppressionApproval,
+      inlineEvalHit === null,
   });
   params.signal?.throwIfAborted();
   return dispatchNodeSystemRun({

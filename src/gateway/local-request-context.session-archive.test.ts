@@ -240,7 +240,7 @@ describe("scoped session archive tools", () => {
                   expectedSessionId: TARGET_ID,
                   archived: true,
                 }),
-              ).rejects.toThrow(/owner|assigned|own session/i);
+              ).rejects.toThrow(/session creator/i);
             },
           ),
         );
@@ -437,7 +437,7 @@ describe("scoped session archive tools", () => {
     },
   );
 
-  it("exposes owner and assignee self-archive for operator.write through the assembled tool surface", async () => {
+  it("allows creator self-archive and denies assignee archive or restore through the assembled tool surface", async () => {
     const scope = "operator.write";
     await withSessionToolsFixture(async (cfg) => {
       const request = getPluginRuntimeGatewayRequestScope();
@@ -534,14 +534,16 @@ describe("scoped session archive tools", () => {
                   expectedSessionId: TARGET_ID,
                   archived: value,
                 });
-              await archiveAssigned(true);
-              expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.archivedAt).toEqual(
-                expect.any(Number),
-              );
-              await archiveAssigned(false);
+              await expect(archiveAssigned(true)).rejects.toThrow(/session creator/i);
               expect(
                 loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.archivedAt,
               ).toBeUndefined();
+              const archivedAt = 123;
+              await upsertSessionEntryCore({ agentId: "main", sessionKey: TARGET }, { archivedAt });
+              await expect(archiveAssigned(false)).rejects.toThrow(/session creator/i);
+              expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.archivedAt).toBe(
+                archivedAt,
+              );
               return await admission.run(() =>
                 tool.execute("archive-own-session", { action: "patch", archived: true }),
               );

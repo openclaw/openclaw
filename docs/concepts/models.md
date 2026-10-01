@@ -273,8 +273,10 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 ### Choose the same model with different runtimes
 
 Set `pickerRuntimes` on an exact model entry to offer additional runtime choices
-in the Control UI. The entries share the model name and differ by their harness
-label. The configured `agentRuntime` remains the default:
+in the Control UI. Each entry shows its harness label. When both OpenClaw and
+Codex are configured for the same model, the Codex choice appends `codex` to its
+name. A model with only one configured harness keeps its plain name. The
+configured `agentRuntime` remains the default:
 
 ```json5
 {

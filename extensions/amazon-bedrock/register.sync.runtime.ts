@@ -113,10 +113,6 @@ function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): Stream
     });
 }
 
-function isBedrockServiceTier(value: string): value is BedrockServiceTier {
-  return BEDROCK_SERVICE_TIER_VALUES.some((tier) => tier === value);
-}
-
 function resolveBedrockServiceTier(
   extraParams: Record<string, unknown> | undefined,
   warn: (message: string) => void,
@@ -126,8 +122,9 @@ function resolveBedrockServiceTier(
     return undefined;
   }
   const normalized = raw.trim().toLowerCase();
-  if (isBedrockServiceTier(normalized)) {
-    return normalized;
+  const tier = BEDROCK_SERVICE_TIER_VALUES.find((candidate) => candidate === normalized);
+  if (tier) {
+    return tier;
   }
   warn(`ignoring invalid Bedrock service_tier param: ${raw}`);
   return undefined;
@@ -256,15 +253,6 @@ function hasCachePoint(blocks: BedrockContentBlock[] | undefined): boolean {
   return blocks?.some((b) => b.cachePoint != null) === true;
 }
 
-function makeCachePoint(cacheRetention: string | undefined): BedrockCachePoint {
-  return {
-    cachePoint: {
-      type: "default",
-      ...(cacheRetention === "long" ? { ttl: "1h" } : {}),
-    },
-  };
-}
-
 /**
  * Inject Bedrock Converse cache points into the payload when the shared runtime skipped them
  * because it didn't recognize the model ID (application inference profiles).
@@ -278,7 +266,9 @@ function injectBedrockCachePoints(
   if (!cacheRetention || cacheRetention === "none" || resolveBedrockPromptCachePolicy(model)) {
     return;
   }
-  const point = makeCachePoint(cacheRetention);
+  const point: BedrockCachePoint = {
+    cachePoint: { type: "default", ...(cacheRetention === "long" ? { ttl: "1h" } : {}) },
+  };
 
   // Inject into system prompt if missing.
   const system = payload.system as BedrockContentBlock[] | undefined;

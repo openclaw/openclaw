@@ -77,12 +77,10 @@ export async function withSubagentKillScope<T>(
   };
   const cancellationControl = {
     prepareRead: params.prepareRead,
-    assertCurrent: () => {
-      assertCurrent();
-    },
+    assertCurrent,
   };
   const selected = new Set<string>();
-  const releaseSessions: Array<() => void> = [];
+  const releaseSessions: Array<SubagentKillSession["release"]> = [];
   const releaseRetirements: Array<() => void> = [];
   const completeRetirementPublications: Array<() => void> = [];
   const holds: Array<NonNullable<ReturnType<typeof holdQueuedSwarmRun>>> = [];
@@ -363,11 +361,13 @@ export async function withSubagentKillScope<T>(
   completeRetirementPublications.forEach((complete) => complete());
   const released = await Promise.allSettled(holds.map((reservation) => reservation.release()));
   const retired = await Promise.allSettled(releaseRetirements.map(async (release) => release()));
-  releaseSessions.forEach((release) => release());
+  const releasedSessions = await Promise.allSettled(
+    releaseSessions.map(async (release) => release()),
+  );
   if (!outcome.ok) {
     throw outcome.error;
   }
-  for (const result of [...released, ...retired]) {
+  for (const result of [...released, ...retired, ...releasedSessions]) {
     if (result.status === "rejected") {
       throw result.reason;
     }

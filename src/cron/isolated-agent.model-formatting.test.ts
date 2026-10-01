@@ -84,10 +84,10 @@ describe("cron model selection", () => {
     expect(mocks.allowed).not.toHaveBeenCalled();
   });
 
-  it("lets the payload override a conflicting session model", async () => {
+  it("trims the payload override before selecting it over a conflicting session model", async () => {
     await expect(
       select({
-        payload: { ...payload, model: "openai/gpt-4.1-mini" },
+        payload: { ...payload, model: "  openai/gpt-4.1-mini  " },
         sessionEntry: { providerOverride: "anthropic", modelOverride: "claude-sonnet-4-6" },
       }),
     ).resolves.toMatchObject({ ok: true, ...selectedRef, modelSource: "payload" });

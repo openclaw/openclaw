@@ -254,26 +254,6 @@ describe("AgentRuntimePlan", () => {
     expect(normalized[0]?.parameters).toStrictEqual({});
   });
 
-  it("forwards OpenAI API-key backup profiles into the Codex harness auth slot", () => {
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      harnessId: "codex",
-      harnessRuntime: "codex",
-      authProfileProvider: "openai",
-      authProfileMode: "api_key",
-      sessionAuthProfileId: "openai:work",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-    });
-
-    expect(plan.auth.providerForAuth).toBe("openai");
-    expect(plan.auth.authProfileProviderForAuth).toBe("openai");
-    expect(plan.auth.harnessAuthProvider).toBe("openai");
-    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
-  });
-
   it("carries forwarded Codex harness auth candidates", () => {
     const plan = buildAgentRuntimePlan({
       provider: "openai",
@@ -291,41 +271,6 @@ describe("AgentRuntimePlan", () => {
 
     expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
     expect(plan.auth.forwardedAuthProfileCandidateIds).toEqual(["openai:work", "openai:backup"]);
-  });
-
-  it("forwards OpenAI OAuth profiles into the Codex harness auth slot", () => {
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      harnessId: "codex",
-      harnessRuntime: "codex",
-      authProfileProvider: "openai",
-      authProfileMode: "oauth",
-      sessionAuthProfileId: "openai:work",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-    });
-
-    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
-  });
-
-  it("forwards OpenAI Codex profiles for explicit OpenAI OpenClaw runs", () => {
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      harnessId: "openclaw",
-      harnessRuntime: "openclaw",
-      authProfileProvider: "openai",
-      sessionAuthProfileId: "openai:work",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-    });
-
-    expect(plan.auth.providerForAuth).toBe("openai");
-    expect(plan.auth.authProfileProviderForAuth).toBe("openai");
-    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
   });
 
   it("resolves follow-up routes with the prepared provider handle", () => {

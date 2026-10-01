@@ -77,16 +77,7 @@ export function hasLegacyAccountStreamingAliases(
   value: unknown,
   match: (entry: unknown) => boolean,
 ): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => match(account));
-}
-
-function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
-  // Clone nested records before migration so callers keep immutable before/after snapshots.
-  return { ...asObjectRecord(owner[key]) };
+  return Object.values(asObjectRecord(value) ?? {}).some((account) => match(account));
 }
 
 /**
@@ -121,9 +112,10 @@ export function normalizeLegacyStreamingAliases(
 
   const updated = { ...params.entry };
   let changed = false;
-  const streaming = ensureNestedRecord(updated, "streaming");
-  const block = ensureNestedRecord(streaming, "block");
-  const preview = ensureNestedRecord(streaming, "preview");
+  // Clone nested records so callers keep immutable before/after snapshots.
+  const streaming = { ...asObjectRecord(updated.streaming) };
+  const block = { ...asObjectRecord(streaming.block) };
+  const preview = { ...asObjectRecord(streaming.preview) };
 
   // Only fill `streaming.mode` when the modern nested field is absent.
   let movedStreamMode = false;
@@ -235,7 +227,6 @@ export function normalizeLegacyStreamingAliases(
     params.changes.push(
       `Set ${params.pathPrefix}.streaming.mode (${params.aliasOnlyMode}) to keep the previous default while migrating flat streaming keys.`,
     );
-    changed = true;
   }
 
   if (Object.keys(preview).length > 0) {

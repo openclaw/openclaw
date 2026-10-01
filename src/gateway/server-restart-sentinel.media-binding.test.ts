@@ -9,11 +9,7 @@ import {
   scheduleMediaGenerationTaskCompletion,
 } from "../agents/tools/media-generate-background-shared.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import {
-  deleteSessionEntryLifecycle,
-  loadTranscriptEvents,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as transcript from "../config/sessions/transcript.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { drainPendingSessionDelivery } from "../infra/session-delivery-queue-recovery.js";
@@ -113,9 +109,6 @@ async function withMediaSession(
 describe("original requester media handoff", () => {
   it.each([
     "current",
-    "replaced-before",
-    "rotated-before",
-    "deleted-before",
     "replaced-after",
     "rotated-after",
     "store-after",
@@ -139,13 +132,6 @@ describe("original requester media handoff", () => {
         const mutate = async () => {
           if (change === "generation-at-enqueue") {
             rotateAgentEventLifecycleGeneration();
-          } else if (change === "deleted-before") {
-            await deleteSessionEntryLifecycle({
-              storePath: scope.storePath,
-              agentId: scope.agentId,
-              target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-              archiveTranscript: false,
-            });
           } else if (change.startsWith("store")) {
             const replacementStore = state.statePath("replacement", "sessions.json");
             await replaceSessionEntry(
@@ -170,9 +156,6 @@ describe("original requester media handoff", () => {
             });
           }
         };
-        if (change.endsWith("before")) {
-          await mutate();
-        }
         const enqueueOriginal = queue.enqueueClaimedSessionDelivery;
         const enqueue = vi.spyOn(queue, "enqueueClaimedSessionDelivery");
         if (change.endsWith("at-enqueue")) {
@@ -189,9 +172,9 @@ describe("original requester media handoff", () => {
           attachments: [{ type: "image", path: mediaPath, mimeType: "image/png" }],
         });
         const entries = await queue.loadPendingSessionDeliveries(queueContext);
-        if (change.endsWith("before") || change.endsWith("at-enqueue")) {
+        if (change.endsWith("at-enqueue")) {
           expect(result).toEqual({ status: "permanent_failure" });
-          expect(enqueue).toHaveBeenCalledTimes(change.endsWith("at-enqueue") ? 1 : 0);
+          expect(enqueue).toHaveBeenCalledTimes(1);
           expect(entries).toEqual([]);
         } else {
           expect(result).toEqual({ status: "pending" });

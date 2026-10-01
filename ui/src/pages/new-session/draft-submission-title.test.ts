@@ -188,7 +188,6 @@ describe("prepared title creation handoff", () => {
       requestedAgentId: "main",
       catalogId,
       catalogLabel: catalogId,
-      model: "",
       startTerminal: true,
     });
     flow.setMessage("inspect this native-only workspace");

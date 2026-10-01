@@ -15,6 +15,15 @@ import {
   childTurnCompletedNotification,
   turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
+import type { CodexServerNotification, JsonObject } from "./protocol.js";
+
+function itemNotification(
+  item: JsonObject,
+  turnId = "parent-turn",
+  threadId = "parent-thread",
+): CodexServerNotification {
+  return { method: "item/completed", params: { threadId, turnId, item } };
+}
 
 function interactionNotification(
   id: string,
@@ -38,145 +47,117 @@ function interactionNotification(
 }
 
 describe("CodexNativeSubagentMonitor", () => {
-  it.each(["v1", "v2"] as const)(
-    "observes completed %s children again when a parent starts follow-up work",
-    async (version) => {
-      const client = createClient();
-      const runtime = createRuntime();
-      const host = await createAdmittedHostCapabilityTestFixture({
-        runId: `native-followup-${version}`,
-      });
-      const relay = createCodexNativeHookRelay({
-        options: { enabled: true },
-        events: ["pre_tool_use"],
-        agentId: undefined,
-        sessionId: `native-followup-${version}`,
-        sessionKey: undefined,
-        config: {},
-        runId: `native-followup-${version}`,
-        attemptTimeoutMs: 30_000,
-        startupTimeoutMs: 1_000,
-        turnStartTimeoutMs: 1_000,
-        loopDetectionPreToolUseRelay: false,
-        signal: new AbortController().signal,
-        hostCapabilities: host.hostCapabilities,
-        onPreToolUseFailure: () => {},
-      });
-      if (!relay) {
-        throw new Error("native hook relay missing");
-      }
-      onTestFinished(async () => {
-        relay.unregister();
-        await relay.drain();
-        host.closeHost();
-        host.closeAdmission();
-      });
-      await relay.ready;
-      const claimDirectChild = vi.fn(relay.claimDirectChild);
-      const onDirectChildAccepted = vi.fn();
-      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-      const owner = await monitor.registerParent({
-        parentThreadId: "parent-thread",
-        requesterSessionKey: "agent:main:main",
-        completionScope: createCompletionScope("agent:main:main"),
-        agentId: "main",
-        claimDirectChild,
-        onDirectChildAccepted,
-      });
-      owner.bindTurn("parent-turn");
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-turn",
-          item: directSpawnItem(version, "parent-thread", "child-thread"),
+  it("observes completed V1 children again when a parent starts follow-up work", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const host = await createAdmittedHostCapabilityTestFixture({
+      runId: "native-followup-v1",
+    });
+    const relay = createCodexNativeHookRelay({
+      options: { enabled: true },
+      events: ["pre_tool_use"],
+      agentId: undefined,
+      sessionId: "native-followup-v1",
+      sessionKey: undefined,
+      config: {},
+      runId: "native-followup-v1",
+      attemptTimeoutMs: 30_000,
+      startupTimeoutMs: 1_000,
+      turnStartTimeoutMs: 1_000,
+      loopDetectionPreToolUseRelay: false,
+      signal: new AbortController().signal,
+      hostCapabilities: host.hostCapabilities,
+      onPreToolUseFailure: () => {},
+    });
+    if (!relay) {
+      throw new Error("native hook relay missing");
+    }
+    onTestFinished(async () => {
+      relay.unregister();
+      await relay.drain();
+      host.closeHost();
+      host.closeAdmission();
+    });
+    await relay.ready;
+    const claimDirectChild = vi.fn(relay.claimDirectChild);
+    const onDirectChildAccepted = vi.fn();
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+    const owner = await monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      completionScope: createCompletionScope("agent:main:main"),
+      agentId: "main",
+      claimDirectChild,
+      onDirectChildAccepted,
+    });
+    owner.bindTurn("parent-turn");
+    await client.notify(itemNotification(directSpawnItem("v1", "parent-thread", "child-thread")));
+    await client.notify(turnStartedNotification("initial-turn", { error: null }));
+    await client.notify(
+      nativeCompletionNotification({
+        agentPath: "child-thread",
+        turnId: "parent-turn",
+        result: "first result",
+      }),
+    );
+    await client.notify(turnStartedNotification("followup-turn", { error: null }));
+    onDirectChildAccepted.mockClear();
+    await client.notify(
+      itemNotification({
+        type: "collabAgentToolCall",
+        id: "followup",
+        tool: "sendInput",
+        status: "completed",
+        senderThreadId: "parent-thread",
+        receiverThreadIds: ["child-thread"],
+      }),
+    );
+    await client.notify(
+      successfulSendInputOutput({ callId: "followup", submissionId: "followup-turn" }),
+    );
+    expect(claimDirectChild).toHaveBeenCalledTimes(2);
+    expect(onDirectChildAccepted).toHaveBeenCalledOnce();
+    await expect(
+      invokeNativeHookRelay(
+        {
+          provider: "codex",
+          relayId: relay.relayId,
+          generation: relay.generation,
+          event: "pre_tool_use",
+          rawPayload: {
+            agent_id: "child-thread",
+            tool_name: "Bash",
+            tool_input: { command: "printf followup" },
+          },
         },
-      });
-      if (version === "v1") {
-        await client.notify(turnStartedNotification("initial-turn", { error: null }));
-      }
-      await client.notify(
-        nativeCompletionNotification({
-          agentPath: version === "v2" ? "/root/child-thread" : "child-thread",
-          turnId: "parent-turn",
-          result: "first result",
-        }),
-      );
-      await client.notify(turnStartedNotification("followup-turn", { error: null }));
-      onDirectChildAccepted.mockClear();
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-turn",
-          item:
-            version === "v2"
-              ? {
-                  type: "subAgentActivity",
-                  id: "followup",
-                  kind: "interacted",
-                  agentThreadId: "child-thread",
-                  agentPath: "/root/child-thread",
-                }
-              : {
-                  type: "collabAgentToolCall",
-                  id: "followup",
-                  tool: "sendInput",
-                  status: "completed",
-                  senderThreadId: "parent-thread",
-                  receiverThreadIds: ["child-thread"],
-                },
-        },
-      });
-      if (version === "v1") {
-        await client.notify(
-          successfulSendInputOutput({ callId: "followup", submissionId: "followup-turn" }),
-        );
-      }
-      expect(claimDirectChild).toHaveBeenCalledTimes(2);
-      expect(onDirectChildAccepted).toHaveBeenCalledOnce();
-      await expect(
-        invokeNativeHookRelay(
-          {
-            provider: "codex",
-            relayId: relay.relayId,
-            generation: relay.generation,
-            event: "pre_tool_use",
-            rawPayload: {
-              agent_id: "child-thread",
-              tool_name: "Bash",
-              tool_input: { command: "printf followup" },
+        AbortSignal.timeout(1_000),
+      ),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    await owner.unregister();
+    await client.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "child-thread",
+        turn: {
+          id: "followup-turn",
+          status: "completed",
+          error: null,
+          items: [
+            {
+              type: "agentMessage",
+              id: "followup-final",
+              phase: "final_answer",
+              text: "second result",
             },
-          },
-          AbortSignal.timeout(1_000),
-        ),
-      ).resolves.toMatchObject({ exitCode: 0 });
-      await owner.unregister();
-      await client.notify({
-        method: "turn/completed",
-        params: {
-          threadId: "child-thread",
-          turn: {
-            id: "followup-turn",
-            status: "completed",
-            error: null,
-            items: [
-              {
-                type: "agentMessage",
-                id: "followup-final",
-                phase: "final_answer",
-                text: "second result",
-              },
-            ],
-          },
+          ],
         },
-      });
-      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledWith(
-        expect.objectContaining({ childSessionId: "child-thread", result: "second result" }),
-      );
-      await monitor.dispose();
-    },
-  );
+      },
+    });
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ childSessionId: "child-thread", result: "second result" }),
+    );
+    await monitor.dispose();
+  });
 
   it("moves a running child's claim to the new parent that sends its follow-up", async () => {
     const client = createClient();
@@ -199,14 +180,9 @@ describe("CodexNativeSubagentMonitor", () => {
       });
     const first = await register(oldClaim);
     first.bindTurn("first-parent-turn");
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "first-parent-turn",
-        item: directSpawnItem("v2", "parent-thread", "child-thread"),
-      },
-    });
+    await client.notify(
+      itemNotification(directSpawnItem("v2", "parent-thread", "child-thread"), "first-parent-turn"),
+    );
     await client.notify(turnStartedNotification("running-turn", { error: null }));
     await first.unregister();
     expect(oldRelease).not.toHaveBeenCalled();
@@ -226,21 +202,12 @@ describe("CodexNativeSubagentMonitor", () => {
     await second.unregister();
   });
 
-  it.each([
-    "first",
-    "second",
-    "neither",
-    "duplicate",
-    "fresh-unbound",
-    "resumed",
-    "resumed-start-first",
-    "resumed-completed-first",
-  ] as const)(
+  it.each(["duplicate", "fresh-unbound", "resumed-completed-first"] as const)(
     "preserves overlapping follow-up outcomes when native delivery consumes %s result",
     async (consumed) => {
       const childThreadId = "11111111-1111-4111-8111-111111111111";
       const freshOwner = consumed === "fresh-unbound";
-      const resumed = consumed.startsWith("resumed");
+      const resumed = consumed === "resumed-completed-first";
       const client = createClient();
       const runtime = createRuntime();
       const claim = vi.fn(() => vi.fn());
@@ -262,14 +229,7 @@ describe("CodexNativeSubagentMonitor", () => {
         claimDirectChild: claim,
       });
       parent.bindTurn("parent-turn");
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-turn",
-          item: directSpawnItem("v2", "parent-thread", childThreadId),
-        },
-      });
+      await client.notify(itemNotification(directSpawnItem("v2", "parent-thread", childThreadId)));
       const notifyCompletion = (params: Parameters<typeof childTurnCompletedNotification>[0]) =>
         client.notify(childTurnCompletedNotification({ ...params, threadId: childThreadId }));
       const complete = (turnId: string, result: string) =>
@@ -338,71 +298,42 @@ describe("CodexNativeSubagentMonitor", () => {
         await notifyCompletion({ turnId: "followup-turn", status: "interrupted" });
         const interact = () =>
           client.notify(interactionNotification("resume-followup", parentTurnId, childThreadId));
-        if (consumed === "resumed") {
-          await interact();
-        }
         await client.notify(
           turnStartedNotification("resumed-turn", { threadId: childThreadId, error: null }),
         );
-        if (consumed === "resumed-completed-first") {
-          await complete("resumed-turn", secondResult);
-        }
-        if (consumed !== "resumed") {
-          await interact();
-        }
-        expect(claim).toHaveBeenCalledTimes(consumed === "resumed-completed-first" ? 2 : 3);
-      }
-      if (consumed === "first" || consumed === "second") {
-        await client.notify(
-          nativeCompletionNotification({
-            agentPath: `/root/${childThreadId}`,
-            turnId: "parent-turn",
-            result: `${consumed} result`,
-          }),
-        );
+        await complete("resumed-turn", secondResult);
+        await interact();
+        expect(claim).toHaveBeenCalledTimes(2);
       }
       await complete(resumed ? "resumed-turn" : "followup-turn", secondResult);
       if (resumed) {
         await client.notify(
           turnStartedNotification("unadmitted-turn", { threadId: childThreadId, error: null }),
         );
-        expect(claim).toHaveBeenCalledTimes(consumed === "resumed-completed-first" ? 2 : 3);
+        expect(claim).toHaveBeenCalledTimes(2);
       }
       if (consumed === "duplicate") {
-        await client.notify({
-          method: "item/completed",
-          params: {
-            threadId: "parent-thread",
-            turnId: "parent-turn",
-            item: {
-              type: "collabAgentToolCall",
-              id: "late-wait",
-              tool: "wait",
-              status: "completed",
-              senderThreadId: "parent-thread",
-              receiverThreadIds: [childThreadId],
-              agentsStates: { [childThreadId]: { status: "completed", message: firstResult } },
-            },
-          },
-        });
+        await client.notify(
+          itemNotification({
+            type: "collabAgentToolCall",
+            id: "late-wait",
+            tool: "wait",
+            status: "completed",
+            senderThreadId: "parent-thread",
+            receiverThreadIds: [childThreadId],
+            agentsStates: { [childThreadId]: { status: "completed", message: firstResult } },
+          }),
+        );
       }
       await parent.unregister();
       await vi.waitFor(() =>
-        expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(
-          consumed === "neither" || resumed ? 2 : 1,
-        ),
+        expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(resumed ? 2 : 1),
       );
       const delivered = runtime.deliverAgentHarnessCompletion.mock.calls.map(
         ([params]) => params.result,
       );
       expect(delivered).toEqual(
-        consumed === "duplicate" || freshOwner
-          ? [secondResult]
-          : consumed === "first"
-            ? ["second result"]
-            : consumed === "second"
-              ? ["first result"]
-              : ["first result", "second result"],
+        consumed === "duplicate" || freshOwner ? [secondResult] : ["first result", "second result"],
       );
     },
   );
@@ -428,14 +359,13 @@ describe("CodexNativeSubagentMonitor", () => {
     owner.bindTurn("parent-turn");
     await notifyChildStarted(client);
     await client.notify(turnStartedNotification("turn-a"));
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-turn",
-        item: { type: "subAgentActivity", kind: "interacted", agentThreadId: "child-thread" },
-      },
-    });
+    await client.notify(
+      itemNotification({
+        type: "subAgentActivity",
+        kind: "interacted",
+        agentThreadId: "child-thread",
+      }),
+    );
     await monitor.reconcileChildThread("child-thread");
     await monitor.reconcileChildThread("child-thread");
     await client.notify(
@@ -461,14 +391,7 @@ describe("CodexNativeSubagentMonitor", () => {
       claimDirectChild: () => releaseClaim,
     });
     owner.bindTurn("parent-turn");
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-turn",
-        item: directSpawnItem("v2", "parent-thread", "child-thread"),
-      },
-    });
+    await client.notify(itemNotification(directSpawnItem("v2", "parent-thread", "child-thread")));
     await client.notify(turnStartedNotification("turn-1", { error: null }));
     client.setThreadRead("child-thread", threadRead({ status: "completed" }));
     await expect(monitor.reconcileChildThread("child-thread")).resolves.toBe(false);

@@ -97,7 +97,7 @@ describe("memory forget phase-signal failures", () => {
       updatedAt: observedAt,
       entries: phases,
     });
-    return { recalls, phases, origins: listMemoryEntryOrigins({ agentId: "main" }) };
+    return { recalls, phases, origins: await listMemoryEntryOrigins({ agentId: "main" }) };
   }
 
   it("preserves a later phase write after phase metadata failure", async () => {
@@ -182,8 +182,8 @@ describe("memory forget phase-signal failures", () => {
           workspaceDir,
         }),
       ).toEqual(expect.arrayContaining(before.recalls));
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before.origins);
-      const tombstones = listMemorySessionTombstones({ agentId: "main" });
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before.origins);
+      const tombstones = await listMemorySessionTombstones({ agentId: "main" });
       expect(tombstones).toMatchObject([{ sessionId: "target", reason: "forgotten" }]);
 
       await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
@@ -195,8 +195,8 @@ describe("memory forget phase-signal failures", () => {
           })
         ).map(({ key }) => key),
       ).not.toContain("target-entry");
-      expect(listMemoryEntryOrigins({ agentId: "main", sessionIds: ["target"] })).toEqual([]);
-      expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+      expect(await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["target"] })).toEqual([]);
+      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
       expect((await readPhaseSignalStore(workspaceDir, observedAt)).entries).toEqual(
         phases.entries,
       );
@@ -239,13 +239,13 @@ describe("memory forget phase-signal failures", () => {
           workspaceDir,
         }),
       ).toEqual(expect.arrayContaining(before.recalls));
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before.origins);
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before.origins);
       const phases = await readPhaseSignalStore(workspaceDir, observedAt);
       expect(phases.entries["target-entry"]).toEqual(
         targetPhaseRemains ? before.phases["target-entry"] : undefined,
       );
       expect(phases.entries["survivor-entry"]).toEqual(before.phases["survivor-entry"]);
-      const tombstones = listMemorySessionTombstones({ agentId: "main" });
+      const tombstones = await listMemorySessionTombstones({ agentId: "main" });
       expect(tombstones).toMatchObject([{ sessionId: "target", reason: "forgotten" }]);
 
       await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
@@ -258,11 +258,11 @@ describe("memory forget phase-signal failures", () => {
       expect((await readPhaseSignalStore(workspaceDir, observedAt)).entries).toEqual({
         "survivor-entry": before.phases["survivor-entry"],
       });
-      expect(listMemoryEntryOrigins({ agentId: "main", sessionIds: ["target"] })).toEqual([]);
-      expect(listMemoryEntryOrigins({ agentId: "main", sessionIds: ["survivor"] })).toEqual(
+      expect(await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["target"] })).toEqual([]);
+      expect(await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["survivor"] })).toEqual(
         before.origins.filter(({ sessionId }) => sessionId === "survivor"),
       );
-      expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
     },
   );
 });

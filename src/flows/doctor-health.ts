@@ -1,4 +1,3 @@
-// Doctor health flow renders interactive health check output.
 import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
@@ -288,8 +287,30 @@ async function runDoctorHealthFlowWithResult(
         }
         const { backupDoctorMigrationDatabases } =
           await import("../commands/doctor-migration-backup.js");
+        const { createOpenClawAgentDatabasePathMatcher } =
+          await import("../state/openclaw-agent-db.paths.js");
+        const { normalizeAgentId } = await import("../routing/session-key.js");
+        const samePath = createOpenClawAgentDatabasePathMatcher();
+        const discovery = schemas.agentDatabaseMigrationDiscovery?.discovery;
+        const databasePaths = discovery?.targets
+          .filter(
+            (database) =>
+              !schemas.agentRefusals?.some(
+                (refusal) =>
+                  normalizeAgentId(refusal.agentId) === normalizeAgentId(database.agentId) &&
+                  refusal.paths.some((pathname) => samePath(pathname, database.path)),
+              ) &&
+              !schemas.indeterminate.some(
+                (failure) =>
+                  failure.kind === "agent" &&
+                  (failure.path === database.path ||
+                    discovery.sourceIdentities.get(failure.path)?.realPath === database.realPath),
+              ),
+          )
+          .map((database) => database.path);
         const backups = await backupDoctorMigrationDatabases({
           env: process.env,
+          databasePaths: databasePaths ?? [],
           pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
           verifiedSnapshots,
         });
@@ -331,7 +352,7 @@ async function runDoctorHealthFlowWithResult(
         await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
       const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
       await maybeRepairUiProtocolFreshness(doctorRuntime, prompter);
-      noteSourceInstallIssues(root);
+      await noteSourceInstallIssues(root);
       await noteStalePluginRuntimeSymlinks(root);
       noteStartupOptimizationHints();
 

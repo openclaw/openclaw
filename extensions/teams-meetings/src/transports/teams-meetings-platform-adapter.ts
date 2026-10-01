@@ -1,9 +1,7 @@
 import {
   MeetingPlatformAdapter,
   type MeetingBrowserJoinSession,
-  type MeetingManualActionCategory,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import type { TeamsMeetingsMode } from "../config.js";
 import {
   teamsMeetingAudioCaptureScript,
   teamsMeetingLeaveScript,
@@ -16,7 +14,11 @@ import {
   normalizeTeamsMeetingUrl,
   normalizeTeamsMeetingUrlForReuse,
 } from "./teams-meetings-urls.js";
-import type { TeamsMeetingsChromeHealth, TeamsMeetingsTranscriptSnapshot } from "./types.js";
+import type {
+  TeamsMeetingsChromeHealth,
+  TeamsMeetingsMode,
+  TeamsMeetingsTranscriptSnapshot,
+} from "./types.js";
 
 function teamsMeetingOrigin(meetingUrl: string): string | undefined {
   try {
@@ -28,15 +30,6 @@ function teamsMeetingOrigin(meetingUrl: string): string | undefined {
     return undefined;
   }
 }
-
-const manualActionCategories = new Map<string, MeetingManualActionCategory>([
-  ["teams-login-required", "login-required"],
-  ["teams-admission-required", "admission-required"],
-  ["teams-permission-required", "permission-required"],
-  ["teams-audio-choice-required", "audio-choice-required"],
-  ["teams-session-conflict", "session-conflict"],
-  ["browser-control-unavailable", "browser-control-unavailable"],
-]);
 
 export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
   MeetingBrowserJoinSession<TeamsMeetingsMode>,
@@ -81,65 +74,19 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     isRecoverableTab: isRecoverableTeamsMeetingTab,
     localeAction: () => undefined,
   },
-  browser: {
-    buildAudioCaptureScript: teamsMeetingAudioCaptureScript,
-    allowsMicrophone: MeetingPlatformAdapter.isTalkBackMode,
-    buildStatusJoinScript: (params) =>
-      teamsMeetingStatusScript({
-        allowMicrophone: MeetingPlatformAdapter.isTalkBackMode(params.mode),
-        allowSessionAdoption: params.allowSessionAdoption,
-        autoJoin: params.autoJoin,
-        captureCaptions: params.captureCaptions,
-        guestName: params.guestName,
-        meetingSessionId: params.meetingSessionId || undefined,
-        meetingUrl: params.url,
-        readOnly: params.readOnly,
-        waitForInCallMs: params.waitForInCallMs,
-      }),
-    shouldRetryJoinStatus: (health) =>
-      health.inCall === true &&
-      ((health.manualAction?.reason === "teams-audio-choice-required" &&
-        health.audioInputRouted === true &&
-        health.audioOutputRouteRetryable === true) ||
-        (health.manualAction === undefined &&
-          health.captionCaptureRequested === true &&
-          health.captioning !== true)),
-    browserControlUnavailable: () => ({
-      category: "browser-control-unavailable",
-      reason: "browser-control-unavailable",
-      message:
-        "Open the OpenClaw browser profile, finish the Teams sign-in, admission, or permission prompt, then retry.",
-    }),
-    buildLeaveScript: (meetingUrl) =>
-      teamsMeetingLeaveScript({
-        leaveInitiated: false,
-        meetingSessionId: "",
-        meetingUrl,
-      }),
-    buildSessionLeaveScript: teamsMeetingLeaveScript,
-    captions: {
-      // Durable notes observe the caption stream in every mode; live transcript
-      // visibility remains gated by MeetingSessionRuntime.
-      enabled: () => true,
-      buildTranscriptScript: ({ finalize, meetingSessionId, meetingUrl }) =>
-        teamsMeetingTranscriptScript(meetingUrl, meetingSessionId, finalize),
-    },
-    permissions: ({ allowMicrophone, meetingUrl }) => {
-      const origin = teamsMeetingOrigin(meetingUrl);
-      return allowMicrophone && origin
-        ? {
-            origin,
-            permissions: ["audioCapture"],
-            optionalPermissions: ["speakerSelection"],
-          }
-        : undefined;
-    },
-  },
-  parsing: {
-    classifyManualActionReason: (reason) => manualActionCategories.get(reason) ?? "custom",
+  ...MeetingPlatformAdapter.createBrowserAdapterOptions({
     displayName: "Teams",
-    invalidTranscriptMessage: "Microsoft Teams transcript payload is invalid.",
-    malformedStatusMessage: "Microsoft Teams browser status JSON is malformed.",
-    malformedTranscriptMessage: "Microsoft Teams transcript JSON is malformed.",
-  },
+    transcriptDisplayName: "Microsoft Teams",
+    manualActionReasonPrefix: "teams",
+    retryCaptions: true,
+    unavailableMessage:
+      "Open the OpenClaw browser profile, finish the Teams sign-in, admission, or permission prompt, then retry.",
+    origin: teamsMeetingOrigin,
+    scripts: {
+      audioCapture: teamsMeetingAudioCaptureScript,
+      status: teamsMeetingStatusScript,
+      leave: teamsMeetingLeaveScript,
+      transcript: teamsMeetingTranscriptScript,
+    },
+  }),
 });

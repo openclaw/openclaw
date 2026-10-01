@@ -1,8 +1,8 @@
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { createSendCfgThreadingRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { IrcClient } from "./client.js";
-import { setIrcRuntime } from "./runtime.js";
+import * as ircRuntime from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => {
@@ -106,7 +106,7 @@ function createClient(isReady = () => true) {
 describe("sendMessageIrc cfg threading", () => {
   beforeEach(() => {
     resetHoistedMocks();
-    setIrcRuntime(createSendCfgThreadingRuntime(hoisted) as never);
+    ircRuntime.setIrcRuntime(createSendCfgThreadingRuntime(hoisted) as never);
   });
 
   it("uses explicitly provided cfg without loading runtime config", async () => {
@@ -207,9 +207,8 @@ describe("sendMessageIrc cfg threading", () => {
 
   it("sends with provided cfg when runtime activity recording is unavailable", async () => {
     const client = createClient();
-    hoisted.record.mockImplementation(() => {
-      throw new Error("IRC runtime not initialized");
-    });
+    const runtime = vi.spyOn(ircRuntime, "getOptionalIrcRuntime").mockReturnValueOnce(null);
+    onTestFinished(() => runtime.mockRestore());
 
     const result = await sendMessageIrc("#room", "hello", {
       cfg: providedCfg,
@@ -217,6 +216,7 @@ describe("sendMessageIrc cfg threading", () => {
     });
 
     expect(hoisted.loadConfig).not.toHaveBeenCalled();
+    expect(hoisted.record).not.toHaveBeenCalled();
     expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello", undefined);
     expect(result.target).toBe("#room");
     expect(result.messageId).toBeTypeOf("string");

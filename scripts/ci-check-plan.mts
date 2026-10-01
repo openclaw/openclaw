@@ -52,7 +52,11 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     runs("prod-types") || runs("test-types")
       ? await (
           await import("./run-tsgo-core-test-shards.mts")
-        ).createChangedCiTypeCheckPlan(input.changedPaths, { cwd: process.cwd() })
+        ).createChangedCiTypeCheckPlan(input.changedPaths, {
+          cwd: process.cwd(),
+          coreBoundaryOwner:
+            input.typeGraphBoundaryOwner === "additional-checks" ? "additional-checks" : undefined,
+        })
       : null;
   // Full selection needs no discovery, but a boundary without another admitted owner stays here.
   if (

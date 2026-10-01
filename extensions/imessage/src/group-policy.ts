@@ -28,18 +28,7 @@ export function resolveIMessageGroupToolPolicy(
   });
 }
 
-/**
- * Per-group `systemPrompt` resolution. Mirrors `resolveWhatsAppGroupSystemPrompt`
- * in `extensions/whatsapp/src/system-prompt.ts`:
- *
- * 1. If the matched per-`chat_id` entry exists AND defines `systemPrompt` (key
- *    is present, value is non-null), use it. Trim whitespace; if the trim
- *    leaves an empty string, return `undefined` and DO NOT fall through to the
- *    wildcard. This is how operators say "this specific group has no prompt"
- *    without inheriting from `groups["*"]`.
- * 2. Otherwise, return the wildcard `groups["*"].systemPrompt` (trimmed; empty
- *    after trim → `undefined`).
- */
+// An explicitly empty group prompt suppresses the wildcard instead of inheriting it.
 export function resolveIMessageGroupSystemPrompt(params: {
   groupConfig?: Readonly<Record<string, unknown>>;
   defaultConfig?: Readonly<Record<string, unknown>>;

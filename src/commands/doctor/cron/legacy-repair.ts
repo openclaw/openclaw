@@ -146,7 +146,7 @@ export async function loadLegacyCronRepairState(params: {
   }
   let persistedQuarantine: CronQuarantinedJob[];
   try {
-    persistedQuarantine = loadCronQuarantinedJobs(storePath, params.env);
+    persistedQuarantine = await loadCronQuarantinedJobs(storePath, params.env);
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);
     persistedQuarantine = [];

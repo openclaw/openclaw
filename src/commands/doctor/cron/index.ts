@@ -174,7 +174,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
 
   try {
-    const quarantine = loadCronQuarantinedJobs(storePath);
+    const quarantine = await loadCronQuarantinedJobs(storePath);
     if (quarantine.length > 0) {
       findings.push(
         legacyCronStoreFinding({
@@ -374,7 +374,7 @@ export async function maybeRepairLegacyCronStore(params: {
   ).length;
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
   try {
-    const quarantine = loadCronQuarantinedJobs(storePath);
+    const quarantine = await loadCronQuarantinedJobs(storePath);
     if (quarantine.length > 0) {
       note(
         [

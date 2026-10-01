@@ -1,4 +1,3 @@
-// Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
 import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
@@ -490,18 +489,6 @@ const bootstrapSizeCheck: HealthCheck = {
   },
 };
 
-function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): HealthCheck {
-  return {
-    id: "core/doctor/provider-catalog-projection",
-    kind: "core",
-    description: "Provider catalog hooks project into unified text model catalog rows.",
-    source: "doctor",
-    async detect(ctx) {
-      return deps.collectProviderCatalogProjectionFindings(ctx);
-    },
-  };
-}
-
 function noteTextToFinding(params: {
   checkId: string;
   severity: HealthFinding["severity"];
@@ -601,20 +588,6 @@ const claudeCliCheck: HealthCheck = {
     return collector.findings;
   },
 };
-
-function createSecurityCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
-  return {
-    id: "core/doctor/security",
-    updateReadiness: "post-plugin",
-    kind: "core",
-    description: "Security posture checks produce structured findings.",
-    source: "doctor",
-    async detect(ctx) {
-      const findings = await deps.collectSecurityWarnings(ctx.cfg, ctx.env);
-      return findings.map(securityAuditFindingToHealthFinding);
-    },
-  };
-}
 
 const openAIOAuthTlsCheck: HealthCheck = {
   id: "core/doctor/oauth-tls",
@@ -800,32 +773,6 @@ const gatewayPlatformNotesCheck: HealthCheck = {
     );
   },
 };
-
-function createGatewayHealthCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
-  return {
-    id: GATEWAY_HEALTH_CHECK_ID,
-    kind: "core",
-    description: "Authenticated Gateway health and degraded secret owners are structured findings.",
-    source: "doctor",
-    defaultEnabled: false,
-    async detect(ctx) {
-      return deps.collectGatewayHealthFindings(ctx);
-    },
-  };
-}
-
-function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
-  return {
-    id: GATEWAY_DAEMON_CHECK_ID,
-    kind: "core",
-    description: "Local Gateway daemon service state is represented as structured findings.",
-    source: "doctor",
-    defaultEnabled: false,
-    async detect(ctx) {
-      return deps.collectGatewayDaemonFindings(ctx);
-    },
-  };
-}
 
 const nodeRuntimeCheck: HealthCheck = {
   id: "core/doctor/node-runtime",
@@ -1140,17 +1087,54 @@ export function createCoreHealthChecks(
     uiProtocolFreshnessCheck,
     gatewayServicesExtraCheck,
     gatewayPlatformNotesCheck,
-    createGatewayHealthCheck(deps),
-    createGatewayDaemonCheck(deps),
+    {
+      id: GATEWAY_HEALTH_CHECK_ID,
+      kind: "core",
+      description:
+        "Authenticated Gateway health and degraded secret owners are structured findings.",
+      source: "doctor",
+      defaultEnabled: false,
+      async detect(ctx) {
+        return deps.collectGatewayHealthFindings(ctx);
+      },
+    },
+    {
+      id: GATEWAY_DAEMON_CHECK_ID,
+      kind: "core",
+      description: "Local Gateway daemon service state is represented as structured findings.",
+      source: "doctor",
+      defaultEnabled: false,
+      async detect(ctx) {
+        return deps.collectGatewayDaemonFindings(ctx);
+      },
+    },
     nodeRuntimeCheck,
-    createSecurityCheck(deps),
+    {
+      id: "core/doctor/security",
+      updateReadiness: "post-plugin",
+      kind: "core",
+      description: "Security posture checks produce structured findings.",
+      source: "doctor",
+      async detect(ctx) {
+        const findings = await deps.collectSecurityWarnings(ctx.cfg, ctx.env);
+        return findings.map(securityAuditFindingToHealthFinding);
+      },
+    },
     browserCheck,
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
     createModelReferenceCheck(),
     createAcpAgentModelCheck(),
-    createProviderCatalogProjectionCheck(deps),
+    {
+      id: "core/doctor/provider-catalog-projection",
+      kind: "core",
+      description: "Provider catalog hooks project into unified text model catalog rows.",
+      source: "doctor",
+      async detect(ctx) {
+        return deps.collectProviderCatalogProjectionFindings(ctx);
+      },
+    },
     {
       id: "core/doctor/local-audio-acceleration",
       kind: "core",

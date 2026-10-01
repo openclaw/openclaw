@@ -1,5 +1,5 @@
 import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
+import { MessagePort, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import * as cronStore from "../../../src/cron/store.js";
@@ -7,6 +7,7 @@ import { cronStoreKey } from "../../../src/cron/store/key.js";
 import type { CronRuntimeMutationType } from "../../../src/cron/store/runtime-worker.types.js";
 import type { SqliteWorkerRequest } from "../../../src/infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../../src/infra/sqlite-worker-operation-admission.js";
+import * as workerCpu from "../../../src/infra/worker-cpu.js";
 import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 
 export function observeCronStoreCommits(storePath: string, observer: () => void): () => void {
@@ -93,6 +94,92 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
       } finally {
         post.mockRestore();
         emit.mockRestore();
+      }
+    },
+  };
+}
+
+/** Install before opening a fresh actor; terminate its real transaction before the commit grant. */
+export function terminateFirstCronMutationBeforeCommit(type: CronRuntimeMutationType) {
+  const attempts: string[] = [];
+  const restorePosts: Array<() => void> = [];
+  let target: { worker: Worker; nonce: string } | undefined;
+  let stopped: Promise<number> | undefined;
+  let held = false;
+  const create = workerCpu.createCpuTrackedWorker;
+  const created = vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
+    const worker = create(...args);
+    const post = worker.postMessage.bind(worker);
+    const posted = vi.spyOn(worker, "postMessage").mockImplementation((message, transferList) => {
+      const request: unknown = message;
+      if (isRecord(request) && request.type === "execute" && request.input instanceof Uint8Array) {
+        const command: unknown = deserialize(request.input);
+        if (
+          isRecord(command) &&
+          command.type === type &&
+          isRecord(command.input) &&
+          typeof command.input.nonce === "string"
+        ) {
+          attempts.push(type);
+          target ??= { worker, nonce: command.input.nonce };
+        }
+      }
+      return post(message, transferList);
+    });
+    restorePosts.push(() => posted.mockRestore());
+    return worker;
+  });
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const admissions = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) => {
+      // Only the real factory's synchronous receive-listener registration is wrapped.
+      const listening = vi.spyOn(MessagePort.prototype, "on").mockImplementation(function (
+        this: MessagePort,
+        event,
+        listener,
+      ) {
+        if (event !== "message") {
+          return this.addListener(event, listener);
+        }
+        return this.addListener("message", function (this: MessagePort, message: unknown) {
+          if (
+            !held &&
+            target &&
+            isRecord(message) &&
+            message.stage === "commit" &&
+            message.decision instanceof SharedArrayBuffer &&
+            isRecord(message.facts) &&
+            message.facts.nonce === target.nonce &&
+            message.facts.bytes instanceof Uint8Array
+          ) {
+            // Withhold delivery before the real receiver can grant or refuse the native request.
+            held = true;
+            stopped = target.worker.terminate();
+            return;
+          }
+          listener.call(this, message);
+        });
+      });
+      try {
+        return createAdmission(admit, attachment);
+      } finally {
+        listening.mockRestore();
+      }
+    });
+  return {
+    attempts,
+    wasHeld: () => held,
+    waitForExit: () => stopped,
+    async close() {
+      try {
+        await stopped;
+      } finally {
+        admissions.mockRestore();
+        created.mockRestore();
+        for (const restore of restorePosts.toReversed()) {
+          restore();
+        }
       }
     },
   };

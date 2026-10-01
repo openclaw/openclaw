@@ -46,6 +46,10 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
     },
+    readSessionFacts: async (params) => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.readTrustedPluginSessionFacts(params);
+    },
   };
 }
 

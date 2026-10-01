@@ -6,6 +6,7 @@ import {
   createExtensionOxlintShards,
   selectExtensionOxlintStripe,
 } from "../../scripts/run-oxlint-shards.mts";
+import { createChangedCiTypeCheckPlan } from "../../scripts/run-tsgo-core-test-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   evaluateWorkflowExpression,
@@ -21,7 +22,7 @@ const typeSelection = vi.hoisted(() => ({
 }));
 
 vi.mock("../../scripts/run-tsgo-core-test-shards.mts", () => ({
-  createChangedCiTypeCheckPlan: async () => ({
+  createChangedCiTypeCheckPlan: vi.fn(async () => ({
     mode: "targeted",
     graphs: typeSelection.graphs ?? [
       {
@@ -30,7 +31,7 @@ vi.mock("../../scripts/run-tsgo-core-test-shards.mts", () => ({
       },
       { name: "scripts", config: "tsconfig.scripts.json" },
     ],
-  }),
+  })),
 }));
 
 const checkJobs = [
@@ -93,6 +94,48 @@ function materializePlan(runnerProfile: string, rows: number) {
 }
 
 describe("CI check-plan completion count", () => {
+  it.each(["", "check-plan", "additional-checks"] as const)(
+    "passes only an admitted parallel boundary owner without adding compiler rows (%s)",
+    async (typeGraphBoundaryOwner) => {
+      typeSelection.graphs = [
+        { name: "extensions", config: "tsconfig.extensions.json" },
+        { name: "extensions-test", config: "test/tsconfig/tsconfig.extensions.test.json" },
+        { name: "test-root", config: "test/tsconfig/tsconfig.test.root.json" },
+      ];
+      vi.mocked(createChangedCiTypeCheckPlan).mockClear();
+      try {
+        const paths = ["extensions/example/value.ts"];
+        const plan = await createCiCheckPlan({
+          typeGraphBoundaryOwner,
+          changedPaths: paths,
+          changedCoreTestPaths: null,
+          runnerProfile: "hybrid",
+          checkMatrix: {
+            include: [
+              { check_name: "check-prod-types", task: "prod-types", runner: "unused" },
+              { check_name: "check-test-types", task: "test-types", runner: "unused" },
+            ],
+          },
+          coreTypeMatrix: { include: [1, 2, 3, 4, 5].map((stripe) => ({ stripe })) },
+          lintCoreMatrix: { include: [] },
+          lintExtensionMatrix: { include: [] },
+        });
+        expect(createChangedCiTypeCheckPlan).toHaveBeenCalledExactlyOnceWith(paths, {
+          cwd: process.cwd(),
+          coreBoundaryOwner:
+            typeGraphBoundaryOwner === "additional-checks" ? "additional-checks" : undefined,
+        });
+        expect(plan.core_type_matrix.include).toEqual([]);
+        expect(plan.check_job_count).toBe(2);
+        expect(
+          plan.check_matrix.include.map((row) => JSON.parse(row.type_graph_names_json!)),
+        ).toEqual([["extensions"], ["extensions-test", "test-root"]]);
+      } finally {
+        typeSelection.graphs = null;
+      }
+    },
+  );
+
   it.each([
     ["hybrid", [1, 2, 4, 5]],
     ["github", [1, 2, 3, 4, 5]],

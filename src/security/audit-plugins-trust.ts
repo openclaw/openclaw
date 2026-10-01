@@ -1,4 +1,3 @@
-// Audits installed plugins for trust, provenance, and filesystem risks.
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";

@@ -405,32 +405,24 @@ function buildExpectation(
     `${left.method} ${left.route}`.localeCompare(`${right.method} ${right.route}`),
   );
   const retries: MatrixQaScenarioRouteStateExpectation["retries"] = [];
-  const adjacentOperationRuns: MatrixQaInternalRecordedExchange[][] = [];
-  for (const record of orderedRecords) {
-    const currentRun = adjacentOperationRuns.at(-1);
-    if (currentRun?.[0]?.operationFingerprint === record.operationFingerprint) {
-      currentRun.push(record);
-    } else {
-      adjacentOperationRuns.push([record]);
-    }
-  }
-  for (const attempts of adjacentOperationRuns) {
-    if (attempts[0]?.request.route.endsWith("/sync")) {
+  for (let index = 0; index < orderedRecords.length; index += 1) {
+    const first = orderedRecords[index];
+    if (!first || first.response.status < 400 || first.request.route.endsWith("/sync")) {
       continue;
     }
-    for (let index = 0; index < attempts.length; index += 1) {
-      const first = attempts[index];
-      if (!first || first.response.status < 400) {
-        continue;
+    let retryEndIndex = index + 1;
+    while (retryEndIndex < orderedRecords.length) {
+      const attempt = orderedRecords[retryEndIndex];
+      if (attempt?.operationFingerprint !== first.operationFingerprint) {
+        break;
       }
-      const recoveryOffset = attempts
-        .slice(index + 1)
-        .findIndex((attempt) => attempt.response.status < 400);
-      const retryEndIndex = recoveryOffset < 0 ? attempts.length : index + recoveryOffset + 2;
-      const retryAttempts = attempts.slice(index, retryEndIndex);
-      if (retryAttempts.length < 2) {
-        continue;
+      retryEndIndex += 1;
+      if (attempt.response.status < 400) {
+        break;
       }
+    }
+    const retryAttempts = orderedRecords.slice(index, retryEndIndex);
+    if (retryAttempts.length > 1) {
       retries.push({
         attempts: retryAttempts.length,
         kind: "retry",
@@ -438,8 +430,8 @@ function buildExpectation(
         route: first.request.route,
         statuses: retryAttempts.map((attempt) => attempt.response.status),
       });
-      index = retryEndIndex - 1;
     }
+    index = retryEndIndex - 1;
   }
   const incrementalSyncRecords = orderedRecords.filter(
     (record) => record.sync?.since !== undefined,

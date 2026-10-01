@@ -107,6 +107,10 @@ vi.mock("../infra/gateway-owner-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-owner-lease.js")>()),
   readGatewayOwnerLease: boundary.owner,
 }));
+vi.mock("./doctor-maintenance-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-maintenance-inspection.js")>()),
+  readDoctorGatewayOwnerLease: boundary.owner,
+}));
 vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
   acquireGatewayLock: boundary.gatewayAcquire,
@@ -126,6 +130,10 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) 
         })),
     };
   },
+}));
+vi.mock("../state/openclaw-state-maintenance-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-maintenance-context.js")>()),
+  admitOpenClawMaintenanceLiveAuthorityReads: () => {},
 }));
 vi.mock("../state/openclaw-agent-db-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-agent-db-lease.js")>()),

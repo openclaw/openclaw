@@ -47,11 +47,10 @@ export function pickAuthMethod(
   provider: ProviderPlugin,
   rawMethod?: string,
 ): ProviderAuthMethod | null {
-  const raw = normalizeOptionalString(rawMethod);
-  if (!raw) {
+  const normalized = normalizeOptionalLowercaseString(rawMethod);
+  if (!normalized) {
     return null;
   }
-  const normalized = normalizeOptionalLowercaseString(raw);
   return (
     provider.auth.find((method) => normalizeLowercaseStringOrEmpty(method.id) === normalized) ??
     provider.auth.find((method) => normalizeLowercaseStringOrEmpty(method.label) === normalized) ??

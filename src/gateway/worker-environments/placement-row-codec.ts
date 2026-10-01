@@ -73,8 +73,7 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
   const state = parseWorkerSessionPlacementState(row.state);
   const executionMode = normalizeWorkerPlacementExecutionMode(row.execution_mode);
   const parsed = {
-    environmentId:
-      row.environment_id === null ? null : required(row.environment_id, "environment id"),
+    environmentId: nullableRequired(row.environment_id, "environment id"),
     activeOwnerEpoch:
       row.active_owner_epoch === null
         ? null
@@ -195,20 +194,18 @@ export function getRequired(db: DatabaseSync, sessionId: string): WorkerSessionP
   return record;
 }
 
-function assertIdentity(
-  record: WorkerSessionPlacementRecord,
-  identity: WorkerSessionPlacementIdentity,
-): void {
-  if (record.agentId !== identity.agentId || record.sessionKey !== identity.sessionKey) {
-    throw new Error(`Worker session placement identity changed for ${identity.sessionId}`);
-  }
-}
-
-function insertLocal(
+export function ensureLocal(
   db: DatabaseSync,
   identity: WorkerSessionPlacementIdentity,
   nowMs: number,
 ): WorkerSessionPlacementRecord {
+  const current = find(db, identity.sessionId);
+  if (current) {
+    if (current.agentId !== identity.agentId || current.sessionKey !== identity.sessionKey) {
+      throw new Error(`Worker session placement identity changed for ${identity.sessionId}`);
+    }
+    return current;
+  }
   executeSqliteQuerySync(
     db,
     query(db).insertInto("worker_session_placements").values({
@@ -243,39 +240,20 @@ function insertLocal(
   return record;
 }
 
-export function ensureLocal(
-  db: DatabaseSync,
-  identity: WorkerSessionPlacementIdentity,
-  nowMs: number,
-): WorkerSessionPlacementRecord {
-  const current = find(db, identity.sessionId);
-  if (current) {
-    assertIdentity(current, identity);
-    return current;
-  }
-  return insertLocal(db, identity, nowMs);
-}
-
 export function transitionValues(
   current: WorkerSessionPlacementRecord,
   to: WorkerSessionPlacementRecord["state"],
   patch: WorkerSessionPlacementTransitionPatch,
   nowMs: number,
 ): PlacementRow {
-  const environmentId =
-    to === "local" || to === "requested"
-      ? null
-      : patch.environmentId === undefined
-        ? current.environmentId
-        : patch.environmentId === null
-          ? null
-          : required(patch.environmentId, "environment id");
+  const clearsWorkerMetadata = to === "local" || to === "requested";
+  const environmentId = clearsWorkerMetadata
+    ? null
+    : patch.environmentId === undefined
+      ? current.environmentId
+      : nullableRequired(patch.environmentId, "environment id");
   const activeOwnerEpoch =
-    to === "local" ||
-    to === "requested" ||
-    to === "provisioning" ||
-    to === "syncing" ||
-    to === "starting"
+    clearsWorkerMetadata || to === "provisioning" || to === "syncing" || to === "starting"
       ? null
       : patch.activeOwnerEpoch === undefined
         ? current.activeOwnerEpoch
@@ -283,7 +261,6 @@ export function transitionValues(
           ? null
           : normalizeEpoch(patch.activeOwnerEpoch, "active owner epoch");
   const generation = nextGeneration(current.generation);
-  const clearsWorkerMetadata = to === "local" || to === "requested";
   const values: PlacementRow = {
     session_id: current.sessionId,
     agent_id: current.agentId,

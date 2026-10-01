@@ -3,7 +3,8 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as mattermostRuntime from "../runtime.js";
 
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
 let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
@@ -200,8 +201,8 @@ vi.mock("./client.js", async () => ({
   uploadMattermostFile: mockState.uploadMattermostFile,
 }));
 
-vi.mock("../runtime.js", () => ({
-  getMattermostRuntime: () => ({
+vi.mock("../runtime.js", () => {
+  const getMattermostRuntime = () => ({
     config: {
       loadConfig: mockState.loadConfig,
     },
@@ -218,8 +219,9 @@ vi.mock("../runtime.js", () => ({
         record: mockState.recordActivity,
       },
     },
-  }),
-}));
+  });
+  return { getMattermostRuntime, getOptionalMattermostRuntime: getMattermostRuntime };
+});
 
 beforeAll(async () => {
   ({ sendMessageMattermost } = await import("./send.js"));
@@ -408,7 +410,7 @@ describe("sendMessageMattermost", () => {
     expect(mockState.resolveMattermostAccount).not.toHaveBeenCalled();
   });
 
-  it("sends with provided cfg even when the runtime store is not initialized", async () => {
+  it("preserves the send receipt when runtime is unavailable for activity recording", async () => {
     const providedCfg = {
       channels: {
         mattermost: {
@@ -422,9 +424,10 @@ describe("sendMessageMattermost", () => {
       baseUrl: "https://mattermost.example.com",
       config: {},
     });
-    mockState.recordActivity.mockImplementation(() => {
-      throw new Error("Mattermost runtime not initialized");
-    });
+    const runtime = vi
+      .spyOn(mattermostRuntime, "getOptionalMattermostRuntime")
+      .mockReturnValueOnce(null);
+    onTestFinished(() => runtime.mockRestore());
 
     const result = await sendMessageMattermost("channel:town-square", "hello", {
       cfg: providedCfg,
@@ -440,6 +443,7 @@ describe("sendMessageMattermost", () => {
     expect(result.receipt.parts[0]?.kind).toBe("text");
     expect(result.content).toBe("hello");
     expect(mockState.loadConfig).not.toHaveBeenCalled();
+    expect(mockState.recordActivity).not.toHaveBeenCalled();
   });
 
   it("preserves the provider post when outbound bookkeeping fails afterward", async () => {

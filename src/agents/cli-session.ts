@@ -84,19 +84,16 @@ export function setCliSessionBinding(
       ? normalizeCliSessionReseedReceipt(previousBinding?.reseedReceipt)
       : undefined;
   const reseedReceipt = normalizeCliSessionReseedReceipt(binding.reseedReceipt) ?? previousReceipt;
+  const resumeCheckpointId = normalizeOptionalString(binding.resumeCheckpointId);
+  const authProfileId = normalizeOptionalString(binding.authProfileId);
+  const authEpoch = normalizeOptionalString(binding.authEpoch);
   const nextBinding: CliSessionBinding = {
     sessionId: trimmed,
-    ...(normalizeOptionalString(binding.resumeCheckpointId)
-      ? { resumeCheckpointId: normalizeOptionalString(binding.resumeCheckpointId) }
-      : {}),
+    ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
     ...(binding.forceReuse === true ? { forceReuse: true } : {}),
     ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
-    ...(normalizeOptionalString(binding.authProfileId)
-      ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
-      : {}),
-    ...(normalizeOptionalString(binding.authEpoch)
-      ? { authEpoch: normalizeOptionalString(binding.authEpoch) }
-      : {}),
+    ...(authProfileId ? { authProfileId } : {}),
+    ...(authEpoch ? { authEpoch } : {}),
     ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
       ? { authEpochVersion: binding.authEpochVersion }
       : {}),

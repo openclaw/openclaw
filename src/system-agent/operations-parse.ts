@@ -535,14 +535,19 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
         : `set agents.defaults.model.primary to ${operation.model}`;
     case "config-unset":
       return `remove config ${redactSystemAgentConfigPath(operation.path)}`;
-    case "config-set":
-      return `set config ${redactSystemAgentConfigPath(operation.path)} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
+    case "config-set": {
+      const path = redactSystemAgentConfigPath(operation.path);
+      const value = isSystemAgentSensitiveConfigValue(operation.path, operation.value)
+        ? "<redacted>"
+        : operation.value;
+      return `set config ${path} to ${value}`;
+    }
     case "config-set-ref":
       return operation.secret === undefined
         ? `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`
         : `save the provided secret in the secret store and point config ${redactSystemAgentConfigPath(operation.path)} at it`;
     case "setup":
-      return formatSetupPlanDescription(operation);
+      return `bootstrap OpenClaw setup for workspace ${shortenHomePath(resolveUserPath(operation.workspace ?? process.cwd()))}`;
     case "model-setup":
       return "configure a model provider and default model";
     case "doctor-fix":
@@ -555,7 +560,7 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return `uninstall plugin ${operation.pluginId}`;
     case "create-agent":
       return [
-        `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`,
+        `create agent ${operation.agentId} with workspace ${operation.workspace ? shortenHomePath(resolveUserPath(operation.workspace)) : "the default for this agent"}`,
         operation.name ? `name: ${JSON.stringify(operation.name)}` : undefined,
         operation.purpose ? `purpose: ${JSON.stringify(operation.purpose)}` : undefined,
         operation.role
@@ -601,22 +606,4 @@ export function formatSystemAgentPersistentPlan(
   return operatorApprovalOnly
     ? `Proposed: ${description}.\n\n${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
     : `Plan: ${description}. Say yes to apply.`;
-}
-
-function formatCreateAgentWorkspace(workspace: string | undefined): string {
-  return workspace ? shortenHomePath(resolveUserPath(workspace)) : "the default for this agent";
-}
-
-function formatConfigSetValueForPlan(configPath: string, value: string): string {
-  if (isSystemAgentSensitiveConfigValue(configPath, value)) {
-    return "<redacted>";
-  }
-  return value;
-}
-
-function formatSetupPlanDescription(
-  operation: Extract<SystemAgentOperation, { kind: "setup" }>,
-): string {
-  const workspace = shortenHomePath(resolveUserPath(operation.workspace ?? process.cwd()));
-  return `bootstrap OpenClaw setup for workspace ${workspace}`;
 }

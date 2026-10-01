@@ -1,5 +1,5 @@
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
-/** Settles durable child ownership when the spawning requester turn ends. */
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { promoteFollowupYield } from "../completion/session-followup-completion.js";
 import {
@@ -9,7 +9,11 @@ import {
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
-import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import {
+  captureSubagentRunMutationSnapshot,
+  publishSubagentRunPostimages,
+  SubagentRegistryWriteError,
+} from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
@@ -19,6 +23,89 @@ import {
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
+
+/** Accepted steering keeps the child's execution and transfers only its requester-turn claim. */
+export async function adoptSubagentRunForRequesterTurnInRuns(params: {
+  expected: SubagentRunRecord;
+  requesterSessionKey: string;
+  requesterAgentId: string;
+  requesterTurnRunId: string;
+  assertCurrent: () => void;
+  assertPublicationCurrent?: () => void;
+  runs: Map<string, SubagentRunRecord>;
+  persist: Parameters<typeof publishSubagentRunPostimages>[0]["persist"];
+}): Promise<AcceptedSessionSpawn | undefined> {
+  const entry = params.expected;
+  const requesterTurnRunId = params.requesterTurnRunId.trim();
+  const eligible = () =>
+    requesterTurnRunId.length > 0 &&
+    params.runs.get(entry.runId) === entry &&
+    entry.requesterSessionKey === params.requesterSessionKey &&
+    entry.requesterAgentId === params.requesterAgentId &&
+    (!entry.requesterTurnRunId || entry.requesterTurnRunId === requesterTurnRunId) &&
+    entry.expectsCompletionMessage === true &&
+    entry.collect !== true &&
+    !entry.killIntent &&
+    !entry.killReconciliation &&
+    entry.suppressCompletionDelivery !== true &&
+    entry.cleanupCompletedAt === undefined &&
+    entry.requesterSettleWake?.status !== "dispatching" &&
+    (entry.requesterSettleWake?.batchRunIds === undefined
+      ? entry.requesterSettleWake?.requesterYieldBatch !== true
+      : entry.requesterSettleWake.batchRunIds.length === 1 &&
+        entry.requesterSettleWake.batchRunIds[0] === entry.runId) &&
+    (entry.requesterSettleWake?.requesterYieldBatch !== true ||
+      (entry.requesterSettleWake.status === "pending" &&
+        entry.requesterSettleWake.attemptCount === 0 &&
+        entry.requesterSettleWake.rearmGeneration !== undefined)) &&
+    (entry.delivery?.status === "pending" || entry.delivery?.status === "failed") &&
+    entry.delivery.disposition !== "permanent_failure" &&
+    (entry.delivery.disposition !== "intentional_non_delivery" ||
+      entry.requesterSettleWake !== undefined);
+  params.assertCurrent();
+  if (!eligible()) {
+    return undefined;
+  }
+  const accepted: AcceptedSessionSpawn = {
+    runId: entry.taskRunId ?? entry.runId,
+    childSessionKey: entry.childSessionKey,
+    expectsCompletionMessage: true,
+  };
+  if (entry.requesterTurnRunId === requesterTurnRunId) {
+    return accepted;
+  }
+  const context = captureOpenClawStateWorkerContext();
+  const assertCurrent = () => {
+    params.assertCurrent();
+    if (!eligible()) {
+      throw new Error("Watched child completion ownership changed before requester claim");
+    }
+  };
+  assertCurrent();
+  const previous = captureSubagentRunMutationSnapshot(entry);
+  entry.requesterTurnRunId = requesterTurnRunId;
+  entry.requesterTurnYielded = undefined;
+  if (entry.requesterSettleWake?.requesterYieldBatch === true) {
+    // The new turn may add children; its settlement must build a fresh batch.
+    entry.requesterSettleWake = { ...entry.requesterSettleWake };
+    delete entry.requesterSettleWake.requesterYieldBatch;
+    delete entry.requesterSettleWake.batchRunIds;
+  }
+  const result = await publishSubagentRunPostimages({
+    runs: params.runs,
+    previous: new Map([[entry, previous]]),
+    persist: params.persist,
+    context,
+    assertCurrent,
+    assertPublicationCurrent: () => {
+      (params.assertPublicationCurrent ?? params.assertCurrent)();
+      if (!eligible()) {
+        throw new Error("Watched child completion ownership changed before publication");
+      }
+    },
+  });
+  return result.publication === "published" ? accepted : undefined;
+}
 
 export type RequesterInitialTransfer = (params: {
   kind: "intent" | "yielded-cohort" | "completed-cohort";
@@ -262,19 +349,18 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     return false;
   }
   const requester = params.runs.get(requesterTurnRunId);
-  const pauseRequester =
+  const requesterOwnsSession =
     params.requesterYielded &&
     requester?.childSessionKey === requesterSessionKey &&
-    requester.execution.status === "running" &&
     !requester.killIntent &&
     !requester.killReconciliation &&
     ![...params.runs.values()].some(
       (entry) =>
         entry.childSessionKey === requesterSessionKey &&
         compareSubagentRunGeneration(entry, requester) > 0,
-    )
-      ? requester
-      : undefined;
+    );
+  const pauseRequester =
+    requesterOwnsSession && requester.execution.status === "running" ? requester : undefined;
   const batchRunIds = entries.map((entry) => entry.runId).toSorted();
   const requesterAlreadyDeliveredFinal =
     params.requesterYielded &&
@@ -326,16 +412,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   }
   const requesterOwner =
     pauseRequester ??
-    (preparedCohort &&
-    requester?.childSessionKey === requesterSessionKey &&
-    requester.pauseReason === "sessions_yield" &&
-    !requester.killIntent &&
-    !requester.killReconciliation &&
-    ![...params.runs.values()].some(
-      (entry) =>
-        entry.childSessionKey === requesterSessionKey &&
-        compareSubagentRunGeneration(entry, requester) > 0,
-    )
+    (preparedCohort && requesterOwnsSession && requester.pauseReason === "sessions_yield"
       ? requester
       : undefined);
   const retired = new Set<SubagentRunRecord>();
@@ -401,7 +478,27 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
           entry.retireAfterRequesterTurn = undefined;
         }
       } else {
+        // Distinct tasks sharing a child retain one completion owner after the turn retires.
+        const completionGeneration =
+          !requesterAlreadyDeliveredFinal &&
+          new Set(entries.map((entry) => entry.childSessionKey)).size < entries.length
+            ? Math.max(
+                0,
+                ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0),
+              ) + 1
+            : undefined;
         for (const entry of entries) {
+          if (completionGeneration !== undefined) {
+            const existing = entry.requesterSettleWake;
+            entry.requesterSettleWake = {
+              ...(existing?.pauseNotice ? { pauseNotice: existing.pauseNotice } : {}),
+              ...(existing?.retireAfterSettle ? { retireAfterSettle: true } : {}),
+              status: "pending",
+              attemptCount: 0,
+              batchRunIds,
+              rearmGeneration: completionGeneration,
+            };
+          }
           if (entry.delivery) {
             entry.delivery = { ...entry.delivery };
             delete entry.delivery.requesterVisibleFinal;

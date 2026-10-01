@@ -24,7 +24,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
   metrics: WorkspaceReconcileMetrics;
 }) {
   const { request, hashMemo, metrics } = params;
-  const pending = request.journal.load();
+  const pending = await request.journal.load();
   if (pending) {
     await recoverWorkerWorkspaceReconciliation({
       root: request.localPath,
@@ -32,7 +32,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
       assertCurrent: request.assertCurrent,
     });
     request.assertCurrent?.();
-    request.journal.abort();
+    await request.journal.abort();
   }
   pruneWorkspaceHashMemo(hashMemo);
   const runLocal = <T>(operation: () => Promise<T>): Promise<T> =>

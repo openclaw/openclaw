@@ -118,7 +118,7 @@ keeps the old id and points at the new one.
 - <a id="param-voice-note-output-format" />[Azure Speech → `voiceNoteOutputFormat`](/tools/tts/field-reference#param-voice-note-output-format)
 - <a id="elevenlabs-1" />[ElevenLabs](/tools/tts/field-reference#elevenlabs)
 - <a id="param-api-key-1" />[ElevenLabs → `apiKey`](/tools/tts/field-reference#param-api-key-1)
-- <a id="param-model" />[ElevenLabs → `model`](/tools/tts/field-reference#param-model)
+- <a id="param-model" />[ElevenLabs → `modelId`](/tools/tts/field-reference#param-model)
 - <a id="param-speaker-voice-id" />[ElevenLabs → `speakerVoiceId`](/tools/tts/field-reference#param-speaker-voice-id)
 - <a id="param-voice-settings" />[ElevenLabs → `voiceSettings`](/tools/tts/field-reference#param-voice-settings)
 - <a id="param-apply-text-normalization" />[ElevenLabs → `applyTextNormalization`](/tools/tts/field-reference#param-apply-text-normalization)

@@ -32,6 +32,14 @@ import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js
 import { resolveSyncMessageReplacement } from "./hook-message-replacement.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
+import type {
+  BeforeAgentFinalizeResultWithRetryCandidates,
+  BeforeAgentFinalizeRetry,
+  HookFailurePolicy,
+  HookRunnerOptions,
+  VoidHookContextProjection,
+  VoidHookRunOptions,
+} from "./hook-runner-types.js";
 import { withHookTimeout } from "./hook-timeout.js";
 import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
@@ -71,53 +79,19 @@ import type {
   PluginHookSkillProposalEvaluateEvent,
   PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
-import { runPluginCleanup } from "./plugin-instance-scope.js";
+import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import {
   type PluginSubagentRequesterContext,
   withPluginSubagentRequesterContext,
 } from "./runtime/subagent-requester-context.js";
+import { projectSessionEndTranscriptContext } from "./session-end-transcript.js";
 import {
   createPluginToolMatcherScope,
   pluginToolMatcherCoversTool,
   type PluginToolMatcherScope,
 } from "./tool-hook-matcher.js";
 
-type HookRunnerLogger = {
-  debug?: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-};
-
-type HookFailurePolicy = "fail-open" | "fail-closed";
-export type VoidHookRunOptions = {
-  unrefTimeout?: boolean;
-};
-
-type BeforeAgentFinalizeRetry = NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>;
-type BeforeAgentFinalizeResultWithRetryCandidates = PluginHookBeforeAgentFinalizeResult & {
-  retryCandidates?: BeforeAgentFinalizeRetry[];
-};
-
-type HookRunnerOptions = {
-  logger?: HookRunnerLogger;
-  /** If true, errors in hooks will be caught and logged instead of thrown */
-  catchErrors?: boolean;
-  /**
-   * Optional per-hook failure policy.
-   * Defaults to fail-open unless explicitly overridden for a hook name.
-   */
-  failurePolicyByHook?: Partial<Record<PluginHookName, HookFailurePolicy>>;
-  /**
-   * Optional timeout for void/observation hooks. A timed-out hook is logged and
-   * the runner continues, but the plugin's underlying work is not cancelled.
-   */
-  voidHookTimeoutMsByHook?: Partial<Record<PluginHookName, number>>;
-  /**
-   * Optional timeout for modifying hooks. A timed-out hook is logged and skipped,
-   * but the plugin's underlying work is not cancelled.
-   */
-  modifyingHookTimeoutMsByHook?: Partial<Record<PluginHookName, number>>;
-};
+export type { VoidHookRunOptions } from "./hook-runner-types.js";
 
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
@@ -642,6 +616,7 @@ export function createHookRunner(
     ctx: HookContext<K>,
     optionsValue: VoidHookRunOptions = {},
     matcherToolName?: string,
+    projectContext?: VoidHookContextProjection<HookContext<K>, K>,
   ): Promise<void> {
     const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
@@ -651,17 +626,24 @@ export function createHookRunner(
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
 
     const promises = hooks.map(async (hook) => {
+      const projected = projectContext?.(hook, ctx);
       try {
         const invoke = () =>
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx);
-        const promise = Promise.resolve(
+          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(
+            event,
+            projected?.context ?? ctx,
+          );
+        const handlerPromise = Promise.resolve(
           hookName === "gateway_stop" ? runPluginCleanup(hook.handler, invoke) : invoke(),
         );
+        const promise = projected ? handlerPromise.finally(projected.dispose) : handlerPromise;
         await awaitHook(hook, promise, voidHookTimeoutMsByHook[hookName], {
           unref: optionsValue.unrefTimeout ?? true,
         });
       } catch (err) {
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      } finally {
+        projected?.dispose();
       }
     });
 
@@ -1321,7 +1303,14 @@ export function createHookRunner(
     runBeforeMessageWrite,
     // Session hooks
     runSessionStart: bindVoidHook("session_start"),
-    runSessionEnd: bindVoidHook("session_end"),
+    runSessionEnd: (event: HookEvent<"session_end">, ctx: HookContext<"session_end">) =>
+      runVoidHook("session_end", event, ctx, {}, undefined, (hook, context) =>
+        projectSessionEndTranscriptContext(
+          hook,
+          context,
+          getPluginValueInstance(hook.handler)?.lifecycle.signal,
+        ),
+      ),
     runSubagentDeliveryTarget: bindModifyingHook("subagent_delivery_target", {
       mergeResults: (acc, next): PluginHookSubagentDeliveryTargetResult =>
         acc?.origin ? acc : next,

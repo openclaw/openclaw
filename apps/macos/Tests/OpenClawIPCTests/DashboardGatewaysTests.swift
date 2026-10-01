@@ -250,7 +250,7 @@ struct DashboardGatewaysBridgeTests {
     }
 }
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardManagerGatewayTargetTests {
     @Test func `background configuration keeps the gateway profile registry cold`() async {
@@ -574,7 +574,7 @@ struct DashboardManagerGatewayTargetTests {
         await profileGate.waitUntilRequested()
         #expect(manager.gatewayEntries.contains { $0.id == "profile:saved-b" })
         await profileGate.release()
-        try await DashboardTestWait.state("saved profile credentials") {
+        try await TestWait.state("saved profile credentials") {
             manager.gatewayEntries.first(where: { $0.id == "profile:saved-b" })?.canPromote == false
         }
         #expect(manager.gatewayEntries.first { $0.id == "profile:saved-b" }?.canPromote == false)
@@ -600,7 +600,7 @@ struct DashboardManagerGatewayTargetTests {
         saved.setEndpoint(GatewayConnection.EndpointSnapshot(
             config: (url: savedServer.websocketURL(), token: "removed", password: nil), routeAuthority: nil))
         manager.configure(updater: DashboardGatewayTestUpdater())
-        try await DashboardTestWait.state("removed profile windows") {
+        try await TestWait.state("removed profile windows") {
             !manager._testAuxiliaryWindows().contains(where: { $0.target == .profile("saved-b") })
         }
         #expect(!manager.gatewayEntries.contains { $0.id == "profile:saved-b" })
@@ -700,7 +700,7 @@ struct DashboardManagerGatewayTargetTests {
             config: (url: server.websocketURL(), token: "after", password: nil), routeAuthority: nil))
 
         NotificationCenter.default.post(name: MacGatewayProfileStore.didChangeNotification, object: nil)
-        try await DashboardTestWait.state("refreshed profile credentials") {
+        try await TestWait.state("refreshed profile credentials") {
             !manager._testAuxiliaryWindows().contains(where: { $0.controller.auth.token != "after" })
         }
 
@@ -768,7 +768,7 @@ struct DashboardManagerGatewayTargetTests {
                 for target in [DashboardGatewayTarget.primary, .profile("secondary")] {
                     let current = try #require(window.windowController as? DashboardWindowController)
                     manager.handleGatewayRequest(.select(target), from: current)
-                    try await DashboardTestWait.state("selected recovery gateway") {
+                    try await TestWait.state("selected recovery gateway") {
                         manager._testAuxiliaryWindows().first?.target == target
                     }
                     #expect(manager._testAuxiliaryWindows().first?.target == target)
@@ -808,7 +808,7 @@ struct DashboardManagerGatewayTargetTests {
                     try await Task.sleep(for: .milliseconds(10))
                 }
             } else {
-                try await DashboardTestWait.state("recovered command delivery") {
+                try await TestWait.state("recovered command delivery") {
                     await readCommands() >= expectedCount
                 }
             }
@@ -958,7 +958,7 @@ struct DashboardManagerGatewayTargetTests {
         defer { manager.close() }
 
         manager.openOrFocusDashboard(for: .profile(studio))
-        try await DashboardTestWait.state("frontmost gateway window") {
+        try await TestWait.state("frontmost gateway window") {
             manager.frontmostDashboardTarget == .profile(studio)
         }
 
@@ -978,7 +978,7 @@ struct DashboardManagerGatewayTargetTests {
         #expect(manager.frontmostDashboardTarget == .profile(studio))
 
         manager.openNewDashboardWindow(for: .profile(studio))
-        try await DashboardTestWait.state("second gateway window") {
+        try await TestWait.state("second gateway window") {
             manager._testAuxiliaryWindows().count >= 2
         }
         let newWindows = manager._testAuxiliaryWindows()
@@ -1197,7 +1197,7 @@ extension DashboardManagerGatewayTargetTests {
             await catalogGate.waitUntilRequested()
             await manager.handleEndpointState(.connecting(mode: .remote, detail: "Reconnecting"))
             await catalogGate.release()
-            try await DashboardTestWait.state("reconnected gateway catalog") {
+            try await TestWait.state("reconnected gateway catalog") {
                 manager.gatewayEntries.first?.name == "Catalog 2"
             }
             #expect(manager.gatewayEntries.first?.name == "Catalog 2")
@@ -1206,7 +1206,7 @@ extension DashboardManagerGatewayTargetTests {
             await responseGate.release()
         } else {
             // Wait until the command has entered either the current window or an endpoint recovery.
-            try await DashboardTestWait.state("gateway command admission") {
+            try await TestWait.state("gateway command admission") {
                 if !original._testPendingNativeCommands.isEmpty { return true }
                 return await profileGate.numberOfRequests() != 1
             }
@@ -1214,7 +1214,7 @@ extension DashboardManagerGatewayTargetTests {
         }
         var events: [String] = []
         // The window's controller can change mid-transition, so re-read it on every pass.
-        try await DashboardTestWait.state("transition command delivery") {
+        try await TestWait.state("transition command delivery") {
             guard let current = window.windowController as? DashboardWindowController else { return false }
             events = await (try? current.webView.evaluateJavaScript("window.commandEvents") as? [String]) ?? []
             return !current.webView.isLoading && events == ["palette", "palette"] &&
@@ -1334,7 +1334,7 @@ extension DashboardManagerGatewayTargetTests {
                     password: nil,
                     routeRevision: 2))
             }
-            try await DashboardTestWait.state("replacement gateway controller") {
+            try await TestWait.state("replacement gateway controller") {
                 window.windowController !== original
             }
             let replacement = try #require(window.windowController as? DashboardWindowController)
@@ -1346,7 +1346,7 @@ extension DashboardManagerGatewayTargetTests {
                 ["new-session", "palette", "palette"] + (scenario.hasPrefix("profile-") ? ["navigation"] : [])
             var events: [String] = []
             try await DashboardTestWait.document(replacement, "replacement gateway document")
-            try await DashboardTestWait.state("replacement command delivery") {
+            try await TestWait.state("replacement command delivery") {
                 events = await (try? replacement.webView.evaluateJavaScript("window.commandEvents") as? [String]) ?? []
                 return events == expected
             }

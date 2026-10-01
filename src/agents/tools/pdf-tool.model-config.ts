@@ -73,15 +73,7 @@ function resolveImageCandidateRefs(
     workspaceDir: params.workspaceDir,
   })
     .filter((providerId) => !params.filter || params.filter(providerId))
-    .filter((providerId) =>
-      hasProviderAuthForTool({
-        provider: providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
-    )
+    .filter((providerId) => hasProviderAuthForTool({ ...params, provider: providerId }))
     .map((providerId) => {
       const documentImageModel = resolveDocumentMediaModel({
         cfg: params.cfg,
@@ -135,16 +127,7 @@ function resolveTextExtractionCandidateRefs(
     }),
   ];
   for (const providerId of providerIds) {
-    if (
-      !providerId ||
-      !hasProviderAuthForTool({
-        provider: providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      })
-    ) {
+    if (!providerId || !hasProviderAuthForTool({ ...params, provider: providerId })) {
       continue;
     }
     const documentTextModel = resolveDocumentMediaModel({
@@ -212,13 +195,7 @@ export function resolvePdfModelConfigForTool(
   }
 
   const primary = resolveDefaultModelRef(params.cfg);
-  const googleOk = hasProviderAuthForTool({
-    provider: "google",
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-  });
+  const googleOk = hasProviderAuthForTool({ ...params, provider: "google" });
 
   const activeProvider = params.activeModel?.provider.trim();
   const activeModel = params.activeModel?.model.trim();
@@ -233,24 +210,12 @@ export function resolvePdfModelConfigForTool(
       document: "pdf",
       mode: "image",
     }) !== false &&
-    hasProviderAuthForTool({
-      provider: activeProvider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-    })
+    hasProviderAuthForTool({ ...params, provider: activeProvider })
       ? formatProviderModelRef(activeProvider, activeModel)
       : null;
   let preferred: string | null = null;
 
-  const providerOk = hasProviderAuthForTool({
-    provider: primary.provider,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-  });
+  const providerOk = hasProviderAuthForTool({ ...params, provider: primary.provider });
   const providerVision = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
     provider: primary.provider,
@@ -269,10 +234,7 @@ export function resolvePdfModelConfigForTool(
     providerId: primary.provider,
   });
   const nativePdfCandidates = resolveImageCandidateRefs({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    authStore: params.authStore,
+    ...params,
     filter: (providerId) =>
       providerSupportsNativePdfDocument({
         cfg: params.cfg,
@@ -280,19 +242,8 @@ export function resolvePdfModelConfigForTool(
         providerId,
       }),
   });
-  const genericImageCandidates = resolveImageCandidateRefs({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    authStore: params.authStore,
-  });
-  const textExtractionCandidates = resolveTextExtractionCandidateRefs({
-    cfg: params.cfg,
-    primary,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    authStore: params.authStore,
-  });
+  const genericImageCandidates = resolveImageCandidateRefs(params);
+  const textExtractionCandidates = resolveTextExtractionCandidateRefs({ ...params, primary });
   const preferPrimaryTextExtraction =
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
@@ -312,13 +263,7 @@ export function resolvePdfModelConfigForTool(
       if (
         !providerId ||
         documentImageModel === false ||
-        !hasProviderAuthForTool({
-          provider: providerId,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-        })
+        !hasProviderAuthForTool({ ...params, provider: providerId })
       ) {
         continue;
       }

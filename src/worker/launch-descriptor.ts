@@ -32,10 +32,6 @@ import {
   WorkerInferenceModelRefSchema,
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import {
-  WorkerSkillWorkshopBindingSchema,
-  type WorkerSkillWorkshopBinding,
-} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import {
   ComputerUseCapabilityDescriptorSchema,
@@ -204,11 +200,6 @@ export function parseWorkerGitHubLaunchBinding(
 }
 
 const AssignmentSchema = workerProtocolObject({
-  skillAuthoring: z
-    .custom<WorkerSkillWorkshopBinding>((value) =>
-      Value.Check(WorkerSkillWorkshopBindingSchema, value),
-    )
-    .optional(),
   skillResources: z
     .custom<SkillResourceDelivery>((value) => Value.Check(SkillResourceDeliverySchema, value))
     .optional(),

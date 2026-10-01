@@ -102,17 +102,9 @@ function extractLidDigits(value: string | null | undefined): string | null {
   return parts && LID_JID_DOMAIN_RE.test(parts.domain) ? parts.user : null;
 }
 
-function participantValues(participant: WhatsAppOutboundMentionParticipant): {
-  id?: string | null;
-  lid?: string | null;
-  phoneNumber?: string | null;
-  e164?: string | null;
-} {
-  return typeof participant === "string" ? { id: participant } : participant;
-}
-
-function chooseMentionJid(participant: WhatsAppOutboundMentionParticipant): string | null {
-  const values = participantValues(participant);
+function chooseMentionJid(
+  values: Exclude<WhatsAppOutboundMentionParticipant, string>,
+): string | null {
   const idJid = normalizeKnownUserJid(values.id ?? "");
   const lidJid = normalizeKnownUserJid(values.lid ?? "");
   return (
@@ -132,7 +124,8 @@ function buildMentionTargetMaps(participants: readonly WhatsAppOutboundMentionPa
   const byPhone = new Map<string, MentionTarget>();
   const byLid = new Map<string, MentionTarget>();
   for (const participant of participants) {
-    const mentionJid = chooseMentionJid(participant);
+    const values = typeof participant === "string" ? { id: participant } : participant;
+    const mentionJid = chooseMentionJid(values);
     if (!mentionJid) {
       continue;
     }
@@ -141,7 +134,6 @@ function buildMentionTargetMaps(participants: readonly WhatsAppOutboundMentionPa
       mentionJid,
       ...(lidDigits ? { replacementText: `@${lidDigits}` } : {}),
     };
-    const values = participantValues(participant);
     for (const value of [values.id, values.phoneNumber, values.e164]) {
       const digits = extractPhoneDigits(value);
       if (digits && !byPhone.has(digits)) {

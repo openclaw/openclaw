@@ -477,9 +477,11 @@ export function renderSidebarSessionSortMenu(params: {
               label:
                 value === "active"
                   ? t("common.active")
-                  : value === "archived"
-                    ? t("sessionsView.archived")
-                    : t("sessionsView.all"),
+                  : value === "snoozed"
+                    ? t("sessionsView.snoozed")
+                    : value === "archived"
+                      ? t("sessionsView.archived")
+                      : t("sessionsView.all"),
             })),
             params.onStatusFilterChange,
           )}

@@ -148,21 +148,10 @@ export async function readSessionMessageByIdAsync(
 }
 
 /** Keep exact membership and its full-history validation in the admitted history worker. */
-export async function readSessionMessagesMatchingIdAsync(
-  scope: SessionTranscriptReadScope,
-  messageId: string,
-): Promise<unknown[]> {
-  const target = captureHistoryReadScope(scope);
-  if (usesProcessHeldTranscript(target)) {
-    return sessionTranscriptReader.readSessionMessagesMatchingIdAsync(target, messageId);
-  }
-  const { readSessionHistoryPageInWorker } =
-    await import("../config/sessions/session-history-worker-runtime.js");
-  return readSessionHistoryPageInWorker({
-    kind: "message-lookup",
-    params: { target, messageId },
-  });
-}
+export const readSessionMessagesMatchingIdAsync = createHistoryPageReader(
+  sessionTranscriptReader.readSessionMessagesMatchingIdAsync,
+  (read, target, messageId) => read({ kind: "message-lookup", params: { target, messageId } }),
+);
 
 /** Counts display messages asynchronously through the reader seam. */
 export async function readSessionMessageCountAsync(
@@ -189,4 +178,34 @@ export async function readSessionMessageCountAsync(
     await waitForSessionTranscriptProjection(target);
     return await readCount();
   }
+}
+
+export async function readSessionReactionsAsync(scope: SessionTranscriptReadScope) {
+  const target = captureHistoryReadScope(scope);
+  if (usesProcessHeldTranscript(target)) {
+    const { listSessionReactions } = await import("../config/sessions/session-reaction-store.js");
+    if (!target.sessionKey) {
+      throw new Error("Reaction reads require a session key");
+    }
+    return listSessionReactions(
+      { ...target, sessionKey: target.sessionKey },
+      { sessionId: target.sessionId },
+    );
+  }
+  const { readSessionHistoryPageInWorker } =
+    await import("../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({ kind: "reactions", params: { target } });
+}
+
+export async function readSessionConversationBindingAsync(
+  scope: SessionTranscriptReadScope,
+  conversationRef: string,
+) {
+  const target = captureHistoryReadScope(scope);
+  const { readSessionHistoryPageInWorker } =
+    await import("../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({
+    kind: "conversation-binding",
+    params: { target, conversationRef },
+  });
 }

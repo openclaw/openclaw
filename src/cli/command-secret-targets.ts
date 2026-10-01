@@ -77,25 +77,11 @@ const STATIC_STATUS_TARGET_IDS = [
   "agents.entries.*.memory.search.remote.apiKey",
 ] as const;
 
-function idsByPrefix(prefixes: readonly string[]): string[] {
-  return listSecretTargetRegistryEntries()
-    .map((entry) => entry.id)
-    .filter((id) => prefixes.some((prefix) => id.startsWith(prefix)))
-    .toSorted();
-}
-
 type CommandSecretTargetScope = {
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
   forcedActivePaths?: Set<string>;
   optionalActivePaths?: Set<string>;
-};
-type SelectedProviderTargetIds = {
-  matchedProvider: boolean;
-  targetIds: string[];
-  targetPaths: string[];
-  allowedPaths: string[];
-  fallbackTargetIds: string[];
 };
 
 let cachedAgentRuntimeBaseTargetIds: string[] | undefined;
@@ -103,8 +89,10 @@ const cachedCapabilityWebTargetIds: Partial<Record<WebCapability, string[]>> = {
 let cachedChannelSecretTargetIds: string[] | undefined;
 
 function getChannelSecretTargetIds(): string[] {
-  cachedChannelSecretTargetIds ??= idsByPrefix(["channels."]);
-  return cachedChannelSecretTargetIds;
+  return (cachedChannelSecretTargetIds ??= listSecretTargetRegistryEntries()
+    .map((entry) => entry.id)
+    .filter((id) => id.startsWith("channels."))
+    .toSorted());
 }
 
 function pluginWebCredentialConfigPath(entry: {
@@ -270,29 +258,6 @@ type SelectedProviderTargetState = {
   fallbackPaths: Set<string>;
 };
 
-function createSelectedProviderTargetState(): SelectedProviderTargetState {
-  return {
-    targetIds: new Set<string>(),
-    targetPaths: new Set<string>(),
-    allowedPaths: new Set<string>(),
-    fallbackTargetIds: new Set<string>(),
-    fallbackPaths: new Set<string>(),
-  };
-}
-
-function toSelectedProviderTargetIds(params: {
-  matchedProvider: boolean;
-  state: SelectedProviderTargetState;
-}): SelectedProviderTargetIds {
-  return {
-    matchedProvider: params.matchedProvider,
-    targetIds: [...params.state.targetIds].toSorted(),
-    targetPaths: [...params.state.targetPaths].toSorted(),
-    allowedPaths: [...params.state.allowedPaths].toSorted(),
-    fallbackTargetIds: [...params.state.fallbackTargetIds].toSorted(),
-  };
-}
-
 type CapabilityWebCredentialProvider = PluginWebFetchProviderEntry | PluginWebSearchProviderEntry;
 
 function addFallbackPathTargets(
@@ -346,8 +311,14 @@ function getCapabilityWebSelectedProviderTargetIds(
   config: OpenClawConfig,
   kind: WebCapability,
   selectedProviderId: string,
-): SelectedProviderTargetIds {
-  const state = createSelectedProviderTargetState();
+): SelectedProviderTargetState & { matchedProvider: boolean } {
+  const state: SelectedProviderTargetState = {
+    targetIds: new Set(),
+    targetPaths: new Set(),
+    allowedPaths: new Set(),
+    fallbackTargetIds: new Set(),
+    fallbackPaths: new Set(),
+  };
   const providerDiscoveryConfig = withSelectedWebProviderForDiscovery(
     config,
     kind,
@@ -378,7 +349,7 @@ function getCapabilityWebSelectedProviderTargetIds(
       });
     }
   }
-  return toSelectedProviderTargetIds({ matchedProvider: providers.length > 0, state });
+  return { ...state, matchedProvider: providers.length > 0 };
 }
 
 function getCapabilityWebAutoDetectTargets(
@@ -678,12 +649,14 @@ function getCapabilityWebCommandSecretTargets(
   if (!selectedTargets.matchedProvider && !providerId) {
     return getCapabilityWebAutoDetectTargets(config, kind);
   }
-  const targetIds = new Set(selectedTargets.targetIds);
+  const targetIds = new Set([...selectedTargets.targetIds].toSorted());
   const allowedPaths =
-    selectedTargets.allowedPaths.length > 0 ? new Set(selectedTargets.targetPaths) : undefined;
+    selectedTargets.allowedPaths.size > 0
+      ? new Set([...selectedTargets.targetPaths].toSorted())
+      : undefined;
   const forcedActivePaths = discoverConfiguredTargetPaths(
     config,
-    new Set(providerId ? selectedTargets.targetIds : selectedTargets.fallbackTargetIds),
+    providerId ? targetIds : new Set([...selectedTargets.fallbackTargetIds].toSorted()),
     allowedPaths,
   );
   return {

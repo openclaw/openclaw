@@ -51,7 +51,9 @@ In the Control UI, the session context menu (kebab or right-click on a sidebar r
 - **Assign to me**: take responsibility for the session yourself.
 - **Assign to…**: pick any registered person or configured agent, including offline people and people who have not owned a session. Choices refresh when you open the menu and do not depend on session filters or archive status.
 
-Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups), including non-owner agent turns when tool policy permits it. Those turns receive the assignment action, not session settings, reset/delete, or global group controls. Operators with `operator.write` also retain the separate archive, restore, and stop controls for sessions they created or are assigned to, subject to session access checks. Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
+Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups), including non-owner agent turns when tool policy permits it. Those turns receive the assignment action, not session settings, reset/delete, or global group controls. Operators with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to, subject to session access checks. Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
+
+Archive and restore require the creator or a Gateway admin (`operator.admin`), including for existing sessions after an upgrade. Assigned owners who are not the creator no longer receive these permissions. If the creator is unavailable, or the session has no usable profile creator, an admin can archive or restore it from the session menu. Reassigning an owner does not change archive authority.
 
 Both paths call the Gateway method `sessions.assignOwner` (`operator.write`). Assignment requires an identified caller — an authenticated Gateway profile or a trusted agent identity — and is authorized by session visibility. Agent owner ids must name a configured agent. After assignment the avatar tooltip switches from "Created by" to "Owned by".
 
@@ -160,6 +162,35 @@ People presence is shared with operators who have read access (`operator.read`, 
 **Viewing now** and **Recent sessions** link only to sessions available in your loaded session list. Recent sessions require the same recorded profile identity on both the viewer and the owner or creator. Matching raw IDs are not enough. They are not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
 
 The Gateway also filters watched-session references for each recipient using `sessions.list` visibility rules, across connect snapshots, presence RPC responses, and events. Hidden or missing references are omitted without counts or placeholders. Opening someone's card never borrows that person's session access.
+
+## Reactions
+
+In the Control UI, you can react to any saved prompt or assistant reply, including
+your own prompts and other people's prompts. Reacting requires an identified
+author with permission to send to the session or suggest in it. Operators whose
+session role permits viewing only cannot react. Everyone who can read the
+session sees its reaction chips, counts, and reactor names, with live updates
+while the session is open.
+
+The agent receives each committed addition and removal as a separate `System:`
+line on its next turn, using the same event mechanism as channel reactions.
+Adding, removing, and adding the same reaction queues three notices in order;
+repeating an action that changes nothing queues no notice. Reactions never wake
+the agent or create notifications. They are stored separately from the transcript,
+so reacting does not rewrite messages. Permanently removing a message also
+removes its reactions and frees their space in the session's reaction limit.
+Resetting a session starts a new transcript instance without the previous
+instance's reactions.
+
+Reactions on channel-origin prompts are also mirrored to that channel as the
+bot's reaction when the channel supports them. A skipped or failed channel
+mirror does not remove the Control UI reaction. On channels where the bot holds
+one reaction per message, such as Telegram bots and WhatsApp, the channel shows
+the most recently mirrored emoji, and removing it clears the channel reaction
+even when other emoji remain in the Control UI. Reactions on assistant replies
+are not mirrored because the transcript does not retain their delivered channel
+message IDs. See [Chat reactions](/web/control-ui/chat#reactions) for the palette
+and toggle controls.
 
 ## Mentioning people
 

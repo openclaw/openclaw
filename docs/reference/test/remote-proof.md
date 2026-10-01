@@ -23,16 +23,23 @@ Crabbox instead.
 Do not pre-warm for anticipated work. Acquire the backend lazily when the
 first environment-sensitive command is ready, reuse the returned `tbx_...` id
 for later remote commands, sync the current checkout on every run, and stop it
-before handoff.
+before handoff. Let the previous command and its cleanup finish before
+another synchronization or reuse of that lease.
 
 At allocation, the wrapper records the caller task, physical checkout, HEAD,
 base, dependency inputs, and Testbox preparation fingerprint under
-`.crabbox/testbox-leases/`. Reuse requires those inputs to match, including
-immediately before delegation. Source-only edits can reuse the box while HEAD
-and preparation inputs remain unchanged; every run syncs the checkout.
+`.crabbox/testbox-leases/`. Reuse requires the same task, checkout, base,
+dependencies, preparation, and workflow inputs, including immediately before
+delegation. Source-only edits and commits can reuse that prepared box. The
+allocation receipt remains unchanged, while each command records its current
+source revision and syncs the checkout. A HEAD change during that command's
+preparation still stops delegation; rerun from the current candidate.
+This source-refresh contract belongs to the OpenClaw wrapper's trusted task
+path; it does not permit raw native callers or untrusted proof to reuse a
+lease across revisions.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
-these checks. All providers require Crabbox 0.67.0 or newer.
+these checks. All providers require Crabbox 0.69.0 or newer.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native

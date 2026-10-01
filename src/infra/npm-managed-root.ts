@@ -1,4 +1,3 @@
-// Manages private npm package roots for plugin install flows.
 import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

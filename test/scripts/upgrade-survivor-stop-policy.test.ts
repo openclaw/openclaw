@@ -160,8 +160,8 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
         fs,
         spawn: () => ({ pid: 42, on: () => {}, once: () => {} }),
         execFileSync: (_binary: string, args: string[]) => {
-          expect(args).toEqual([join(f.home, "bin/systemd-fixture.mjs"), "stop-timeout-ms"]);
-          const result = f.manager("stop-timeout-ms");
+          expect(args).toEqual([join(f.home, "bin/systemd-fixture.mjs"), "stop-context"]);
+          const result = f.manager("stop-context");
           expect(result.status, result.stderr).toBe(0);
           return result.stdout;
         },
@@ -257,6 +257,193 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
       expect(Number(outer.stdout)).toBe(
         seconds === "infinity" ? 4000 : (seconds * 1_000 + 5_000) / 100,
       );
+    },
+  );
+
+  it.each(["main-exit", "deadline"])(
+    "settles detached cgroup members after mixed-mode %s before releasing custody",
+    (trigger) => {
+      const f = fixture();
+      const controlGroup = "/openclaw-gateway.service";
+      const runtimePath = join(f.home, "bin/systemd-fixture-runtime.json");
+      writeFileSync(
+        runtimePath,
+        JSON.stringify({ ...JSON.parse(readFileSync(runtimePath, "utf8")), controlGroup }),
+      );
+      writeFileSync(
+        f.unit,
+        "[Service]\nExecStart=/usr/bin/true\nTimeoutStopSec=30\nKillMode=mixed\n",
+      );
+      expect(f.systemctl("daemon-reload").status).toBe(0);
+      // Both the signal policy and deadline must come from the loaded definition.
+      writeFileSync(
+        f.unit,
+        "[Service]\nExecStart=/usr/bin/true\nTimeoutStopSec=1\nKillMode=control-group\n",
+      );
+      const body = readFileSync(owner, "utf8")
+        .split("<<'SUPERVISOR'\n")[1]
+        ?.split("\nSUPERVISOR")[0];
+      expect(body).toBeDefined();
+      const handlers = new Map<string, () => void>();
+      const files = new Map<string, string>();
+      const signals: Array<[number, string | number]> = [];
+      const timers = new Map<number, { at: number; callback: () => void }>();
+      let closeChild: ((code: number, signal: string | null) => void) | undefined;
+      let groupAlive = true;
+      let descendantAlive = true;
+      let lateDescendantAlive = false;
+      let now = 0;
+      let serial = 0;
+      const exit = vi.fn();
+      const spawn = vi.fn(() => ({
+        pid: 42,
+        on: () => {},
+        once: (_event: string, callback: (code: number, signal: string | null) => void) => {
+          closeChild = callback;
+        },
+      }));
+      vm.runInNewContext(body!.replace(/^import .*;\n/gm, ""), {
+        fs: {
+          openSync: () => 1,
+          closeSync: () => {},
+          writeSync: () => {},
+          writeFileSync: (file: string, contents: string) => files.set(file, contents),
+          renameSync: (from: string, to: string) => files.set(to, files.get(from)!),
+          readFileSync: (file: string) => {
+            if (file === `/sys/fs/cgroup${controlGroup}/cgroup.events`) {
+              return `populated ${groupAlive || descendantAlive || lateDescendantAlive ? 1 : 0}\n`;
+            }
+            if (file === `/sys/fs/cgroup${controlGroup}/cgroup.procs`) {
+              // PID 45 moved out between enumeration and membership validation.
+              return `${groupAlive ? "42\n" : ""}${descendantAlive ? "44\n" : ""}45\n${lateDescendantAlive ? "46\n" : ""}`;
+            }
+            if (
+              file === "/proc/42/cgroup" ||
+              file === "/proc/44/cgroup" ||
+              file === "/proc/46/cgroup"
+            ) {
+              return `0::${controlGroup}\n`;
+            }
+            if (file === "/proc/45/cgroup") {
+              return "0::/unrelated.service\n";
+            }
+            const member = /^\/proc\/(42|44|45|46)\/stat$/.exec(file)?.[1];
+            if (member) {
+              return `${member} (fixture child) S ${Array(18).fill("0").join(" ")} 100 0 0\n`;
+            }
+            throw new Error(`Unexpected fixture read: ${file}`);
+          },
+        },
+        spawn,
+        execFileSync: (_binary: string, args: string[]) => {
+          expect(args[0]).toBe(join(f.home, "bin/systemd-fixture.mjs"));
+          const result = f.manager(...args.slice(1));
+          expect(result.status, result.stderr).toBe(0);
+          return result.stdout;
+        },
+        process: {
+          pid: 43,
+          execPath: process.execPath,
+          cwd: () => "/fixture",
+          env: {
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT: join(f.home, "bin/systemd-fixture.mjs"),
+            OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: "/usr/bin/true",
+            OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: "/fixture/log",
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
+          },
+          hrtime: { bigint: () => 1n },
+          exit,
+          on: (signal: string, callback: () => void) => handlers.set(signal, callback),
+          kill: (pid: number, signal: string | number) => {
+            if (signal === 0) {
+              expect(pid).toBe(-42);
+              if (!groupAlive) {
+                throw Object.assign(new Error("gone"), { code: "ESRCH" });
+              }
+            } else {
+              signals.push([pid, signal]);
+            }
+          },
+        },
+        setTimeout: (callback: () => void, delay: number) => {
+          const id = ++serial;
+          timers.set(id, { at: now + delay, callback });
+          return id;
+        },
+        clearTimeout: (id: number) => timers.delete(id),
+      });
+      const advance = (until: number) => {
+        while (true) {
+          const next = [...timers].toSorted((a, b) => a[1].at - b[1].at)[0];
+          if (!next || next[1].at > until) {
+            break;
+          }
+          now = next[1].at;
+          timers.delete(next[0]);
+          next[1].callback();
+        }
+        now = until;
+      };
+      const runtime = () => JSON.parse(files.get("/fixture/log.runtime.json")!);
+      handlers.get("SIGTERM")!();
+      expect(signals).toEqual([[42, "SIGTERM"]]);
+      expect(timers.size).toBe(2);
+      if (trigger === "deadline") {
+        advance(29_999);
+        expect(signals).toEqual([[42, "SIGTERM"]]);
+        expect(exit).not.toHaveBeenCalled();
+        advance(30_000);
+        expect(signals).toEqual([
+          [42, "SIGTERM"],
+          [42, "SIGKILL"],
+          [44, "SIGKILL"],
+        ]);
+        expect(exit).not.toHaveBeenCalled();
+      }
+      groupAlive = false;
+      closeChild!(0, null);
+      advance(now + 25);
+      expect(signals).toEqual(
+        trigger === "deadline"
+          ? [
+              [42, "SIGTERM"],
+              [42, "SIGKILL"],
+              [44, "SIGKILL"],
+            ]
+          : [
+              [42, "SIGTERM"],
+              [44, "SIGKILL"],
+            ],
+      );
+      expect(exit).not.toHaveBeenCalled();
+      expect(runtime()).toMatchObject({ pid: 0, groupPid: 42, supervisorPid: 43 });
+      // A fork first observed during settlement is owned work too. The previous
+      // member stays live, but must not receive a second signal attempt.
+      lateDescendantAlive = true;
+      advance(now + 25);
+      expect(signals).toEqual(
+        trigger === "deadline"
+          ? [
+              [42, "SIGTERM"],
+              [42, "SIGKILL"],
+              [44, "SIGKILL"],
+              [46, "SIGKILL"],
+            ]
+          : [
+              [42, "SIGTERM"],
+              [44, "SIGKILL"],
+              [46, "SIGKILL"],
+            ],
+      );
+      expect(exit).not.toHaveBeenCalled();
+      expect(runtime()).toMatchObject({ pid: 0, groupPid: 42, supervisorPid: 43 });
+      descendantAlive = false;
+      lateDescendantAlive = false;
+      advance(now + 25);
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(runtime()).toMatchObject({ pid: 0, groupPid: 0, supervisorPid: 0 });
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(timers.size).toBe(0);
     },
   );
 

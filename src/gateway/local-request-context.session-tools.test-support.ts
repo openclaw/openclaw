@@ -40,6 +40,30 @@ export const PARTICIPANT_DRAFT = "agent:main:dashboard:participant-draft";
 export const PARTICIPANT_DRAFT_ID = "participant-draft-id";
 let fixtureRun: Promise<void> | undefined;
 
+export async function seedSessionToolsFixtureSession({
+  agentId = "main",
+  sessionKey,
+  sessionId,
+  creatorId = "other-person",
+}: {
+  agentId?: string;
+  sessionKey: string;
+  sessionId: string;
+  creatorId?: string;
+}) {
+  await upsertSessionEntryCore(
+    { agentId, sessionKey },
+    {
+      sessionId,
+      updatedAt: 1,
+      visibility: "shared",
+      createdVia: "operator",
+      createdActor: { type: "human", source: "profile", id: creatorId },
+    },
+  );
+  return { sessionKey, sessionId };
+}
+
 export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
   return (fixtureRun = withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
@@ -61,16 +85,7 @@ export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<vo
       ["main", INCOGNITO, "session-tools-incognito-id"],
       ["other", "agent:other:dashboard:session-tools-other", "session-tools-other-id"],
     ] as const) {
-      await upsertSessionEntryCore(
-        { agentId, sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          visibility: "shared",
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: "other-person" },
-        },
-      );
+      await seedSessionToolsFixtureSession({ agentId, sessionKey, sessionId });
     }
     const resources = new LegacyPluginSdkResourceHost();
     try {

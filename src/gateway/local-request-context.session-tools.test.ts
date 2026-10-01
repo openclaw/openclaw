@@ -1,4 +1,5 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
 import { captureAgentHarnessCompletionCustody } from "../agents/agent-harness-completion-custody.js";
@@ -57,6 +58,7 @@ import {
   PARTICIPANT_DRAFT,
   PARTICIPANT_DRAFT_ID,
   withSessionToolsFixture,
+  seedSessionToolsFixtureSession,
   withParticipantSessionToolsFixture,
   drainSessionToolsFixture,
 } from "./local-request-context.session-tools.test-support.js";
@@ -754,24 +756,29 @@ describe("built-in session tool role authority", () => {
         if (!context) {
           throw new Error("expected local Gateway context");
         }
+        const client = roleClient("write");
+        const profile = expectDefined(client.authenticatedUserProfile, "operator profile");
+        const { sessionKey, sessionId } = await seedSessionToolsFixtureSession({
+          sessionKey: "agent:main:dashboard:session-tools-self-archive",
+          sessionId: "session-tools-self-archive-id",
+          creatorId: caller === "system" ? "other-person" : profile.profileId,
+        });
         const archived = createDeferredCore();
         context.subscribeSessionEvents("self-archive-proof");
         context.broadcastToConnIds = (event, payload) => {
           if (event === "sessions.changed") {
-            expect(payload).toMatchObject({ sessionKey: REQUESTER });
+            expect(payload).toMatchObject({ sessionKey });
             archived.resolve();
           }
         };
-        const sessionId = "session-tools-requester-id";
         const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
         const admission = await beginSessionWorkAdmission({
           scope: storePath,
-          identities: [REQUESTER, sessionId],
+          identities: [sessionKey, sessionId],
           assertAllowed: () => {},
         });
         let current = true;
         const settled = createDeferredCore();
-        const client = roleClient("write");
         const source = captureGatewayDeviceRevocation(
           context,
           { deviceId: "archive-device", role: "operator" },
@@ -784,7 +791,7 @@ describe("built-in session tool role authority", () => {
             withGatewayToolCallerIdentity(
               {
                 agentId: "main",
-                sessionKey: REQUESTER,
+                sessionKey,
                 operationalRunInstance: { instanceId: "archive-instance", runId: "archive-run" },
                 receiptAuthority: () => current,
                 gatewayContextResolver: () => context,
@@ -793,7 +800,7 @@ describe("built-in session tool role authority", () => {
                 admission.run(() =>
                   createSessionsTool({
                     config: cfg,
-                    agentSessionKey: REQUESTER,
+                    agentSessionKey: sessionKey,
                     agentSessionId: sessionId,
                     callGateway: async <T>(
                       request: Parameters<AgentToolGatewayRequestCaller>[0],
@@ -810,14 +817,11 @@ describe("built-in session tool role authority", () => {
                   }).execute("archive-self", { action: "patch", archived: true }),
                 ),
             );
-          if (!client.authenticatedUserProfile) {
-            throw new Error("expected operator profile");
-          }
           const invoke = () =>
             caller !== "system"
               ? withOperatorToolGatewayAuthority(
                   {
-                    authenticatedUserProfile: client.authenticatedUserProfile,
+                    authenticatedUserProfile: profile,
                     scopes: client.connect.scopes ?? [],
                   },
                   archive,
@@ -835,10 +839,8 @@ describe("built-in session tool role authority", () => {
                 invoke,
               )
             : invoke());
-          expect(result.details).toMatchObject({ status: "scheduled", sessionKey: REQUESTER });
-          expect(
-            loadSessionEntry({ agentId: "main", sessionKey: REQUESTER })?.archivedAt,
-          ).toBeUndefined();
+          expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
+          expect(loadSessionEntry({ agentId: "main", sessionKey })?.archivedAt).toBeUndefined();
           if (caller === "revoked device") {
             invalidateGatewayDeviceRevocation(context, "archive-device", "operator");
           }
@@ -849,15 +851,13 @@ describe("built-in session tool role authority", () => {
         }
         if (caller === "revoked device") {
           await expect(settled.promise).rejects.toThrow(/authority.*no longer active/);
-          expect(
-            loadSessionEntry({ agentId: "main", sessionKey: REQUESTER })?.archivedAt,
-          ).toBeUndefined();
+          expect(loadSessionEntry({ agentId: "main", sessionKey })?.archivedAt).toBeUndefined();
           return;
         }
         await settled.promise;
         await archived.promise;
         expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(false);
-        expect(loadSessionEntry({ agentId: "main", sessionKey: REQUESTER })).toMatchObject({
+        expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
           sessionId,
           archivedAt: expect.any(Number),
         });

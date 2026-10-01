@@ -276,7 +276,7 @@ enum SelfContainedSwarmHelpers {
 }
 
 extension OpenClawChatViewModel {
-    private func updateSwarmProjection() {
+    func updateSwarmProjection() {
         self.activeSwarmGroups = buildOpenClawChatSwarmGroups(sessions: self.swarmSessions) { candidate in
             self.matchesCurrentSessionKey(incoming: candidate, current: self.sessionKey)
         }
@@ -294,7 +294,7 @@ extension OpenClawChatViewModel {
         var nextActivity = swarmActivityState
         guard nextActivity.observe(event) else { return false }
         swarmActivityState = nextActivity
-        swarmSessions = nextActivity.decorate(swarmSessions)
+        if self.sidebarData == nil { swarmSessions = nextActivity.decorate(swarmSessions) }
         self.updateSwarmProjection()
         if event.kind != "phase", event.kind != "log" {
             self.scheduleSwarmRefresh()
@@ -335,9 +335,16 @@ extension OpenClawChatViewModel {
                 self.swarmSessions = []
                 self.updateSwarmProjection()
             }
-            let rows = try await routeLease.listChildSessions(parentKey: session.key)
+            let rosterRead = self.sidebarData?.beginRead()
+            let result = try await routeLease.listChildSessions(parentKey: session.key)
             guard isCurrent() else { return }
-            self.swarmSessions = self.swarmActivityState.decorate(rows)
+            // iOS and macOS Swarm keep showing partial rows; only sidebar hydration uses completeness for retry UI.
+            let rows = result.rows
+            if let owner = self.sidebarData, let rosterRead {
+                self.swarmRowIDs = owner.receive(rows, read: rosterRead)
+            } else if self.sidebarData == nil {
+                self.swarmSessions = self.swarmActivityState.decorate(rows)
+            }
             self.updateSwarmProjection()
         } catch {
             guard isCurrent() else { return }

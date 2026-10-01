@@ -4,6 +4,7 @@ import type {
   BrokerResourceAttachment,
   BrokerResourceResponse,
 } from "../process/spawn-broker/resource-protocol.js";
+import type { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
 import type { RetainedOperation } from "./retained-operation.js";
 import type { NativeWorkerFailure } from "./worker-native-error.js";
 
@@ -106,6 +107,7 @@ export type NativeWorkerRequest =
       type: "create";
       id: number;
       filename: { kind: "url" | "path"; value: string };
+      environmentData: ReturnType<typeof captureSqliteWorkerEnvironmentData>;
       options: NativeWorkerOptions;
       transferList: Transferable[];
       resource?: NativeWorkerResourceRequest;

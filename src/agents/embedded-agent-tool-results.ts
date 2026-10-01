@@ -448,11 +448,9 @@ export function extractToolErrorCode(result: unknown): string | undefined {
 }
 
 export function isToolResultTimedOut(result: unknown): boolean {
-  const normalizedStatus = readToolResultStatus(result);
-  if (normalizedStatus === "timeout") {
-    return true;
-  }
-  return readToolResultDetails(result)?.timedOut === true;
+  return (
+    readToolResultStatus(result) === "timeout" || readToolResultDetails(result)?.timedOut === true
+  );
 }
 
 export function extractToolErrorMessage(result: unknown): string | undefined {
@@ -460,19 +458,12 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
     return undefined;
   }
   const record = result as Record<string, unknown>;
-  const fromDetails = extractDirectErrorField(record.details);
-  if (fromDetails) {
-    return fromDetails;
-  }
-  const fromDetailsAggregated = readErrorCandidate(
-    asOptionalObjectRecord(record.details)?.aggregated,
-  );
-  if (fromDetailsAggregated) {
-    return fromDetailsAggregated;
-  }
-  const fromRoot = extractDirectErrorField(record);
-  if (fromRoot) {
-    return fromRoot;
+  const direct =
+    extractDirectErrorField(record.details) ??
+    readErrorCandidate(asOptionalObjectRecord(record.details)?.aggregated) ??
+    extractDirectErrorField(record);
+  if (direct) {
+    return direct;
   }
   const text = extractToolResultText(result);
   if (text) {
@@ -486,13 +477,9 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
       // Fall through to status/text fallback.
     }
   }
-  const fromDetailsStatus = extractErrorField(record.details);
-  if (fromDetailsStatus) {
-    return fromDetailsStatus;
-  }
-  const fromRootStatus = extractErrorField(record);
-  if (fromRootStatus) {
-    return fromRootStatus;
+  const fromStatus = extractErrorField(record.details) ?? extractErrorField(record);
+  if (fromStatus) {
+    return fromStatus;
   }
   const status = readToolResultStatus(result);
   if (status && !isToolResultError(result)) {

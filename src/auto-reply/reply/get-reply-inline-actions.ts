@@ -1,4 +1,3 @@
-/** Handles inline slash commands, skill invocations, and abort actions before model runs. */
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -89,13 +88,8 @@ function getBuiltinSlashCommands(): Set<string> {
 }
 
 function resolveSlashCommandName(commandBodyNormalized: string): string | null {
-  const trimmed = commandBodyNormalized.trim();
-  if (!trimmed.startsWith("/")) {
-    return null;
-  }
-  const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
-  const name = normalizeOptionalLowercaseString(match?.[1]) ?? "";
-  return name ? name : null;
+  const match = commandBodyNormalized.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
+  return normalizeOptionalLowercaseString(match?.[1]) ?? null;
 }
 
 function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefined): boolean {
@@ -109,7 +103,6 @@ function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefin
   return /^(?:<@[!&]?[A-Za-z0-9._:-]+>|<!(?:here|channel|everyone)>|[:,.!?-]|\s)+$/u.test(trimmed);
 }
 
-/** Result of attempting to handle an inbound message as an inline action. */
 type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
@@ -274,8 +267,7 @@ export async function handleInlineActions(params: {
           "blocked",
         );
       }
-      typing.cleanup();
-      return { kind: "reply", reply: undefined };
+      return finishCommand();
     }
     if (cutoff) {
       await (
@@ -300,8 +292,7 @@ export async function handleInlineActions(params: {
     command.to &&
     command.from !== command.to
   ) {
-    typing.cleanup();
-    return { kind: "reply", reply: undefined };
+    return finishCommand();
   }
 
   const slashCommandName = getStandaloneSlashCommandName(command.commandBodyNormalized);
@@ -358,8 +349,7 @@ export async function handleInlineActions(params: {
       logVerbose(
         `Ignoring /${skillInvocation.command.name} from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
-      typing.cleanup();
-      return { kind: "reply", reply: undefined };
+      return finishCommand();
     }
 
     const dispatch = skillInvocation.command.dispatch;
@@ -636,20 +626,16 @@ export async function handleInlineActions(params: {
       ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
     };
   }
-  const remainingBodyAfterInlineStatus = (() => {
-    const stripped = stripStructuralPrefixes(cleanedBody);
-    if (!isGroup) {
-      return stripped.trim();
-    }
-    return stripMentions(stripped, ctx, cfg, agentId).trim();
-  })();
+  const strippedBody = stripStructuralPrefixes(cleanedBody);
+  const remainingBodyAfterInlineStatus = (
+    isGroup ? stripMentions(strippedBody, ctx, cfg, agentId) : strippedBody
+  ).trim();
   if (
     didSendInlineStatus &&
     (remainingBodyAfterInlineStatus.length === 0 ||
       isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
   ) {
-    typing.cleanup();
-    return { kind: "reply", reply: undefined };
+    return finishCommand();
   }
 
   const commandBodyBeforeRun = command.commandBodyNormalized;

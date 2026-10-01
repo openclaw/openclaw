@@ -6,12 +6,10 @@ import type {
   SecretInputMode,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
-  ensureApiKeyFromOptionEnvOrPrompt,
   isNonSecretApiKeyMarker,
-  normalizeApiKeyInput,
   normalizeOptionalSecretInput,
-  validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
+import { captureProviderApiKey } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
@@ -160,44 +158,38 @@ async function promptForOllamaCloudCredential(params: {
   credentialMode?: SecretInputMode;
   discoveryApiKey: string;
 }> {
-  const captured: { credential?: SecretInput; credentialMode?: SecretInputMode } = {};
   const optionToken = normalizeOptionalSecretInput(params.opts?.ollamaApiKey);
-  const discoveryApiKey = await ensureApiKeyFromOptionEnvOrPrompt({
-    token: optionToken ?? normalizeOptionalSecretInput(params.opts?.token),
-    tokenProvider: optionToken
-      ? "ollama"
-      : normalizeOptionalSecretInput(params.opts?.tokenProvider),
-    secretInputMode:
-      params.allowSecretRefPrompt === false
-        ? (params.secretInputMode ?? "plaintext")
-        : params.secretInputMode,
-    config: params.cfg,
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-    expectedProviders: ["ollama"],
-    provider: "ollama",
-    envLabel: "OLLAMA_API_KEY",
-    promptMessage: "Ollama API key",
-    normalize: normalizeApiKeyInput,
-    validate: validateApiKeyInput,
-    prompter: params.prompter,
-    setCredential: async (apiKey, mode) => {
-      captured.credential = apiKey;
-      captured.credentialMode = mode;
+  const {
+    apiKey: discoveryApiKey,
+    input: credential,
+    mode: credentialMode,
+  } = await captureProviderApiKey(
+    { ...params, config: params.cfg },
+    {
+      token: optionToken ?? normalizeOptionalSecretInput(params.opts?.token),
+      tokenProvider: optionToken
+        ? "ollama"
+        : normalizeOptionalSecretInput(params.opts?.tokenProvider),
+      env: params.env,
+      expectedProviders: ["ollama"],
+      provider: "ollama",
+      envLabel: "OLLAMA_API_KEY",
+      promptMessage: "Ollama API key",
+      missingInputMessage: "Missing Ollama API key input.",
     },
-  });
-  if (!captured.credential) {
+  );
+  if (!credential) {
     throw new Error("Missing Ollama API key input.");
   }
   if (
-    typeof captured.credential === "string" &&
-    isNonSecretApiKeyMarker(captured.credential, { includeEnvVarName: false })
+    typeof credential === "string" &&
+    isNonSecretApiKeyMarker(credential, { includeEnvVarName: false })
   ) {
     throw new Error("Cloud-only Ollama setup requires a real OLLAMA_API_KEY.");
   }
   return {
-    credential: captured.credential,
-    credentialMode: captured.credentialMode,
+    credential,
+    credentialMode,
     discoveryApiKey,
   };
 }

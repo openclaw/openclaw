@@ -38,6 +38,7 @@ import {
   createThinkingOnlyDoneEvent,
   mockDoneAnswer,
   mockCliOutput,
+  createCliRuntimeConfig,
   registerCodexSideQuestionHarness,
   supportsPreparedOpenAIAuth,
   createSideQuestionParams,
@@ -83,7 +84,6 @@ import {
   registerProviderStreamForModelMock,
   resolveEmbeddedAgentStreamMock,
   prepareCliRunContextMock,
-  executePreparedCliRunMock,
   diagDebugMock,
   ensureSelectedAgentHarnessPluginMock,
   createAgentHarnessHostCapabilitiesMock,
@@ -102,16 +102,6 @@ import {
 } from "./embedded-agent-runner/model.generation-scope.test-support.js";
 import type { AgentHarness } from "./harness/types.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
-
-function createCliRuntimeConfig(): Parameters<typeof runBtwSideQuestion>[0]["cfg"] {
-  return {
-    agents: {
-      defaults: {
-        models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
-      },
-    },
-  };
-}
 
 function createSeedTranscript() {
   const userEntry = createTranscriptEntry({
@@ -1162,44 +1152,6 @@ describe("runBtwSideQuestion", () => {
       }),
     );
     expect(streamSimpleMock).toHaveBeenCalledOnce();
-  });
-
-  it("runs CLI-runtime alias BTW as an ephemeral CLI side question", async () => {
-    const { cleanup, prepared } = mockCliOutput({ text: "CLI side answer." });
-
-    const result = await runSideQuestion({
-      cfg: createCliRuntimeConfig(),
-      model: "claude-opus-4-7",
-      sessionKey: DEFAULT_SESSION_KEY,
-      authorityRunId: "btw-cli-authority",
-      opts: { runId: "parent-correlation" },
-    });
-
-    expect(result).toEqual({ text: "CLI side answer." });
-    expect(prepareCliRunContextMock).toHaveBeenCalledTimes(1);
-    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
-      executionMode?: string;
-      provider?: string;
-      model?: string;
-      disableTools?: boolean;
-      cliSessionId?: string;
-      extraSystemPrompt?: string;
-      prompt?: string;
-    };
-    expect(prepareParams.executionMode).toBe("side-question");
-    expect(prepareParams.provider).toBe("claude-cli");
-    expect(prepareParams.model).toBe("claude-opus-4-7");
-    expect(prepareParams.disableTools).toBe(true);
-    expect(prepareParams).toMatchObject({ runId: "btw-cli-authority" });
-    expect(prepareParams.cliSessionId).toBeUndefined();
-    expect(prepareParams.extraSystemPrompt).toContain("Answer only the side question");
-    expect(prepareParams.prompt).toContain("<conversation_history>");
-    expect(prepareParams.prompt).toContain("<btw_side_question>");
-    expect(executePreparedCliRunMock).toHaveBeenCalledWith(prepared);
-    expect(cleanup).toHaveBeenCalledTimes(1);
-    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
-    expect(streamSimpleMock).not.toHaveBeenCalled();
-    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
   it.each([

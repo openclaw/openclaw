@@ -102,3 +102,22 @@ export function visitChannelEntries(
     }
   }
 }
+
+export function moveLegacyConfigKey(
+  owner: JsonRecord | null | undefined,
+  legacyKey: string,
+  canonicalKey: string,
+  path: string,
+  changes: string[],
+): void {
+  if (!owner || !Object.hasOwn(owner, legacyKey)) {
+    return;
+  }
+  if (owner[canonicalKey] === undefined) {
+    owner[canonicalKey] = owner[legacyKey];
+    changes.push(`Moved ${path}.${legacyKey} → ${path}.${canonicalKey}.`);
+  } else {
+    changes.push(`Removed ${path}.${legacyKey} (${path}.${canonicalKey} already set).`);
+  }
+  delete owner[legacyKey];
+}

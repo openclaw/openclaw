@@ -105,6 +105,10 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/codex/catalog-page-worker-entrypoint.ts",
   "extensions/memory-core/manager-publication-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
+  "extensions/memory-core/memory-forget-fault-entrypoint.test-support":
+    "extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts",
+  "extensions/memory-core/memory-forget-planning-observer-entrypoint.test-support":
+    "extensions/memory-core/src/memory-forget-planning-observer-entrypoint.test-support.ts",
   "state/openclaw-agent-worker-store.runtime.test-support":
     "src/state/openclaw-agent-worker-store.runtime.test-support.ts",
   "cli/update-cli/update-command-legacy-finalize-entrypoint.test-support":

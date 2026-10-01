@@ -226,7 +226,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       if (!this.closingPromise) {
         this.releaseResources("abort");
       }
-      throw this.redactAdmissionError(error);
+      throw this.redactError(error, projectOpenAIQuicksilverAuthErrorMessage(error));
     }
     try {
       const requestIds = createOpenAIQuicksilverRequestIds();
@@ -550,16 +550,11 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     void this.teardown("error", () => this.config.onError?.(redactedError));
   }
 
-  private redactError(error: unknown): Error {
-    const projected = new Error(projectOpenAIQuicksilverErrorMessage("gateway"));
-    if (error instanceof Error && error.name === "TimeoutError") {
-      projected.name = "TimeoutError";
-    }
-    return projected;
-  }
-
-  private redactAdmissionError(error: unknown): Error {
-    const projected = new Error(projectOpenAIQuicksilverAuthErrorMessage(error));
+  private redactError(
+    error: unknown,
+    message = projectOpenAIQuicksilverErrorMessage("gateway"),
+  ): Error {
+    const projected = new Error(message);
     if (error instanceof Error && error.name === "TimeoutError") {
       projected.name = "TimeoutError";
     }

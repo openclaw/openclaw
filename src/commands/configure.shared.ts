@@ -1,4 +1,3 @@
-// Shared prompt wrappers and section metadata for the configure wizard.
 import {
   confirm as clackConfirm,
   intro as clackIntro,

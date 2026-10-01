@@ -49,14 +49,12 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
       this.configSave.update({ busy: false, error: null, notice: null });
     },
   });
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.runtimeConfig,
-    (runtimeConfig) => runtimeConfig.subscribe(() => this.requestUpdate()),
-  );
-
-  override disconnectedCallback() {
-    this.subscriptions.clear();
-    super.disconnectedCallback();
+  constructor() {
+    super();
+    void new SubscriptionsController(this).effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => runtimeConfig.subscribe(() => this.requestUpdate()),
+    );
   }
 
   private config() {

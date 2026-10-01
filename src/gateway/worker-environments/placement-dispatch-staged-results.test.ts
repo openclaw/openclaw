@@ -162,7 +162,7 @@ describe("worker placement result recovery", () => {
     };
     const base = encode(params.base);
     const current = encode(params.current);
-    params.store.updateWorkspaceBaseManifest({ claim: params.claim, manifestRef: base.ref });
+    await params.store.updateWorkspaceBaseManifest({ claim: params.claim, manifestRef: base.ref });
     params.store.markWorkspaceResultPending(params.claim);
     const stagedResultRef = workerWorkspaceResultRef(params.claim.claimId);
     await stageWorkerWorkspaceResult({
@@ -422,10 +422,10 @@ describe("worker placement result recovery", () => {
       base: "base\n",
       current: "worker\n",
     });
-    placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     const binding = claim;
     expect(
-      placementStore.beginWorkerSessionToolOperation({
+      await placementStore.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "running-session-operation-call",
@@ -463,7 +463,7 @@ describe("worker placement result recovery", () => {
     } finally {
       // Join recovery even when a fence assertion fails, before database teardown.
       try {
-        completed = placementStore.completeWorkerSessionToolOperation({
+        completed = await placementStore.completeWorkerSessionToolOperation({
           sourceSessionId: claim.sessionId,
           sourceClaimId: claim.claimId,
           toolCallId: "running-session-operation-call",
@@ -934,7 +934,7 @@ describe("worker placement result recovery", () => {
       ownerEpoch: active.activeOwnerEpoch,
       placementGeneration: active.generation,
     };
-    expect(interruptedStore.loadWorkspaceReconciliation(owner)).toMatchObject({
+    expect(await interruptedStore.loadWorkspaceReconciliation(owner)).toMatchObject({
       appliedManifestRef: baseManifestRef,
     });
     await fs.rm(path.join(workspacePath, "result.txt"));

@@ -30,12 +30,9 @@ import {
   stagedInputFileName,
 } from "../../media/staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
+import { projectWorkerTextOrImageContent } from "../../worker/assistant-message-projection.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
-import {
-  cloneImageContent,
-  cloneTextContent,
-  isWorkerTranscriptMessageFrameSafe,
-} from "../../worker/transcript-message.js";
+import { isWorkerTranscriptMessageFrameSafe } from "../../worker/transcript-message.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 const MAX_WORKER_ATTACHMENT_BYTES = 256 * 1024 * 1024;
@@ -266,11 +263,12 @@ export async function prepareWorkerTurnMedia(params: {
   };
   const projectInput = (input: ReturnType<typeof prepareInput>) => {
     // Gateway bookkeeping is not part of the closed worker content contract.
-    const parts = input.parts.map((part) =>
-      part.type === "text"
-        ? { ...cloneTextContent(part), text: projectText(part.text) }
-        : cloneImageContent(part),
-    );
+    const parts = input.parts.map(projectWorkerTextOrImageContent);
+    for (const part of parts) {
+      if (part.type === "text") {
+        part.text = projectText(part.text);
+      }
+    }
     const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
     const notes = [...input.files]
       .filter((file) => !text.includes(file))

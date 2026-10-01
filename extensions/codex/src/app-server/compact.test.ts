@@ -426,8 +426,8 @@ describe("maybeCompactCodexAppServerSession", () => {
       // only the injected message carries the current catalog.
       const ephemeralPolicy = {
         developerInstructions: "generic policy",
-        skillsInstructions: refreshed,
-        nativeSkillsInstructions: "catalog A",
+        refreshableInstructions: refreshed,
+        nativeRefreshableInstructions: "catalog A",
       };
       await retainCodexAppServerLiveThread(
         fake.client,
@@ -457,8 +457,8 @@ describe("maybeCompactCodexAppServerSession", () => {
         expect.objectContaining({
           ephemeralPolicy: {
             developerInstructions: "generic policy",
-            skillsInstructions: "catalog A",
-            nativeSkillsInstructions: "catalog A",
+            refreshableInstructions: "catalog A",
+            nativeRefreshableInstructions: "catalog A",
           },
         }),
       );

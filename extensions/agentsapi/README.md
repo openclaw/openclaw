@@ -1,8 +1,16 @@
 # Agents API harness
 
-The `agentsapi` harness uses API-key authentication and defaults to an OpenAI-hosted
-Linux environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
-`agentRuntime.id`. See the [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
+The `agentsapi` harness runs commands and file operations in an OpenAI-hosted Linux
+VM by default, while OpenClaw handles channel messaging and configured Gateway
+tools. It uses OpenAI API-key authentication.
+
+Start with the [setup and supported features guide](https://docs.openclaw.ai/plugins/agentsapi).
+Enable the `agentsapi` plugin and select it for the model through
+`agents.defaults.models["openai/<model>"].agentRuntime.id: "agentsapi"`.
+Replace `<model>` with a model available to your Agents API project. Enabling the
+plugin alone does not select the runtime. Provider-scoped and per-agent model
+overrides are covered in the
+[harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
 Multi-user Gateways are not supported by the Agents API MVP.
 

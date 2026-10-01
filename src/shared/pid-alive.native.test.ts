@@ -39,24 +39,27 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each(["arm64", "x64"] as const)(
-  "reads fresh Darwin identities without process startup on %s",
-  async (arch) => {
-    vi.spyOn(process, "arch", "get").mockReturnValue(arch);
-    const shell = vi.spyOn(childProcess, "execFileSync");
-    const { getFileLockProcessStartTime, readDarwinProcessIdentity } =
-      await import("./pid-alive.js");
-    expect(getFileLockProcessStartTime(42)).toBe(seconds);
-    bytes.writeBigUInt64LE(BigInt(seconds + 1), 120);
-    bytes.writeUInt32LE(8, 16);
-    expect(getFileLockProcessStartTime(42)).toBe(seconds + 1);
-    expect(readDarwinProcessIdentity(42)).toEqual({ parentPid: 8, startedAt: seconds + 1 });
-    expect(shell).not.toHaveBeenCalled();
-    expect(load).toHaveBeenCalledExactlyOnceWith("/usr/lib/libproc.dylib");
-    expect(query).toHaveBeenCalledTimes(3);
-    expect(query.mock.calls[0]).toEqual([42, 3, 0, expect.any(Buffer), 136]);
-  },
-);
+it("reads fresh Darwin identities without process startup on arm64", async () => {
+  const shell = vi.spyOn(childProcess, "execFileSync");
+  const { getFileLockProcessStartTime, readDarwinProcessIdentity } = await import("./pid-alive.js");
+  expect(getFileLockProcessStartTime(42)).toBe(seconds);
+  bytes.writeBigUInt64LE(BigInt(seconds + 1), 120);
+  bytes.writeUInt32LE(8, 16);
+  expect(getFileLockProcessStartTime(42)).toBe(seconds + 1);
+  expect(readDarwinProcessIdentity(42)).toEqual({ parentPid: 8, startedAt: seconds + 1 });
+  expect(shell).not.toHaveBeenCalled();
+  expect(load).toHaveBeenCalledExactlyOnceWith("/usr/lib/libproc.dylib");
+  expect(query).toHaveBeenCalledTimes(3);
+  expect(query.mock.calls[0]).toEqual([42, 3, 0, expect.any(Buffer), 136]);
+});
+
+it("keeps the bounded shell path on x64 without loading Koffi", async () => {
+  vi.spyOn(process, "arch", "get").mockReturnValue("x64");
+  vi.spyOn(childProcess, "execFileSync").mockReturnValue("Thu Sep 24 00:00:00 2026\n");
+  const { getFileLockProcessStartTime } = await import("./pid-alive.js");
+  expect(getFileLockProcessStartTime(42)).toBe(Date.UTC(2026, 8, 24) / 1000);
+  expect(nativeKoffi).not.toHaveBeenCalled();
+});
 
 it.each([
   "short read",

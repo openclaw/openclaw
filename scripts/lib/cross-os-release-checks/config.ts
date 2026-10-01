@@ -185,13 +185,13 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "talk-voice",
 ];
 
-export function buildCrossOsReleaseSmokePluginAllowlist(
+function buildCrossOsReleaseSmokePluginAllowlist(
   providerMeta: Pick<ProviderConfig, "extensionId">,
 ) {
   return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
 }
 
-export function buildCrossOsReleaseSmokeMemorySlotConfigArgs() {
+function buildCrossOsReleaseSmokeMemorySlotConfigArgs() {
   return ["config", "set", "plugins.slots.memory", JSON.stringify("none"), "--strict-json"];
 }
 
@@ -264,7 +264,7 @@ export function managedGatewayRestartCommandTimeoutMs(platform = process.platfor
   // harness alive long enough to receive that result plus service-manager overhead.
   return gatewayReadyDeadlineMs(platform) + 60_000;
 }
-export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
+const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
 export const CROSS_OS_COMMAND_HEARTBEAT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS",
   60,
@@ -347,7 +347,7 @@ export function parsePositiveIntegerEnv(name: string, fallback: number, env = pr
   return value;
 }
 
-export function looksLikeReleaseVersionRef(ref: string) {
+function looksLikeReleaseVersionRef(ref: string) {
   const trimmed = normalizeRequestedRef(ref);
   return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[1-9][0-9]*)|[-.](?:alpha|beta|rc)[-.]?[0-9]+)?$/iu.test(
     trimmed,

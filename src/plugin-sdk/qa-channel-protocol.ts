@@ -309,7 +309,7 @@ function sanitizeQaBusToolCallValue(value: unknown, depth: number, key?: string)
     return QA_BUS_TOOL_CALL_REDACTED;
   }
   if (value === null || typeof value === "boolean" || typeof value === "number") {
-    return Number.isFinite(value as number) || typeof value !== "number" ? value : String(value);
+    return typeof value === "number" && !Number.isFinite(value) ? String(value) : value;
   }
   if (typeof value === "string") {
     // Tool args often embed credentials in command/header/env shapes; keep structure, not raw text.
@@ -325,9 +325,9 @@ function sanitizeQaBusToolCallValue(value: unknown, depth: number, key?: string)
     return "[truncated]";
   }
   if (Array.isArray(value)) {
-    return value.slice(0, QA_BUS_TOOL_CALL_MAX_ARRAY_LENGTH).map((entry) => {
-      return sanitizeQaBusToolCallValue(entry, depth + 1);
-    });
+    return value
+      .slice(0, QA_BUS_TOOL_CALL_MAX_ARRAY_LENGTH)
+      .map((entry) => sanitizeQaBusToolCallValue(entry, depth + 1));
   }
   if (isRecord(value)) {
     return Object.fromEntries(

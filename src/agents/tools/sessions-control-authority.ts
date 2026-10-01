@@ -78,6 +78,7 @@ export async function prepareSessionControlTarget(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string | null;
+  operation: "archive" | "restore" | "stop";
   authority?: AdmittedRunOperatorAuthority;
 }): Promise<{
   sessionId: string;
@@ -174,12 +175,14 @@ export async function prepareSessionControlTarget(params: {
       }
       const creatorId = sessionCreatorProfileId(current.createdActor);
       const assigneeId = current.owner?.actor.type === "human" ? current.owner.actor.id : undefined;
+      // Self-archive acknowledges before the Gateway write, so reject non-creators here too.
+      // Assignment permits stopping work, not changing the shared archive state.
       if (
         !(creatorId && profileIds.has(creatorId)) &&
-        !(assigneeId && profileIds.has(assigneeId))
+        !(params.operation === "stop" && assigneeId && profileIds.has(assigneeId))
       ) {
         throw new ToolAuthorizationError(
-          "Session controls require the session creator or assigned human owner.",
+          `Session ${params.operation} requires the session creator${params.operation === "stop" ? " or assigned human owner" : ""}.`,
         );
       }
     };

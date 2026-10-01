@@ -44,14 +44,13 @@ function addLegacyChannelAcpBindingIssues(
 export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
   .object({
     defaults: z
-      .object({
+      .strictObject({
         groupPolicy: GroupPolicySchema.optional(),
         contextVisibility: ContextVisibilityModeSchema.optional(),
         heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
         botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
         implicitMentions: ChannelImplicitMentionsSchema.optional(),
       })
-      .strict()
       .optional(),
     modelByChannel: ChannelModelByChannelSchema,
   })

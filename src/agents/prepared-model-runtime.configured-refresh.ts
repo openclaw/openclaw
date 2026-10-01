@@ -29,6 +29,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     gatewayLifecycleActive: boolean;
     isPublicationCurrent: () => boolean;
     acquisitionSignal: AbortSignal;
+    onPluginGenerationRetired: (owner: PreparedModelRuntimeOwner) => void;
     progress?: Parameters<typeof publishPreparedModelRuntimeOwnerBatch>[0]["progress"];
   },
 ): Promise<void> {
@@ -74,6 +75,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
       catalogMode,
       existing?.provenance === "configured" ? existing : undefined,
     );
+    owner.onPluginGenerationRetired = () => context.onPluginGenerationRetired(owner);
     owner.catalogInventory = inventories.get(
       ownerKey({ ...input, runtimePluginSelections: undefined }),
     );

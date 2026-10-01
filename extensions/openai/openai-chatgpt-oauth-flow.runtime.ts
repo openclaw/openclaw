@@ -1,10 +1,10 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
 import {
   createOAuthLoginCancelledError,
   oauthErrorHtml,
   oauthSuccessHtml,
   parseOAuthAuthorizationInput,
+  resolveOpenAICodexAuthIdentity,
   throwIfOAuthLoginAborted,
   withOAuthLoginAbort,
   type OAuthCredentials,

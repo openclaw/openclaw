@@ -247,6 +247,124 @@
   margin-top: 4px;
 }
 
+.chat-message-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.chat-group.user:not(.chat-group--peer) .chat-message-reactions {
+  justify-content: flex-end;
+}
+
+.chat-reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: default;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.chat-reaction-chip__emoji {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.chat-reaction-chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.chat-reaction-chip:enabled:hover {
+  border-color: color-mix(in srgb, var(--muted) 45%, var(--border));
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-reaction-chip[aria-pressed="true"]:enabled:hover {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.chat-reaction-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The add chip is the picker's own trigger; the chip box belongs to that trigger. */
+.chat-reaction-chip--add {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.chat-group:hover .chat-reaction-chip--add,
+.chat-group:focus-within .chat-reaction-chip--add {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-reaction-chip {
+    animation: chat-reaction-chip-in 160ms ease-out;
+  }
+
+  .chat-reaction-chip__count {
+    display: inline-block;
+    animation: chat-reaction-count-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1.4);
+  }
+}
+
+@keyframes chat-reaction-chip-in {
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+}
+
+@keyframes chat-reaction-count-in {
+  from {
+    transform: translateY(35%);
+    opacity: 0;
+  }
+}
+
+.chat-reaction-action {
+  opacity: var(--chat-footer-disclosure-opacity, 0);
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
+}
+
+.chat-message-actions-row .chat-reaction-action {
+  opacity: var(--chat-message-action-opacity, 0);
+  pointer-events: var(--chat-message-action-pointer-events, none);
+}
+
+.chat-group:hover .chat-reaction-action,
+.chat-group:focus-within .chat-reaction-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* Keep long configurable sender names compact while footer actions retain
    their reachable wrapped layout in narrow panes. */
 .chat-sender-name {
@@ -926,6 +1044,7 @@ img.chat-avatar {
 }
 
 .chat-reply-attribution--inline .chat-reply-attribution__unavailable {
+  grid-column: 3;
   contain: inline-size;
   justify-self: stretch;
 }

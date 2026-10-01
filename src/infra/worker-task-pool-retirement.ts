@@ -170,7 +170,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
           if (!areWorkerNativeSectionsSettled(slot.nativeSections)) {
             if (!observingSection) {
               observingSection = true;
-              void waitForWorkerNativeSections(slot.nativeSections)?.then(
+              void Promise.resolve(waitForWorkerNativeSections(slot.nativeSections)).then(
                 advance,
                 completion.reject,
               );

@@ -6,7 +6,7 @@ export { MessagesSchema } from "./zod-schema.messages.js";
 export { SessionSchema } from "./zod-schema.session-config.js";
 
 export const CommandsSchema = z
-  .object({
+  .strictObject({
     native: NativeCommandsSettingSchema.optional().default("auto"),
     nativeSkills: NativeCommandsSettingSchema.optional().default("auto"),
     text: z.boolean().optional(),
@@ -20,6 +20,5 @@ export const CommandsSchema = z
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     allowFrom: ElevatedAllowFromSchema.optional(),
   })
-  .strict()
   .optional()
   .default(() => ({ native: "auto", nativeSkills: "auto", restart: true }) as const);

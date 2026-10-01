@@ -174,7 +174,7 @@ export function createMergeOutcomeFixtureHarness() {
         gates?: string;
         restPolicy?: string;
         priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
-        postAuthorityRestBoundary?: "start" | "complete";
+        afterRestMainReads?: number;
         afterPolicyRead?: boolean;
       },
       restObservationAppliedAt: 0,
@@ -440,7 +440,7 @@ else if(args[0]==="api"&&args.includes("user")) {
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
   if(s.repoAuthorityUnavailable) fail("repository metadata unavailable");
-  if(s.restObservation&&!s.restObservation.afterPolicyRead&&s.restObservation.postAuthorityRestBoundary===undefined&&
+  if(s.restObservation&&!s.restObservation.afterPolicyRead&&s.restObservation.afterRestMainReads===undefined&&
     (s.quotaTriggered||(s.graphqlMergeProjection&&s.observationReads>0))) {
     applyRestObservation();
   }
@@ -479,15 +479,7 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main"))
     if(s.restMainFault==="unavailable-sha-once") {reference.object.sha="f".repeat(40);s.restMainFault="";save();}
   }
   out(reference);
-  if(s.restObservation?.postAuthorityRestBoundary) {
-    const isMainRead=(call)=>call.includes("repos/fixture/repo/git/ref/heads/main");
-    const authority=s.calls.findLastIndex((call)=>call.includes("orgs/fixture/memberships/fixture-operator"));
-    // The initial authority read precedes REST selection; target the next observation after revalidation.
-    if(authority>=0&&s.calls.slice(0,authority).some(isMainRead)) {
-      const reads=s.calls.slice(authority+1).filter(isMainRead).length;
-      if(reads===(s.restObservation.postAuthorityRestBoundary==="start"?1:2)) applyRestObservation();
-    }
-  }
+  if(s.restObservation?.afterRestMainReads===s.restMainReads) applyRestObservation();
   if(s.pr.state==="MERGED"&&s.restAdvanceMain) {s.restAdvanceMain=false;advanceMain();}
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/branches/main/protection")) {
@@ -730,6 +722,18 @@ verify_crabbox_admin_merge_bypass() {
 # Fault the Git boundary, not the outcome owner: crash after intent CAS, or
 # reject later receipt writes. All successful object/ref operations are real.
 pr_git() {
+  if [ "$1" = --no-lazy-fetch ] && [ "\${3:-}" = '--batch-check=%(objectname) %(objecttype)' ] &&
+    [ -n "$(command jq -r .priorCi.localOnlyQueryFault "$FIXTURE_STATE")" ]; then
+    local candidate; IFS= read -r candidate
+    printf '%s missing\\n' "$candidate"
+    [ "$(command jq -r .priorCi.localOnlyQueryFault "$FIXTURE_STATE")" != stderr ] || { echo 'permission denied' >&2; return 0; }
+    return 128
+  fi
+  if [ "$1" = --no-lazy-fetch ] && [ "\${2:-}" = cat-file ] && [ "\${3:-}" = -e ] &&
+    [ "\${4:-}" = "$(command jq -r .priorCi.localOnlyFailureOid "$FIXTURE_STATE")^{commit}" ]; then
+    command jq -r .priorCi.localOnlyFailureStderr "$FIXTURE_STATE" >&2
+    return 128
+  fi
   if [ "$1" = --no-lazy-fetch ] &&
     [ "$(command jq -r .priorCi.unsupportedNoLazy "$FIXTURE_STATE")" = true ]; then return 129; fi
   if [ "$1" = fetch ] && [ "\${2:-}" = --no-tags ] && [ "\${3:-}" = --no-write-fetch-head ] &&

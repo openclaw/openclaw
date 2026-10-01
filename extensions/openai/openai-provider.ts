@@ -42,8 +42,9 @@ import {
   OPENAI_DEFAULT_MODEL,
 } from "./default-models.js";
 import {
+  buildOpenAIUnknownModelHint,
   OPENAI_CHAT_LATEST_MODEL_ID,
-  OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
+  OPENAI_DAYBREAK_MODEL_IDS,
   OPENAI_GPT_54_MINI_MODEL_ID,
   OPENAI_GPT_54_MODEL_ID,
   OPENAI_GPT_54_NANO_MODEL_ID,
@@ -397,6 +398,7 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
       // New model availability comes from successful account discovery.
       if (
         OPENAI_GPT_6_MODEL_IDS.some((id) => id === modelId) ||
+        OPENAI_DAYBREAK_MODEL_IDS.some((id) => id === modelId) ||
         (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID)
       ) {
         return [];
@@ -605,15 +607,11 @@ function shouldResolveDynamicModelThroughCodex(ctx: ProviderResolveDynamicModelC
   return ctx.agentRuntimeId === "codex";
 }
 
-function buildOpenAIUnknownModelHint(modelId: string): string | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  if (normalized !== OPENAI_GPT_53_CODEX_SPARK_MODEL_ID) {
-    return undefined;
-  }
-  return "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.";
-}
-
 const OPENAI_GPT_FORWARD_COMPAT_CASES = [
+  {
+    match: OPENAI_DAYBREAK_MODEL_IDS,
+    templateIds: [OPENAI_GPT_56_SOL_MODEL_ID],
+  },
   {
     match: OPENAI_GPT_6_MODEL_IDS,
     templateIds: [OPENAI_GPT_56_SOL_MODEL_ID, OPENAI_GPT_55_MODEL_ID],
@@ -663,6 +661,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   const modelId = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const exactModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
   if (
+    OPENAI_DAYBREAK_MODEL_IDS.some((id) => id === modelId) ||
     OPENAI_GPT_6_MODEL_IDS.some((id) => id === modelId) ||
     modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
     modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||

@@ -30,8 +30,6 @@ enum SpeechAudioBufferNormalizer {
         output.frameLength = buffer.frameLength
         let channelCount = Int(format.channelCount)
         let frameCount = Int(buffer.frameLength)
-        guard channelCount > 0, frameCount > 0 else { return output }
-
         let scale = 1.0 / Float(channelCount)
         for frame in 0..<frameCount {
             var sum: Float = 0

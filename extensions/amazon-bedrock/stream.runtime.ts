@@ -1,7 +1,3 @@
-/**
- * Amazon Bedrock Converse streaming runtime. It maps OpenClaw messages/tools,
- * thinking, cache points, images, and usage into Bedrock Converse Stream calls.
- */
 import {
   type CachePointBlock,
   CacheTTL,
@@ -71,6 +67,7 @@ import {
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  buildAssistantMessage,
   describeToolResultMediaPlaceholder,
   createEmptyTransportUsage,
   failTransportStream,
@@ -138,25 +135,20 @@ function resolveAdaptiveBedrockMaxTokens(
   return OPENCLAW_FALLBACK_MODEL_MAX_TOKENS.has(model.maxTokens) ? undefined : model.maxTokens;
 }
 
-/** Stream a Bedrock Converse request using Bedrock-specific options. */
 const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
-  model: Model<"bedrock-converse-stream">,
-  context: Context,
-  options: BedrockOptions = {},
+  model,
+  context,
+  options = {},
 ) => {
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
-    const output: AssistantMessage = {
-      role: "assistant",
+    const output = buildAssistantMessage({
+      model: { api: "bedrock-converse-stream", provider: model.provider, id: model.id },
       content: [],
-      api: "bedrock-converse-stream",
-      provider: model.provider,
-      model: model.id,
       usage: createEmptyTransportUsage(),
       stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    });
 
     const blocks = output.content as Block[];
     const pendingToolCallEnds: PendingBedrockToolCall[] = [];
@@ -413,14 +405,6 @@ const BEDROCK_ERROR_PREFIXES: Record<string, string> = {
   ServiceUnavailableException: "Service unavailable",
 };
 
-/**
- * Format a Bedrock error with a human-readable prefix.
- * AWS SDK exceptions (both from `client.send()` and from stream event items)
- * extend BedrockRuntimeServiceException. We map the `.name` to a stable
- * human-readable prefix so downstream consumers (retry logic, context-overflow
- * detection) can distinguish error categories via simple string matching.
- * The shared transport owner projects errorType, errorCode, and diagnostics.
- */
 function formatBedrockError(error: unknown): string {
   const message = error instanceof Error ? error.message : JSON.stringify(error);
   if (error instanceof BedrockRuntimeServiceException) {
@@ -432,9 +416,9 @@ function formatBedrockError(error: unknown): string {
 
 /** Stream a Bedrock Converse request from the generic OpenClaw stream options. */
 export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", SimpleStreamOptions> = (
-  model: Model<"bedrock-converse-stream">,
-  context: Context,
-  options?: SimpleStreamOptions,
+  model,
+  context,
+  options,
 ) => streamBedrock(model, context, resolveSimpleBedrockOptions(model, options));
 
 function resolveSimpleBedrockOptions(
@@ -586,35 +570,31 @@ function handleContentBlockDelta(
       partial: output,
     });
   } else if (delta?.reasoningContent) {
-    let thinkingBlock = block;
-    let thinkingIndex = index;
-
-    if (!thinkingBlock) {
-      const newBlock: Block = {
+    if (!block) {
+      block = {
         type: "thinking",
         thinking: "",
         thinkingSignature: "",
         index: contentBlockIndex,
       };
-      output.content.push(newBlock);
-      thinkingIndex = blocks.length - 1;
-      thinkingBlock = blocks[thinkingIndex];
-      stream.push({ type: "thinking_start", contentIndex: thinkingIndex, partial: output });
+      output.content.push(block);
+      index = blocks.length - 1;
+      stream.push({ type: "thinking_start", contentIndex: index, partial: output });
     }
 
-    if (thinkingBlock?.type === "thinking") {
+    if (block.type === "thinking") {
       if (delta.reasoningContent.text) {
-        thinkingBlock.thinking += delta.reasoningContent.text;
+        block.thinking += delta.reasoningContent.text;
         stream.push({
           type: "thinking_delta",
-          contentIndex: thinkingIndex,
+          contentIndex: index,
           delta: delta.reasoningContent.text,
           partial: output,
         });
       }
       if (delta.reasoningContent.signature) {
-        thinkingBlock.thinkingSignature =
-          (thinkingBlock.thinkingSignature || "") + delta.reasoningContent.signature;
+        block.thinkingSignature =
+          (block.thinkingSignature || "") + delta.reasoningContent.signature;
       }
       if (delta.reasoningContent.redactedContent) {
         const chunks = redactedReasoningChunks.get(contentBlockIndex);
@@ -623,8 +603,8 @@ function handleContentBlockDelta(
         } else {
           redactedReasoningChunks.set(contentBlockIndex, [delta.reasoningContent.redactedContent]);
         }
-        thinkingBlock.thinking = "[Reasoning redacted]";
-        thinkingBlock.redacted = true;
+        block.thinking = "[Reasoning redacted]";
+        block.redacted = true;
       }
     }
   }
@@ -1040,28 +1020,17 @@ function convertMessages(
               if (c.thinking.trim().length === 0 && !hasNativeThinkingSignature) {
                 continue;
               }
-              // Only Anthropic models support the signature field in reasoningText.
-              // For other models, we omit the signature to avoid errors like:
-              // "This model doesn't support the reasoningContent.reasoningText.signature field"
-              if (supportsSignature) {
-                if (normalizedThinkingSignature === "reasoning_content") {
-                  continue;
-                }
-                // Signatures arrive after thinking deltas. If a partial or externally
-                // persisted message lacks a signature, Bedrock rejects the replayed
-                // reasoning block. Fall back to plain text, matching Anthropic.
-                if (!thinkingSignature || !normalizedThinkingSignature) {
-                  contentBlocks.push({ text: sanitizeSurrogates(c.thinking) });
-                } else {
-                  contentBlocks.push({
-                    reasoningContent: {
-                      reasoningText: {
-                        text: c.thinking,
-                        signature: thinkingSignature,
-                      },
-                    },
-                  });
-                }
+              if (supportsSignature && normalizedThinkingSignature === "reasoning_content") {
+                continue;
+              }
+              // Only Claude accepts signed reasoning. Missing signatures and other
+              // providers replay as text, matching the Anthropic transport.
+              if (hasNativeThinkingSignature) {
+                contentBlocks.push({
+                  reasoningContent: {
+                    reasoningText: { text: c.thinking, signature: thinkingSignature },
+                  },
+                });
               } else {
                 contentBlocks.push({ text: sanitizeSurrogates(c.thinking) });
               }
@@ -1325,24 +1294,18 @@ function buildAdditionalModelRequestFields(
   return undefined;
 }
 
+const BEDROCK_IMAGE_FORMATS = new Map<string, ImageFormat>([
+  ["image/jpeg", ImageFormat.JPEG],
+  ["image/jpg", ImageFormat.JPEG],
+  ["image/png", ImageFormat.PNG],
+  ["image/gif", ImageFormat.GIF],
+  ["image/webp", ImageFormat.WEBP],
+]);
+
 function createImageBlock(mimeType: string, data: string) {
-  let format: ImageFormat;
-  switch (mimeType) {
-    case "image/jpeg":
-    case "image/jpg":
-      format = ImageFormat.JPEG;
-      break;
-    case "image/png":
-      format = ImageFormat.PNG;
-      break;
-    case "image/gif":
-      format = ImageFormat.GIF;
-      break;
-    case "image/webp":
-      format = ImageFormat.WEBP;
-      break;
-    default:
-      throw new Error(`Unknown image type: ${mimeType}`);
+  const format = BEDROCK_IMAGE_FORMATS.get(mimeType);
+  if (!format) {
+    throw new Error(`Unknown image type: ${mimeType}`);
   }
 
   return {

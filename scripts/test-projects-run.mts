@@ -262,7 +262,7 @@ async function runVitestSpecs(
   const withCacheSlot = createVitestCacheSlots();
   await runVitestPlans(specs, {
     concurrency,
-    isExclusive: automatic ? (spec) => isExclusiveCiTestConfig(spec.config) : undefined,
+    isExclusive: (spec) => isExclusiveCiTestConfig(spec.config),
     shouldStop: () => stopScheduling || Boolean(termination.signal),
     run: async (spec, index) => {
       let result: Awaited<ReturnType<typeof runLoggedVitestSpec>>;

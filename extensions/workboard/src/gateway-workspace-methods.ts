@@ -1,6 +1,5 @@
-import type { WorkboardCard } from "@openclaw/workboard-contract";
-// Workboard Gateway methods that can persist workspace-bearing card metadata.
 import type { OpenClawPluginApi } from "../api.js";
+import { redactClaimToken } from "./card-redaction.js";
 import {
   readId,
   readExpectedUpdatedAt,
@@ -39,11 +38,10 @@ async function resolveGatewayWorkspaceMutationAccess(
 type WorkspaceGatewayMethodParams = {
   api: OpenClawPluginApi;
   store: WorkboardStore;
-  redactCard: (card: WorkboardCard) => WorkboardCard;
 };
 
 export function registerWorkboardWorkspaceCardMethods(params: WorkspaceGatewayMethodParams): void {
-  const { api, store, redactCard } = params;
+  const { api, store } = params;
   registerWorkboardResultMethods(api, [
     [
       "workboard.cards.create",
@@ -52,7 +50,7 @@ export function registerWorkboardWorkspaceCardMethods(params: WorkspaceGatewayMe
         const input = withoutWorkboardWorkspaceAccess(request.params);
         const access = await resolveGatewayWorkspaceMutationAccess(request, input);
         return {
-          card: redactCard(await store.create(withWorkboardWorkspaceAccess(input, access))),
+          card: redactClaimToken(await store.create(withWorkboardWorkspaceAccess(input, access))),
         };
       },
     ],
@@ -63,7 +61,9 @@ export function registerWorkboardWorkspaceCardMethods(params: WorkspaceGatewayMe
         const input = withoutWorkboardWorkspaceAccess(request.params);
         const access = await resolveGatewayWorkspaceMutationAccess(request, input);
         return {
-          card: redactCard(await store.captureSession(withWorkboardWorkspaceAccess(input, access))),
+          card: redactClaimToken(
+            await store.captureSession(withWorkboardWorkspaceAccess(input, access)),
+          ),
         };
       },
     ],
@@ -76,7 +76,7 @@ export function registerWorkboardWorkspaceCardMethods(params: WorkspaceGatewayMe
         const access = await resolveGatewayWorkspaceMutationAccess(request, patch);
         const expectedUpdatedAt = readExpectedUpdatedAt(requestParams);
         return {
-          card: redactCard(
+          card: redactClaimToken(
             await store.update(
               readId(requestParams),
               containsWorkboardWorkspaceMutation(patch)
@@ -92,7 +92,7 @@ export function registerWorkboardWorkspaceCardMethods(params: WorkspaceGatewayMe
 }
 
 export function registerWorkboardWorkspaceBulkMethod(params: WorkspaceGatewayMethodParams): void {
-  const { api, store, redactCard } = params;
+  const { api, store } = params;
   registerWorkboardResultMethods(api, [
     [
       "workboard.cards.bulk",
@@ -108,7 +108,7 @@ export function registerWorkboardWorkspaceBulkMethod(params: WorkspaceGatewayMet
             ? withWorkboardWorkspaceAccess(patch, access)
             : patch,
         });
-        return { cards: result.cards.map(redactCard) };
+        return { cards: result.cards.map(redactClaimToken) };
       },
     ],
   ]);
@@ -132,7 +132,7 @@ export function registerWorkboardWorkspaceBoardMethod(params: WorkspaceGatewayMe
 export function registerWorkboardWorkspaceWorkflowMethods(
   params: WorkspaceGatewayMethodParams,
 ): void {
-  const { api, store, redactCard } = params;
+  const { api, store } = params;
   registerWorkboardResultMethods(api, [
     [
       "workboard.cards.specify",
@@ -145,7 +145,7 @@ export function registerWorkboardWorkspaceWorkflowMethods(
           ? withWorkboardWorkspaceAccess(sanitizedParams, access)
           : sanitizedParams;
         return {
-          card: redactCard(await store.specify(readId(requestParams), input, null)),
+          card: redactClaimToken(await store.specify(readId(requestParams), input, null)),
         };
       },
     ],
@@ -162,8 +162,8 @@ export function registerWorkboardWorkspaceWorkflowMethods(
           null,
         );
         return {
-          parent: redactCard(result.parent),
-          children: result.children.map(redactCard),
+          parent: redactClaimToken(result.parent),
+          children: result.children.map(redactClaimToken),
         };
       },
     ],

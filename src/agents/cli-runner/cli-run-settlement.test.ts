@@ -6,8 +6,8 @@ import { wrapRunWithTestPreparedAdmission } from "../admitted-run-context.test-s
 import {
   acquireSessionMcpRuntime,
   peekSessionMcpRuntime,
-  releaseSessionMcpRuntime,
 } from "../agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";
 import {
   createSessionMcpRuntimeManager,
   unopenedMcpConfig,

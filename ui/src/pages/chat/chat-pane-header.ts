@@ -60,6 +60,7 @@ import { renderContinueInTerminalDialog } from "./components/continue-in-termina
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import {
   ensureSidebarConversation,
+  isSidebarSlotVisible,
   promoteSidebarPanel,
   setSidebarDock,
   setSidebarExpanded,
@@ -344,7 +345,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           </button>
         </openclaw-tooltip>`
       : nothing;
-    const sessionRailMode = this.selectedSessionRailMode(this.state?.sessionKey ?? "");
+    const sessionRailVisible =
+      this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "companion");
     const toggleSessionRail = () => this.requestSessionRail("toggle");
     const panelMenuActions: HeaderMenuQuickAction[] = (
       [
@@ -386,9 +388,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     });
     panelMenuActions.push({
       id: "session-companion",
-      label: t(sessionRailMode === "expanded" ? "chat.rail.collapse" : "chat.rail.show"),
+      label: t(sessionRailVisible ? "chat.rail.collapse" : "chat.rail.show"),
       icon: icons.spark,
-      active: sessionRailMode === "expanded",
+      active: sessionRailVisible,
       onActivate: toggleSessionRail,
     });
     const layoutMenuActions: HeaderMenuQuickAction[] = [];
@@ -565,7 +567,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
-              .boardWidgetMenu=${this.fullscreenBoardWidgetMenu(currentLayout)}
+              .boardWidgetMenu=${this.pageBoardWidgetMenu(currentLayout)}
               .sharing=${sharing}
               .groups=${knownGroups}
               .currentOwner=${row.owner?.actor ?? null}

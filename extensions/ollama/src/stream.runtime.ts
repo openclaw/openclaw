@@ -14,6 +14,7 @@ import type {
   Usage,
 } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream, transformMessages } from "openclaw/plugin-sdk/llm";
+import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
@@ -247,12 +248,6 @@ function resolveOllamaTopLevelParams(
 }
 
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
-  if (!nextText) {
-    return "";
-  }
-  if (!previousText) {
-    return nextText;
-  }
   if (nextText.startsWith(previousText)) {
     return nextText.slice(previousText.length);
   }
@@ -432,11 +427,7 @@ function estimateOllamaCompletionTokens(
 
 function resolveUsageFallback(fallback: OllamaUsageFallback["input"]): number {
   const estimate = typeof fallback === "function" ? fallback() : fallback;
-  return resolveOptionalUsageCount(estimate) ?? 0;
-}
-
-function resolveOptionalUsageCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asNonNegativeFiniteNumber(estimate) ?? 0;
 }
 
 type InputContentPart =
@@ -694,12 +685,12 @@ export function buildAssistantMessage(
     }
   }
 
-  const reportedPromptTokens = resolveOptionalUsageCount(response.prompt_eval_count);
-  const reportedOutputTokens = resolveOptionalUsageCount(response.eval_count);
+  const reportedPromptTokens = asNonNegativeFiniteNumber(response.prompt_eval_count);
+  const reportedOutputTokens = asNonNegativeFiniteNumber(response.eval_count);
   // Provider counters, including zero, avoid scanning and serializing history for estimates.
   const promptTokens = reportedPromptTokens ?? resolveUsageFallback(usageFallback?.input);
   const outputTokens = reportedOutputTokens ?? resolveUsageFallback(usageFallback?.output);
-  const reportedCacheRead = resolveOptionalUsageCount(response.prompt_eval_cached_count);
+  const reportedCacheRead = asNonNegativeFiniteNumber(response.prompt_eval_cached_count);
   // Ollama includes cached tokens in prompt_eval_count; OpenClaw records input as uncached.
   const cacheRead =
     reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
@@ -1153,8 +1144,10 @@ function createRawOllamaStreamFn(
           }
 
           if (
-            pendingFinalVisibleContent !== undefined &&
-            isLikelyGarbledVisibleText({ text: pendingFinalVisibleContent, modelId: model.id })
+            isLikelyGarbledVisibleText({
+              text: pendingFinalVisibleContent || accumulatedVisibleContent,
+              modelId: model.id,
+            })
           ) {
             throw new Error(
               `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
@@ -1162,12 +1155,6 @@ function createRawOllamaStreamFn(
           }
 
           flushVisibleText(pendingFinalVisibleContent);
-
-          if (isLikelyGarbledVisibleText({ text: accumulatedVisibleContent, modelId: model.id })) {
-            throw new Error(
-              `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
-            );
-          }
 
           finalResponse.message.content = accumulatedVisibleContent;
           if (accumulatedThinking) {

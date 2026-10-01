@@ -12,10 +12,10 @@ import {
   type Checker,
   type Project,
   type Symbol,
-} from "typescript/unstable/sync";
+} from "typescript/unstable/async";
 import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
-import { createNativeTypeScriptProject } from "./lib/native-typescript.mts";
+import { createNativeTypeScriptProjectAsync } from "./lib/native-typescript.mts";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -197,12 +197,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     // without its ratchet update; these pin exactly that growth.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4594,
+      4588,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      2698,
+      2694,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -212,7 +212,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      47,
+      46,
       env,
     ),
   };
@@ -240,16 +240,17 @@ function unwrapAlias(checker: Checker, symbol: Symbol) {
   return symbol.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
 }
 
-function hasDeprecatedTag(checker: Checker, symbol: Symbol) {
-  return checker.getJsDocTagsOfSymbol(symbol).some((tag) => tag.name === "deprecated");
+async function hasDeprecatedTag(checker: Checker, symbol: Symbol) {
+  return (await checker.getJsDocTagsOfSymbol(symbol)).some((tag) => tag.name === "deprecated");
 }
 
-function isCallableExport(checker: Checker, symbol: Symbol, sourceFile: ts.SourceFile) {
-  const target = unwrapAlias(checker, symbol);
+async function isCallableExport(checker: Checker, target: Symbol, sourceFile: ts.SourceFile) {
   const declaration =
-    target.valueDeclaration?.resolve() ?? target.declarations[0]?.resolve() ?? sourceFile;
-  const type = checker.getTypeOfSymbolAtLocation(target, declaration);
-  return checker.getSignaturesOfType(type, SignatureKind.Call).length > 0;
+    (await target.valueDeclaration?.resolve()) ??
+    (await target.declarations[0]?.resolve()) ??
+    sourceFile;
+  const type = await checker.getTypeOfSymbolAtLocation(target, declaration);
+  return (await checker.getSignaturesOfType(type, SignatureKind.Call)).length > 0;
 }
 
 function countWildcardReexports(entrypoints: string[]) {
@@ -269,12 +270,12 @@ function countWildcardReexports(entrypoints: string[]) {
   return { count, matches };
 }
 
-function collectExportStats(project: Project, entrypoints: string[]) {
+async function collectExportStats(project: Project, entrypoints: string[]) {
   const { program, checker } = project;
   const byEntrypoint = new Map<string, ExportEntryStats>();
 
   for (const entrypoint of entrypoints) {
-    const sourceFile = program.getSourceFile(entrypointPath(entrypoint));
+    const sourceFile = await program.getSourceFile(entrypointPath(entrypoint));
     if (!sourceFile) {
       byEntrypoint.set(entrypoint, {
         exports: 0,
@@ -284,18 +285,29 @@ function collectExportStats(project: Project, entrypoints: string[]) {
       });
       continue;
     }
-    const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
-    const symbols = moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
+    const moduleSymbol = await checker.getSymbolAtLocation(sourceFile);
+    const symbols = moduleSymbol ? await checker.getExportsOfModule(moduleSymbol) : [];
     let callableExports = 0;
     let deprecatedExports = 0;
     let deprecatedCallableExports = 0;
     const deprecatedEntrypoint = deprecatedPublicEntrypointSet.has(entrypoint);
-    for (const symbol of symbols) {
-      const callable = isCallableExport(checker, symbol, sourceFile);
-      const deprecated =
-        deprecatedEntrypoint ||
-        hasDeprecatedTag(checker, symbol) ||
-        hasDeprecatedTag(checker, unwrapAlias(checker, symbol));
+    // Let the native client batch one entrypoint's reads, and settle them all before closing it.
+    const observations = await Promise.allSettled(
+      symbols.map(async (symbol) => {
+        const target = await unwrapAlias(checker, symbol);
+        const callable = await isCallableExport(checker, target, sourceFile);
+        const deprecated =
+          deprecatedEntrypoint ||
+          (await hasDeprecatedTag(checker, symbol)) ||
+          (await hasDeprecatedTag(checker, target));
+        return { callable, deprecated };
+      }),
+    );
+    for (const observation of observations) {
+      if (observation.status === "rejected") {
+        throw observation.reason;
+      }
+      const { callable, deprecated } = observation.value;
       if (callable) {
         callableExports += 1;
       }
@@ -318,7 +330,7 @@ function collectExportStats(project: Project, entrypoints: string[]) {
 }
 
 function selectExportStats(
-  scannedStats: ReturnType<typeof collectExportStats>,
+  scannedStats: Awaited<ReturnType<typeof collectExportStats>>,
   entrypoints: string[],
 ) {
   const byEntrypoint = new Map<string, ExportEntryStats>();
@@ -363,7 +375,7 @@ function formatStats(label: string, stats: ReturnType<typeof selectExportStats>[
 }
 
 function collectDeprecatedEntrypointBudgetFailures(
-  byEntrypoint: ReturnType<typeof collectExportStats>,
+  byEntrypoint: Awaited<ReturnType<typeof collectExportStats>>,
   entrypointBudgets: Readonly<Record<string, number>>,
 ) {
   const failures: string[] = [];
@@ -378,7 +390,7 @@ function collectDeprecatedEntrypointBudgetFailures(
   return failures;
 }
 
-export function collectPluginSdkSurfaceReport() {
+export async function collectPluginSdkSurfaceReport() {
   const scannedEntrypoints = [
     ...new Set([
       ...pluginSdkEntrypoints,
@@ -388,7 +400,7 @@ export function collectPluginSdkSurfaceReport() {
   ];
   // All inventories share one native graph; its handles never escape this report.
   const configFileName = path.join(repoRoot, "tsconfig.plugin-sdk-surface-report.json");
-  const session = createNativeTypeScriptProject({
+  const session = await createNativeTypeScriptProjectAsync({
     cwd: repoRoot,
     configFileName,
     files: {
@@ -412,11 +424,11 @@ export function collectPluginSdkSurfaceReport() {
     },
   });
   try {
-    const diagnostics = session.project.program.getConfigFileParsingDiagnostics();
+    const diagnostics = await session.project.program.getConfigFileParsingDiagnostics();
     if (diagnostics.length) {
       throw new Error(formatNativeTypeScriptDiagnostics(diagnostics));
     }
-    const scannedStats = collectExportStats(session.project, scannedEntrypoints);
+    const scannedStats = await collectExportStats(session.project, scannedEntrypoints);
     const allStats = selectExportStats(scannedStats, pluginSdkEntrypoints);
     const publicStats = selectExportStats(scannedStats, publicPluginSdkEntrypoints);
     const localOnlyStats = selectExportStats(scannedStats, privateLocalOnlyPluginSdkEntrypoints);
@@ -437,20 +449,23 @@ export function collectPluginSdkSurfaceReport() {
     const deprecatedBarrelMissingFromInventory = [...deprecatedBarrelEntrypointSet].filter(
       (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
     );
-    const deprecatedBarrelWithoutReexports = [...deprecatedBarrelEntrypointSet].filter(
-      (entrypoint) => {
-        const source = session.project.program.getSourceFile(entrypointPath(entrypoint));
-        // Frozen facades retain named reexports without inheriting new APIs through a wildcard.
-        return !source?.statements.some(
+    const deprecatedBarrelWithoutReexports: string[] = [];
+    for (const entrypoint of deprecatedBarrelEntrypointSet) {
+      const source = await session.project.program.getSourceFile(entrypointPath(entrypoint));
+      // Frozen facades retain named reexports without inheriting new APIs through a wildcard.
+      if (
+        !source?.statements.some(
           (statement) =>
             ts.isExportDeclaration(statement) &&
             statement.moduleSpecifier !== undefined &&
             (!statement.exportClause ||
               ts.isNamespaceExport(statement.exportClause) ||
               statement.exportClause.elements.length > 0),
-        );
-      },
-    );
+        )
+      ) {
+        deprecatedBarrelWithoutReexports.push(entrypoint);
+      }
+    }
     return {
       allStats,
       deprecatedBarrelMissingFromInventory,
@@ -464,12 +479,12 @@ export function collectPluginSdkSurfaceReport() {
       publicWildcards,
     };
   } finally {
-    session.close();
+    await session.close();
   }
 }
 
 export function evaluatePluginSdkSurfaceReport(
-  report: ReturnType<typeof collectPluginSdkSurfaceReport>,
+  report: Awaited<ReturnType<typeof collectPluginSdkSurfaceReport>>,
   {
     budgets,
     publicDeprecatedExportsByEntrypointBudget,
@@ -534,7 +549,9 @@ export function evaluatePluginSdkSurfaceReport(
   return failures;
 }
 
-function renderPluginSdkSurfaceReport(report: ReturnType<typeof collectPluginSdkSurfaceReport>) {
+function renderPluginSdkSurfaceReport(
+  report: Awaited<ReturnType<typeof collectPluginSdkSurfaceReport>>,
+) {
   return [
     formatStats("all SDK entrypoints", report.allStats.totals),
     formatStats("public package SDK entrypoints", report.publicStats.totals),
@@ -546,14 +563,14 @@ function renderPluginSdkSurfaceReport(report: ReturnType<typeof collectPluginSdk
   ].join("\n");
 }
 
-function main(argv: string[] = process.argv.slice(2), env = process.env) {
+async function main(argv: string[] = process.argv.slice(2), env = process.env) {
   const cliArgs = parsePluginSdkSurfaceReportArgs(argv);
   if (cliArgs.help) {
     process.stdout.write(usage());
     return 0;
   }
   const budgetConfig = readPluginSdkSurfaceBudgets(env);
-  const report = collectPluginSdkSurfaceReport();
+  const report = await collectPluginSdkSurfaceReport();
   process.stdout.write(`${renderPluginSdkSurfaceReport(report)}\n`);
   const failures = evaluatePluginSdkSurfaceReport(report, budgetConfig);
   if (cliArgs.check && failures.length > 0) {
@@ -573,7 +590,7 @@ const isMain =
 
 if (isMain) {
   try {
-    process.exitCode = main();
+    process.exitCode = await main();
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

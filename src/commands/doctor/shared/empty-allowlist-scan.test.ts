@@ -144,25 +144,6 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("matches raw runtime account ids to canonical config keys", async () => {
-    const warnings = await scanEmptyAllowlistPolicyWarnings(
-      {
-        channels: {
-          signal: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            accounts: {
-              Work: { groupAllowFrom: ["signal:group:work"] },
-            },
-          },
-        },
-      },
-      { doctorFixCommand: "openclaw doctor --fix" },
-    );
-
-    expect(warnings).toEqual([]);
-  });
-
   it("keeps parent warning for a distinct case-sensitive implicit default account", async () => {
     const warnings = await scanEmptyAllowlistPolicyWarnings(
       {

@@ -49,7 +49,15 @@ const wrapperThroughFacade: GuardFixture = {
 
 describe("wrapper shadowing guard", () => {
   it("fails for a same-name wrapper around an imported implementation", async () => {
-    const result = await runFixture(directViolation);
+    const result = await runFixture({
+      ...directViolation,
+      ...Object.fromEntries(
+        Array.from({ length: 40 }, (_, index) => [
+          `src/module-${String(index).padStart(2, "0")}.ts`,
+          `export const value${index} = ${index};`,
+        ]),
+      ),
+    });
 
     expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.js", wrapper: "src/outer.ts" }]);
   });

@@ -138,13 +138,10 @@ function resolveReplyBackendMessageInjection(
     claimPendingUserInputAnswer: backend.claimPendingUserInputAnswer?.bind(backend),
     cancelPendingUserInput: backend.cancelPendingUserInput?.bind(backend),
     isAvailable: () => {
-      if (backend.isStopped) {
-        return !backend.isStopped();
-      }
       // Legacy handles already expose the only capability that matters here:
       // queueMessage. Let the runtime accept or reject instead of guessing from
       // unrelated token-stream state.
-      return true;
+      return !backend.isStopped?.();
     },
     queueMessage: (text, options) =>
       options ? backend.queueMessage!(text, options) : backend.queueMessage!(text),
@@ -169,14 +166,11 @@ export function resolveReplyMessageInjectionRejection(params: {
     return { reason: "stale_run" };
   }
   const backend = getAttachedBackend(operation);
-  const canInject = () => {
-    return (
-      replyRunState.activeRunsByKey.get(operation.key) === operation &&
-      !operation.result &&
-      operation.phase === "running" &&
-      getAttachedBackend(operation) === backend
-    );
-  };
+  const canInject = () =>
+    replyRunState.activeRunsByKey.get(operation.key) === operation &&
+    !operation.result &&
+    operation.phase === "running" &&
+    getAttachedBackend(operation) === backend;
   return resolveReplyBackendMessageInjectionRejection({
     ...params,
     sessionId: operation.sessionId,

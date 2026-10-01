@@ -167,10 +167,10 @@ function normalizeClaudeCliContent(
     return content;
   }
 
-  const normalized: ToolContentBlock[] = [];
+  const normalized: unknown[] = [];
   for (const item of content) {
     if (!item || typeof item !== "object") {
-      normalized.push(structuredClone(item as ToolContentBlock));
+      normalized.push(structuredClone(item));
       continue;
     }
     const block = structuredClone(item as ToolContentBlock);

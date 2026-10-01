@@ -341,9 +341,8 @@ async function runEditFlow(params: {
   prompter: WizardPrompter;
   options: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["options"];
 }): Promise<{ cfg: OpenClawConfig }> {
-  const { prompter, options } = params;
-  const next = params.cfg;
-  const feishuCfg = next.channels?.feishu as FeishuConfig | undefined;
+  const { cfg, prompter, options } = params;
+  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
   // Check existing appId (top-level or first configured account).
   // Supports both plain string and SecretRef (env-backed) appId values.
@@ -382,12 +381,12 @@ async function runEditFlow(params: {
       initialValue: true,
     }))
   ) {
-    return runNewAppFlow({ cfg: next, prompter, options });
+    return runNewAppFlow({ cfg, prompter, options });
   }
 
   await prompter.note(t("wizard.feishu.botConfigured"), "");
 
-  return { cfg: next };
+  return { cfg };
 }
 
 export async function runFeishuLogin(params: {

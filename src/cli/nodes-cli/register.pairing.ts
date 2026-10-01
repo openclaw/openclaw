@@ -141,14 +141,14 @@ export function registerNodesPairingCommands(nodes: Command) {
             defaultRuntime.log(muted("No pending pairing requests."));
             return;
           }
-          const { heading, warn, muted } = getNodesTheme();
+          const { heading, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const rendered = renderPendingPairingRequestsTable({
             pending,
             now,
             tableWidth,
-            theme: { heading, warn, muted },
+            theme: { heading, muted },
           });
           defaultRuntime.log(rendered.heading);
           defaultRuntime.log(rendered.table);
