@@ -1,6 +1,3 @@
-import type { WorkerOperations } from "../state/worker-operation-registry.js";
-import type { fleetOperations } from "./registry.worker.js";
-
 export type FleetCellRecord = {
   tenantId: string;
   createdAtMs: number;
@@ -24,5 +21,3 @@ export type FleetCellOperationName =
   | "backup"
   | "restore"
   | "rm";
-
-export type FleetRegistryWriteOperations = WorkerOperations<typeof fleetOperations>;

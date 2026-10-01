@@ -1,5 +1,5 @@
 import type { WorktreeWorkerOperations } from "../agents/worktrees/dispatch.worker.js";
-import type { FleetRegistryWriteOperations } from "../fleet/registry.types.js";
+import type { FleetRegistryWriteOperations } from "../fleet/registry.worker-contract.js";
 import type { ApnsRegistrationWorkerOperations } from "../infra/push-apns-store.worker-contract.js";
 import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
