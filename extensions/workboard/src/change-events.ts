@@ -2,7 +2,28 @@ import type { WorkboardChange } from "@openclaw/workboard-contract";
 import type { OpenClawPluginService } from "../api.js";
 import type { WorkboardStore } from "./store.js";
 
-const WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = 1000;
+const DEFAULT_WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = 12_000;
+const MIN_WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = 1_000;
+const MAX_WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = 60_000;
+const WORKBOARD_EXTERNAL_CHANGE_MAX_BACKOFF_MS = 60_000;
+
+function resolveExternalChangeCheckMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.WORKBOARD_EXTERNAL_CHANGE_CHECK_MS?.trim();
+  if (!raw) {
+    return DEFAULT_WORKBOARD_EXTERNAL_CHANGE_CHECK_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_WORKBOARD_EXTERNAL_CHANGE_CHECK_MS;
+  }
+  return Math.min(
+    MAX_WORKBOARD_EXTERNAL_CHANGE_CHECK_MS,
+    Math.max(MIN_WORKBOARD_EXTERNAL_CHANGE_CHECK_MS, Math.trunc(parsed)),
+  );
+}
+
+/** Exported for tests; production uses resolveExternalChangeCheckMs(). */
+export const WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = resolveExternalChangeCheckMs();
 
 export function createWorkboardChangeEventService(
   store: Pick<
@@ -11,10 +32,12 @@ export function createWorkboardChangeEventService(
   >,
 ): OpenClawPluginService & { stop: () => Promise<void> } {
   let unsubscribe: (() => void) | undefined;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let generation = 0;
   let starting: { generation: number; promise: Promise<void> } | undefined;
   let polling: Promise<void> | undefined;
+  let consecutiveFailures = 0;
+  let nextDelayMs = resolveExternalChangeCheckMs();
 
   return {
     id: "workboard-change-events",
@@ -41,23 +64,50 @@ export function createWorkboardChangeEventService(
         };
         unsubscribe = store.subscribeChanges(emit);
         store.announceChangeEpoch();
-        timer = setInterval(() => {
+        const baseMs = resolveExternalChangeCheckMs();
+        nextDelayMs = baseMs;
+
+        const schedule = () => {
+          if (timer) {
+            clearTimeout(timer);
+          }
+          timer = setTimeout(tick, nextDelayMs);
+          timer.unref?.();
+        };
+
+        const tick = () => {
           if (polling) {
+            schedule();
             return;
           }
           polling = store
             .reconcileExternalChanges()
             .then(
-              () => undefined,
+              () => {
+                consecutiveFailures = 0;
+                nextDelayMs = baseMs;
+              },
               (error: unknown) => {
                 ctx.logger.warn(`workboard external change check failed: ${String(error)}`);
+                consecutiveFailures += 1;
+                // Exponential backoff on failure (circuit soft-open): base, 2x, 4x… capped.
+                // Resets to baseMs on the next success. Env-only interval raise
+                // without this still helps, but does not stop failure storms.
+                nextDelayMs = Math.min(
+                  WORKBOARD_EXTERNAL_CHANGE_MAX_BACKOFF_MS,
+                  baseMs * 2 ** Math.min(consecutiveFailures, 5),
+                );
               },
             )
             .finally(() => {
               polling = undefined;
+              if (currentGeneration === generation) {
+                schedule();
+              }
             });
-        }, WORKBOARD_EXTERNAL_CHANGE_CHECK_MS);
-        timer.unref?.();
+        };
+
+        schedule();
       })().finally(() => {
         if (starting?.promise === pending) {
           starting = undefined;
@@ -71,7 +121,7 @@ export function createWorkboardChangeEventService(
       unsubscribe?.();
       unsubscribe = undefined;
       if (timer) {
-        clearInterval(timer);
+        clearTimeout(timer);
         timer = undefined;
       }
       return Promise.allSettled([starting?.promise, polling]).then(() => undefined);
