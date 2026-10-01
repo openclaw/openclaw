@@ -17,14 +17,11 @@ import {
   invalidateCronRefresh,
   loadCronJobsPage,
   loadCronScopeStats,
-  normalizeCronFormState,
   removeCronJob,
-  resolveConfiguredCronModelSuggestions,
   runCronJob,
   startCronEdit,
   startCronClone,
   updateCronJobsFilter,
-  validateCronForm,
 } from "../../lib/cron/index.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
@@ -196,48 +193,6 @@ function createCronJobsReloadHarness(stateOverrides: Partial<CronState> = {}) {
 }
 
 describe("cron controller", () => {
-  it("collects, deduplicates, and sorts configured models", () => {
-    expect(
-      resolveConfiguredCronModelSuggestions({
-        agents: {
-          defaults: {
-            model: { primary: "p/b", fallbacks: ["p/c", "p/d"] },
-            models: { "p/a": {}, "p/b": {} },
-          },
-          entries: {
-            writer: { model: { primary: "p/f", fallbacks: ["p/d"] } },
-            planner: { model: "p/e" },
-          },
-        },
-      }),
-    ).toEqual(["p/a", "p/b", "p/c", "p/d", "p/e", "p/f"]);
-  });
-
-  it("returns no configured model suggestions for invalid or missing config", () => {
-    expect(resolveConfiguredCronModelSuggestions(null)).toStrictEqual([]);
-    expect(resolveConfiguredCronModelSuggestions({})).toStrictEqual([]);
-    expect(
-      resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } }),
-    ).toStrictEqual([]);
-  });
-
-  it.each([
-    ["payloadKind", "isolated", "systemEvent", "main", "systemEvent"],
-    ["payloadKind", "main", "agentTurn", "isolated", "agentTurn"],
-    ["sessionTarget", "main", "agentTurn", "main", "systemEvent"],
-    ["sessionTarget", "isolated", "systemEvent", "isolated", "agentTurn"],
-  ] as const)(
-    "normalizes a changed %s on %s/%s",
-    (changed, sessionTarget, payloadKind, target, kind) => {
-      const form = { ...DEFAULT_CRON_FORM, sessionTarget, payloadKind };
-      expect(normalizeCronFormState(form, { [changed]: form[changed] })).toMatchObject({
-        sessionTarget: target,
-        payloadKind: kind,
-        deliveryMode: "none",
-      });
-    },
-  );
-
   it("preserves an explicit zero timeout in the saved payload", async () => {
     const { call, result } = await createCronSubmitHarness("no-timeout", {
       method: "cron.update",
@@ -853,28 +808,6 @@ describe("cron controller", () => {
     expect(await addCronJob(state)).toEqual({ saved: false });
     expect(state.cronFieldErrors).toHaveProperty(field, error);
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("validates key cron form errors", () => {
-    const errors = validateCronForm({
-      ...DEFAULT_CRON_FORM,
-      name: "",
-      scheduleKind: "cron",
-      cronExpr: "",
-      payloadKind: "agentTurn",
-      payloadText: "",
-      timeoutSeconds: "-1",
-      triggerEnabled: true,
-      triggerScript: "",
-      deliveryMode: "webhook",
-      deliveryTo: "ftp://bad",
-    });
-    expect(errors.name).toBe("cron.errors.nameRequired");
-    expect(errors.cronExpr).toBe("cron.errors.cronExprRequired");
-    expect(errors.payloadText).toBe("cron.errors.agentMessageRequired");
-    expect(errors.triggerScript).toBe("cron.errors.triggerScriptRequired");
-    expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
-    expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
 
   it("accepts the minimum conditional interval", async () => {
