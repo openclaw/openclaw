@@ -55,6 +55,7 @@ if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
   require "fastlane"
   require "supply"
   Fastlane.load_actions
+  $supply_commit = Supply::Client.instance_method(:commit_current_edit!)
 else
   $LOADED_FEATURES << "supply.rb"
   module FastlaneCore
@@ -103,9 +104,25 @@ module Supply
   def self.config=(value); @config = value; end
   class Client
     attr_reader :current_edit
-    def initialize; end
+    def initialize
+      return unless $supply_commit
+
+      self.client = AndroidPublisher::AndroidPublisherService.new
+      client.define_singleton_method(:execute_or_queue_command) do |command, &block|
+        $committed_query = command.query
+        if $scenario == "internal" && command.query.key?("changesNotSentForReview")
+          raise "Changes are sent for review automatically. The query parameter changesNotSentForReview must not be set."
+        end
+        AndroidPublisher::AppEdit.new(id: "synthetic-edit")
+      end
+    end
     def self.make_from_config(params:); $client; end
-    def begin_edit(package_name:); $events << "begin"; $edits += 1; @current_edit = true; end
+    def begin_edit(package_name:)
+      $events << "begin"
+      $edits += 1
+      @current_edit = Struct.new(:id).new("synthetic-edit")
+      @current_package_name = package_name
+    end
     def aab_version_codes
       $events << "bundles"
       raise "Play inventory unavailable" if $scenario == "inventory-failure"
@@ -136,7 +153,15 @@ module Supply
     end
     def upload_image(**); $events << "image"; end
     def clear_screenshots(**); $events << "screenshots"; end
-    def commit_current_edit!; $events << "commit"; $committed_config = Supply.config; @current_edit = nil; end
+    def commit_current_edit!
+      $events << "commit"
+      $committed_config = Supply.config
+      if $supply_commit
+        $supply_commit.bind(self).call
+      else
+        @current_edit = nil
+      end
+    end
     def validate_current_edit!; $events << "validate-edit"; end
     def abort_current_edit; $events << "abort"; @current_edit = nil; end
   end
@@ -160,7 +185,7 @@ module Open3
   end
 end
 ENV["GOOGLE_PLAY_JSON_KEY_DATA"] = "synthetic"
-%w(MATCH_PASSWORD GOOGLE_PLAY_TRACK GOOGLE_PLAY_RELEASE_STATUS GOOGLE_PLAY_VALIDATE_ONLY OPENCLAW_ANDROID_RELEASE_PLAN SUPPLY_UPLOAD_METADATA SUPPLY_UPLOAD_SCREENSHOTS SUPPLY_UPLOAD_IMAGES).each { |key| ENV.delete(key) }
+%w(MATCH_PASSWORD GOOGLE_PLAY_TRACK GOOGLE_PLAY_RELEASE_STATUS GOOGLE_PLAY_VALIDATE_ONLY OPENCLAW_ANDROID_RELEASE_PLAN SUPPLY_UPLOAD_METADATA SUPPLY_UPLOAD_SCREENSHOTS SUPPLY_UPLOAD_IMAGES SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW).each { |key| ENV.delete(key) }
 if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
   FastlaneCore::UI.ui_object = TestUI
   fastfile = Fastlane::FastFile.new(ARGV.fetch(0))
@@ -209,7 +234,8 @@ type LaneResult = {
   tracks: unknown;
   pinned_notes?: string;
   wear_code?: string;
-  committed_config?: Record<string, boolean>;
+  committed_config?: Record<string, boolean | null>;
+  committed_query?: Record<string, boolean>;
   plan?: {
     schemaVersion: number;
     version: string;
@@ -243,13 +269,15 @@ $run_lane.call(:release_plan, output_path: plan_path)
 ENV["OPENCLAW_ANDROID_RELEASE_PLAN"] = plan_path
 results = %w(invalid-destination invalid-notes changed-baseline changed-code initialize-failure validate-only upload internal).map do |scenario|
   $scenario, $events, $tracks, $edits, $client, $committed_config = scenario, [], {}, 0, Supply::Client.new, nil
+  $committed_query = nil
+  ENV["SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
+  ENV["SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW"] = "false"
   scenario == "validate-only" ? ENV["GOOGLE_PLAY_VALIDATE_ONLY"] = "1" : ENV.delete("GOOGLE_PLAY_VALIDATE_ONLY")
   if scenario == "internal"
     ENV["GOOGLE_PLAY_TRACK"] = "production"
     ENV["GOOGLE_PLAY_RELEASE_STATUS"] = "draft"
     %w(METADATA SCREENSHOTS IMAGES).each { |kind| ENV["SUPPLY_UPLOAD_#{kind}"] = "1" }
-    ENV["SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
-    ENV["SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW"] = "false"
+    ENV["SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
     FileUtils.rm_rf(File.join(play_metadata_path, "en-US", "images"))
   end
   begin
@@ -259,7 +287,7 @@ results = %w(invalid-destination invalid-notes changed-baseline changed-code ini
               else {}
               end
     $run_lane.call(:release_upload, options)
-    { events: $events, tracks: $tracks, pinned_notes: File.read(notes_path), wear_code: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"], committed_config: $committed_config }
+    { events: $events, tracks: $tracks, pinned_notes: File.read(notes_path), wear_code: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"], committed_config: $committed_config, committed_query: $committed_query }
   rescue => error
     { error: error.message, events: $events, tracks: $tracks }
   end
@@ -345,10 +373,18 @@ STDOUT.puts JSON.generate(results)
     expect(internal?.events).not.toContain("screenshots");
     expect(internal?.events).not.toContain("image");
     expect(internal?.pinned_notes).toBe("Pinned archive notes stay unchanged.\n");
-    expect(internal?.committed_config).toMatchObject({
+    expect(uploaded?.committed_config).toMatchObject({
       changes_not_sent_for_review: true,
       rescue_changes_not_sent_for_review: false,
     });
+    expect(internal?.committed_config).toMatchObject({
+      changes_not_sent_for_review: null,
+      rescue_changes_not_sent_for_review: false,
+    });
+    if (process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1") {
+      expect(uploaded?.committed_query).toEqual({ changesNotSentForReview: true });
+      expect(internal?.committed_query).toEqual({});
+    }
   });
 
   it("passes both artifact inventories and public tracks to the planner and aborts read edits on every outcome", () => {
