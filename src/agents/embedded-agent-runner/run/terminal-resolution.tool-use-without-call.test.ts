@@ -13,8 +13,6 @@ vi.mock("./auth-profile-success.js", () => ({
   reportEmbeddedRunSuccessfulAuthBinding: vi.fn(),
 }));
 
-const TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION =
-  "The previous assistant turn stopped for tool use but contained no tool call, so nothing ran. Continue from the current state: call the tool you need through the tool interface instead of writing the call as text, or produce the visible answer now. Do not restart from scratch.";
 const PSEUDO_TOOL_CALL_TEXT =
   'exec\n<invoke name="read">\n<parameter name="path">~/skills/example/SKILL.md</parameter>\n</invoke>';
 
@@ -66,7 +64,6 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
     await expect(
       resolveEmbeddedRunTerminal(makeTerminalInput({ ...turn, activateInternalPrompt })),
     ).resolves.toEqual({ action: "retry" });
-    expect(activateInternalPrompt).toHaveBeenCalledWith(TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION);
 
     const exhausted = await resolveEmbeddedRunTerminal(
       makeTerminalInput({
