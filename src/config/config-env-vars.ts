@@ -210,51 +210,18 @@ export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.Pr
   let cloned: NodeJS.ProcessEnv = { ...env };
   // A plain spread loses Windows process.env's case-insensitive lookup and assignment semantics.
   if (process.platform === "win32") {
-    cloned = new Proxy(cloned, {
-      deleteProperty(target, property) {
-        if (typeof property !== "string") {
-          return Reflect.deleteProperty(target, property);
-        }
-        const key = findCaseInsensitiveEnvKey(target, property);
-        return key ? Reflect.deleteProperty(target, key) : true;
-      },
-      get(target, property, receiver) {
-        if (typeof property !== "string") {
-          return Reflect.get(target, property, receiver);
-        }
-        const key = findCaseInsensitiveEnvKey(target, property);
-        return key ? target[key] : Reflect.get(target, property, receiver);
-      },
-      getOwnPropertyDescriptor(target, property) {
-        if (typeof property !== "string") {
-          return Reflect.getOwnPropertyDescriptor(target, property);
-        }
-        const key = findCaseInsensitiveEnvKey(target, property);
-        if (!key) {
-          return undefined;
-        }
-        return {
-          configurable: true,
-          enumerable: true,
-          value: target[key],
-          writable: true,
-        };
-      },
-      has(target, property) {
-        return typeof property === "string"
-          ? findCaseInsensitiveEnvKey(target, property) !== undefined
-          : Reflect.has(target, property);
-      },
-      set(target, property, value) {
-        if (typeof property !== "string") {
-          return Reflect.set(target, property, value);
-        }
-        target[findCaseInsensitiveEnvKey(target, property) ?? property] = value as
-          | string
-          | undefined;
-        return true;
-      },
-    });
+    // Windows process.env is case-insensitive. The previous implementation returned a Proxy
+    // to emulate that, but a Proxy can never be structured-cloned, so any copy of this
+    // environment that crossed a worker_threads boundary failed with:
+    //   WorkerTaskError: DataCloneError: #<Object> could not be cloned.
+    // Emulate case-insensitivity with plain uppercase aliases instead so the value stays
+    // cloneable across threads.
+    for (const caseKey of Object.keys(cloned)) {
+      const upperKey = caseKey.toUpperCase();
+      if (upperKey !== caseKey && !Object.hasOwn(cloned, upperKey)) {
+        cloned[upperKey] = cloned[caseKey];
+      }
+    }
   }
   appliedConfigEnvOwnership.set(cloned, resolveAppliedConfigEnvOwnership(env));
   return cloned;
