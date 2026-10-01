@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { resolveStateDir } from "../config/paths.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { spawnProcess } from "../process/spawn-utils.js";
@@ -17,6 +18,8 @@ import { spawnProcess } from "../process/spawn-utils.js";
 const SNAPSHOT_VERSION = 1;
 const SNAPSHOT_REFRESH_MS = 5 * 60 * 1000;
 const SNAPSHOT_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+// Bound process-wide cwd/env history while keeping recently used snapshots hot.
+const SNAPSHOT_CACHE_MAX_ENTRIES = 128;
 const CAPTURE_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_CAPTURE__";
 const ENV_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_ENV__";
 const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
@@ -74,10 +77,10 @@ type ShellSnapshotWrapOptions = {
   env: Record<string, string | undefined>;
 };
 
-const snapshotCache = new Map<
-  string,
-  { createdAtMs: number; promise: Promise<ShellSnapshot | null> }
->();
+const snapshotCache = new LruCache<{
+  createdAtMs: number;
+  promise: Promise<ShellSnapshot | null>;
+}>(SNAPSHOT_CACHE_MAX_ENTRIES);
 let cleanupPromise: Promise<void> | null = null;
 
 export async function maybeWrapCommandWithShellSnapshot(
