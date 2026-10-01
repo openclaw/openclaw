@@ -724,6 +724,8 @@ export async function startGatewayPostAttachRuntime(
       return;
     }
     params.onStartupPluginsLoading?.();
+    // Capture retirement before starting work that can finish after shutdown begins.
+    const { disposePluginRegistryInstances } = await import("../plugins/runtime.js");
     const loaded = await measureStartup(params.startupTrace, "plugins.runtime-post-bind", () =>
       params.loadStartupPlugins!(),
     );
@@ -732,7 +734,6 @@ export async function startGatewayPostAttachRuntime(
       const current = params.getCurrentPluginRegistry?.() ?? pluginRegistry;
       if (loaded.pluginRegistry !== current) {
         loaded.retireGatewayRuntimeBindings?.();
-        const { disposePluginRegistryInstances } = await import("../plugins/runtime.js");
         await disposePluginRegistryInstances(loaded.pluginRegistry, current);
       }
       pluginRegistry = current;

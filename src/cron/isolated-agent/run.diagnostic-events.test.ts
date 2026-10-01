@@ -35,6 +35,7 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function makeParams(cfg: OpenClawConfig = {}) {
   return {
+    deliveryAttemptFence: null,
     cfg,
     deps: {} as never,
     job: {

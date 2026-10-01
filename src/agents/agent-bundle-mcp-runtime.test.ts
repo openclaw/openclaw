@@ -22,7 +22,7 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
-import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-api.js";
+import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
   bindSessionMcpRuntimeTestScheduler,
   createSessionMcpRuntimeManager,

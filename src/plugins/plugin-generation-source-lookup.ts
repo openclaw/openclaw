@@ -5,7 +5,7 @@ import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
-  assertPluginNativeReferenceNamespace,
+  createPluginNativeReferenceValidator,
   linkPluginNativeReference,
 } from "./plugin-native-reference.js";
 import { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
@@ -98,13 +98,9 @@ function captureRecoverySource({
         return false;
       },
     });
+    const assertReference = createPluginNativeReferenceValidator(recovery.directory);
     for (const [target, fact] of hardlinkedTargets) {
-      assertPluginNativeReferenceNamespace(
-        target,
-        fact,
-        native!.namespaces.get(fact.namespace)!,
-        recovery.directory,
-      );
+      assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
     }
     const relocate = (filename: string) =>
       path.join(recovery.directory, path.relative(boundaryRoot, filename));

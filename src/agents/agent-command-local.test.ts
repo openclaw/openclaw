@@ -30,8 +30,8 @@ import {
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
   peekSessionMcpRuntime,
-  releaseSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import { unopenedMcpConfig } from "./agent-bundle-mcp-manager.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type { SessionMcpRuntimeLease } from "./agent-bundle-mcp-types.js";

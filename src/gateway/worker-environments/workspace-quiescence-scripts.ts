@@ -71,9 +71,11 @@ function processIdentity(pid) {
 }
 function reportPendingProcesses(entries, exhausted = false) {
   const pids = entries.filter((entry) => Number.isSafeInteger(entry?.pid) && entry.pid > 0).map((entry) => entry.pid);
+  // Match workspaceSyncError's single-line display in the retained diagnostic, while
+  // preserving raw ps padding in lease identities used by signal guards and older watchdogs.
   const message = (exhausted
     ? "workspace quiescence recovery exhausted after 4 probe passes (30000 ms each, 7000 ms total backoff); check host load and ps availability, then retry workspace recovery; unfinished workers (PID/start): "
-    : "workspace quiescence recovery pending PIDs: " + pids.join(", ") + "; unfinished workers (PID/start): ") + JSON.stringify(entries);
+    : "workspace quiescence recovery pending PIDs: " + pids.join(", ") + "; unfinished workers (PID/start): ") + JSON.stringify(entries).replace(/\s+/gu, " ");
   process.stderr.write(message + "\n");
   return message;
 }

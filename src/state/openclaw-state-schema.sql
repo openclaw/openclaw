@@ -1531,6 +1531,7 @@ CREATE TABLE IF NOT EXISTS cron_run_receipts (
   config_revision TEXT NOT NULL,
   agent_id TEXT NOT NULL,
   request_run_id TEXT,
+  delivery_attempt_state TEXT NOT NULL DEFAULT 'unknown' CHECK (delivery_attempt_state IN ('unknown', 'not-started', 'started')),
   status TEXT NOT NULL,
   owner_pid INTEGER NOT NULL,
   owner_start_time INTEGER,

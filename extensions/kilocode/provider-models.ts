@@ -188,7 +188,6 @@ export async function discoverKilocodeModels(
     timeoutMs: DISCOVERY_TIMEOUT_MS,
     ttlMs: 0,
     readRows: readGatewayModelRows,
-    buildRequestHeaders: () => ({ Accept: "application/json" }),
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(KILOCODE_BASE_URL),
     auditContext: "kilocode.model_discovery",
     projectRows: projectKilocodeModels,

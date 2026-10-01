@@ -7,6 +7,7 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -22,6 +23,7 @@ export type RunCronAgentTurnParams = {
   cfg: OpenClawConfig;
   deps: CliDeps;
   job: CronStoredJob;
+  deliveryAttemptFence: CronCompletionDeliveryFence | null;
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
