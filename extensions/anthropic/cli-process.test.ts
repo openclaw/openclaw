@@ -210,7 +210,8 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       const context = await contextForChild(`
       import { spawn } from "node:child_process";
       import { writeFileSync, writeSync } from "node:fs";
-      const descendant = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000)"],
+      // Natural expiry would hide a missing transport tree kill from the exit assertion.
+      const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"],
         { stdio: ["ignore", "ignore", 2] });
       writeFileSync("descendant.pid", String(descendant.pid));
       writeSync(2, "PermissionError: parent exited\\n");
