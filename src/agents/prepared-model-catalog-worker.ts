@@ -43,7 +43,10 @@ import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.lifecycle.js";
-import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
+import {
+  listPreparedSyntheticAuthProviderRefs,
+  scopeSyntheticAuthProviderRefs,
+} from "./prepared-model-runtime.synthetic-auth.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
@@ -576,6 +579,11 @@ export function createPreparedModelCatalogWorker(
               command.kind === "catalog" && !command.providerIds
                 ? [
                     ...listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
+                    // Full discovery can add providers absent from startup refs. Their runtime
+                    // hooks still need captured answers, including explicit unavailable facts.
+                    ...listPreparedSyntheticAuthProviderRefs(
+                      params.pluginRegistry?.providers.map(({ provider }) => provider) ?? [],
+                    ),
                     ...workerInput.providerIds,
                   ]
                 : [

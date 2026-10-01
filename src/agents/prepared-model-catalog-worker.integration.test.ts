@@ -57,6 +57,7 @@ import { AuthStorage } from "./sessions/auth-storage.js";
 import { withHeldCatalogOAuthRefresh } from "./test-helpers/prepared-model-catalog-oauth-fixture.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
 import {
+  CLI_AUTH_API_PROVIDER_ID,
   loadCompletedFullCatalog,
   readCatalogDiscoveryCaptures,
   usePreparedCatalogWorkerFixtures,
@@ -368,6 +369,19 @@ describe("prepared model catalog worker boundary", () => {
       expect(catalog).not.toHaveProperty("credentials");
 
       if (asyncSyntheticAuth) {
+        // No configured model or credential introduced this API provider. Full discovery
+        // must consume its unavailable parent fact instead of invoking its CLI-only hook.
+        expect(fixture.snapshot.authModes[CLI_AUTH_API_PROVIDER_ID]).toBeUndefined();
+        expect(fixture.snapshot.modelCatalog.entries).not.toContainEqual(
+          expect.objectContaining({ provider: CLI_AUTH_API_PROVIDER_ID }),
+        );
+        expect(catalog?.entries).toContainEqual(
+          expect.objectContaining({
+            provider: CLI_AUTH_API_PROVIDER_ID,
+            id: "unconfigured-api-model",
+          }),
+        );
+        expect(fullAuth?.authModes[CLI_AUTH_API_PROVIDER_ID]).toBeUndefined();
         expect(
           fs
             .readFileSync(path.join(fixture.root, "synthetic-auth-owner.txt"), "utf8")

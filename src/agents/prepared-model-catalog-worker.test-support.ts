@@ -33,6 +33,8 @@ import type {
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 import {
+  CLI_AUTH_API_PROVIDER_ID,
+  cliAuthApiProviderSource,
   refreshNativeCatalogDuringBoundedRead,
   seedFixturePluginModelCatalog,
   writeCatalogFailureControl,
@@ -157,6 +159,7 @@ module.exports = {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
     let nativeCatalogObserved = false;
+    ${params.asyncSyntheticAuth ? cliAuthApiProviderSource(HARNESS_ID) : ""}
     api.registerAgentHarness({
       id: ${JSON.stringify(HARNESS_ID)},
       label: "Worker catalog fixture harness",
@@ -279,7 +282,7 @@ module.exports = {
         const hasShared = context.resolveProviderApiKey(${JSON.stringify(SHARED_AUTH_PROVIDER_ID)}).apiKey === ${JSON.stringify(MATERIALIZED_SECRET)};
         const hasUnrelated = context.resolveProviderApiKey("unrelated-provider").apiKey === ${JSON.stringify(UNRELATED_SECRET)};
         fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, "done\\n");
-        return [${params.catalogControl ? `{ provider: ${JSON.stringify(PROVIDER_ID)}, id: "configured-row", name: "Configured-only model", api: "openai-completions", baseUrl: "https://worker-catalog.invalid/v1", status: "available", statusReason: "refresh-" + invocation },` : ""}{
+        return [${params.asyncSyntheticAuth ? `{ provider: ${JSON.stringify(CLI_AUTH_API_PROVIDER_ID)}, id: "unconfigured-api-model", name: "API model without credentials" },` : ""}${params.catalogControl ? `{ provider: ${JSON.stringify(PROVIDER_ID)}, id: "configured-row", name: "Configured-only model", api: "openai-completions", baseUrl: "https://worker-catalog.invalid/v1", status: "available", statusReason: "refresh-" + invocation },` : ""}{
           provider: ${JSON.stringify(PROVIDER_ID)},
           id: \`proof-refresh-\${invocation}-sqlite-\${hasSqlite}-shared-\${hasShared}-unrelated-\${hasUnrelated}\`,
           name: "Worker boundary proof",
@@ -323,6 +326,7 @@ module.exports = {
         PROVIDER_ID,
         DISCOVERED_HARNESS_ID,
         MISSING_AUTH_HARNESS_ID,
+        ...(params.asyncSyntheticAuth ? [CLI_AUTH_API_PROVIDER_ID] : []),
         ...(params.catalogControl ? [CATALOG_ALIAS_ID] : []),
       ],
       cliBackends: [

@@ -26,6 +26,22 @@ import type {
 
 const waitTimeoutMs = 30_000;
 
+export const CLI_AUTH_API_PROVIDER_ID = "cli-auth-api-provider";
+
+/** Runtime API owner carries auth for a separate, manifest-declared CLI namespace. */
+export function cliAuthApiProviderSource(harnessId: string): string {
+  return `api.registerProvider({
+      id: ${JSON.stringify(CLI_AUTH_API_PROVIDER_ID)},
+      hookAliases: [${JSON.stringify(harnessId)}],
+      label: "API provider with CLI-only synthetic auth",
+      auth: [],
+      async prepareSyntheticAuth({ provider }) {
+        if (provider !== ${JSON.stringify(harnessId)}) return undefined;
+        throw new Error("CLI discovery must use its prepared parent fact");
+      },
+    });`;
+}
+
 export function usePreparedCatalogWorkerFixtures() {
   const retirements = new Set<() => void | Promise<void>>();
   const workers = new Set<Worker>();
