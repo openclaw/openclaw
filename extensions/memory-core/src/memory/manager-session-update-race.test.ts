@@ -325,6 +325,8 @@ describe("memory session update sync", () => {
       markActiveSyncIndexed = resolve;
     });
     let syncArchiveFilesSpy: { mockRestore: () => void } | undefined;
+    let enqueueSpy: { mockRestore: () => void } | undefined;
+    let sessionUpdate: Promise<void> | undefined;
     try {
       await seedSessionTranscript({
         sessionId,
@@ -352,13 +354,22 @@ describe("memory session update sync", () => {
         messages: [{ role: "assistant", timestamp: Date.now(), content: updatedMarker }],
       });
       owner.sessionPendingTargets.set(sessionKey, { agentId: "main", sessionId, sessionKey });
-      await owner.processSessionUpdateBatch();
+      const sessionSyncQueued = createDeferred<void>();
+      const enqueue = owner.sessionSyncQueue.enqueue.bind(owner.sessionSyncQueue);
+      enqueueSpy = vi.spyOn(owner.sessionSyncQueue, "enqueue").mockImplementation((targets) => {
+        const pending = enqueue(targets);
+        sessionSyncQueued.resolve();
+        return pending;
+      });
+      sessionUpdate = owner.processSessionUpdateBatch();
+      await sessionSyncQueued.promise;
       const queuedSessionSync = owner.sessionSyncQueue.pending;
       expect(queuedSessionSync).not.toBeNull();
 
       releaseActiveSync();
       await activeSync;
       await queuedSessionSync;
+      await sessionUpdate;
 
       const observer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), {
         readOnly: true,
@@ -376,7 +387,9 @@ describe("memory session update sync", () => {
       expect(manager.status().dirty).toBe(false);
     } finally {
       syncArchiveFilesSpy?.mockRestore();
+      enqueueSpy?.mockRestore();
       releaseActiveSync();
+      await sessionUpdate;
       await manager.close?.();
     }
   });

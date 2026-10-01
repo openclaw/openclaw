@@ -10,7 +10,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryWorkspaceWatchRequest } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
-import { runInMemoryBackgroundContext } from "./background-context.js";
+import { createMemoryBackgroundContext, runInMemoryCleanupContext } from "./background-context.js";
 import { MemoryWatchPolicy, type MemoryObservation } from "./watch-policy.js";
 import {
   MEMORY_WATCH_MAX_PATHS,
@@ -41,6 +41,7 @@ type Observation = {
 };
 
 export class MemoryFileWatcher {
+  private readonly runInBackground = createMemoryBackgroundContext();
   private readonly policy: MemoryWatchPolicy;
   private readonly lifetime = new AbortController();
   private readonly observations = new Map<string, Observation>();
@@ -96,7 +97,7 @@ export class MemoryFileWatcher {
   start(): Promise<void> {
     // Both local and remote callers can arrive from a turn. Resource lifetimes
     // inherit the plugin service context, never the requesting turn's ALS store.
-    return (this.starting ??= runInMemoryBackgroundContext(() => this.refresh()));
+    return (this.starting ??= this.runInBackground(() => this.refresh()));
   }
 
   private get canObserve(): boolean {
@@ -392,7 +393,7 @@ export class MemoryFileWatcher {
     clearTimeout(this.watchTimer);
     clearTimeout(this.retryTimer);
     const retirement = this.retire([...this.observations.values()]);
-    this.closing = runInMemoryBackgroundContext(async () => {
+    this.closing = runInMemoryCleanupContext(async () => {
       await Promise.allSettled([
         this.starting,
         this.refreshing,

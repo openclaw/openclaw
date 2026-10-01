@@ -58,6 +58,12 @@ engine unchanged, and tries that engine again on the next logical turn.
 
 ## Bundled Memory Core workers
 
+Memory Core detaches watcher, timer, and transcript callbacks from the foreground
+turn, then admits each task through the instance that owns the manager. When a
+reload keeps that instance, new tasks use its current plugin registry; work
+already admitted keeps its registry until completion. Retired instances reject
+new work, and disposal waits for admitted synchronization to finish.
+
 Memory Core uses the shared `process-runtime` worker pool for lexical retrieval,
 cosine fallback, and immutable chunk preparation. Retrieval retains the search
 generation until its readers close; publication, source-hash validation, and

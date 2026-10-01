@@ -1,6 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { capturePluginBackgroundContext } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryFileWatcher } from "./file-watcher.js";
@@ -14,6 +16,14 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   ...(await original<typeof import("openclaw/plugin-sdk/file-access-runtime")>()),
   watch: observer.watch,
 }));
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (original) => {
+  const actual =
+    await original<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>();
+  return {
+    ...actual,
+    capturePluginBackgroundContext: vi.fn(actual.capturePluginBackgroundContext),
+  };
+});
 const warnings = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (original) => {
   const actual =
@@ -69,6 +79,47 @@ describe("Memory observation lifecycle", () => {
     owners.push(watcher);
     return { watcher, onChange, onDirty, onUnavailable };
   }
+
+  it("starts in its detached owner and joins cleanup after that owner retires", async () => {
+    const turn = new AsyncLocalStorage<string>();
+    const plugin = new AsyncLocalStorage<{ accepting: boolean }>();
+    const instance = { accepting: true };
+    const admitted = vi.fn();
+    vi.mocked(capturePluginBackgroundContext).mockImplementationOnce(() => {
+      const captured = plugin.getStore();
+      return <T>(run: () => T): T => {
+        if (!captured?.accepting) {
+          throw new Error("Owner no longer accepts background work");
+        }
+        admitted(turn.getStore());
+        return run();
+      };
+    });
+    const retirement = createDeferred<void>();
+    observer.closeBarrier = retirement.promise;
+    try {
+      const { watcher } = plugin.run(instance, () => turn.run("opening turn", () => owner()));
+      await turn.run("starting turn", () => watcher.start());
+      expect(admitted).toHaveBeenCalledExactlyOnceWith(undefined);
+      expect(observer.watch).toHaveBeenCalledOnce();
+
+      instance.accepting = false;
+      const closing = turn.run("closing turn", () => watcher.close());
+      expect(watcher.close()).toBe(closing);
+      expect(observer.observations[0]!.close).toHaveBeenCalledOnce();
+      let closed = false;
+      const completed = closing.then(() => {
+        closed = true;
+      });
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      retirement.resolve();
+      await completed;
+      expect(admitted).toHaveBeenCalledOnce();
+    } finally {
+      retirement.resolve();
+    }
+  });
 
   it.each([
     ["false", undefined, 30_000],

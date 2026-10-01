@@ -1,3 +1,4 @@
+export { capturePluginBackgroundContext } from "../plugins/runtime/background-context.js";
 export { SILENT_REPLY_TOKEN } from "../../packages/memory-host-sdk/src/runtime-core.js";
 export { resolveRememberAcrossConversations } from "../../packages/memory-host-sdk/src/host/config-utils.js";
 export { resolveEffectiveCompactionReserveTokens } from "../agents/agent-compaction-constants.js";
