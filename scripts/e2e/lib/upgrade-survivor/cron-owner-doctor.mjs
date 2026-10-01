@@ -251,7 +251,7 @@ function seedSession(p) {
   assert(
     history.messages.some(
       (message) =>
-        message.id === injected.messageId &&
+        message.__openclaw?.id === injected.messageId &&
         JSON.stringify(message.content).includes(sessionMarker),
     ),
   );
