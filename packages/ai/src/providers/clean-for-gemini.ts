@@ -165,7 +165,11 @@ function extendSchemaDefs(
 }
 
 function decodeJsonPointerSegment(segment: string): string {
-  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+  try {
+    return decodeURIComponent(segment).replaceAll("~1", "/").replaceAll("~0", "~");
+  } catch {
+    return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+  }
 }
 
 function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown {
