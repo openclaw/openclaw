@@ -26,13 +26,17 @@ extension ChatSessionSidebar {
         session.agentId = OpenClawChatSessionKey.agentID(from: session.key) ??
             self.viewModel.sessionMutationTarget(key: session.key, agentID: session.agentId).agentID
         return ChatSessionSidebarRowMenu(
-            viewModel: self.viewModel, session: session, isChild: isChild, groups: self.groups,
+            viewModel: self.viewModel,
+            session: session,
+            isChild: isChild,
+            groups: self.groups,
             actions: self.menuActions,
             inspect: { self.inspectedSession = session },
             rename: {
                 self.renameText = session.label ?? session.displayName ?? ""
                 self.sessionPendingRename = session
-            }, delete: { self.sessionPendingDeletion = session },
+            },
+            delete: { self.sessionPendingDeletion = session },
             present: { self.menuPresentation = $0 })
     }
 }
@@ -113,7 +117,8 @@ private struct ChatSessionSidebarRowMenu: View {
             self.button(String(localized: "Icon & color…"), "paintpalette", key: "i") {
                 if let connection = self.actions.connection { self.present(.init(
                     session: self.session,
-                    connection: connection, viewModel: self.viewModel)) }
+                    connection: connection,
+                    viewModel: self.viewModel)) }
             }.disabled(self.actions.connection?.allows("sessions.patch") != true)
             if ChatSessionSidebarActions.canMoveToGroup(
                 self.session,

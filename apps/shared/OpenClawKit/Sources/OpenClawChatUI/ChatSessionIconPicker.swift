@@ -37,11 +37,12 @@ struct ChatSessionIconPicker: View, Identifiable {
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(38)), count: 6)) {
                 ForEach(self.emoji, id: \.self) { emoji in
                     Button(emoji) { self.save(["icon": .init(emoji)]) }.font(.title2)
-                        .tint(self.selectedIcon == emoji ? .accentColor : .primary)
+                        .tint(self.selectedIcon == emoji ? OpenClawChatTheme.accent : .primary)
                 }
                 ForEach(self.glyphs, id: \.0) { glyph in
                     Button { self.save(["icon": .init(glyph.0)]) } label: { Image(systemName: glyph.1) }
-                        .accessibilityLabel(glyph.0).tint(self.selectedIcon == glyph.0 ? .accentColor : .primary)
+                        .accessibilityLabel(glyph.0)
+                        .tint(self.selectedIcon == glyph.0 ? OpenClawChatTheme.accent : .primary)
                 }
                 Button { self.save(["icon": .init(NSNull())]) } label: { Image(systemName: "xmark.circle") }
                     .accessibilityLabel("No icon")
@@ -52,7 +53,7 @@ struct ChatSessionIconPicker: View, Identifiable {
                 }
                 .disabled(!Self.acceptsCustomEmoji(self.custom))
             }
-            if let error { Text(error).foregroundStyle(.red) }
+            if let error { Text(error).foregroundStyle(OpenClawChatTheme.danger) }
             HStack {
                 Button("Reset appearance") { self.save(["icon": .init(NSNull()), "color": .init(NSNull())])
                 }

@@ -42,8 +42,11 @@ extension OpenClawChatViewModel {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else { return }
-            if let name { _ = try await self.renameSessionGroup(name, to: value, using: lease) }
-            else { _ = try await self.createSessionGroup(named: value, using: lease) }
+            if let name {
+                _ = try await self.renameSessionGroup(name, to: value, using: lease)
+            } else {
+                _ = try await self.createSessionGroup(named: value, using: lease)
+            }
             if let session {
                 guard let mutation else { throw OpenClawChatTransportSendError.notDispatched }
                 try await mutation.patchSession(

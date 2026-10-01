@@ -15,7 +15,10 @@ public struct OpenClawSessionMenuConnection {
     public let openWindow: (OpenClawChatSessionEntry) -> Void
 
     public init(
-        hello: HelloOk, local: Bool, selfProfileID: String? = nil, isCurrent: @escaping () -> Bool,
+        hello: HelloOk,
+        local: Bool,
+        selfProfileID: String? = nil,
+        isCurrent: @escaping () -> Bool,
         request: @escaping (OpenClawChatGatewayRequest) async throws -> Data,
         link: @escaping (OpenClawChatSessionEntry, Bool) -> URL?,
         openWindow: @escaping (OpenClawChatSessionEntry) -> Void)
@@ -271,7 +274,8 @@ extension OpenClawChatViewModel {
                     String(localized: "There are no messages to copy.")])
         }
         return ChatTranscriptExporter.markdown(
-            sessionTitle: ChatSessionSidebarModel.displayName(for: session), sessionKey: session.key,
+            sessionTitle: ChatSessionSidebarModel.displayName(for: session),
+            sessionKey: session.key,
             messages: messages)
     }
 }
