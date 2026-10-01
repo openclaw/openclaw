@@ -56,8 +56,7 @@ async function markSubagentRunTerminatedBestEffort(
     if (hasSqliteWorkerOutcomeUnknown(error)) {
       throw error;
     }
-    // The registry transition rolled back atomically. Keep multi-run control
-    // moving so one persistence failure cannot leave siblings running.
+    // A persistence failure must not leave the other siblings running.
     logVerbose(
       `subagents control kill: failed to persist ${params.runId ?? params.childSessionKey ?? "unknown"}: ${formatErrorMessage(error)}`,
     );
@@ -140,8 +139,7 @@ export async function killSubagentRun(params: {
   if (!initial || !isCurrent()) {
     return { killed: false, superseded: true };
   }
-  const initialTargetState = resolveSubagentKillTargetState(initial);
-  if (initialTargetState) {
+  if (resolveSubagentKillTargetState(initial)) {
     if (params.suppressTaskDelivery && initial.requesterSettleWake) {
       await cancelSubagentRequesterSettleWake(initial, () => {
         params.cancellationControl?.assertCurrent();

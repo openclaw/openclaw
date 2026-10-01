@@ -35,6 +35,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "../subagents/registry/subagent-run-generation.js";
 import {
   jsonResult,
   readNonNegativeIntegerParam,
@@ -315,7 +316,8 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         if (selection) {
           selection.ownership.assertCurrent();
           if (
-            entry !== selection.entry ||
+            !entry ||
+            !isSameSubagentRunOwner(entry, selection.entry) ||
             entry.generation !== selection.generation ||
             entry.createdAt !== selection.createdAt
           ) {

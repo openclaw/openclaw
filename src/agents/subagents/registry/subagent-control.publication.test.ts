@@ -230,6 +230,7 @@ it.each([
       const result = resolveTargetState(entry);
       if (
         handoff &&
+        followup !== undefined &&
         entry.runId === b0.runId &&
         entry.generation === b0.generation &&
         !observedTarget

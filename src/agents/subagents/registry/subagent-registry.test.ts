@@ -973,8 +973,8 @@ describe("subagent registry seam flow", () => {
         execution: { status: "running" },
       });
       expect(acceptedRun).not.toHaveProperty("startedAt");
-      expect(acceptedRun).not.toHaveProperty("sessionStartedAt");
-      expect(acceptedRun?.execution).not.toHaveProperty("startedAt");
+      expect(acceptedRun?.sessionStartedAt).toBeUndefined();
+      expect(acceptedRun?.execution.startedAt).toBeUndefined();
       expect(mod.getSubagentRunByRunId("run-queued-two")?.execution?.status).toBe("queued");
     },
   );
@@ -3848,7 +3848,9 @@ describe("subagent registry seam flow", () => {
         execution: { status: "running", startedAt: 1 },
       });
       await mod.addSubagentRunForTests(entry);
-      const original = structuredClone(entry);
+      const original = structuredClone(
+        expectDefined(findRequesterRun(runId), "published fixture run"),
+      );
       mocks.persistRegistryRows.mockClear();
       mocks.persistRegistryRows.mockImplementationOnce(() => {
         throw new Error("registry store boom");
@@ -3921,7 +3923,9 @@ describe("subagent registry seam flow", () => {
         ...evidence,
       });
       await mod.addSubagentRunForTests(entry);
-      const original = structuredClone(entry);
+      const original = structuredClone(
+        expectDefined(findRequesterRun(runId), "published fixture run"),
+      );
 
       await expect(
         mod.finalizeInterruptedSubagentRun({
@@ -4084,11 +4088,11 @@ describe("subagent registry seam flow", () => {
       cleanupCompletedAt: now,
       delivery: {
         status: "discarded",
-        payload: undefined,
         discardedAt: now,
         discardReason: "expired",
       },
     });
+    expect(stored?.delivery?.payload).toBeUndefined();
   });
 
   it("does not emit ended hooks before suspended delete retirement is durable", async () => {

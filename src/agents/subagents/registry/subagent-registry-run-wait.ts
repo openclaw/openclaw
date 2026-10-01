@@ -328,8 +328,6 @@ export class SubagentWaitManager {
         return this.options.completeSubagentRun(completionForRetry);
       };
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
-        this.options.clearPendingLifecycleError(runId);
-        this.options.clearPendingLifecycleTimeout(runId);
         if (entry.collect !== true) {
           await mutateSubagentRuns(
             [runId],
@@ -357,12 +355,18 @@ export class SubagentWaitManager {
           );
           assertCurrent();
           const paused = this.options.runs.get(runId);
-          if (paused?.pauseReason === "sessions_yield" && paused.requesterSettleWake?.pauseNotice) {
-            this.options.resumedRuns.delete(getSubagentRunRuntimeKey(paused));
-            this.options.resumeSubagentRun(runId);
+          if (paused?.pauseReason === "sessions_yield") {
+            this.options.clearPendingLifecycleError(runId);
+            this.options.clearPendingLifecycleTimeout(runId);
+            if (paused.requesterSettleWake?.pauseNotice) {
+              this.options.resumedRuns.delete(getSubagentRunRuntimeKey(paused));
+              this.options.resumeSubagentRun(runId);
+            }
           }
           return;
         }
+        this.options.clearPendingLifecycleError(runId);
+        this.options.clearPendingLifecycleTimeout(runId);
         // A collector result is read by an explicit wait and never delivered by a
         // requester continuation, so nothing can resume a parked collector and its
         // waiter blocks for good. The attempt's own terminal is the only result

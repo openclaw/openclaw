@@ -167,9 +167,6 @@ export function createSubagentRegistryListener(config: {
           (entry.collect !== true ||
             (terminalOutcome.status !== "timeout" && terminalOutcome.reason !== "blocked"))
         ) {
-          // Drop any grace timer from an earlier aborted/error terminal so it can't
-          // later fire and settle this now-paused run with a false notice.
-          pendingLifecycle.clear(evt.runId);
           if (entry.collect !== true) {
             await mutateSubagentRuns(
               [evt.runId],
@@ -197,14 +194,16 @@ export function createSubagentRegistryListener(config: {
             );
             assertCurrent();
             const paused = runs.get(evt.runId);
-            if (
-              paused?.pauseReason === "sessions_yield" &&
-              paused.requesterSettleWake?.pauseNotice
-            ) {
-              config.resumeRequesterSettleWake(paused.runId, paused);
+            if (paused?.pauseReason === "sessions_yield") {
+              // An earlier event can arm grace while this row's publication awaits its ACK.
+              pendingLifecycle.clear(evt.runId);
+              if (paused.requesterSettleWake?.pauseNotice) {
+                config.resumeRequesterSettleWake(paused.runId, paused);
+              }
             }
             return;
           }
+          pendingLifecycle.clear(evt.runId);
           // A collector result is read by an explicit wait and never delivered by
           // a requester continuation, so nothing can resume a parked collector and
           // its waiter blocks for good. The attempt's own terminal is the only

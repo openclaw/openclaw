@@ -2,11 +2,12 @@ import { onTestFinished, vi } from "vitest";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
 import { subagentRunRowVersion } from "./subagent-registry.store.codec.js";
 import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isSameSubagentRun } from "./subagent-run-generation.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export function createSubagentSweeperRun(): SubagentRunRecord {
   return createSubagentRunRecord({
@@ -80,7 +81,23 @@ export function createSubagentSweeperHarness(
     if (params.isCurrent && !params.isCurrent()) {
       return;
     }
-    params.discardDelivery?.(structuredClone(params.entry));
+    await mutateSubagentRuns(
+      [params.runId],
+      (rows) => {
+        const current = rows.get(params.runId);
+        if (
+          !current ||
+          !isSameSubagentRunOwner(current, params.entry) ||
+          params.isCurrent?.() === false
+        ) {
+          return { value: undefined };
+        }
+        const draft = structuredClone(current);
+        params.discardDelivery?.(draft);
+        return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
+      },
+      { runs },
+    );
   });
   const discardTerminalDelivery =
     vi.fn<Parameters<typeof createSubagentRegistrySweeper>[0]["discardTerminalDelivery"]>();
@@ -102,7 +119,7 @@ export function createSubagentSweeperHarness(
     startSubagentAnnounceCleanupFlow: vi.fn(() => true),
     completeCleanupBookkeeping,
     isEndedHookOwnerCurrent: (runId, selected) =>
-      isSameSubagentRun(runs.get(runId), selected) || !runs.has(runId),
+      isSameSubagentRunOwner(runs.get(runId), selected) || !runs.has(runId),
     sessionEffectsHostCurrent: (selected) => selected.execution.suppressSessionEffects !== true,
     shouldSuppressSessionEffects: async (selected) =>
       selected.execution.suppressSessionEffects === true,

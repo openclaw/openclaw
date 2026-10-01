@@ -7,6 +7,7 @@ import { enqueueSwarmRun, releaseSwarmRun, holdQueuedSwarmRun } from "../swarm/s
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import {
   addSubagentRunForTests,
@@ -33,7 +34,7 @@ export function registerLateDescendantControlTests({
     "captures descendants registered during %s before releasing capacity (replacement=%s)",
     async (phase, replaceChild) => {
       const owner = "agent:main:main";
-      const parent = createSubagentRunRecord({
+      let parent = createSubagentRunRecord({
         runId: "late-parent",
         childSessionKey: "agent:main:subagent:late-parent",
         requesterSessionKey: owner,
@@ -43,15 +44,17 @@ export function registerLateDescendantControlTests({
         createdAt: 1,
         startedAt: 2,
       });
-      const activeChild = createSubagentRunRecord({
+      let activeChild = createSubagentRunRecord({
         ...parent,
         runId: "live-child",
         childSessionKey: "agent:main:subagent:live-child",
         controllerSessionKey: parent.childSessionKey,
       });
       await addSubagentRunForTests(parent);
+      parent = subagentRuns.get(parent.runId)!;
       if (phase === "admission drain") {
         await addSubagentRunForTests(activeChild);
+        activeChild = subagentRuns.get(activeChild.runId)!;
       }
       const storePath = await writeSessionStoreFixture("late-descendant", {
         [parent.childSessionKey]: { sessionId: "late-parent-session", updatedAt: 1 },

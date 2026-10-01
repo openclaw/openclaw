@@ -5,6 +5,7 @@ import type { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins
 vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 vi.mock("../../../context-engine/init.js", { spy: true });
 vi.mock("../../../context-engine/registry.js", { spy: true });
+vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 vi.mock("../../runtime-plugins.js", async () => {
   const { getActivePluginRegistry } = await import("../../../plugins/runtime.js");
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");

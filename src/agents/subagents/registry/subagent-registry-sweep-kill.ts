@@ -258,12 +258,22 @@ export async function reconcileProvisionalSubagentKill(params: {
   // decision boundary so a newly registered generation can supersede this run.
   const findNextRunCreatedAt = () =>
     findNextSubagentRunCreatedAt(params.getRunsForChildSession(entry.childSessionKey), entry);
-  const hasStableTaskCancellation = killReconciliation.taskCancellationAccepted === true;
   const killedAt = killReconciliation.killedAt;
-  const isCurrentKill = () =>
-    isSameSubagentRunOwner(runs.get(runId), entry) &&
-    runs.get(runId)?.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-    JSON.stringify(runs.get(runId)?.killReconciliation) === JSON.stringify(killReconciliation);
+  const isCurrentKill = (current = runs.get(runId)) => {
+    const reconciliation = current?.killReconciliation;
+    return (
+      isSameSubagentRunOwner(current, entry) &&
+      current?.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+      reconciliation !== undefined &&
+      reconciliation.killedAt === killedAt &&
+      reconciliation.supersededAt === killReconciliation.supersededAt &&
+      Boolean(reconciliation.suppressTaskDelivery) ===
+        Boolean(killReconciliation.suppressTaskDelivery) &&
+      // Confirmation strengthens the same cancellation while completion capture awaits.
+      (killReconciliation.taskCancellationAccepted !== true ||
+        reconciliation.taskCancellationAccepted === true)
+    );
+  };
   if (killedAt + PROVISIONAL_KILL_RECONCILIATION_MS > now) {
     return false;
   }
@@ -295,7 +305,8 @@ export async function reconcileProvisionalSubagentKill(params: {
       ? completionDeadline
       : undefined;
   const completionCanOverrideCancellation =
-    !hasStableTaskCancellation || (completionEndedAt ?? Number.POSITIVE_INFINITY) < killedAt;
+    runs.get(runId)?.killReconciliation?.taskCancellationAccepted !== true ||
+    (completionEndedAt ?? Number.POSITIVE_INFINITY) < killedAt;
   const completionBelongsToGeneration =
     nextRunCreatedAt === undefined || (completion != null && completion.endedAt < nextRunCreatedAt);
   if (
@@ -355,19 +366,14 @@ export async function reconcileProvisionalSubagentKill(params: {
     [runId],
     (rows) => {
       const current = rows.get(runId);
-      if (
-        !current ||
-        !isSameSubagentRunOwner(current, entry) ||
-        current.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
-        JSON.stringify(current.killReconciliation) !== JSON.stringify(killReconciliation) ||
-        findNextRunCreatedAt() !== undefined
-      ) {
+      if (!current || !isCurrentKill(current) || findNextRunCreatedAt() !== undefined) {
         return { value: undefined };
       }
       const next: SubagentRunRecord = {
         ...current,
         suppressCompletionDelivery:
-          killReconciliation.suppressTaskDelivery === true || hasStableTaskCancellation
+          current.killReconciliation?.suppressTaskDelivery === true ||
+          current.killReconciliation?.taskCancellationAccepted === true
             ? true
             : undefined,
         suppressAnnounceReason: undefined,

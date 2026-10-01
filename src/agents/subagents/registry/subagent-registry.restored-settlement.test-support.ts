@@ -282,6 +282,7 @@ export function registerRestoredRequesterWakeSettlementTests({
       createSubagentRunRecord({
         runId,
         childSessionKey: `agent:main:subagent:${runId}`,
+        requesterAgentId: "main",
         task: "restore requester settle wake",
         cleanup: "delete",
         expectsCompletionMessage: true,
@@ -329,12 +330,21 @@ export function registerRestoredRequesterWakeSettlementTests({
       }
     });
     const wakeGateway = createDeferred<unknown>();
+    const wakeOutcome = wakeGateway.promise.then(
+      (gateway) => ({ gateway }),
+      (error: unknown) => ({ error }),
+    );
     wakeRequester.mockImplementation(async (params) => {
-      const gateway = getSharedGatewayContextResolver(restored)?.()?.recoveryRuntime;
-      bindWakeMutation(restored);
-      await params.completeBatch(restored);
-      wakeGateway.resolve(gateway);
-      return false;
+      try {
+        const gateway = getSharedGatewayContextResolver(restored)?.()?.recoveryRuntime;
+        bindWakeMutation(restored);
+        await params.completeBatch(restored);
+        wakeGateway.resolve(gateway);
+        return false;
+      } catch (error) {
+        wakeGateway.reject(error);
+        throw error;
+      }
     });
     let gatewayOpen = true;
     const instanceContext = { recoveryRuntime } as never;
@@ -368,7 +378,11 @@ export function registerRestoredRequesterWakeSettlementTests({
           await activateRegistry();
         }
       }
-      expect(await wakeGateway.promise).toBe(
+      const outcome = await wakeOutcome;
+      if ("error" in outcome) {
+        throw outcome.error;
+      }
+      expect(outcome.gateway).toBe(
         restoreTiming === "without activation" ? undefined : recoveryRuntime,
       );
     } finally {

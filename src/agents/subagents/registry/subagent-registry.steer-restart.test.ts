@@ -3,12 +3,23 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import * as gatewayCallRuntime from "../../../gateway/call.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
@@ -285,6 +296,17 @@ describe("subagent registry steer restarts", () => {
 
   const listMainRuns = () => mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY);
 
+  const observeTerminalPublication = (runId: string) => {
+    const committed = createDeferred();
+    const stop = subscribeSubagentRunChanges(() => {
+      if (mod.getSubagentRunByRunId(runId)?.execution.status === "terminal") {
+        committed.resolve();
+      }
+    });
+    onTestFinished(stop);
+    return committed.promise;
+  };
+
   const updateRun = (runId: string, amend: (draft: SubagentRunRecord) => void) =>
     mutateSubagentRuns([runId], (rows) => {
       const draft = structuredClone(expectDefined(rows.get(runId), "registered fixture row"));
@@ -518,8 +540,10 @@ describe("subagent registry steer restarts", () => {
     expect(run.delivery).toEqual({ status: "pending" });
 
     const settleRootWork = observeRootWork();
+    const terminalPublished = observeTerminalPublication(run.runId);
     try {
       emitLifecycleEnd(run.runId);
+      await terminalPublished;
       await settleRootWork(true);
       const hookCall = requireSubagentEndedHookCall(run.runId);
       expect(hookCall.event.runId).toBe(run.runId);
@@ -783,8 +807,11 @@ describe("subagent registry steer restarts", () => {
     });
 
     const settleRootWork = observeRootWork();
+    const parentPublished = observeTerminalPublication("run-parent");
+    const childPublished = observeTerminalPublication("run-child");
     try {
       emitLifecycleEnd("run-parent");
+      await parentPublished;
       await settleRootWork(true);
       const initialChildRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
@@ -792,6 +819,7 @@ describe("subagent registry steer restarts", () => {
       expect(countMatching(initialChildRunIds, (id) => id === "run-parent")).toBe(1);
 
       emitLifecycleEnd("run-child");
+      await childPublished;
       await settleRootWork(true);
       {
         const childRunIds = announceSpy.mock.calls.map(

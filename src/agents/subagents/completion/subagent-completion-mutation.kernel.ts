@@ -567,13 +567,11 @@ export function mutateSubagentCompletionInDatabase(
       const { expected, now } = mutation;
       const endedAt = retiredCancellationEndedAt(expected, now);
       const marker = expected.killReconciliation;
-      if (
-        endedAt === undefined ||
-        !marker ||
-        !Number.isFinite(marker.killedAt) ||
-        marker.killedAt > endedAt
-      ) {
+      if (endedAt === undefined || !marker) {
         return noMutation(null);
+      }
+      if (!Number.isFinite(marker.killedAt) || marker.killedAt > endedAt) {
+        return noMutation(false);
       }
       const current = readSubagentRun(database, expected.runId);
       if (

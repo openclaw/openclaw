@@ -15,7 +15,10 @@ import {
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../../subagents/registry/subagent-lifecycle-events.js";
-import { createLifecycleControllerFixture } from "../../subagents/registry/subagent-registry-lifecycle-controller.test-support.js";
+import {
+  createLifecycleControllerFixture,
+  installLifecycleWorkerAckFixture,
+} from "../../subagents/registry/subagent-registry-lifecycle-controller.test-support.js";
 import { markPendingFinalDelivery } from "../../subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-persistence.js";
 import { createSubagentRegistryPublicApi } from "../../subagents/registry/subagent-registry-public-api.js";
@@ -230,6 +233,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     }),
   );
   const runs = new Map<string, SubagentRunRecord>();
+  installLifecycleWorkerAckFixture(runs);
   await mutateSubagentRuns(
     children.map((child) => child.runId),
     () => ({
@@ -246,7 +250,6 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     {
       entry: initial,
       runs,
-      realWorker: true,
       captureSubagentCompletionReply: vi.fn(async () => {
         throw new Error("producer evidence must own stored completion");
       }),

@@ -6,6 +6,7 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
   countActiveRunsForSessionFromRuns,
@@ -222,6 +223,9 @@ describe("subagent registry query regressions", () => {
         ] as const,
     );
     try {
+      for (const entry of [running, sibling]) {
+        subagentRuns.set(entry.runId, entry);
+      }
       const params = { runs: toRunMap([running, ended, sibling]), now };
       const index = buildSubagentRunReadIndexFromRuns(params);
       for (const [id, claim] of claims) {
@@ -234,6 +238,7 @@ describe("subagent registry query regressions", () => {
     } finally {
       for (const [id, claim] of claims) {
         releaseAgentRunContext(id, claim);
+        subagentRuns.delete(id);
       }
     }
   });

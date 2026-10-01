@@ -49,6 +49,7 @@ import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { releaseSubagentRun, testing } from "./subagent-registry.test-helpers.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
@@ -185,7 +186,16 @@ it.each([
             if (transition === "retirement write rollback") {
               await vi.waitFor(() => expect(retirementRejected).toBe(true));
               await fixture.settle();
-              expect(subagentRuns.get("ancestor")).toBe(ancestor);
+              const retained = subagentRuns.get("ancestor");
+              expect(isSameSubagentRunOwner(retained, ancestor)).toBe(true);
+              expect(retained?.execution).toEqual(ancestor.execution);
+              expect(retained?.controllerSessionKey).toBe(ancestor.controllerSessionKey);
+              expect(retained?.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+              expect(retained?.killReconciliation).toBeUndefined();
+              expect(retained?.delivery?.status).toBe("not_required");
+              expect(retained?.cleanupHandled).toBe(false);
+              expect(retained?.cleanupCompletedAt).toBeUndefined();
+              expect(loadSubagentRegistryFromSqlite().get("ancestor")).toEqual(retained);
               worker.mockImplementation(runSubagentStateWorkerOperation);
             } else {
               await vi.waitFor(() => expect(subagentRuns.has("ancestor")).toBe(false));

@@ -13,7 +13,6 @@ import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-bridge-record.js";
-import { normalizeSubagentRunState } from "../agents/subagents/registry/subagent-delivery-state.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { registerRequiredQueuedSubagent } from "../agents/subagents/registry/subagent-registry-queued-registration.js";
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
@@ -866,9 +865,7 @@ it("commits captured registry rows without host SQL", async () => {
       resultText: "captured result 🦞\n".repeat(256),
       terminalReply,
     };
-    const expected = [queued, terminal].map((entry) =>
-      bindSubagentRunRecord(normalizeSubagentRunState(structuredClone(entry))),
-    );
+    const expected = [queued, terminal].map(bindSubagentRunRecord);
     const capturedContext = captureOpenClawStateWorkerContext();
     const runs = new Map([[removed.runId, removed]]);
     const captured = createDeferredCore();

@@ -375,6 +375,9 @@ function currentCompletionOwner(
     current.execution.lifecycleGeneration !== expected.execution.lifecycleGeneration ||
     !isDeepStrictEqual(current.childSessionIdentity, expected.childSessionIdentity) ||
     !isDeepStrictEqual(current.killIntent, expected.killIntent) ||
+    current.killReconciliation?.killedAt !== expected.killReconciliation?.killedAt ||
+    Boolean(current.killReconciliation?.taskCancellationAccepted) !==
+      Boolean(expected.killReconciliation?.taskCancellationAccepted) ||
     Boolean(current.killReconciliation?.suppressTaskDelivery) !==
       Boolean(expected.killReconciliation?.suppressTaskDelivery) ||
     current.killReconciliation?.supersededAt !== expected.killReconciliation?.supersededAt ||
@@ -573,13 +576,15 @@ export async function reconcileRetiredSubagentCancellation(
   expected: SubagentRunRecord,
   now: number,
 ): Promise<boolean | undefined> {
-  if (retiredCancellationEndedAt(expected, now) === undefined || !expected.killReconciliation) {
+  const endedAt = retiredCancellationEndedAt(expected, now);
+  if (endedAt === undefined || !expected.killReconciliation) {
     return undefined;
   }
   try {
     const result = await mutateCompletion([expected], (rows) => {
       const current = currentCompletionOwner(rows, expected);
       if (
+        retiredCancellationEndedAt(current, now) !== endedAt ||
         [...getSubagentRunsForChildSession(current.childSessionKey)].some(
           (candidate) => compareSubagentRunGeneration(candidate, current) > 0,
         )

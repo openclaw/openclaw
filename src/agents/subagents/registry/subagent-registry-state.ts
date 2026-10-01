@@ -70,8 +70,8 @@ const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
 const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunReadRecord> = {
   state: {},
   captureAdmission: captureSubagentFactsAdmission,
-  copy: (entry) => copySubagentRunRuntimeOwner(entry, projectSubagentRunForSessionList(entry)),
-  project: (entry) => copySubagentRunRuntimeOwner(entry, projectSubagentRunForSessionList(entry)),
+  copy: projectSubagentRunForSessionList,
+  project: projectSubagentRunForSessionList,
 };
 const persistedSubagentMaintenanceRunsReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},

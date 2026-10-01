@@ -36,7 +36,7 @@ export function registerQueuedReservationFailureTests({
     "parent persistence",
   ])("releases or withdraws the exact queued reservation after %s failure", async (failure) => {
     const controllerSessionKey = "agent:main:main";
-    const entry = createSubagentRunRecord({
+    let entry = createSubagentRunRecord({
       runId: "failure-queued",
       childSessionKey: "agent:main:subagent:failure-queued",
       controllerSessionKey,
@@ -49,6 +49,7 @@ export function registerQueuedReservationFailureTests({
       execution: { status: "queued" },
     });
     await addSubagentRunForTests(entry);
+    entry = subagentRuns.get(entry.runId)!;
     const storePath = await writeSessionStoreFixture("queue-failure", {
       [entry.childSessionKey]: { sessionId: "queued-session", updatedAt: 1 },
     });

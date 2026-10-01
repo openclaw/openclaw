@@ -268,13 +268,18 @@ describe("subagent orphan recovery — faithful restart path", () => {
         waitRequests.push(params.runId);
         return (params.runId === runId ? await oldWait.promise : { status: "pending" }) as T;
       };
+      const interruptedPersisted = createDeferred();
       const terminalPersisted = createDeferred();
-      const stopObservingTerminal = onSubagentRegistryPersisted(() => {
-        if (loadSubagentRegistryFromSqlite().get(runId)?.execution.status === "terminal") {
+      const stopObservingPublication = onSubagentRegistryPersisted(() => {
+        const executionStatus = loadSubagentRegistryFromSqlite().get(runId)?.execution.status;
+        if (executionStatus === "interrupted") {
+          interruptedPersisted.resolve();
+        }
+        if (executionStatus === "terminal") {
           terminalPersisted.resolve();
         }
       });
-      onTestFinished(stopObservingTerminal);
+      onTestFinished(stopObservingPublication);
       try {
         await runWithGatewayIndependentRootWorkAdmission(async () => {
           await registerSubagentRun({
@@ -309,6 +314,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
             });
             await vi.dynamicImportSettled();
             if (restartsBeforeWait) {
+              await interruptedPersisted.promise;
               expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.status).toBe(
                 "interrupted",
               );
@@ -379,7 +385,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
           execution: { status: "terminal", outcome: { status: "error" } },
         });
       } finally {
-        stopObservingTerminal();
         if (source === "retired wait retry") {
           vi.useRealTimers();
         }
@@ -387,6 +392,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         try {
           await fixture.settle();
         } finally {
+          stopObservingPublication();
           if (getActiveGatewayRootWorkCount() === 0) {
             gatewayRuntime.waitForAgent = originalWait;
             resetGatewayWorkAdmission();

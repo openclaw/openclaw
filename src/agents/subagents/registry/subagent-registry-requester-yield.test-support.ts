@@ -58,6 +58,7 @@ export function createRequesterWakeContextFixture(
 export function createRequesterInitialTransferFixture(
   runs: Map<string, SubagentRunRecord>,
   beforeWrite?: (...runIds: string[]) => void,
+  options: { assertCurrent?: () => void } = {},
 ): RequesterInitialTransfer {
   const context = createRequesterWakeContextFixture(runs);
   return async (params) => {
@@ -74,7 +75,7 @@ export function createRequesterInitialTransferFixture(
       mutate: wrap(params.mutate),
       ...(params.release ? { release: wrap(params.release) } : {}),
       stateContext: captureOpenClawStateWorkerContext(),
-      assertCurrent: () => {},
+      assertCurrent: options.assertCurrent ?? (() => {}),
       scheduleRetry: () => {},
     });
   };

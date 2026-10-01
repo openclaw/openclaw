@@ -6,7 +6,7 @@ import {
   mockGatewayMethods,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 
@@ -51,7 +51,7 @@ export function registerYieldedParentCleanupCase({
 
     const parent = mod.getSubagentRunByRunId("run-yielded-parent");
     const terminalCommitted = createDeferred();
-    const stopObserving = onSubagentRegistryPersisted(() => {
+    const stopObserving = subscribeSubagentRunChanges(() => {
       if (
         mod.getSubagentRunByRunId("run-yielded-child-finished")?.execution.status === "terminal"
       ) {

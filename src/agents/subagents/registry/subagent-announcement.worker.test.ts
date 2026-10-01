@@ -35,7 +35,10 @@ import * as registryDeps from "./subagent-registry-deps.js";
 import * as registryHelpers from "./subagent-registry-helpers.js";
 import * as announceCleanup from "./subagent-registry-lifecycle-announce-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  SubagentRegistryMutationRejectedError,
+} from "./subagent-registry-persistence.js";
 import { getSubagentRegistryPublicationRevision } from "./subagent-registry-publication.js";
 import * as registryState from "./subagent-registry-state.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
@@ -592,7 +595,7 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
         });
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
       } else if (change === "yielded") {
-        expect(outcome.completed).toBe(false);
+        expect(outcome).toEqual({ completed: true });
         expect(subagentRuns.get(runId)).toEqual(pausedRecord);
         expect(loadSubagentRegistryFromSqlite().get(runId)?.pauseReason).toBe("sessions_yield");
       } else {
@@ -620,7 +623,7 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
 );
 
 it.each([false, true])(
-  "publishes registered suspended retirement before its queued successor (successor: %s)",
+  "preserves registered suspended retirement across successor registration (successor: %s)",
   async (replace) => {
     const run = await registerCompletion("suspended-retirement", {
       cleanup: "delete",
@@ -664,7 +667,6 @@ it.each([false, true])(
     const release = createDeferredCore();
     const cleanupEntered = createDeferredCore();
     const releaseCleanup = createDeferredCore();
-    const releaseSuccessor = createDeferredCore();
     const removeAttachments = registryHelpers.safeRemoveAttachmentsDir;
     const cleanup = vi
       .spyOn(registryHelpers, "safeRemoveAttachmentsDir")
@@ -684,14 +686,6 @@ it.each([false, true])(
           (scope) =>
             operation({
               async execute(command, executeOptions) {
-                if (
-                  replace &&
-                  held &&
-                  isSubagentRegistryWriteCommand(command) &&
-                  command.input.values.some((row) => row.run_id === run.runId)
-                ) {
-                  await releaseSuccessor.promise;
-                }
                 const result = await scope.execute(command, executeOptions);
                 if (
                   !held &&
@@ -714,7 +708,23 @@ it.each([false, true])(
       () => ({ completed: true as const }),
       (error: unknown) => ({ completed: false as const, error }),
     );
+    const registerSuccessor = () =>
+      withPluginRuntimeGatewayRequestScope(
+        { client, context, resolveGatewayContext, isWebchatConnect: () => false },
+        () =>
+          registerSubagentRun({
+            runId: run.runId,
+            childSessionKey: run.childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterAgentId: "main",
+            requesterDisplayKey: "main",
+            task: "live retirement successor",
+            cleanup: "keep",
+            expectsCompletionMessage: true,
+          }),
+      );
     let successor = entry;
+    let rejectedRegistration: Promise<unknown> | undefined;
     let registration: Promise<void> | undefined;
     try {
       await Promise.race([
@@ -728,20 +738,9 @@ it.each([false, true])(
       expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
       expect(ended).not.toHaveBeenCalled();
       if (replace) {
-        // The successor retains its source while FIFO admission waits for retirement.
-        registration = withPluginRuntimeGatewayRequestScope(
-          { client, context, resolveGatewayContext, isWebchatConnect: () => false },
-          () =>
-            registerSubagentRun({
-              runId: run.runId,
-              childSessionKey: run.childSessionKey,
-              requesterSessionKey: "agent:main:main",
-              requesterAgentId: "main",
-              requesterDisplayKey: "main",
-              task: "live retirement successor",
-              cleanup: "keep",
-              expectsCompletionMessage: true,
-            }),
+        rejectedRegistration = registerSuccessor().then(
+          () => undefined,
+          (error: unknown) => error,
         );
       }
       const publicationRevision = getSubagentRegistryPublicationRevision();
@@ -753,7 +752,15 @@ it.each([false, true])(
             throw new Error("Suspended retirement settled before attachment cleanup entered");
           }),
         ]);
-        releaseSuccessor.resolve();
+        const rejection = await rejectedRegistration;
+        expect(rejection).toBeInstanceOf(SubagentRegistryMutationRejectedError);
+        expect(rejection).toHaveProperty(
+          "message",
+          "Subagent registration owner changed during preparation",
+        );
+        expect(subagentRuns.has(run.runId)).toBe(false);
+        expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
+        registration = registerSuccessor();
       }
       await registration;
       if (replace) {
@@ -787,9 +794,8 @@ it.each([false, true])(
       }
     } finally {
       release.resolve();
-      releaseSuccessor.resolve();
       releaseCleanup.resolve();
-      await Promise.allSettled([outcome, registration]);
+      await Promise.allSettled([outcome, rejectedRegistration, registration]);
       cleanup.mockRestore();
       worker.mockRestore();
       source.release();

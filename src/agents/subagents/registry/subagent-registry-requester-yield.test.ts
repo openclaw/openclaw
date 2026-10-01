@@ -36,6 +36,7 @@ function makeRun(runId: string, requesterTurnYielded = true): SubagentRunRecord 
     createdAt: 1_000,
     execution: { status: "terminal", endedAt: 2_000 },
     expectsCompletionMessage: true,
+    completion: { required: true },
     delivery: { status: "delivered" },
   };
 }
@@ -290,7 +291,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         childSessionKey: REQUESTER,
         requesterSessionKey: "agent:main:parent",
         execution: { status: "running", startedAt: 1_000 },
-        delivery: undefined,
+        delivery: { status: "pending" },
       };
       const child = makeRun("run-child");
       const originalRequester = structuredClone(requester);

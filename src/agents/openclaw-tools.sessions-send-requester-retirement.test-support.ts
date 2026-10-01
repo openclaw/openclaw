@@ -483,16 +483,18 @@ export function registerSessionsSendRequesterRetirementTests({
         expect(getSubagentRunByRunId(runId)?.requesterTurnRunId).toBeUndefined();
       }
       const firstIndex = newestFirst ? 1 : 0;
-      const firstSettled = createDeferredCore();
+      const childrenSettled = children.map(() => createDeferredCore());
       stopObserving = onSubagentRegistryPersisted(() => {
-        const firstChild = getSubagentRunByRunId(children[firstIndex]!.runId);
-        if (!firstChild || firstChild.cleanupCompletedAt !== undefined) {
-          firstSettled.resolve();
-        }
+        children.forEach(({ runId }, index) => {
+          const child = getSubagentRunByRunId(runId);
+          if (!child || child.cleanupCompletedAt !== undefined) {
+            childrenSettled[index]!.resolve();
+          }
+        });
       });
       admission.close();
       childrenPending[firstIndex]!.resolve();
-      await firstSettled.promise;
+      await childrenSettled[firstIndex]!.promise;
       expect(
         getSubagentRunByRunId(children[firstIndex]!.runId),
         "The first accepted result must retain its completion owner",
@@ -504,6 +506,7 @@ export function registerSessionsSendRequesterRetirementTests({
         ),
       ).toHaveLength(0);
       childrenPending[1 - firstIndex]!.resolve();
+      await childrenSettled[1 - firstIndex]!.promise;
       await settleSessionWork();
       const requesterCalls = calls.filter(
         (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
@@ -530,8 +533,8 @@ export function registerSessionsSendRequesterRetirementTests({
       admission.close();
       childrenPending.forEach((pending) => pending.resolve());
       stopObserving();
-      await resetSubagentRegistryForTests();
       await settleSessionWork();
+      await resetSubagentRegistryForTests();
       announceTesting.setDepsForTest();
       operator.release();
     }

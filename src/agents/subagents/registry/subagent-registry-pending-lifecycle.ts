@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -46,9 +47,14 @@ export function createPendingLifecycleScheduler(params: {
     pendingByRunId.clear();
   }
 
+  const canComplete = (kind: PendingLifecycleKind, entry: SubagentRunRecord) =>
+    entry.pauseReason !== "sessions_yield" &&
+    entry.execution.outcome?.status !== "ok" &&
+    (kind !== "error" || entry.endedReason !== SUBAGENT_ENDED_REASON_COMPLETE);
+
   function schedule(kind: PendingLifecycleKind, scheduleParams: PendingLifecycleParams) {
     const selected = params.runs.get(scheduleParams.runId);
-    if (!selected) {
+    if (!selected || !canComplete(kind, selected)) {
       return;
     }
     clearKind(scheduleParams.runId);
@@ -59,21 +65,34 @@ export function createPendingLifecycleScheduler(params: {
       }
       pendingByRunId.delete(scheduleParams.runId);
       const entry = getCurrentSubagentRunOwner(params.runs, pending.entry);
-      if (!entry) {
+      if (!entry || !canComplete(kind, entry)) {
         return;
       }
-      if (
-        kind === "error"
-          ? entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE ||
-            entry.execution.outcome?.status === "ok"
-          : entry.execution.outcome?.status === "ok" || entry.pauseReason === "sessions_yield"
-      ) {
-        return;
-      }
+      let publication: Pick<SubagentRunRecord, "execution" | "endedReason"> | undefined;
+      const isCurrent = () => {
+        const current = getCurrentSubagentRunOwner(params.runs, pending.entry);
+        return (
+          current !== undefined &&
+          current.pauseReason !== "sessions_yield" &&
+          (publication
+            ? current.endedReason === publication.endedReason &&
+              isDeepStrictEqual(current.execution, publication.execution)
+            : canComplete(kind, current))
+        );
+      };
       params.completeInBackground(
         {
           runId: entry.runId,
           expectedEntry: entry,
+          // Yield can commit after this timer fires but before completion reaches admission.
+          recoveryCurrent: {
+            prepare: async () => isCurrent(),
+            isHostCurrent: isCurrent,
+            onPublished: ({ execution, endedReason }) => {
+              // Deadline normalization can change a cancellation into this owner's timeout.
+              publication = { execution, endedReason };
+            },
+          },
           endedAt: pending.endedAt,
           outcome:
             kind === "timeout"
