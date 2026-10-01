@@ -211,6 +211,8 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
           timeout: 30_000,
         });
         expect(result.status, `${result.error ?? ""}\n${result.stdout}${result.stderr}`).toBe(0);
+        // Version probes can hide failed bootstrap work behind a successful exit.
+        expect(result.stderr).not.toContain("ERR_PNPM_BAD_CONFIG_DEP");
         return result.stdout.trim();
       };
       expect(`pnpm@${run("pnpm", ["--version"])}`).toBe(packageManager.split("+")[0]);
@@ -287,6 +289,8 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
 
       let frozenLockfile: string | undefined;
       if (entrypoint === "shared setup action") {
+        // Corepack's marker makes version probes synchronize the environment lockfile.
+        env.COREPACK_ROOT = root;
         const { environment: managerEnvironment, dependencies } = pnpmLockfileDocuments(
           readFileSync(lockfilePath, "utf8"),
         );
