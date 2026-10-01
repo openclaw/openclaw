@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionEntryWriter from "../../config/sessions/session-accessor.entry-mutation.js";
 import type { SessionTranscriptAccountingSnapshot } from "../../config/sessions/session-transcript-accounting.types.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import {
@@ -102,7 +102,7 @@ it.each(["memory", "compaction"] as const)(
     const entered = createDeferred();
     const release = createDeferred();
     let current = true;
-    const persist = vi.spyOn(sessionAccessor, "updateSessionEntry").mockResolvedValue(null);
+    const persist = vi.spyOn(sessionEntryWriter, "updateSessionEntry").mockResolvedValue(null);
     accounting.mockImplementation(async () => {
       entered.resolve();
       await release.promise;
