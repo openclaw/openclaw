@@ -186,17 +186,16 @@ export function applyJobResult(
     }
   };
   const alertConfig = resolveFailureAlert(state, job);
+  // A silent job's agent-reported blocked outcome stays in history, status, and backoff, but no
+  // notification owner exists for it, so it never auto-disables the job or posts that notice.
+  const silentReportedFailure =
+    result.status === "error" &&
+    result.errorClassification?.kind === "permanent" &&
+    result.errorClassification.reportedByAgent === true &&
+    alertConfig === null &&
+    resolveCronDeliveryPlan(job).mode === "none";
   if (result.status === "error") {
-    // A silent job's agent-reported blocked outcome stays in history and status, but no
-    // notification owner exists for it, so it must not build toward the auto-disable streak.
-    const silentReportedFailure =
-      result.errorClassification?.kind === "permanent" &&
-      result.errorClassification.reportedByAgent === true &&
-      alertConfig === null &&
-      resolveCronDeliveryPlan(job).mode === "none";
-    if (!silentReportedFailure) {
-      job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
-    }
+    job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
@@ -362,6 +361,7 @@ export function applyJobResult(
     } else if (
       result.status === "error" &&
       isJobEnabled(job) &&
+      !silentReportedFailure &&
       maybeAutoDisableCronJobAfterRunFailure({
         job,
         atMs: result.endedAt,

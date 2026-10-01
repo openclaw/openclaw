@@ -183,13 +183,14 @@ describe("cron timer outcome and failure policy regressions", () => {
     },
     { name: "announce job", delivery: undefined, disables: true },
   ])(
-    "counts agent-reported failures toward auto-disable only with a notification owner: $name",
+    "backs off agent-reported failures and auto-disables only with a notification owner: $name",
     ({ delivery, disables }) => {
       const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
+      let now = startedAt;
       const deferredNotifications: DeferredCronNotifications = [];
       const state = createCronServiceState({
         storePath: "/tmp/cron-reported-failure-threshold.json",
-        nowMs: () => startedAt,
+        nowMs: () => now,
         enqueueSystemEvent: vi.fn(),
         runIsolatedAgentJob: createDefaultIsolatedRunner(),
       });
@@ -199,28 +200,39 @@ describe("cron timer outcome and failure policy regressions", () => {
         scheduledAt: startedAt,
         schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
         payload: { kind: "agentTurn", message: "report" },
-        state: { consecutiveErrors: 9 },
+        state: {},
       });
       job.delivery = delivery;
 
-      applyJobResult(
-        state,
-        job,
-        {
-          status: "error",
-          error: "No shell tool is available in this run.",
-          errorClassification: { kind: "permanent", reportedByAgent: true },
-          startedAt,
-          endedAt: startedAt + 10,
-        },
-        { deferredNotifications },
-      );
+      const delaysMs: number[] = [];
+      for (let run = 1; run <= 11 && job.enabled; run += 1) {
+        applyJobResult(
+          state,
+          job,
+          {
+            status: "error",
+            error: "No shell tool is available in this run.",
+            errorClassification: { kind: "permanent", reportedByAgent: true },
+            startedAt: now,
+            endedAt: now + 10,
+          },
+          { deferredNotifications },
+        );
+        if (job.state.nextRunAtMs !== undefined) {
+          delaysMs.push(job.state.nextRunAtMs - (now + 10));
+          now = job.state.nextRunAtMs;
+        }
+      }
 
       expect(job.state.lastRunStatus).toBe("error");
       expect(job.state.lastError).toBe("No shell tool is available in this run.");
       expect(job.enabled).toBe(!disables);
-      expect(job.state.consecutiveErrors).toBe(disables ? 10 : 9);
-      expect(deferredNotifications.some((n) => n.kind === "auto-disabled")).toBe(disables);
+      expect(job.state.consecutiveErrors).toBe(disables ? 10 : 11);
+      expect(deferredNotifications.filter((n) => n.kind === "auto-disabled")).toHaveLength(
+        disables ? 1 : 0,
+      );
+      // The streak still drives error backoff past the one-minute cadence: 5 and 15 minutes, then hourly.
+      expect(delaysMs.slice(2, 6)).toEqual([300_000, 900_000, 3_600_000, 3_600_000]);
     },
   );
 
