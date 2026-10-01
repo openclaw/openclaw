@@ -103,6 +103,8 @@ export async function prepareCodexAttemptContext(
       : {}),
   };
   const hookContext = {
+    // Source enrichment uses the same admitted trace as dynamic tool calls.
+    ...(params.diagnosticTrace ? { trace: params.diagnosticTrace } : {}),
     runId: params.runId,
     agentId: sessionAgentId,
     sessionKey: contextSessionKey,

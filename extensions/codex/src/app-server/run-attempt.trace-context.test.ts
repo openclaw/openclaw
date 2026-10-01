@@ -1,7 +1,11 @@
 // Codex tests cover diagnostic trace propagation into native app-server requests.
 import path from "node:path";
-import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import {
+  createMockPluginRegistry,
+  initializeGlobalHookRunner,
+  runWithDiagnosticTraceContext,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 import {
   createStartedThreadHarness,
   createCodexRuntimePlanFixture,
@@ -29,6 +33,57 @@ function readRequestOptions(
 }
 
 describe("Codex app-server diagnostic trace context", () => {
+  it.each([
+    { supplied: true, label: "enriches" },
+    { supplied: false, label: "withholds" },
+  ])("$label source context using only the admitted run trace", async ({ supplied }) => {
+    const beforePromptBuild = vi.fn((_event: unknown, context: unknown) => {
+      if (
+        !context ||
+        typeof context !== "object" ||
+        !("trace" in context) ||
+        !context.trace ||
+        !("trigger" in context) ||
+        context.trigger !== "cron" ||
+        !("runId" in context) ||
+        typeof context.runId !== "string"
+      ) {
+        return undefined;
+      }
+      return { appendContext: `Claimed Business refs for ${context.runId}` };
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+    );
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, `source-trace-${supplied}.jsonl`),
+      path.join(tempDir, `workspace-source-trace-${supplied}`),
+    );
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.trigger = "cron";
+    params.diagnosticTrace = supplied ? diagnosticTrace : undefined;
+    const run = runCodexAppServerAttempt(params);
+    await Promise.race([
+      harness.waitForMethod("turn/start"),
+      run.then(() => {
+        throw new Error("Attempt ended before turn/start");
+      }),
+    ]);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(beforePromptBuild).toHaveBeenCalledOnce();
+    const hookContext = beforePromptBuild.mock.calls[0]?.[1];
+    const turnStart = harness.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    if (supplied) {
+      expect(hookContext).toHaveProperty("trace", diagnosticTrace);
+      expect(JSON.stringify(turnStart)).toContain(`Claimed Business refs for ${params.runId}`);
+    } else {
+      expect(hookContext).not.toHaveProperty("trace");
+      expect(JSON.stringify(turnStart)).not.toContain("Claimed Business refs");
+    }
+  });
+
   it.each([
     { enabled: true, label: "propagates" },
     { enabled: false, label: "omits" },
