@@ -2,13 +2,18 @@ import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.j
 import type {
   SqliteNativeSessionLaunch,
   SqliteNativeStagingSession,
+  SqliteNativeTokenReservation,
 } from "./sqlite-readonly-native-resource.types.js";
 import { isSameSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker-session.js";
 import type { SqliteSnapshotStagingLaunch } from "./sqlite-snapshot-staging.types.js";
+import type { SqliteStagingTokenIdentity } from "./sqlite-staging-token.js";
 
-/** Private token connections share one process, never a copy/read worker permit. */
+/** Staging admission shares one queue and the existing native resource owner. */
 export function createSqliteSnapshotStagingRuntime(
-  createSession: (launch: SqliteNativeSessionLaunch) => SqliteNativeStagingSession,
+  createSession: (
+    launch: SqliteNativeSessionLaunch,
+    token?: SqliteNativeTokenReservation,
+  ) => SqliteNativeStagingSession,
 ) {
   let worker: SqliteNativeStagingSession | undefined;
   let directories = 0;
@@ -92,6 +97,43 @@ export function createSqliteSnapshotStagingRuntime(
     }
   }
   return {
+    startToken(
+      directory: string,
+      mode: "create" | "reclaim",
+      identity: SqliteStagingTokenIdentity,
+      launch: SqliteSnapshotStagingLaunch,
+      preparationId: number,
+    ) {
+      let original: SqliteNativeStagingSession | undefined;
+      const result = run(async () => {
+        // Each generic root needs its own native-close receipt, including on Bun.
+        // These sessions share the existing native resource, not snapshot creator locks.
+        original = createSession(
+          {
+            ...launch,
+            retainLifetime: false,
+            retainOnOperationError: true,
+          },
+          { directory, identity, preparationId, mode },
+        );
+        return await original.run(directory, {
+          mode: mode === "create" ? "token-create" : "token-reclaim",
+          identity,
+          preparationId,
+        });
+      });
+      void result.catch(() => undefined);
+      return {
+        result,
+        settle: () =>
+          run(async () => {
+            if (!original) {
+              return "not-started" as const;
+            }
+            return await original.settleToken(directory, preparationId);
+          }),
+      };
+    },
     close() {
       return run(async () => {
         if (directories !== 0) {

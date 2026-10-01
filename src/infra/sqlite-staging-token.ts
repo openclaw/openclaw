@@ -5,6 +5,7 @@ import { sql, type RawBuilder } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 
 export const SQLITE_STAGING_TOKEN_FILES = [
   "owner.sqlite",
@@ -13,13 +14,104 @@ export const SQLITE_STAGING_TOKEN_FILES = [
   "owner.sqlite-shm",
 ] as const;
 
+export type SqliteStagingTokenIdentity = Readonly<{
+  directory: Readonly<{ dev: string; ino: string }>;
+  token: Readonly<{ dev: string; ino: string }>;
+}>;
+
+export function readSqliteStagingTokenIdentity(value: unknown): SqliteStagingTokenIdentity {
+  if (!isRecord(value) || !isRecord(value.directory) || !isRecord(value.token)) {
+    throw new Error("SQLite staging token requires an exact filesystem identity");
+  }
+  const read = (part: Record<string, unknown>) => {
+    if (
+      typeof part.dev !== "string" ||
+      !/^\d+$/.test(part.dev) ||
+      typeof part.ino !== "string" ||
+      !/^\d+$/.test(part.ino)
+    ) {
+      throw new Error("SQLite staging token identity is invalid");
+    }
+    return Object.freeze({ dev: part.dev, ino: part.ino });
+  };
+  return Object.freeze({ directory: read(value.directory), token: read(value.token) });
+}
+
+export function captureSqliteStagingTokenIdentity(
+  directory: string,
+  mode: "create" | "reclaim",
+  expectedDirectoryIdentity?: SqliteStagingTokenIdentity["directory"],
+): SqliteStagingTokenIdentity {
+  const directoryStat = fs.lstatSync(directory, { bigint: true });
+  if (!directoryStat.isDirectory()) {
+    throw new Error("SQLite staging directory ownership is unknown");
+  }
+  if (
+    expectedDirectoryIdentity &&
+    (String(directoryStat.dev) !== expectedDirectoryIdentity.dev ||
+      String(directoryStat.ino) !== expectedDirectoryIdentity.ino)
+  ) {
+    throw new Error("SQLite staging directory ownership changed before token creation");
+  }
+  const location = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
+  let tokenStat: fs.BigIntStats;
+  if (mode === "create") {
+    const fd = fs.openSync(location, "wx", 0o600);
+    try {
+      tokenStat = fs.fstatSync(fd, { bigint: true });
+    } finally {
+      fs.closeSync(fd);
+    }
+  } else {
+    tokenStat = fs.lstatSync(location, { bigint: true });
+  }
+  if (
+    !tokenStat.isFile() ||
+    (process.platform === "win32" &&
+      [directoryStat.dev, directoryStat.ino, tokenStat.dev, tokenStat.ino].includes(0n))
+  ) {
+    throw new Error("SQLite staging token ownership is unknown");
+  }
+  const identity = readSqliteStagingTokenIdentity({
+    directory: { dev: String(directoryStat.dev), ino: String(directoryStat.ino) },
+    token: { dev: String(tokenStat.dev), ino: String(tokenStat.ino) },
+  });
+  assertSqliteStagingTokenIdentity(directory, identity);
+  return identity;
+}
+
+export function assertSqliteStagingTokenIdentity(
+  directory: string,
+  expected: SqliteStagingTokenIdentity,
+): void {
+  for (const [pathname, kind, identity] of [
+    [directory, "directory", expected.directory],
+    [path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]), "file", expected.token],
+  ] as const) {
+    const stat = fs.lstatSync(pathname, { bigint: true });
+    if (
+      !(kind === "directory" ? stat.isDirectory() : stat.isFile()) ||
+      String(stat.dev) !== identity.dev ||
+      String(stat.ino) !== identity.ino ||
+      (process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n))
+    ) {
+      throw new Error("SQLite staging token ownership changed");
+    }
+  }
+}
+
 export type SqliteStagingToken = ((retiring?: boolean) => void) & {
   beginRetirement: () => SqliteStagingToken;
 };
+export type IdentifiedSqliteStagingToken = SqliteStagingToken & {
+  getIdentity(): SqliteStagingTokenIdentity;
+};
 
 export class SqliteStagingRetiredError extends Error {
+  readonly code = "SQLITE_STAGING_RETIRED";
   constructor() {
     super("SQLite snapshot parent retired; aborting snapshot allocation");
+    this.name = "SqliteStagingRetiredError";
   }
 }
 
@@ -27,8 +119,28 @@ export class SqliteStagingRetiredError extends Error {
 export function acquireSqliteStagingToken(
   directory: string,
   mode: "create" | "read" | "reclaim",
-  options: { allowMissing?: boolean } = {},
+  options: {
+    expectedIdentity: SqliteStagingTokenIdentity;
+    retainCleanup?: (token: IdentifiedSqliteStagingToken) => void;
+  },
+): IdentifiedSqliteStagingToken;
+export function acquireSqliteStagingToken(
+  directory: string,
+  mode: "create" | "read" | "reclaim",
+  options?: { allowMissing?: boolean },
+): SqliteStagingToken;
+export function acquireSqliteStagingToken(
+  directory: string,
+  mode: "create" | "read" | "reclaim",
+  options: {
+    allowMissing?: boolean;
+    expectedIdentity?: SqliteStagingTokenIdentity;
+    retainCleanup?: (token: IdentifiedSqliteStagingToken) => void;
+  } = {},
 ): SqliteStagingToken {
+  if (options.expectedIdentity) {
+    assertSqliteStagingTokenIdentity(directory, options.expectedIdentity);
+  }
   const location = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
   const readIdentity = (pathname: string, kind: "directory" | "file") => {
     const stat = fs.lstatSync(pathname, { bigint: true });
@@ -60,7 +172,9 @@ export function acquireSqliteStagingToken(
   // create the same inode; SQLite arbitrates admission without recreating parents.
   const existingIdentity = existing ? readIdentity(location, "file") : undefined;
   const db = withSqliteNativeOpen(() =>
-    openNodeSqliteDatabase(existing ? resolveExistingSqliteFileUri(location) : location),
+    openNodeSqliteDatabase(
+      existing || options.expectedIdentity ? resolveExistingSqliteFileUri(location) : location,
+    ),
   );
   let tokenIdentity: fs.BigIntStats;
   const kysely = getNodeSqliteKysely(db);
@@ -88,6 +202,9 @@ export function acquireSqliteStagingToken(
   const beginRetirement = (): SqliteStagingToken => {
     assertIdentity();
     if (!db.isOpen) {
+      if (options.expectedIdentity) {
+        throw new Error("SQLite staging token is closed");
+      }
       return acquireSqliteStagingToken(directory, "reclaim");
     }
     if (!db.isTransaction || !exclusive) {
@@ -111,6 +228,9 @@ export function acquireSqliteStagingToken(
   };
   const release = (retiring = false) => {
     if (!db.isOpen) {
+      if (retiring && options.expectedIdentity) {
+        throw new Error("SQLite staging token is closed");
+      }
       return;
     }
     if (retiring) {
@@ -129,9 +249,17 @@ export function acquireSqliteStagingToken(
     }
     db.close();
   };
-  const token = Object.assign(release, { beginRetirement });
+  const token: IdentifiedSqliteStagingToken = Object.assign(release, {
+    beginRetirement,
+    getIdentity: () =>
+      readSqliteStagingTokenIdentity({
+        directory: { dev: String(directoryIdentity.dev), ino: String(directoryIdentity.ino) },
+        token: { dev: String(tokenIdentity.dev), ino: String(tokenIdentity.ino) },
+      }),
+  });
   try {
     tokenIdentity = existingIdentity ?? readIdentity(location, "file");
+    assertIdentity();
     execute(sql`PRAGMA busy_timeout=0`);
     if (mode === "create") {
       execute(sql`BEGIN IMMEDIATE`);
@@ -151,9 +279,21 @@ export function acquireSqliteStagingToken(
     }
     retired = version === 1;
     assertIdentity();
+    if (options.expectedIdentity) {
+      assertSqliteStagingTokenIdentity(directory, options.expectedIdentity);
+    }
     return token;
   } catch (error) {
-    release();
+    try {
+      release();
+    } catch (cleanupError) {
+      options.retainCleanup?.(token);
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "SQLite staging admission cleanup failed",
+        error,
+      );
+    }
     throw error;
   }
 }

@@ -12,7 +12,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  registerGlobalSingletonFinalResourceReset,
+  resolveGlobalSingleton,
+} from "../shared/global-singleton.js";
 import { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
@@ -64,8 +67,9 @@ type NativeSource = RetainedNativeWorkerSource & {
   close(): Promise<void>;
 };
 
+const lifetimeKey = Symbol.for("openclaw.nativeWorkerLifetimes");
 const lifetime = resolveGlobalSingleton(
-  Symbol.for("openclaw.nativeWorkerLifetimes"),
+  lifetimeKey,
   (): {
     nextId: number;
     sources: WeakMap<RuntimeWorkerGeneration, NativeSource>;
@@ -74,10 +78,10 @@ const lifetime = resolveGlobalSingleton(
     nextId: 0,
     sources: new WeakMap(),
   }),
-  async (state) => {
-    await state.defaultSource?.close();
-  },
 );
+registerGlobalSingletonFinalResourceReset(lifetimeKey, async () => {
+  await lifetime.defaultSource?.close();
+});
 
 function nativeRuntime(source: NativeSource): NativeRuntime {
   if (source.closing) {
@@ -199,6 +203,9 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
           // A refused owner close can finish later through its original native handle.
           void runtime.close().catch(ownerJoined.reject);
           return;
+        }
+        for (const handle of handles.values()) {
+          handle.refreshResourceReference();
         }
         if ([...handles.values()].some((handle) => handle.needsReference)) {
           worker.ref();
@@ -323,10 +330,14 @@ export function captureRetainedNativeWorkerSource(options?: {
               inContext(() => {
                 const connection = connect();
                 const decode = connection.decodeCloseError?.bind(connection);
+                const setReferenced = connection.setReferenced?.bind(connection);
                 return {
                   port: connection.port,
                   service: () => inContext(() => connection.service()),
                   dispose: () => inContext(() => connection.dispose()),
+                  setReferenced: setReferenced
+                    ? (referenced: boolean) => inContext(() => setReferenced(referenced))
+                    : undefined,
                   decodeCloseError: decode
                     ? (payload: unknown) => inContext(() => decode(payload))
                     : undefined,

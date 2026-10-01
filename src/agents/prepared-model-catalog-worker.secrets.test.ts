@@ -27,16 +27,27 @@ import { createCatalogInspectionPool } from "./test-helpers/prepared-model-catal
 
 const provider = "worker-secret-fixture";
 let state: OpenClawTestState;
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "catalog-worker-secrets" });
-  await state.writeAuthProfiles({ version: 1, profiles: {} });
-});
-afterEach(async () => {
+let fixtureActive = false;
+let inspectionCleanup: (() => Promise<void>) | undefined;
+async function cleanupFixture() {
+  if (!fixtureActive) {
+    return;
+  }
+  await inspectionCleanup?.();
+  inspectionCleanup = undefined;
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
   clearRuntimeConfigSnapshot();
   await state.cleanup();
+  fixtureActive = false;
+}
+beforeEach(async () => {
+  await cleanupFixture();
+  state = await createOpenClawTestState({ label: "catalog-worker-secrets" });
+  fixtureActive = true;
+  await state.writeAuthProfiles({ version: 1, profiles: {} });
 });
+afterEach(cleanupFixture);
 
 describe("serialized catalog credential provenance", () => {
   it.each<{
@@ -294,7 +305,9 @@ module.exports = {
         clearRuntimeConfigSnapshot();
         clearRuntimeAuthProfileStoreSnapshots();
         const request = async (failCatalog = false) => {
-          const { pool, captureDirectory } = createCatalogInspectionPool(env);
+          const { pool, captureDirectory } = await createCatalogInspectionPool(env, (cleanup) => {
+            inspectionCleanup = cleanup;
+          });
           try {
             const result = await pool.run(
               {
@@ -314,6 +327,7 @@ module.exports = {
             return result;
           } finally {
             await pool.close();
+            inspectionCleanup = undefined;
             expect(fs.existsSync(captureDirectory)).toBe(false);
           }
         };

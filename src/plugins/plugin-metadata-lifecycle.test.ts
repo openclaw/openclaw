@@ -28,6 +28,7 @@ import {
 import { snapshotReaderSlot } from "./plugin-metadata-snapshot-readers.js";
 import { getCurrentPluginMetadataSnapshotRequiredRuntime } from "./plugin-metadata-snapshot-required.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import * as sourceCapture from "./plugin-source-capture-directory.js";
 
 const clearMemo = vi.fn();
 registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
@@ -84,6 +85,41 @@ it("joins owned cleanup and final shared teardown before admitting another Gatew
   const cleanupReleased = createDeferredCore();
   const sharedEntered = createDeferredCore();
   const sharedReleased = createDeferredCore();
+  const sweepEntered = createDeferredCore();
+  const sweepReleased = createDeferredCore();
+  const captureReleaseEntered = createDeferredCore();
+  const captureReleaseAllowed = createDeferredCore();
+  let sweepJoined = false;
+  let captureReleased = false;
+  let capture: ReturnType<typeof sourceCapture.retainPluginSourceCaptureInstance> | undefined;
+  const restoreCaptureHooks: Array<() => void> = [];
+  const retainCapture = sourceCapture.retainPluginSourceCaptureInstance;
+  const observingCapture = vi
+    .spyOn(sourceCapture, "retainPluginSourceCaptureInstance")
+    .mockImplementationOnce((...args) => {
+      const original = retainCapture(...args);
+      capture = original;
+      const maintenance = original.startMaintenance.bind(original);
+      const release = original.releaseAsync.bind(original);
+      const sweeping = vi.spyOn(original, "startMaintenance").mockImplementation((scheduler) =>
+        maintenance(scheduler).then(async () => {
+          sweepEntered.resolve();
+          await sweepReleased.promise;
+          sweepJoined = true;
+        }),
+      );
+      const releasing = vi.spyOn(original, "releaseAsync").mockImplementation(async () => {
+        captureReleaseEntered.resolve();
+        await captureReleaseAllowed.promise;
+        await release();
+        captureReleased = true;
+      });
+      restoreCaptureHooks.push(
+        () => sweeping.mockRestore(),
+        () => releasing.mockRestore(),
+      );
+      return original;
+    });
   instance.lifecycle.onDispose(async () => {
     cleanupEntered.resolve();
     await cleanupReleased.promise;
@@ -104,7 +140,18 @@ it("joins owned cleanup and final shared teardown before admitting another Gatew
     expect(getPluginCache()).toBe(cache);
     expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(/retir|shut/i);
     cleanupReleased.resolve();
+    await sweepEntered.promise;
+    sweepReleased.resolve();
+    await Promise.race([captureReleaseEntered.promise, sharedEntered.promise]);
+    expect(sharedStarted).toBe(false);
+    expect(sweepJoined).toBe(true);
+    expect(captureReleased).toBe(false);
+    expect(capture?.isCurrent()).toBe(true);
+    expect(getPluginCache()).toBe(cache);
+    captureReleaseAllowed.resolve();
     await sharedEntered.promise;
+    expect(captureReleased).toBe(true);
+    expect(capture?.isCurrent()).toBe(false);
     expect(getPluginCache()).toBe(cache);
     expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(/retir|shut/i);
     sharedReleased.resolve();
@@ -119,8 +166,17 @@ it("joins owned cleanup and final shared teardown before admitting another Gatew
     }
   } finally {
     cleanupReleased.resolve();
+    sweepReleased.resolve();
+    captureReleaseAllowed.resolve();
     sharedReleased.resolve();
-    await closing;
+    try {
+      await closing;
+    } finally {
+      for (const restore of restoreCaptureHooks) {
+        restore();
+      }
+      observingCapture.mockRestore();
+    }
   }
 });
 

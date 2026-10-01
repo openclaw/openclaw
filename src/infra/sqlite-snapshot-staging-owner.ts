@@ -17,16 +17,31 @@ import {
   settleSqliteSnapshotRequest,
   SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
-import { createSqliteReadOnlyNativeResourceConnection } from "./sqlite-readonly-native-resource.client.js";
 import { SQLITE_NATIVE_RESOURCE_PORT } from "./sqlite-readonly-native-resource.types.js";
 import { captureSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker.js";
+import {
+  createSqliteStagingNativeConnection,
+  closeSqliteStagingGeneration,
+  startSqliteStagingIdleClose,
+} from "./sqlite-snapshot-staging-owner.connection.js";
+import {
+  createOwnedStagingToken,
+  sameTokenIdentity,
+  startTokenAdmission,
+} from "./sqlite-snapshot-staging-owner.token.js";
 import type {
   SqliteSnapshotStagingCommand,
   SqliteSnapshotStagingDirectory,
   SqliteSnapshotStagingInput,
   SqliteSnapshotStagingRequest,
   SqliteSnapshotStagingReply,
+  WorkerOwnedSqliteStagingTokenAdmission,
+  SqliteStagingOwnedDirectory as OwnedDirectory,
+  SqliteStagingOwnedToken as OwnedToken,
+  SqliteStagingNativeDirectory,
+  SqliteStagingPreparation,
 } from "./sqlite-snapshot-staging.types.js";
+import type { SqliteStagingTokenIdentity } from "./sqlite-staging-token.js";
 import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
@@ -37,9 +52,9 @@ import {
 } from "./worker-task-capacity.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 import type { RetainedWorkerTask } from "./worker-task-pool.types.js";
+export type { WorkerOwnedSqliteStagingTokenAdmission } from "./sqlite-snapshot-staging.types.js";
 
 type SuccessfulReply = Exclude<SqliteSnapshotStagingReply, { type: "failed" }>;
-
 function decodeSnapshotError(payload: unknown): Error {
   const remote = new Error("SQLite snapshot staging failed");
   retainOpenClawStateWorkerErrorPayload(remote, payload);
@@ -48,10 +63,7 @@ function decodeSnapshotError(payload: unknown): Error {
 
 /** The existing staging owner retains its child; this transport only moves its event loop. */
 function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSource) {
-  const nativeDirectories = new Map<
-    string,
-    { owner: { disposed: boolean }; preparationId: number; removed: boolean; recovering: boolean }
-  >();
+  const nativeDirectories = new Map<string, SqliteStagingNativeDirectory>();
   const nativeResource = nativeSource.captureResource(
     resolveRuntimeProcessEntrypointUrl("sqliteReadOnlyNativeResource"),
     SQLITE_NATIVE_RESOURCE_PORT,
@@ -73,19 +85,8 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       decodeResourceError: decodeSnapshotError,
     },
   );
-  const directories = new Map<string, SqliteSnapshotStagingDirectory>();
-  const preparations = new Map<
-    number,
-    {
-      directories: Set<string>;
-      closeRequested: boolean;
-      isAdmitted(): boolean;
-      acceptOwner(owner: { disposed: boolean }): void;
-      startClose(): RetainedOperation<void>;
-      serviceClose(): void;
-      releaseIfComplete(): void;
-    }
-  >();
+  const directories = new Map<string, OwnedDirectory | OwnedToken>();
+  const preparations = new Map<number, SqliteStagingPreparation>();
   let preparationSequence = 0;
   const activeRequests = new Set<RetainedOperation<SuccessfulReply>>();
   let servicingRequests = false;
@@ -95,64 +96,13 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   let unavailable: { error: unknown } | undefined;
 
   function connectNativeResource() {
-    return createSqliteReadOnlyNativeResourceConnection({
-      receive(value, owner) {
-        const directory = value.directory;
-        const existing = nativeDirectories.get(directory);
-        if (value.type === "allocated") {
-          const preparation = preparations.get(value.preparationId);
-          if (!preparation?.isAdmitted()) {
-            throw new SqliteSnapshotCleanupError(
-              "SQLite snapshot preparation custody is unavailable",
-            );
-          }
-          preparation.acceptOwner(owner);
-          if (
-            existing &&
-            (existing.owner !== owner || existing.preparationId !== value.preparationId)
-          ) {
-            throw new SqliteSnapshotCleanupError(
-              "SQLite snapshot changed its original native owner",
-            );
-          }
-          if (!existing) {
-            nativeDirectories.set(directory, {
-              owner,
-              preparationId: value.preparationId,
-              removed: false,
-              recovering: false,
-            });
-          }
-          preparation.directories.add(directory);
-          retainDirectory(directory);
-          if (preparation.closeRequested) {
-            try {
-              sealRetainedSnapshotTempDirectory(directory);
-            } catch {
-              // The request's actual removal reports a held reader; allocation still records custody.
-            }
-          }
-        } else {
-          if (existing?.owner !== owner) {
-            throw new SqliteSnapshotCleanupError("SQLite snapshot native custody is unavailable");
-          }
-          if (value.type === "retire") {
-            sealRetainedSnapshotTempDirectory(directory, { requireRequested: true });
-            existing.recovering = true;
-          } else if (value.type === "removed") {
-            existing.removed = true;
-          }
-        }
-      },
-      onFailure(error) {
+    return createSqliteStagingNativeConnection({
+      nativeDirectories,
+      directories,
+      preparations,
+      retainDirectory,
+      onFailure: (error) => {
         unavailable ??= { error };
-      },
-      onDispose(owner) {
-        for (const [directory, record] of nativeDirectories) {
-          if (record.owner === owner && record.removed && !directories.has(directory)) {
-            nativeDirectories.delete(directory);
-          }
-        }
       },
     });
   }
@@ -179,52 +129,24 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     if (idleClose?.read().status === "pending") {
       return idleClose;
     }
-    let close: RetainedOperation<void> | undefined;
-    let rotate: RetainedOperation<void> | undefined;
-    const retained = createRetainedOperation<void>(() => {
-      if (retained.operation.read().status !== "pending") {
-        return;
-      }
-      if (!close) {
-        if (requests > 0 || directories.size > 0) {
-          return retained.resolve(undefined);
-        }
-        close = pool.startCloseResources();
-        void close.result.then(serviceIdleClose, serviceIdleClose);
-      }
-      close.service();
-      const closed = close.read();
-      if (closed.status === "pending") {
-        return;
-      }
-      if (closed.status === "rejected") {
-        return retained.reject(closed.error);
-      }
-      if (!rotate) {
-        if (requests > 0 || directories.size > 0) {
-          return retained.resolve(undefined);
-        }
-        rotate = pool.startRotate();
-        void rotate.result.then(serviceIdleClose, serviceIdleClose);
-      }
-      rotate.service();
-      const rotated = rotate.read();
-      if (rotated.status === "fulfilled") {
+    idleClose = startSqliteStagingIdleClose({
+      hasWork: () => requests > 0 || directories.size > 0,
+      startCloseResources: () => pool.startCloseResources(),
+      startRotate: () => pool.startRotate(),
+      onRotated: () => {
         unavailable = undefined;
-        retained.resolve(undefined);
-      } else if (rotated.status === "rejected") {
-        retained.reject(rotated.error);
-      }
+      },
     });
-    const serviceIdleClose = retained.operation.service.bind(retained.operation);
-    idleClose = retained.operation;
-    retained.operation.service();
-    return retained.operation;
+    idleClose.service();
+    return idleClose;
   };
 
-  const retainDirectory = (directory: string): SqliteSnapshotStagingDirectory => {
+  const retainDirectory = (directory: string): OwnedDirectory => {
     const existing = directories.get(directory);
     if (existing) {
+      if (existing.kind !== "snapshot") {
+        throw new SqliteSnapshotCleanupError("SQLite snapshot path belongs to a generic token");
+      }
       return existing;
     }
     const preparationId = nativeDirectories.get(directory)?.preparationId;
@@ -300,7 +222,11 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       retained.operation.service();
       return retained.operation;
     };
-    const owned = { directory, startRetire };
+    const owned: OwnedDirectory = {
+      kind: "snapshot",
+      directory,
+      startRetire,
+    };
     directories.set(directory, owned);
     registerRetainedSnapshotTempDirectory(directory, startRetire);
     return owned;
@@ -312,6 +238,10 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   ): SqliteSnapshotStagingRequest => {
     if (admissionClosed) {
       throw new Error("SQLite snapshot staging owner is closing");
+    }
+    const tokenInput = command.type === "token" ? command : undefined;
+    if (tokenInput && directories.has(tokenInput.directory)) {
+      throw new Error("SQLite staging directory already has a retained owner");
     }
     const preparationId = ++preparationSequence;
     const inputBytes = Buffer.byteLength(JSON.stringify({ ...command, preparationId }));
@@ -359,10 +289,46 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
         originalNativeOwner = owner;
       },
       startClose,
-      serviceClose: () => closeService?.(),
+      serviceClose: () => {
+        closeService?.();
+        ownedToken?.serviceClose();
+      },
       releaseIfComplete,
     };
     preparations.set(preparationId, preparation);
+    const ownedToken = tokenInput
+      ? createOwnedStagingToken({
+          input: tokenInput,
+          preparationId,
+          inContext: runInContext,
+          isAdmitting: () => admitting,
+          isInputPrepared: () => inputPrepared,
+          isAdmissionClosed: () => admissionClosed,
+          task: () => task,
+          originalNativeOwner: () => originalNativeOwner,
+          nativeDirectory: () => nativeDirectories.get(tokenInput.directory),
+          serviceAdmission: service,
+          admissionResult: retained.operation.result,
+          requestClose: () => {
+            preparation.closeRequested = true;
+          },
+          startCloseResource: () => pool.startCloseResources(tokenInput.directory),
+          closeWhenIdle,
+          relinquish: () => {
+            directories.delete(tokenInput.directory);
+            nativeDirectories.delete(tokenInput.directory);
+            preparation.directories.delete(tokenInput.directory);
+          },
+          complete: () => {
+            custodyReleased = true;
+            preparations.delete(preparationId);
+          },
+        })
+      : undefined;
+    if (ownedToken) {
+      directories.set(ownedToken.directory, ownedToken);
+      preparation.directories.add(ownedToken.directory);
+    }
     try {
       task = pool.startTask(
         () => {
@@ -437,7 +403,13 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
                 : error,
             );
           } else {
-            if (!preparation.directories.has(result.value.directory)) {
+            if (
+              !preparation.directories.has(result.value.directory) ||
+              (ownedToken &&
+                (!ownedToken.admitted ||
+                  result.value.type !== "token" ||
+                  !sameTokenIdentity(ownedToken.identity, result.value.identity)))
+            ) {
               errors.push(
                 new SqliteSnapshotCleanupError(
                   "SQLite staging result lost its original directory custody",
@@ -512,6 +484,9 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     }
 
     function startClose(): RetainedOperation<void> {
+      if (ownedToken) {
+        return ownedToken.startSettlement(ownedToken.mode === "create" ? "retire" : "close");
+      }
       preparation.closeRequested = true;
       if (pendingClose?.read().status === "pending") {
         return pendingClose;
@@ -650,41 +625,30 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     activeRequests.add(retained.operation);
     retained.operation.service();
     closeService?.();
-    return { ...retained.operation, service: serviceRequests, startClose };
+    return {
+      ...retained.operation,
+      service: serviceRequests,
+      startClose,
+      ...(ownedToken
+        ? { token: ownedToken.token, startRelease: () => ownedToken.startSettlement("close") }
+        : {}),
+    };
   };
 
   const owner = { start, retainDirectory };
-  nativeSource.retain(owner, async () => {
-    admissionClosed = true;
-    for (const preparation of preparations.values()) {
-      preparation.closeRequested = true;
-    }
-    await Promise.allSettled([...activeRequests].map((request) => request.result));
-    // A lost Worker shares native cleanup across roots; admit eligible siblings first.
-    for (const directory of directories.keys()) {
-      try {
-        sealRetainedSnapshotTempDirectory(directory);
-      } catch {
-        // Removal below rechecks and reports refusal, including readers released meanwhile.
-      }
-    }
-    const closures = Array.from(preparations.values()).map((preparation) =>
-      preparation.startClose(),
-    );
-    const outcomes = await Promise.allSettled(closures.map((close) => close.result));
-    const failures = outcomes.flatMap((outcome) =>
-      outcome.status === "rejected" ? [outcome.reason] : [],
-    );
-    if (failures.length) {
-      throw createSqliteLifecycleAggregateError(
-        failures,
-        "SQLite snapshot generation cleanup failed",
-        failures[0],
-      );
-    }
-    await closeWhenIdle().result;
-    await pool.close();
-  });
+  nativeSource.retain(owner, () =>
+    closeSqliteStagingGeneration({
+      directories,
+      preparations,
+      requests: activeRequests,
+      closeAdmission: () => {
+        admissionClosed = true;
+      },
+      closeWhenIdle,
+      closePool: () => pool.close(),
+    }),
+  );
+
   return owner;
 }
 
@@ -724,4 +688,15 @@ export async function allocateWorkerOwnedSqliteSnapshotDirectory(
   );
   const reply = await settleSqliteSnapshotRequest(request);
   return owner.retainDirectory(reply.directory);
+}
+
+export function startWorkerOwnedSqliteStagingToken(
+  directory: string,
+  mode: "create" | "reclaim",
+  options: {
+    signal?: AbortSignal;
+    expectedDirectoryIdentity?: SqliteStagingTokenIdentity["directory"];
+  } = {},
+): WorkerOwnedSqliteStagingTokenAdmission {
+  return startTokenAdmission(captureSqliteSnapshotStagingOwner, directory, mode, options);
 }

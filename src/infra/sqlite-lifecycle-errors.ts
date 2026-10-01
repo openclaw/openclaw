@@ -54,6 +54,8 @@ export function createSqliteLifecycleAggregateError(
 }
 
 /** Keep the first failure as the cause while retaining independent cleanup errors. */
+export function throwSqliteLifecycleErrors(errors: [unknown, ...unknown[]], message: string): never;
+export function throwSqliteLifecycleErrors(errors: unknown[], message: string): void;
 export function throwSqliteLifecycleErrors(errors: unknown[], message: string): void {
   if (errors.length === 1) {
     throw errors[0];

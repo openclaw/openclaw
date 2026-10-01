@@ -65,6 +65,12 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     );
   }
 
+  refreshResourceReference(): void {
+    const referenced = this.needsReference;
+    this.resourceBinding?.setReferenced(referenced);
+    this.resourceConnection?.setReferenced?.(referenced);
+  }
+
   service(): void {
     this.runtime.service();
   }
@@ -268,6 +274,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.supervisorJoined = true;
       this.rejectSamples(error);
       this.finishExecution(undefined);
+      this.runtime.refreshReference();
       if (this.ownsNativeResource) {
         if (this.resourceClosed) {
           this.finishJoined(undefined);

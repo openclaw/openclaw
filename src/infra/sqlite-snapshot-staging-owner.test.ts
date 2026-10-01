@@ -38,6 +38,9 @@ import type {
   WorkerTaskPoolOwnerOptions,
 } from "./worker-task-pool.types.js";
 
+// Runtime setup preloads plugin capture before this file installs its call-through mocks.
+vi.hoisted(() => vi.resetModules());
+
 type ReleaseGate = {
   ordinal: number;
   entered: ReturnType<typeof createDeferredCore<void>>;
@@ -320,7 +323,7 @@ it.each(["queued", "accepted"] as const)(
         await nextTurn();
       }
       expect(observation.tasks).toBe(2);
-      expect(observation.admitted).toHaveLength(phase === "queued" ? 1 : 2);
+      expect(observation.admitted.length).toBe(phase === "queued" ? 1 : 2);
       expect(observation.allocated).toHaveLength(1);
       if (replyGate) {
         expect(observation.taskReads.get(2)?.()).toEqual({ status: "pending" });
@@ -346,7 +349,7 @@ it.each(["queued", "accepted"] as const)(
       releaseReplyGate(replyGate);
       expect(await first).toBe(sibling);
       await rejected;
-      expect(observation.admitted).toHaveLength(phase === "queued" ? 1 : 2);
+      expect(observation.admitted.length).toBe(phase === "queued" ? 1 : 2);
       expect(observation.allocated).toHaveLength(phase === "queued" ? 1 : 2);
       expect(fs.readFileSync(sentinel, "utf8")).toBe("sibling snapshot bytes");
       expect(fs.readdirSync(root)).toEqual([path.basename(sibling)]);
@@ -450,20 +453,19 @@ it("preserves allocation launch facts while waiting behind another token command
     await waitForGate(gate, first);
     second = allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
     expect(observation.tasks).toBe(2);
-    expect(observation.admitted).toHaveLength(1);
+    expect(observation.admitted.length).toBe(1);
     cwd.mockReturnValue(changedCwd);
     vi.stubEnv("OPENCLAW_SNAPSHOT_HOST_CAPTURE_FIXTURE", "changed-while-queued");
     releaseGate(gate);
     const owned = await Promise.all([first, second]);
-    expect(observation.admitted).toHaveLength(2);
+    expect(observation.admitted.length).toBe(2);
     for (const command of observation.admitted) {
-      expect(command).toMatchObject({
-        type: "allocate",
-        launch: {
-          cwd: originalCwd,
-          env: { OPENCLAW_SNAPSHOT_HOST_CAPTURE_FIXTURE: "captured" },
-        },
-      });
+      if (!isRecord(command) || !isRecord(command.launch) || !isRecord(command.launch.env)) {
+        throw new Error("Captured allocation command is missing its launch environment");
+      }
+      expect(command.type === "allocate").toBe(true);
+      expect(command.launch.cwd === originalCwd).toBe(true);
+      expect(command.launch.env.OPENCLAW_SNAPSHOT_HOST_CAPTURE_FIXTURE === "captured").toBe(true);
     }
     expect(owned.every(({ directory }) => fs.existsSync(directory))).toBe(true);
   } finally {
@@ -524,7 +526,7 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
     );
     second.service();
     expect(observation.tasks).toBe(2);
-    expect(observation.admitted).toHaveLength(1);
+    expect(observation.admitted.length).toBe(1);
     let microtaskRan = false;
     queueMicrotask(() => {
       microtaskRan = true;

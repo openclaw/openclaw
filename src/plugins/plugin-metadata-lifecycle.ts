@@ -233,10 +233,14 @@ export function retainGatewayPluginMetadata(
               selectCurrentPluginMetadataCache(survivor.cache);
             }
           }
-          return await waitForRetirement([
+          const cleanup = await waitForRetirement([
             ...(retireRegistry ? [Promise.resolve().then(retireRegistry)] : []),
             ...(final ? precedingCloses : []),
           ]);
+          // Capture maintenance still needs the infrastructure that onFinal drains after retire.
+          await sourceSweep;
+          await sourceCaptures.releaseAsync();
+          return cleanup;
         }));
       owner.closing = Promise.resolve().then(async () => {
         try {
@@ -249,8 +253,6 @@ export function retainGatewayPluginMetadata(
           if (final) {
             clearPluginMetadataCaches();
           }
-          await sourceSweep;
-          await sourceCaptures.releaseAsync();
           gatewayMetadataOwners.delete(owner);
           releaseReaders();
           return cleanup;

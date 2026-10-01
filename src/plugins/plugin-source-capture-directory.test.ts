@@ -9,6 +9,8 @@ import { cleanupStartupPluginSourceCaptures } from "../commands/startup-plugin-s
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { nativeWorkerLifecycleEntrypoint } from "../infra/worker-native-lifecycle.runtime.test-support.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -17,13 +19,19 @@ import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 import {
-  createPluginSourceCaptureRoot,
+  startPluginSourceCaptureRoot,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
 import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
 import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
-const temp = useAutoCleanupTempDirTracker(afterEach);
+const temp = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // The shared native broker can retain a socket beneath this test's temporary root.
+    await drainGlobalSingletonLifecycleState();
+    cleanup();
+  }),
+);
 const artifactUrl = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.artifact);
 const artifactModule = artifactUrl.href;
 const runtimeArgs = resolveRuntimeWorkerArgv(artifactUrl).slice(0, -1);
@@ -76,12 +84,13 @@ const childCapture = `
   import fs from "node:fs";
   import path from "node:path";
   import { capturePluginGenerationArtifact } from ${JSON.stringify(artifactModule)};
-  import { createPluginSourceCaptureRoot } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.captureDirectory).href)};
+  import { startPluginSourceCaptureRoot } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.captureDirectory).href)};
   import { withPluginSourceCaptureDirectory } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.metadataCapture).href)};
   const source = process.argv[1];
-  const worker = process.argv[2] === "worker"
-    ? createPluginSourceCaptureRoot(process.env.OPENCLAW_STATE_DIR, "openclaw-model-catalog-")
+  const admission = process.argv[2] === "worker"
+    ? startPluginSourceCaptureRoot(process.env.OPENCLAW_STATE_DIR, "openclaw-model-catalog-")
     : undefined;
+  const worker = await admission?.result;
   const artifact = worker
     ? withPluginSourceCaptureDirectory(worker.directory, () => capturePluginGenerationArtifact(source))
     : capturePluginGenerationArtifact(source);
@@ -112,6 +121,29 @@ async function abandonCapture(stateDir: string, source: string) {
   expect(fs.readFileSync(captured.capturedFile, "utf8")).toBe(capturedSource);
   return captured;
 }
+
+it.each([
+  "retry",
+  "realpath-refusal",
+  "directory-replacement",
+  "token-replacement",
+  "sidecar-replacement",
+] as const)("retains original creator cleanup before native admission (%s)", (scenario) => {
+  const stateDir = temp.make("capture-unadmitted-");
+  const result = spawnSync(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(nativeWorkerLifecycleEntrypoint)),
+      "capture-unadmitted-cleanup",
+      stateDir,
+      scenario,
+    ],
+    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, encoding: "utf8", timeout: 15_000 },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe("original creator cleanup recovered");
+});
 
 it("retains mapped addons once through disposal and exit, then reclaims them at startup", async () => {
   const stateDir = temp.make("plugin-capture-loaded-");
@@ -761,9 +793,10 @@ it("leaves explicit worker capture directories under their caller's custody", as
 
 it("excludes managed worker output when the state directory is also plugin source", async () => {
   const source = createSource();
-  const root = createPluginSourceCaptureRoot(source, "openclaw-model-catalog-");
+  const admission = startPluginSourceCaptureRoot(source, "openclaw-model-catalog-");
   let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
   try {
+    const root = await admission.result;
     artifact = withPluginSourceCaptureDirectory(
       root.directory,
       () => capturePluginGenerationArtifact(source),
@@ -774,8 +807,11 @@ it("excludes managed worker output when the state directory is also plugin sourc
     );
     expect(fs.existsSync(path.join(artifact.rootDir, "tmp", "plugin-captures"))).toBe(false);
   } finally {
-    await artifact?.disposeAsync();
-    await root.release();
+    try {
+      await artifact?.disposeAsync();
+    } finally {
+      await admission.release();
+    }
   }
 });
 

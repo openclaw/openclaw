@@ -27,6 +27,11 @@ class ProcessModelRuntimeLifetimes {
   retirePlugins?: () => Promise<void>;
   epoch = 0;
   closing?: Promise<void>;
+  failedClose?: {
+    error: Error;
+    callbacks: ModelRuntimeClose[];
+    retirePlugins?: () => Promise<void>;
+  };
 }
 
 const lifetimes = resolveGlobalSingleton(
@@ -60,32 +65,55 @@ export function registerPreparedPluginRetirement(retire: () => Promise<void>): v
 
 /** Fence admission before abort callbacks run; old publications cannot enter the next lifetime. */
 export function closePreparedModelRuntimeSnapshots(): Promise<void> {
-  if (lifetimes.closing) {
+  // Failed cleanup keeps admission fenced; only its still-owned work can be retried.
+  const retry = lifetimes.failedClose;
+  if (lifetimes.closing && !retry) {
     return lifetimes.closing;
   }
   const closed = createDeferredCore();
   lifetimes.closing = closed.promise;
-  lifetimes.epoch += 1;
-  const error = new Error("prepared model runtime process lifetime closed");
-  void Promise.allSettled(
-    [...lifetimes.closeCallbacks].map(async (close) => await close(error)),
-  ).then(async (results) => {
-    try {
-      await lifetimes.retirePlugins?.();
-      lifetimes.retirePlugins = undefined;
-    } catch (reason) {
-      results.push({ status: "rejected", reason });
-    }
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      closed.reject(new AggregateError(failures, "Prepared model runtime failed to close"));
-    } else {
-      lifetimes.closing = undefined;
-      closed.resolve();
-    }
-  });
+  lifetimes.failedClose = undefined;
+  if (!retry) {
+    lifetimes.epoch += 1;
+  }
+  const error = retry?.error ?? new Error("prepared model runtime process lifetime closed");
+  const callbacks = retry
+    ? retry.callbacks.filter((close) => lifetimes.closeCallbacks.has(close))
+    : [...lifetimes.closeCallbacks];
+  void Promise.allSettled(callbacks.map(async (close) => await close(error))).then(
+    async (results) => {
+      const failedCallbacks = callbacks.filter((_, index) => results[index]?.status === "rejected");
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      const retirePlugins = retry
+        ? retry.retirePlugins === lifetimes.retirePlugins
+          ? retry.retirePlugins
+          : undefined
+        : lifetimes.retirePlugins;
+      let failedRetirement: typeof retirePlugins = undefined;
+      try {
+        await retirePlugins?.();
+        if (lifetimes.retirePlugins === retirePlugins) {
+          lifetimes.retirePlugins = undefined;
+        }
+      } catch (reason) {
+        failedRetirement = retirePlugins;
+        failures.push(reason);
+      }
+      if (failures.length) {
+        lifetimes.failedClose = {
+          error,
+          callbacks: failedCallbacks,
+          retirePlugins: failedRetirement,
+        };
+        closed.reject(new AggregateError(failures, "Prepared model runtime failed to close"));
+      } else {
+        lifetimes.closing = undefined;
+        closed.resolve();
+      }
+    },
+  );
   return closed.promise;
 }
 

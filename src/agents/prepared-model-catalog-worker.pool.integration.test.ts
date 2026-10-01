@@ -2,10 +2,13 @@ import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as checkpoint } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import * as workerCpu from "../infra/worker-cpu.js";
 import { getPluginMetadataSnapshotCache, retirePluginCache } from "../plugins/plugin-cache.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentAuthDiscovery from "./agent-auth-discovery.js";
@@ -40,25 +43,50 @@ const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 
+function observeCatalogWorkers() {
+  const spawned: Worker[] = [];
+  let peakWorkers = 0;
+  const tracking = vi.mocked(workerCpu.createCpuTrackedWorker);
+  const createWorker = tracking.getMockImplementation();
+  if (!createWorker) {
+    throw new Error("Expected the catalog fixture's actual worker creation observer");
+  }
+  const catalogWorkerUrl = resolveRuntimeWorkerUrl(
+    runtimeProcessEntrypoints.preparedModelCatalog,
+  ).href;
+  return {
+    spawned,
+    get peakWorkers() {
+      return peakWorkers;
+    },
+    start(this: void) {
+      tracking.mockImplementation((...args) => {
+        const worker = createWorker(...args);
+        if (String(args[0]) === catalogWorkerUrl) {
+          spawned.push(worker);
+          peakWorkers = Math.max(
+            peakWorkers,
+            spawned.filter((item) => item.threadId !== -1).length,
+          );
+        }
+        return worker;
+      });
+    },
+    restore() {
+      tracking.mockImplementation(createWorker);
+    },
+  };
+}
+
 describe("Gateway catalog worker pool", () => {
   beforeEach(() => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
   });
   it("republishes failed catalog borrowers before replacing their source worker", async () => {
-    const spawned: Worker[] = [];
-    let peakWorkers = 0;
-    const workerChannel = channel("worker_threads");
-    const recordWorker = (message: unknown) => {
-      if (isRecord(message) && message.worker instanceof Worker) {
-        spawned.push(message.worker);
-        peakWorkers = Math.max(
-          peakWorkers,
-          spawned.filter((worker) => worker.threadId !== -1).length,
-        );
-      }
-    };
+    const observation = observeCatalogWorkers();
+    const { spawned } = observation;
     try {
-      const fixture = await createFleetFixture(() => workerChannel.subscribe(recordWorker));
+      const fixture = await createFleetFixture(observation.start);
       await Promise.all(
         fixture.snapshots.map((snapshot) =>
           loadPreparedModelRuntimeAuth(snapshot, { providerIds: [PROVIDER_ID] }),
@@ -82,25 +110,20 @@ describe("Gateway catalog worker pool", () => {
         expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v2" }),
       );
       expect(spawned).toHaveLength(2);
-      expect(peakWorkers).toBe(1);
+      expect(observation.peakWorkers).toBe(1);
       expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
         maxWorkers: 1,
         workers: 1,
       });
     } finally {
-      workerChannel.unsubscribe(recordWorker);
+      observation.restore();
     }
   });
 
   it("retains only the admitted renewal failure when queued auth observes pool closure first", async () => {
-    const spawned: Worker[] = [];
-    const workerChannel = channel("worker_threads");
-    const recordWorker = (message: unknown) => {
-      if (isRecord(message) && message.worker instanceof Worker) {
-        spawned.push(message.worker);
-      }
-    };
-    const fixture = await createFleetFixture(() => workerChannel.subscribe(recordWorker), true);
+    const observation = observeCatalogWorkers();
+    const { spawned } = observation;
+    const fixture = await createFleetFixture(observation.start, true);
     const taskChannel = channel("openclaw.worker.task");
     const failedTasks: unknown[] = [];
     const recordFailure = (message: unknown) => {
@@ -224,7 +247,7 @@ describe("Gateway catalog worker pool", () => {
       fs.rmSync(`${fixture.marker}.hold`, { force: true });
       await Promise.allSettled([renewal, queuedAuth, queuedCatalog]);
       taskChannel.unsubscribe(recordFailure);
-      workerChannel.unsubscribe(recordWorker);
+      observation.restore();
       unregister();
     }
   });
@@ -232,14 +255,9 @@ describe("Gateway catalog worker pool", () => {
   it.for(["source", "credentials"])(
     "fences a pending recovery callback across %s A to B to A",
     async (identity, { signal }) => {
-      const spawned: Worker[] = [];
-      const workerChannel = channel("worker_threads");
-      const recordWorker = (message: unknown) => {
-        if (isRecord(message) && message.worker instanceof Worker) {
-          spawned.push(message.worker);
-        }
-      };
-      const fixture = await createFleetFixture(() => workerChannel.subscribe(recordWorker), true);
+      const observation = observeCatalogWorkers();
+      const { spawned } = observation;
+      const fixture = await createFleetFixture(observation.start, true);
       const exited = createDeferredCore();
       const release = createDeferredCore();
       const resume = () => release.resolve();
@@ -396,7 +414,7 @@ describe("Gateway catalog worker pool", () => {
         await Promise.allSettled([renewal]);
         termination?.mockRestore();
         unregister();
-        workerChannel.unsubscribe(recordWorker);
+        observation.restore();
       }
     },
   );
@@ -623,21 +641,11 @@ describe("Gateway catalog worker pool", () => {
   it.for([false, true])(
     "rotates the pinned environment after a full Gateway publication (shutdown: %s)",
     async (shutdown, { signal }) => {
-      const spawned: Worker[] = [];
-      let peakWorkers = 0;
-      const workerChannel = channel("worker_threads");
-      const recordWorker = (message: unknown) => {
-        if (isRecord(message) && message.worker instanceof Worker) {
-          spawned.push(message.worker);
-          peakWorkers = Math.max(
-            peakWorkers,
-            spawned.filter((worker) => worker.threadId !== -1).length,
-          );
-        }
-      };
+      const observation = observeCatalogWorkers();
+      const { spawned } = observation;
       const warnings = vi.spyOn(process, "emitWarning");
       try {
-        const fixture = await createFleetFixture(() => workerChannel.subscribe(recordWorker));
+        const fixture = await createFleetFixture(observation.start);
         await Promise.all(
           fixture.snapshots.map((snapshot) =>
             loadPreparedModelRuntimeAuth(snapshot, { providerIds: [] }),
@@ -717,14 +725,14 @@ describe("Gateway catalog worker pool", () => {
           expect(fs.readFileSync(nextMarker, "utf8")).toContain("done");
           expect(spawned).toHaveLength(2);
         }
-        expect(peakWorkers).toBe(1);
+        expect(observation.peakWorkers).toBe(1);
         expect(
           warnings.mock.calls.filter(([warning]) =>
             String(warning).includes("Gateway catalog worker failed to retire"),
           ),
         ).toEqual([]);
       } finally {
-        workerChannel.unsubscribe(recordWorker);
+        observation.restore();
         warnings.mockRestore();
       }
     },

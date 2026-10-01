@@ -810,6 +810,8 @@ src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-snapshot-source.ts
+src/infra/sqlite-snapshot-staging-owner.connection.ts
+src/infra/sqlite-snapshot-staging-owner.token.ts
 src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
@@ -1147,8 +1149,10 @@ src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
+src/plugins/plugin-source-capture-maintenance.ts
 src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
+src/plugins/plugin-source-capture-payload.ts
 src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
 src/plugins/plugin-source-verification.ts

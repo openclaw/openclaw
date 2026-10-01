@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { renameSync, writeFileSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type {
@@ -68,6 +69,9 @@ export function createNativeWorkerResource(
   };
   const databasePath = input.databasePath;
   let child: ChildProcessWithoutNullStreams | undefined;
+  let childClosed = false;
+  const closeReceiptPath = input.closeReceiptPath;
+  assert.ok(closeReceiptPath === undefined || typeof closeReceiptPath === "string");
   const closed = createDeferredCore();
   void closed.promise.catch(() => undefined);
   const owner: NativeWorkerResourceOwner = {
@@ -81,7 +85,7 @@ export function createNativeWorkerResource(
           }
           throw new Error("synthetic first resource close failure");
         }
-        if (!child) {
+        if (!child || childClosed) {
           return;
         }
         process.stderr.write(`native resource pid=${process.pid}: awaiting close permission\n`);
@@ -102,6 +106,16 @@ export function createNativeWorkerResource(
     assert.ok(isRecord(message));
     if (message.type === "owner-reply-barrier") {
       sendOwner({ type: "owner-reply-barrier", acknowledgments, fences });
+      return;
+    }
+    if (message.type === "domain-close") {
+      void owner.close().then(
+        () => sendTarget({ domainClosed: true }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          sendTarget({ domainClosed: false, error: error.message });
+        },
+      );
       return;
     }
     assert.equal(child, undefined, "one native child belongs to this resource owner");
@@ -130,7 +144,14 @@ export function createNativeWorkerResource(
       sendOwner({ type: "child", pid: owned.pid });
     }
     owned.once("error", closed.reject);
-    owned.once("close", (code) => {
+    owned.once("close", (code, signal) => {
+      childClosed = true;
+      if (closeReceiptPath !== undefined) {
+        // Persist only this original ChildProcess.close fact, before a sealed port can refuse it.
+        const temporary = `${closeReceiptPath}.partial`;
+        writeFileSync(temporary, JSON.stringify({ kind: "child-close", code, signal }));
+        renameSync(temporary, closeReceiptPath);
+      }
       sendOwner({ type: "child-closed", code });
       if (code === 0) {
         closed.resolve();

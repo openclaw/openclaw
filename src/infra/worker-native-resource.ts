@@ -61,6 +61,11 @@ export function bindNativeWorkerResource(options: {
   };
   return {
     attachment: lease.attachment,
+    setReferenced(referenced: boolean) {
+      if (!disposed) {
+        lease.setReferenced(referenced);
+      }
+    },
     receive(response: BrokerResourceResponse) {
       lease.receive(response);
     },

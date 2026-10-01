@@ -8,6 +8,7 @@ type GlobalSingletonLifecycle = "close-and-restart" | "close-only" | "plugin-reg
 type GlobalSingletonReset<T> = (value: T) => void | Promise<void>;
 type RegisteredGlobalSingletonReset = {
   lifecycle: GlobalSingletonLifecycle;
+  phase?: "final-resource";
   reset: () => void | Promise<void>;
 };
 
@@ -72,21 +73,36 @@ export function resolveGlobalSet<T>(key: symbol, lifecycle: GlobalSingletonLifec
   );
 }
 
+/** Core resource lifetimes outlive the ordinary owners that consume them. */
+export function registerGlobalSingletonFinalResourceReset(
+  key: symbol,
+  reset: () => void | Promise<void>,
+  lifecycle: GlobalSingletonLifecycle = "close-and-restart",
+): void {
+  resolveGlobalSingletonResetRegistry().set(key, { lifecycle, reset, phase: "final-resource" });
+}
+
 /** Resets every opt-in singleton while preserving shared object identity for the next lifecycle. */
 export async function drainGlobalSingletonLifecycleState(
   event: "close" | "plugin-registry" | "restart" = "close",
 ): Promise<void> {
-  const resets = [...resolveGlobalSingletonResetRegistry().values()]
-    .filter(({ lifecycle }) => {
-      if (event === "plugin-registry") {
-        return lifecycle === "plugin-registry";
-      }
-      if (lifecycle === "plugin-registry") {
-        return false;
-      }
-      return event === "close" || lifecycle === "close-and-restart";
-    })
-    .map(({ reset }) => {
+  const resets = [...resolveGlobalSingletonResetRegistry().values()].filter(({ lifecycle }) => {
+    if (event === "plugin-registry") {
+      return lifecycle === "plugin-registry";
+    }
+    if (lifecycle === "plugin-registry") {
+      return false;
+    }
+    return event === "close" || lifecycle === "close-and-restart";
+  });
+  // Final resources remain available until every ordinary owner has settled.
+  const groups = [
+    resets.filter(({ phase }) => phase !== "final-resource"),
+    resets.filter(({ phase }) => phase === "final-resource"),
+  ];
+  const errors: unknown[] = [];
+  for (const group of groups) {
+    const pending = group.map(({ reset }) => {
       try {
         return Promise.resolve(reset());
       } catch (error) {
@@ -97,8 +113,11 @@ export async function drainGlobalSingletonLifecycleState(
         );
       }
     });
-  const settled = await Promise.allSettled(resets);
-  const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+    const settled = await Promise.allSettled(pending);
+    errors.push(
+      ...settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+    );
+  }
   if (errors.length > 0) {
     throw new AggregateError(errors, "Failed to reset global singleton lifecycle state");
   }

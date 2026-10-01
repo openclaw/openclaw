@@ -7,6 +7,7 @@ import {
   formatSqliteErrorCodeSuffix,
   formatSqliteReadOnlyInspectionFailure,
   isSqliteLockError,
+  sqliteExtendedResultCode,
 } from "./sqlite-error-diagnostics.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
 import {
@@ -25,6 +26,7 @@ import {
   SQLITE_INSPECTION_CONTENTION_PREFIX,
   SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX,
   isSqliteSnapshotStagingMode,
+  isSqliteStagingTokenWorkerMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
@@ -33,14 +35,29 @@ import {
   reclaimAbandonedSqliteSnapshots,
   reconcileSqliteSnapshotRetirement,
 } from "./sqlite-snapshot-staging.js";
-import type { SqliteStagingToken } from "./sqlite-staging-token.js";
+import {
+  acquireSqliteStagingToken,
+  assertSqliteStagingTokenIdentity,
+  readSqliteStagingTokenIdentity,
+  type SqliteStagingToken,
+  type SqliteStagingTokenIdentity,
+  type IdentifiedSqliteStagingToken,
+} from "./sqlite-staging-token.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabaseFileIdentity,
 } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
-const stagingTokens = new Map<string, SqliteStagingToken>();
+type StagingToken =
+  | { kind: "snapshot"; token: SqliteStagingToken }
+  | {
+      kind: "token";
+      token: IdentifiedSqliteStagingToken;
+      identity: SqliteStagingTokenIdentity;
+      preparationId: number;
+    };
+const stagingTokens = new Map<string, StagingToken>();
 
 // Artifact-preserving sync requests must not open SQLite on the source. Live
 // async backups pin committed pages with a read transaction and may update SHM.
@@ -62,6 +79,68 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     };
   }
   try {
+    if (isSqliteStagingTokenWorkerMode(mode)) {
+      const encodedIdentity = args[2];
+      if (args.length !== 3 || encodedIdentity === undefined) {
+        throw new Error("SQLite staging token requires captured identity");
+      }
+      const input: unknown = JSON.parse(encodedIdentity);
+      if (
+        !isRecord(input) ||
+        typeof input.preparationId !== "number" ||
+        !Number.isSafeInteger(input.preparationId) ||
+        input.preparationId < 1
+      ) {
+        throw new Error("SQLite staging token requires a preparation identity");
+      }
+      const identity = readSqliteStagingTokenIdentity(input.identity);
+      const preparationId = input.preparationId;
+      let owned = stagingTokens.get(pathname);
+      if (
+        owned &&
+        (owned.kind !== "token" ||
+          owned.preparationId !== preparationId ||
+          JSON.stringify(owned.identity) !== JSON.stringify(identity))
+      ) {
+        throw new Error("SQLite staging token belongs to another preparation");
+      }
+      if (mode === "token-close") {
+        owned?.token();
+        stagingTokens.delete(pathname);
+        return { ok: true, tokenIdentity: identity };
+      }
+      assertSqliteStagingTokenIdentity(pathname, identity);
+      if (
+        mode === "token-create" ||
+        mode === "token-reclaim" ||
+        (mode === "token-reconcile" && !owned)
+      ) {
+        if (owned) {
+          throw new Error("SQLite staging token is already acquired");
+        }
+        const retain = (token: IdentifiedSqliteStagingToken) => {
+          stagingTokens.set(pathname, { kind: "token", token, identity, preparationId });
+        };
+        const token = acquireSqliteStagingToken(
+          pathname,
+          mode === "token-create" ? "create" : "reclaim",
+          {
+            expectedIdentity: identity,
+            retainCleanup: retain,
+          },
+        );
+        retain(token);
+        owned = stagingTokens.get(pathname);
+      }
+      if (!owned || owned.kind !== "token") {
+        throw new Error("SQLite staging token is not owned by this worker");
+      }
+      if (mode === "token-retire" || mode === "token-reconcile") {
+        owned.token(true);
+        stagingTokens.delete(pathname);
+      }
+      return { ok: true, tokenIdentity: owned.token.getIdentity() };
+    }
     if (args.length > 4 || (args[3] !== undefined && mode !== "sync")) {
       throw new Error(
         "SQLite source identity is supported only for artifact-preserving sync copies",
@@ -78,15 +157,15 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
         pathname,
         mode === "staging-create-legacy",
       );
-      stagingTokens.set(owned.directory, owned.release);
+      stagingTokens.set(owned.directory, { kind: "snapshot", token: owned.release });
       return { ok: true, location: owned.directory };
     }
     if (mode === "staging-retire") {
-      const token = stagingTokens.get(pathname);
-      if (!token) {
+      const owned = stagingTokens.get(pathname);
+      if (!owned || owned.kind !== "snapshot") {
         throw new Error("SQLite snapshot token is not owned by this worker");
       }
-      const retirement = beginSqliteSnapshotRetirement(pathname, { token });
+      const retirement = beginSqliteSnapshotRetirement(pathname, { token: owned.token });
       try {
         retireSqliteSnapshotPayload(retirement);
         stagingTokens.delete(pathname);
@@ -157,8 +236,18 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     const prefix =
       (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
       (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
+    const errcode = isSqliteStagingTokenWorkerMode(mode)
+      ? sqliteExtendedResultCode(error)
+      : undefined;
     return {
       ok: false,
+      ...(errcode !== undefined && errcode >= 0 && errcode <= 0x7fff_ffff ? { errcode } : {}),
+      ...(isSqliteStagingTokenWorkerMode(mode) &&
+      error instanceof Error &&
+      "code" in error &&
+      (typeof error.code === "string" || typeof error.code === "number")
+        ? { code: error.code }
+        : {}),
       message: `${prefix}${formatSqliteReadOnlyInspectionFailure(error)}`,
     };
   }

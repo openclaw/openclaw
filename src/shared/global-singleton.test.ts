@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   drainGlobalSingletonLifecycleState,
+  registerGlobalSingletonFinalResourceReset,
   resolveGlobalMap,
   resolveGlobalSingleton,
 } from "./global-singleton.js";
@@ -112,29 +113,60 @@ describe("global singleton lifecycle resets", () => {
     }
   });
 
-  it("runs every registered reset before reporting failures", async () => {
+  it("joins ordinary owners before final resource cleanup and reports every failure", async () => {
     const failingKey = Symbol("global-singleton:failing-reset");
     const succeedingKey = Symbol("global-singleton:succeeding-reset");
+    const finalKey = Symbol("global-singleton:final-resource");
+    const { promise: held, resolve: release } = createDeferred();
+    const ownerFailure = new Error("owner reset failed");
+    const resourceFailure = new Error("resource reset failed");
+    const order: string[] = [];
     let shouldThrow = true;
-    const succeedingReset = vi.fn();
+    const succeedingReset = vi.fn(() => {
+      order.push("sibling");
+    });
+    const finalReset = vi.fn(() => {
+      order.push("final");
+      if (shouldThrow) {
+        throw resourceFailure;
+      }
+    });
     resolveGlobalSingleton(
       failingKey,
       () => ({}),
-      () => {
+      async () => {
+        order.push("owner-start");
+        await held;
+        order.push("owner-settled");
         if (shouldThrow) {
-          throw new Error("reset failed");
+          throw ownerFailure;
         }
       },
     );
     resolveGlobalSingleton(succeedingKey, () => ({}), succeedingReset);
+    registerGlobalSingletonFinalResourceReset(finalKey, finalReset);
 
+    const drain = drainGlobalSingletonLifecycleState().catch((error: unknown) => error);
     try {
-      await expect(drainGlobalSingletonLifecycleState()).rejects.toThrow(AggregateError);
       expect(succeedingReset).toHaveBeenCalledOnce();
+      expect(finalReset).not.toHaveBeenCalled();
+      release();
+      const failure = await drain;
+      if (!(failure instanceof AggregateError)) {
+        throw new Error("Expected both lifecycle reset failures", { cause: failure });
+      }
+      expect(failure.errors).toHaveLength(2);
+      expect(failure.errors[0]).toBe(ownerFailure);
+      expect(failure.errors[1]).toBe(resourceFailure);
+      expect(finalReset).toHaveBeenCalledOnce();
+      expect(order).toEqual(["owner-start", "sibling", "owner-settled", "final"]);
     } finally {
+      release();
+      await drain;
       shouldThrow = false;
-      delete (globalThis as Record<PropertyKey, unknown>)[failingKey];
-      delete (globalThis as Record<PropertyKey, unknown>)[succeedingKey];
+      for (const key of [failingKey, succeedingKey, finalKey]) {
+        delete (globalThis as Record<PropertyKey, unknown>)[key];
+      }
     }
   });
 

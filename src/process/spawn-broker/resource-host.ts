@@ -16,6 +16,7 @@ export type BrokerNativeResourceLease = {
   readonly attachment: BrokerResourceAttachment;
   receive(response: BrokerResourceResponse): void;
   ownerMessage(value: unknown): { sequence: number; result: Promise<void> };
+  setReferenced(referenced: boolean): void;
   close(): Promise<void>;
   release(): void;
   abandonUnattached(): void;
@@ -33,6 +34,7 @@ type Claim = {
   ready: boolean;
   created: boolean;
   closed: boolean;
+  referenced: boolean;
   failure?: Error;
   lastSequence: number;
   ownerSequence: number;
@@ -75,6 +77,9 @@ export class BrokerResourceClaims {
   get hasOpenClaims() {
     return [...this.claims.values()].some((claim) => !claim.closed);
   }
+  get hasReferencedClaims() {
+    return [...this.claims.values()].some((claim) => !claim.closed && claim.referenced);
+  }
 
   capture(
     attachment: BrokerResourceAttachment,
@@ -97,6 +102,7 @@ export class BrokerResourceClaims {
       ready: false,
       created: false,
       closed: false,
+      referenced: true,
       lastSequence: 0,
       ownerSequence: 0,
       ownerMessages: new Map(),
@@ -115,6 +121,17 @@ export class BrokerResourceClaims {
     };
     return {
       attachment: captured,
+      setReferenced: (referenced) => {
+        if (
+          this.claims.get(captured.id) !== claim ||
+          claim.closed ||
+          claim.referenced === referenced
+        ) {
+          return;
+        }
+        claim.referenced = referenced;
+        this.host.refreshReference();
+      },
       receive: (response) => {
         if (response.id !== captured.id) {
           throw new SpawnBrokerError("Native resource response belongs to another claim");

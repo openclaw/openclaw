@@ -5,6 +5,8 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
+import { resolveGatewayStateOwnerPath } from "../../../src/infra/gateway-state-owner.ts";
+import { resolveOpenClawStateSqlitePath } from "../../../src/state/openclaw-state-db.paths.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
@@ -64,7 +66,12 @@ const suite = createControlUiE2eSuite({
     try {
       instance = await createOpenClawTestInstance({
         name: "palette-catalog-publication",
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined, OLLAMA_API_KEY: "" },
+        env: {
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+          VITEST: undefined,
+          NODE_ENV: undefined,
+          OLLAMA_API_KEY: "",
+        },
         config: {
           gateway: { controlUi: { enabled: true } },
           cron: { enabled: false },
@@ -96,6 +103,17 @@ const suite = createControlUiE2eSuite({
       });
       try {
         await instance.startGateway();
+        const gatewayPid = instance.child?.pid;
+        expect(gatewayPid).toBeGreaterThan(0);
+        const stateOwner = requireRecord(
+          JSON.parse(
+            await fs.readFile(
+              resolveGatewayStateOwnerPath(resolveOpenClawStateSqlitePath(instance.env)),
+              "utf8",
+            ),
+          ),
+        );
+        expect(stateOwner).toMatchObject({ pid: gatewayPid, role: "gateway" });
         readback = await acquireGatewayTestClient(
           {
             url: instance.url,

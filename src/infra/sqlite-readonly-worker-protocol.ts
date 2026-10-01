@@ -2,6 +2,10 @@ import path from "node:path";
 import { toUSVString } from "node:util";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
+import {
+  readSqliteStagingTokenIdentity,
+  type SqliteStagingTokenIdentity,
+} from "./sqlite-staging-token.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 // Keep the one-shot execFile output limit when inspections use IPC.
@@ -17,13 +21,32 @@ export type SqliteReadOnlyWorkerMode =
   | "staging-create"
   | "staging-create-legacy"
   | "staging-reconcile"
-  | "staging-retire";
+  | "staging-retire"
+  | SqliteStagingTokenWorkerMode;
+export type SqliteStagingTokenWorkerMode =
+  | "token-create"
+  | "token-reclaim"
+  | "token-retire"
+  | "token-reconcile"
+  | "token-close";
+export function isSqliteStagingTokenWorkerMode(
+  mode: unknown,
+): mode is SqliteStagingTokenWorkerMode {
+  return (
+    mode === "token-create" ||
+    mode === "token-reclaim" ||
+    mode === "token-retire" ||
+    mode === "token-reconcile" ||
+    mode === "token-close"
+  );
+}
 export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
   return (
     mode === "staging-create" ||
     mode === "staging-create-legacy" ||
     mode === "staging-reconcile" ||
-    mode === "staging-retire"
+    mode === "staging-retire" ||
+    isSqliteStagingTokenWorkerMode(mode)
   );
 }
 
@@ -31,7 +54,8 @@ export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
   | { ok: true; warnings: string[] }
-  | { ok: false; message: string };
+  | { ok: true; tokenIdentity: SqliteStagingTokenIdentity }
+  | { ok: false; message: string; code?: string | number; errcode?: number };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
 export class SqliteSnapshotAllocationRefusedError extends Error {}
@@ -54,7 +78,15 @@ export type SqliteAuthProfileReadOptions = {
 export type SqliteReadOnlyWorkerOptions =
   | SqliteAuthProfileReadOptions
   | {
-      mode: Exclude<SqliteReadOnlyWorkerMode, "auth-profile-rows">;
+      mode: SqliteStagingTokenWorkerMode;
+      identity: SqliteStagingTokenIdentity;
+      preparationId: number;
+      signal?: AbortSignal;
+      stagingRoot?: never;
+      expectedSourceIdentity?: never;
+    }
+  | {
+      mode: Exclude<SqliteReadOnlyWorkerMode, "auth-profile-rows" | SqliteStagingTokenWorkerMode>;
       stagingRoot?: string;
       signal?: AbortSignal;
       expectedSourceIdentity?: DatabaseFileIdentity;
@@ -64,6 +96,10 @@ export function sqliteReadOnlyWorkerRequestArgs(
   options: SqliteReadOnlyWorkerOptions,
 ): string[] {
   const args = [options.mode, path.resolve(pathname)];
+  if (isSqliteStagingTokenWorkerMode(options.mode) && "identity" in options) {
+    args.push(JSON.stringify({ identity: options.identity, preparationId: options.preparationId }));
+    return args;
+  }
   const stagingRoot = options.stagingRoot && path.resolve(options.stagingRoot);
   const expected =
     options.mode === "auth-profile-rows" ? undefined : options.expectedSourceIdentity;
@@ -81,12 +117,47 @@ export function sqliteReadOnlyWorkerRequestArgs(
 }
 
 export type SqliteReadOnlyWorkerOutput = { failure?: string; stderr: string; stdout: string };
-export type SqliteReadOnlyWorkerValue = string | string[] | SqliteAuthProfileRows;
+export type SqliteReadOnlyWorkerValue =
+  | string
+  | string[]
+  | SqliteAuthProfileRows
+  | SqliteStagingTokenIdentity;
 export const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 
 export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWorkerResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
+  }
+  if (
+    "ok" in value &&
+    value.ok === true &&
+    "tokenIdentity" in value &&
+    Object.keys(value).length === 2
+  ) {
+    try {
+      readSqliteStagingTokenIdentity(value.tokenIdentity);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (
+    "ok" in value &&
+    value.ok === false &&
+    "message" in value &&
+    typeof value.message === "string"
+  ) {
+    return (
+      Object.keys(value).every(
+        (key) => key === "ok" || key === "message" || key === "code" || key === "errcode",
+      ) &&
+      (!("code" in value) || typeof value.code === "string" || typeof value.code === "number") &&
+      (!("errcode" in value) ||
+        (typeof value.errcode === "number" &&
+          Number.isInteger(value.errcode) &&
+          value.errcode >= 0 &&
+          value.errcode <= 0x7fff_ffff))
+    );
   }
   if (Object.keys(value).length !== 2 || !("ok" in value)) {
     return false;
@@ -100,8 +171,7 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
     (value.ok === true &&
       "warnings" in value &&
       Array.isArray(value.warnings) &&
-      value.warnings.every((warning) => typeof warning === "string")) ||
-    (value.ok === false && "message" in value && typeof value.message === "string")
+      value.warnings.every((warning) => typeof warning === "string"))
   );
 }
 
@@ -151,6 +221,13 @@ export function readSqliteReadOnlyWorkerValue(
   let result: SqliteReadOnlyWorkerResult;
   try {
     result = parseSqliteReadOnlyWorkerResult(params.stdout, params.stderr);
+    if (
+      !result.ok &&
+      (result.code !== undefined || result.errcode !== undefined) &&
+      !isSqliteStagingTokenWorkerMode(mode)
+    ) {
+      throw createSqliteReadOnlyWorkerError("returned an invalid result", params.stderr);
+    }
   } catch (error) {
     if (params.failure) {
       throw createSqliteReadOnlyWorkerError(params.failure, params.stderr);
@@ -173,14 +250,28 @@ export function readSqliteReadOnlyWorkerValue(
       allocationRefused ? message.slice(SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX.length) : message,
       params.stderr,
     );
-    if (contention) {
-      const failure = new SqliteReadOnlyInspectionContentionError(error.message);
-      throw allocationRefused ? markPrivateDirectoryCreationRefused(failure) : failure;
-    }
-    if (allocationRefused) {
+    if (allocationRefused && !contention) {
       throw new SqliteSnapshotAllocationRefusedError(error.message);
     }
-    throw error;
+    const failure = contention ? new SqliteReadOnlyInspectionContentionError(error.message) : error;
+    if (allocationRefused) {
+      markPrivateDirectoryCreationRefused(failure);
+    }
+    if (!result.ok && isSqliteStagingTokenWorkerMode(mode)) {
+      if (result.code !== undefined) {
+        Object.assign(failure, { code: result.code });
+      }
+      if (result.errcode !== undefined) {
+        Object.assign(failure, { errcode: result.errcode });
+      }
+    }
+    throw failure;
+  }
+  if (isSqliteStagingTokenWorkerMode(mode)) {
+    if ("tokenIdentity" in result) {
+      return readSqliteStagingTokenIdentity(result.tokenIdentity);
+    }
+    throw createSqliteReadOnlyWorkerError("returned no token identity", params.stderr);
   }
   if (
     (mode === "sync" ||

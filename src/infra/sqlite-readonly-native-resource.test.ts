@@ -17,6 +17,7 @@ import type {
 } from "./sqlite-readonly-native-resource.types.js";
 import { SqliteReadOnlyInspectionContentionError } from "./sqlite-readonly-worker-protocol.js";
 import { createSqliteSnapshotStagingTokenSync } from "./sqlite-snapshot-staging.js";
+import { captureSqliteStagingTokenIdentity } from "./sqlite-staging-token.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import type { NativeWorkerResourceOwner } from "./worker-native-lifecycle.types.js";
 
@@ -71,21 +72,30 @@ function fixture() {
   // This is the host policy boundary, not physical filesystem or process proof.
   const inventory = new Set<string>();
   const hostMessages: SqliteNativeOwnerRequest[] = [];
-  const hostPolicy = vi.fn((_request: SqliteNativeOwnerRequest) => {});
+  const hostPolicy = vi.fn(
+    (_request: SqliteNativeOwnerRequest): void | { disposition: "retire" | "close" } => {},
+  );
   hostPort.on("message", (request: SqliteNativeOwnerRequest) => {
     hostMessages.push(request);
     let reply: SqliteNativeOwnerReply;
     try {
-      if (request.type === "allocated") {
+      if (request.type === "allocated" || request.type === "token-reserved") {
         inventory.add(request.directory);
       } else if (!inventory.has(request.directory)) {
         throw new Error("Host received a directory outside this physical resource");
       }
-      hostPolicy(request);
-      if (request.type === "removed") {
+      const decision = hostPolicy(request);
+      if (request.type === "removed" || request.type === "token-settled") {
         inventory.delete(request.directory);
       }
-      reply = { id: request.id, ok: true };
+      if (request.type === "token-disposition") {
+        if (!decision) {
+          throw new Error("Fixture token owner did not authorize settlement");
+        }
+        reply = { id: request.id, ok: true, disposition: decision.disposition };
+      } else {
+        reply = { id: request.id, ok: true };
+      }
     } catch (error: unknown) {
       const encoded = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
       if (!encoded) {
@@ -643,3 +653,154 @@ it("rejects lost-port RPCs without declaring child death and joins outstanding w
   }
   expect(native.close).toHaveBeenCalledOnce();
 });
+
+it.each([false, true])(
+  "closes independent native snapshots while a token owner refuses settlement (remove fails: %s)",
+  async (removalFails) => {
+    const { client, resource, hostPolicy, inventory, hostMessages } = fixture();
+    const actual = await vi.importActual<typeof import("./sqlite-readonly-worker.js")>(
+      "./sqlite-readonly-worker.js",
+    );
+    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const nativeSessions: Array<{
+      native: ReturnType<typeof actual.createScopedSqliteReadOnlyWorker>;
+      joined: boolean;
+    }> = [];
+    operations.session.mockImplementation((launch) => {
+      const native = actual.createScopedSqliteReadOnlyWorker(launch);
+      const entry = { native, joined: false };
+      nativeSessions.push(entry);
+      void native.closed.then(() => {
+        entry.joined = true;
+      });
+      return native;
+    });
+    operations.copy.mockImplementation(actual.runSqliteReadOnlyWorkerOnce);
+    operations.remove.mockImplementation(actualFs.rm);
+    const root = fs.realpathSync(tempDirs.make("native-independent-cleanup-"));
+    const tokenDirectory = path.join(root, "plugin-token");
+    fs.mkdirSync(tokenDirectory);
+    const identity = captureSqliteStagingTokenIdentity(tokenDirectory, "create");
+    const launch: SqliteNativeSessionLaunch = {
+      ...actual.captureSqliteReadOnlyWorkerLaunch(),
+      transport: { kind: "native" },
+      retainLifetime: false,
+      retainOnOperationError: true,
+    };
+    let tokenReleased = false;
+    const refusal = new SqliteSnapshotCleanupError("plugin still owns its original token");
+    hostPolicy.mockImplementation((request) => {
+      if (request.type === "token-disposition") {
+        if (!tokenReleased) {
+          throw refusal;
+        }
+        return { disposition: "close" };
+      }
+      return undefined;
+    });
+    const sqlite = requireNodeSqlite();
+    const failures: unknown[] = [];
+    try {
+      const token = client.createSession(launch, {
+        directory: tokenDirectory,
+        mode: "create",
+        preparationId: 1,
+        identity,
+      });
+      expect(
+        await token.run(tokenDirectory, { mode: "token-create", preparationId: 1, identity }),
+      ).toEqual(identity);
+      const snapshot = client.createSession(launch);
+      const directory = await snapshot.run(root, { mode: "staging-create", preparationId: 2 });
+      const database = new sqlite.DatabaseSync(path.join(directory, "database.sqlite"));
+      try {
+        database.exec("CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES('snapshot');");
+      } finally {
+        database.close();
+      }
+      expect(nativeSessions.length).toBe(2);
+      const [tokenSession, snapshotSession] = nativeSessions;
+      if (!tokenSession || !snapshotSession) {
+        throw new Error("Expected the original token and snapshot native sessions");
+      }
+      const removalFailure = Object.assign(new Error("snapshot removal refused"), {
+        code: "EACCES",
+      });
+      if (removalFails) {
+        operations.remove.mockRejectedValueOnce(removalFailure);
+      }
+      const result = await resource.close().then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      expect(result.status).toBe("rejected");
+      if (result.status !== "rejected") {
+        throw new Error("Resource closed while its original token owner still refused settlement");
+      }
+      if (removalFails) {
+        expect(result.error instanceof AggregateError).toBe(true);
+        if (!(result.error instanceof AggregateError)) {
+          throw new Error("Independent cleanup failures lost their aggregate");
+        }
+        expect(result.error.errors.length).toBe(2);
+        const primary: unknown = result.error.errors[0];
+        expect(primary instanceof Error && primary.message === refusal.message).toBe(true);
+        expect(result.error.errors[1] === removalFailure).toBe(true);
+        expect(result.error.cause === primary).toBe(true);
+      } else {
+        expect(result.error instanceof Error && result.error.message === refusal.message).toBe(
+          true,
+        );
+      }
+      expect(tokenSession.joined).toBe(false);
+      expect(snapshotSession.joined).toBe(true);
+      expect(fs.existsSync(directory)).toBe(removalFails);
+      expect(inventory.has(directory)).toBe(removalFails);
+      expect(inventory.has(tokenDirectory)).toBe(true);
+      expect(hostMessages.some((request) => request.type === "token-settled")).toBe(false);
+      const probe = new sqlite.DatabaseSync(path.join(tokenDirectory, "owner.sqlite"), {
+        timeout: 0,
+      });
+      try {
+        expect(() => probe.exec("BEGIN IMMEDIATE")).toThrow(/locked|busy/i);
+      } finally {
+        if (probe.isTransaction) {
+          probe.exec("ROLLBACK");
+        }
+        probe.close();
+      }
+      tokenReleased = true;
+      await resource.close();
+      expect(nativeSessions.every((entry) => entry.joined)).toBe(true);
+      expect(inventory.size).toBe(0);
+      expect(fs.existsSync(directory)).toBe(false);
+      expect(fs.existsSync(tokenDirectory)).toBe(true);
+      const released = new sqlite.DatabaseSync(path.join(tokenDirectory, "owner.sqlite"), {
+        timeout: 0,
+      });
+      try {
+        expect(released.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
+        released.exec("BEGIN IMMEDIATE");
+        released.exec("ROLLBACK");
+      } finally {
+        released.close();
+      }
+      expect(operations.session.mock.calls.length).toBe(2);
+    } catch (error) {
+      failures.push(error);
+    }
+    tokenReleased = true;
+    operations.remove.mockReset().mockImplementation(actualFs.rm);
+    try {
+      await resource.close();
+      await Promise.all(nativeSessions.map((entry) => entry.native.closed));
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, "Independent native cleanup fixture failed", {
+        cause: failures[0],
+      });
+    }
+  },
+);

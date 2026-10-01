@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -7,8 +6,16 @@ import {
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
-import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "./sqlite-lifecycle-errors.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import {
+  closeSqliteSnapshotNativeResources,
+  type SqliteNativeSnapshotDirectory,
+} from "./sqlite-readonly-native-resource.cleanup.js";
+import { readId, readRequest } from "./sqlite-readonly-native-resource.protocol.js";
 import type {
   SqliteNativeOwnerRequest,
   SqliteNativeReply,
@@ -20,136 +27,47 @@ import {
   createScopedSqliteReadOnlyWorker,
   runSqliteReadOnlyWorkerOnce,
 } from "./sqlite-readonly-worker.js";
-import { readDatabaseFileIdentity } from "./sqlite-worker-identity.js";
+import {
+  readSqliteStagingTokenIdentity,
+  type SqliteStagingTokenIdentity,
+} from "./sqlite-staging-token.js";
 import type {
   NativeWorkerResourceOwner,
   NativeWorkerResourcePort,
 } from "./worker-native-lifecycle.types.js";
 
-function readId(value: unknown): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error("SQLite native resource requires a positive request identity");
-  }
-  return value;
-}
-function readPath(value: unknown): string {
-  if (typeof value !== "string" || !value || value.includes("\0")) {
-    throw new Error("SQLite native resource requires a filesystem path");
-  }
-  return value;
-}
-function readLaunch(value: unknown): Pick<SqliteNativeSessionLaunch, "env" | "cwd"> {
-  if (!isRecord(value) || !isRecord(value.env)) {
-    throw new Error("SQLite native resource requires captured launch facts");
-  }
-  const entries: Array<[string, string | undefined]> = [];
-  for (const [key, item] of Object.entries(value.env)) {
-    if (
-      !key ||
-      key.includes("=") ||
-      key.includes("\0") ||
-      (item !== undefined && (typeof item !== "string" || item.includes("\0")))
-    ) {
-      throw new Error("SQLite native resource received an invalid environment");
-    }
-    entries.push([key, item]);
-  }
-  return { env: Object.fromEntries(entries), cwd: readPath(value.cwd) };
-}
-function readRequest(value: unknown): SqliteNativeRequest {
-  if (!isRecord(value)) {
-    throw new Error("SQLite native resource requires a command");
-  }
-  const id = readId(value.id);
-  if (value.type === "copy.cancel") {
-    return { type: value.type, id };
-  }
-  if (value.type === "directory.removed") {
-    return { type: value.type, id, directory: readPath(value.directory) };
-  }
-  if (value.type === "session.close") {
-    return { type: value.type, id, session: readId(value.session) };
-  }
-  if (
-    value.type === "session.run" &&
-    (value.mode === "staging-create" ||
-      value.mode === "staging-create-legacy" ||
-      value.mode === "staging-retire" ||
-      value.mode === "staging-reconcile")
-  ) {
-    return {
-      type: value.type,
-      id,
-      session: readId(value.session),
-      pathname: readPath(value.pathname),
-      ...(value.mode === "staging-create" || value.mode === "staging-create-legacy"
-        ? { mode: value.mode, preparationId: readId(value.preparationId) }
-        : { mode: value.mode }),
-    };
-  }
-  if (
-    value.type === "session.create" &&
-    isRecord(value.launch) &&
-    isRecord(value.launch.transport) &&
-    value.launch.transport.kind === "native" &&
-    (value.launch.retainLifetime === undefined ||
-      typeof value.launch.retainLifetime === "boolean") &&
-    (value.launch.retainOnOperationError === undefined ||
-      typeof value.launch.retainOnOperationError === "boolean")
-  ) {
-    return {
-      type: value.type,
-      id,
-      session: readId(value.session),
-      launch: {
-        ...readLaunch(value.launch),
-        transport: { kind: "native" },
-        retainLifetime: value.launch.retainLifetime,
-        retainOnOperationError: value.launch.retainOnOperationError,
-      },
-    };
-  }
-  if (
-    value.type === "copy.run" &&
-    (value.mode === "sync" || value.mode === "async") &&
-    isRecord(value.launch) &&
-    typeof value.launch.deadlineOwnedByCaller === "boolean"
-  ) {
-    const expectedSourceIdentity =
-      value.expectedSourceIdentity === undefined
-        ? undefined
-        : readDatabaseFileIdentity(value.expectedSourceIdentity);
-    if (expectedSourceIdentity && value.mode !== "sync") {
-      throw new Error("SQLite source identity requires artifact-preserving preparation");
-    }
-    return {
-      type: value.type,
-      id,
-      pathname: readPath(value.pathname),
-      mode: value.mode,
-      stagingRoot: value.stagingRoot === undefined ? undefined : readPath(value.stagingRoot),
-      expectedSourceIdentity,
-      launch: {
-        ...readLaunch(value.launch),
-        deadlineOwnedByCaller: value.launch.deadlineOwnedByCaller,
-      },
-    };
-  }
-  throw new Error("SQLite native resource received an unsupported command");
-}
-
 type Session = {
-  native: ReturnType<typeof createScopedSqliteReadOnlyWorker>;
+  native?: ReturnType<typeof createScopedSqliteReadOnlyWorker>;
+  creationFailure?: unknown;
+  token?: TokenDirectory;
   launch: SqliteNativeSessionLaunch;
   running: boolean;
+  purpose?: "snapshot" | "token";
   closing?: Promise<void>;
 };
-type Directory = {
+type SnapshotDirectory = SqliteNativeSnapshotDirectory<Session>;
+
+type TokenDirectory = {
+  kind: "token";
+  directory: string;
   preparationId: number;
+  sessionId: number;
   session: Session;
-  announced: boolean;
-  removed: boolean;
+  identity: SqliteStagingTokenIdentity;
+  mode: "create" | "reclaim";
+  unavailable: boolean;
+  admitted: boolean;
+  sqlDispatched: boolean;
+  terminal?: "retired" | "closed" | "not-started";
+  receiptAcknowledged?: boolean;
+  settlement?: Promise<"retired" | "closed" | "not-started">;
 };
+type Directory = SnapshotDirectory | TokenDirectory;
+type OwnerMessage = SqliteNativeOwnerRequest extends infer Request
+  ? Request extends SqliteNativeOwnerRequest
+    ? Omit<Request, "id">
+    : never
+  : never;
 
 /** NativeLifetime installs this owner before delivering the port to its target Worker. */
 export function createNativeWorkerResource(
@@ -169,7 +87,10 @@ export function createNativeWorkerResource(
   const uncertainAllocations: SqliteSnapshotCleanupError[] = [];
   const copies = new Map<number, AbortController>();
   const active = new Set<Promise<void>>();
-  const ownerRequests = new Map<number, ReturnType<typeof createDeferredCore<void>>>();
+  const ownerRequests = new Map<
+    number,
+    ReturnType<typeof createDeferredCore<"retire" | "close" | undefined>>
+  >();
   let ownerSequence = 0;
   let ownerUnavailable: SqliteSnapshotCleanupError | undefined;
   let sealed = false;
@@ -203,7 +124,15 @@ export function createNativeWorkerResource(
     }
     ownerRequests.delete(value.id);
     if (value.ok) {
-      request.resolve();
+      if (
+        value.disposition !== undefined &&
+        value.disposition !== "retire" &&
+        value.disposition !== "close"
+      ) {
+        request.reject(loseOwner());
+      } else {
+        request.resolve(value.disposition);
+      }
     } else {
       const error = new Error("SQLite snapshot host cleanup refused");
       retainOpenClawStateWorkerErrorPayload(error, value.error);
@@ -212,43 +141,45 @@ export function createNativeWorkerResource(
   });
   ownerPort.on("close", loseOwner);
   ownerPort.on("messageerror", loseOwner);
-  const notifyOwner = (
-    type: SqliteNativeOwnerRequest["type"],
-    directory: string,
-    preparationId?: number,
-  ) => {
+  const notify = (message: OwnerMessage) => {
     if (ownerUnavailable) {
       return Promise.reject(ownerUnavailable);
     }
     const id = ++ownerSequence;
-    const request = createDeferredCore();
+    const request = createDeferredCore<"retire" | "close" | undefined>();
     ownerRequests.set(id, request);
     try {
-      const message: SqliteNativeOwnerRequest =
-        type === "allocated"
-          ? { id, type, directory, preparationId: readId(preparationId) }
-          : { id, type, directory };
-      sendOwnerMessage(message);
+      sendOwnerMessage({ ...message, id });
     } catch (error) {
       loseOwner(error);
     }
     return request.promise;
   };
-  const announce = async (directory: string, owned: Directory) => {
+  const tokenUnavailable = async (directory: string, owned: TokenDirectory) => {
+    if (owned.terminal || owned.unavailable) {
+      return;
+    }
+    owned.unavailable = true;
+    await notify({ type: "token-unavailable", directory, preparationId: owned.preparationId });
+  };
+  const announce = async (directory: string, owned: SnapshotDirectory) => {
     if (!owned.announced) {
-      await notifyOwner("allocated", directory, owned.preparationId);
+      await notify({ type: "allocated", directory, preparationId: readId(owned.preparationId) });
       owned.announced = true;
     }
   };
   const removed = async (directory: string) => {
     const owned = directories.get(directory);
-    if (!owned) {
+    if (!owned || owned.kind !== "snapshot") {
       throw new Error("SQLite snapshot directory is not owned by this native resource");
     }
     owned.removed = true;
     await announce(directory, owned);
-    await notifyOwner("removed", directory);
+    await notify({ type: "removed", directory });
     directories.delete(directory);
+  };
+  const loseTarget = () => {
+    available = false;
   };
   const send = (message: SqliteNativeReply) => {
     if (!available) {
@@ -257,7 +188,7 @@ export function createNativeWorkerResource(
     try {
       port.postMessage(message);
     } catch {
-      available = false;
+      loseTarget();
     }
   };
   const fail = (id: number, error: unknown, retired?: boolean) => {
@@ -272,32 +203,198 @@ export function createNativeWorkerResource(
   };
   const closeSession = (id: number, session: Session): Promise<void> => {
     session.closing ??= (async () => {
-      await session.native.close();
-      await session.native.closed;
-      sessions.delete(id);
+      if (session.native) {
+        await session.native.close();
+        await session.native.closed;
+      }
+      if (!session.token || session.token.receiptAcknowledged) {
+        sessions.delete(id);
+      }
     })().finally(() => {
       session.closing = undefined;
     });
     return session.closing;
   };
+  const settleToken = (
+    directory: string,
+    owned: TokenDirectory,
+  ): Promise<"retired" | "closed" | "not-started"> => {
+    return (owned.settlement ??= (async () => {
+      if (owned.terminal) {
+        await notify({
+          type: "token-settled",
+          directory,
+          preparationId: owned.preparationId,
+          disposition: owned.terminal,
+        });
+        owned.receiptAcknowledged = true;
+        sessions.delete(owned.sessionId);
+        return owned.terminal;
+      }
+      const disposition = await notify({
+        type: "token-disposition",
+        directory,
+        preparationId: owned.preparationId,
+      });
+      if (disposition !== "retire" && disposition !== "close") {
+        throw new Error("SQLite staging token has no owner settlement decision");
+      }
+      await tokenUnavailable(directory, owned);
+      const options = { identity: owned.identity, preparationId: owned.preparationId };
+      let committed = false;
+      let operationFailure: unknown;
+      if (owned.sqlDispatched && owned.session.native && !owned.session.native.isRetired()) {
+        try {
+          await owned.session.native.run(directory, {
+            mode:
+              disposition === "close"
+                ? "token-close"
+                : owned.admitted
+                  ? "token-retire"
+                  : "token-reconcile",
+            ...options,
+          });
+          committed = disposition === "retire";
+        } catch (error) {
+          operationFailure = error;
+        }
+      }
+      // Generic tokens have a dedicated child in the existing session owner.
+      // Its real join releases Bun's retained handles without revoking sibling roots.
+      try {
+        await closeSession(owned.sessionId, owned.session);
+      } catch (error) {
+        if (operationFailure !== undefined) {
+          throw createSqliteLifecycleAggregateError(
+            [operationFailure, error],
+            "SQLite staging token cleanup did not join",
+            operationFailure,
+          );
+        }
+        throw error;
+      }
+      if (owned.sqlDispatched && disposition === "retire" && !committed) {
+        // Recovery never restores admission. The original child is joined before
+        // a cleanup child uses the captured launch and original inode pair.
+        await runSqliteReadOnlyWorkerOnce(
+          directory,
+          { mode: "token-reconcile", ...options },
+          {
+            env: owned.session.launch.env,
+            cwd: owned.session.launch.cwd,
+            deadlineOwnedByCaller: false,
+          },
+        );
+      }
+      owned.terminal = !owned.sqlDispatched
+        ? "not-started"
+        : disposition === "retire"
+          ? "retired"
+          : "closed";
+      await notify({
+        type: "token-settled",
+        directory,
+        preparationId: owned.preparationId,
+        disposition: owned.terminal,
+      });
+      owned.receiptAcknowledged = true;
+      sessions.delete(owned.sessionId);
+      return owned.terminal;
+    })().finally(() => {
+      owned.settlement = undefined;
+    }));
+  };
   async function execute(request: Exclude<SqliteNativeRequest, { type: "copy.cancel" }>) {
-    if (sealed && request.type !== "session.close" && request.type !== "directory.removed") {
+    if (
+      sealed &&
+      request.type !== "session.close" &&
+      request.type !== "directory.removed" &&
+      request.type !== "token.settle"
+    ) {
       throw new Error("SQLite native resource is closing");
     }
     if (request.type === "directory.removed") {
       await removed(request.directory);
       return undefined;
     }
+    if (request.type === "token.settle") {
+      const owned = sessions.get(request.session)?.token ?? directories.get(request.directory);
+      if (
+        !owned ||
+        owned.kind !== "token" ||
+        owned.directory !== request.directory ||
+        owned.preparationId !== request.preparationId ||
+        owned.sessionId !== request.session
+      ) {
+        throw new Error("SQLite staging token settlement belongs to another preparation");
+      }
+      if (owned.session.running) {
+        throw new Error("SQLite native session is busy");
+      }
+      owned.session.running = true;
+      try {
+        return await settleToken(request.directory, owned);
+      } finally {
+        owned.session.running = false;
+      }
+    }
     if (request.type === "session.create") {
       if (sessions.has(request.session)) {
         throw new Error("SQLite native session already exists");
       }
-      const native = createScopedSqliteReadOnlyWorker(request.launch);
-      sessions.set(request.session, { native, launch: request.launch, running: false });
-      void native.closed.then(
-        () => send({ type: "session.closed", session: request.session }),
-        () => {},
-      );
+      const session: Session = { launch: request.launch, running: true };
+      sessions.set(request.session, session);
+      let reservation: TokenDirectory | undefined;
+      try {
+        if (request.token) {
+          session.purpose = "token";
+          reservation = {
+            kind: "token",
+            directory: request.token.directory,
+            preparationId: request.token.preparationId,
+            sessionId: request.session,
+            session,
+            identity: request.token.identity,
+            mode: request.token.mode,
+            unavailable: false,
+            admitted: false,
+            sqlDispatched: false,
+          };
+          // The session retains the same record even when directory admission is
+          // refused, so its exact never-dispatched preparation can still settle.
+          session.token = reservation;
+          await notify({ type: "token-reserved", ...request.token });
+          const previous = directories.get(request.token.directory);
+          if (previous && (previous.kind !== "token" || !previous.receiptAcknowledged)) {
+            throw new Error("SQLite staging directory already belongs to this resource");
+          }
+          if (request.launch.retainLifetime !== false || !request.launch.retainOnOperationError) {
+            throw new Error("SQLite staging token session requires independent native custody");
+          }
+          directories.set(request.token.directory, reservation);
+        }
+        const native = createScopedSqliteReadOnlyWorker(request.launch);
+        session.native = native;
+        void native.closed.then(
+          () => {
+            for (const [directory, owned] of directories) {
+              if (owned.kind === "token" && owned.session === session) {
+                void tokenUnavailable(directory, owned).catch(() => undefined);
+              }
+            }
+            send({ type: "session.closed", session: request.session });
+          },
+          () => {},
+        );
+      } catch (error) {
+        session.creationFailure = error;
+        if (reservation && request.token) {
+          await tokenUnavailable(request.token.directory, reservation);
+        }
+        throw error;
+      } finally {
+        session.running = false;
+      }
       return undefined;
     }
     if (request.type === "copy.run") {
@@ -320,27 +417,107 @@ export function createNativeWorkerResource(
     const session = sessions.get(request.session);
     if (!session) {
       if (request.type === "session.close") {
+        for (const [directory, owned] of directories) {
+          if (owned.kind === "token" && owned.sessionId === request.session) {
+            await settleToken(directory, owned);
+          }
+        }
         return undefined;
       }
       throw new Error("SQLite native session is closed");
     }
     if (request.type === "session.close") {
-      await closeSession(request.session, session);
-      return undefined;
+      if (session.running) {
+        throw new Error("SQLite native session is busy");
+      }
+      session.running = true;
+      try {
+        if (session.token) {
+          await settleToken(session.token.directory, session.token);
+        }
+        await closeSession(request.session, session);
+        return undefined;
+      } finally {
+        session.running = false;
+      }
     }
     if (session.running || session.closing) {
       throw new Error("SQLite native session is busy");
     }
-    if (session.native.isRetired()) {
+    if (
+      session.native?.isRetired() &&
+      request.mode !== "token-create" &&
+      request.mode !== "token-reclaim"
+    ) {
       throw new Error("SQLite native session is closed");
     }
     session.running = true;
     try {
+      if (request.mode === "token-create" || request.mode === "token-reclaim") {
+        const owned = directories.get(request.pathname);
+        if (
+          !owned ||
+          owned.kind !== "token" ||
+          owned.session !== session ||
+          owned.preparationId !== request.preparationId ||
+          owned.mode !== (request.mode === "token-create" ? "create" : "reclaim") ||
+          JSON.stringify(owned.identity) !== JSON.stringify(request.identity) ||
+          owned.sqlDispatched
+        ) {
+          throw new Error("SQLite staging token does not match its original reservation");
+        }
+        try {
+          if (!session.native) {
+            throwSqliteLifecycleErrors(
+              [session.creationFailure ?? new Error("SQLite native session did not start")],
+              "SQLite native session did not start",
+            );
+          }
+          if (owned.unavailable || session.native.isRetired()) {
+            throw new Error("SQLite staging token lost its original native owner");
+          }
+          owned.sqlDispatched = true;
+          const result = readSqliteStagingTokenIdentity(
+            await session.native.run(request.pathname, {
+              mode: request.mode,
+              identity: owned.identity,
+              preparationId: owned.preparationId,
+            }),
+          );
+          if (JSON.stringify(result) !== JSON.stringify(owned.identity)) {
+            throw new Error("SQLite staging token native identity changed");
+          }
+          owned.admitted = true;
+          await notify({
+            type: "token-admitted",
+            directory: request.pathname,
+            preparationId: owned.preparationId,
+          });
+          if (owned.unavailable) {
+            throw new Error("SQLite staging token lost its original native owner");
+          }
+          return result;
+        } catch (error) {
+          await tokenUnavailable(request.pathname, owned);
+          throw error;
+        }
+      }
+      if (session.purpose === "token") {
+        throw new Error("SQLite staging token session cannot allocate snapshots");
+      }
+      session.purpose = "snapshot";
+      if (!session.native) {
+        throwSqliteLifecycleErrors(
+          [session.creationFailure ?? new Error("SQLite native session did not start")],
+          "SQLite native session did not start",
+        );
+      }
+      const native = session.native;
       const allocating =
         request.mode === "staging-create" || request.mode === "staging-create-legacy";
-      let result: Awaited<ReturnType<typeof session.native.run>>;
+      let result: Awaited<ReturnType<typeof native.run>>;
       try {
-        result = await session.native.run(request.pathname, { mode: request.mode });
+        result = await native.run(request.pathname, { mode: request.mode });
         if (
           allocating &&
           (typeof result !== "string" || result.length === 0 || result.includes("\0"))
@@ -351,7 +528,7 @@ export function createNativeWorkerResource(
         // Validation, missing sessions and factory refusal never enter this dispatched boundary.
         if (
           allocating &&
-          !session.native.notStarted &&
+          !native.notStarted &&
           !(error instanceof SqliteSnapshotAllocationRefusedError) &&
           !isPrivateDirectoryCreationRefused(error)
         ) {
@@ -368,7 +545,8 @@ export function createNativeWorkerResource(
         (request.mode === "staging-create" || request.mode === "staging-create-legacy") &&
         typeof result === "string"
       ) {
-        const owned = {
+        const owned: SnapshotDirectory = {
+          kind: "snapshot",
           preparationId: request.preparationId,
           session,
           announced: false,
@@ -396,7 +574,7 @@ export function createNativeWorkerResource(
       ) {
         fail(value.id, error);
       } else {
-        available = false;
+        loseTarget();
         port.close();
       }
       return;
@@ -416,19 +594,20 @@ export function createNativeWorkerResource(
     const work = Promise.resolve()
       .then(() => execute(command))
       .then((result) => {
-        if (result !== undefined && typeof result !== "string") {
-          throw new Error("SQLite native resource returned an invalid location");
-        }
+        const replyValue =
+          result === undefined || typeof result === "string"
+            ? result
+            : readSqliteStagingTokenIdentity(result);
         send({
           type: "result",
           id: command.id,
           ok: true,
-          value: result,
+          value: replyValue,
           retired:
             command.type === "session.close"
               ? true
               : "session" in command
-                ? sessions.get(command.session)?.native.isRetired()
+                ? sessions.get(command.session)?.native?.isRetired()
                 : undefined,
         });
       })
@@ -436,7 +615,7 @@ export function createNativeWorkerResource(
         fail(
           command.id,
           error,
-          "session" in command ? sessions.get(command.session)?.native.isRetired() : undefined,
+          "session" in command ? sessions.get(command.session)?.native?.isRetired() : undefined,
         );
       })
       .finally(() => {
@@ -448,11 +627,9 @@ export function createNativeWorkerResource(
     active.add(work);
   };
   port.on("message", receive);
-  port.on("close", () => {
-    available = false;
-  });
+  port.on("close", loseTarget);
   port.on("messageerror", () => {
-    available = false;
+    loseTarget();
     port.close();
   });
   return {
@@ -467,52 +644,29 @@ export function createNativeWorkerResource(
         // Session.close marks the connection retired and ignores late replies: collect
         // accepted allocation facts first, under their original native operation budget.
         await Promise.allSettled(active);
-        const fences = await Promise.allSettled(
-          [...directories].map(async ([directory, owned]) => {
-            await announce(directory, owned);
-            if (!owned.removed) {
-              await notifyOwner("retire", directory);
-            }
-          }),
-        );
-        // Keep creator locks alive when a host reader has not acquired its disk token yet.
-        throwSqliteLifecycleErrors(
-          fences.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : [])),
-          "SQLite snapshot host cleanup admission failed",
-        );
-        const outcomes = await Promise.allSettled(
-          [...sessions].map(([id, session]) => closeSession(id, session)),
-        );
-        throwSqliteLifecycleErrors(
-          outcomes.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : [])),
-          "SQLite native resource cleanup failed",
-        );
-        const failures: unknown[] = [...uncertainAllocations];
-        for (const [directory, owned] of directories) {
+        const tokenFailures: unknown[] = [];
+        // Each settlement joins its dedicated child before publishing its receipt.
+        for (const session of sessions.values()) {
+          if (!session.token) {
+            continue;
+          }
           try {
-            if (!owned.removed) {
-              await runSqliteReadOnlyWorkerOnce(
-                directory,
-                { mode: "staging-reconcile" },
-                {
-                  env: owned.session.launch.env,
-                  cwd: owned.session.launch.cwd,
-                  deadlineOwnedByCaller: false,
-                },
-              );
-              await fs.rm(directory, {
-                force: true,
-                recursive: true,
-                maxRetries: 3,
-                retryDelay: 20,
-              });
-            }
-            await removed(directory);
+            await settleToken(session.token.directory, session.token);
           } catch (error) {
-            failures.push(error);
+            tokenFailures.push(error);
           }
         }
-        throwSqliteLifecycleErrors(failures, "SQLite snapshot native directory cleanup failed");
+        await closeSqliteSnapshotNativeResources({
+          directories,
+          // Failed token settlement retains its dedicated session and creator lock.
+          sessions: [...sessions].filter(([, session]) => !session.token),
+          announce,
+          requestRetirement: (directory) => notify({ type: "retire", directory }),
+          closeSession,
+          removed,
+          tokenFailures,
+          uncertainAllocations,
+        });
         port.off("message", receive);
         port.close();
         ownerPort.close();

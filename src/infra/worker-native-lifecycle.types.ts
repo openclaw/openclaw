@@ -70,6 +70,7 @@ export type NativeWorkerResourceConnection = {
   port: MessagePort;
   service(): void;
   dispose(): void;
+  setReferenced?: (referenced: boolean) => void;
   decodeCloseError?: (payload: unknown) => Error;
 };
 

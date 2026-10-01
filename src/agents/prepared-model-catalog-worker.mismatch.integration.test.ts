@@ -1,10 +1,12 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import * as workerCpu from "../infra/worker-cpu.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import {
@@ -154,15 +156,23 @@ function trackSpawnedWorkers(
   onSpawn?: (worker: Worker) => void,
 ) {
   const spawned: Worker[] = [];
-  const workerChannel = channel("worker_threads");
-  const trackWorker = (message: unknown) => {
-    if (isRecord(message) && message.worker instanceof Worker) {
-      spawned.push(message.worker);
-      onSpawn?.(message.worker);
+  const tracking = vi.mocked(workerCpu.createCpuTrackedWorker);
+  const createWorker = tracking.getMockImplementation();
+  if (!createWorker) {
+    throw new Error("Expected the catalog fixture's actual worker creation observer");
+  }
+  const catalogWorkerUrl = resolveRuntimeWorkerUrl(
+    runtimeProcessEntrypoints.preparedModelCatalog,
+  ).href;
+  tracking.mockImplementation((...args) => {
+    const worker = createWorker(...args);
+    if (String(args[0]) === catalogWorkerUrl) {
+      spawned.push(worker);
+      onSpawn?.(worker);
     }
-  };
-  workerChannel.subscribe(trackWorker);
-  return run(spawned).finally(() => workerChannel.unsubscribe(trackWorker));
+    return worker;
+  });
+  return run(spawned).finally(() => tracking.mockImplementation(createWorker));
 }
 
 describe("prepared model catalog worker generation mismatch", () => {

@@ -6,6 +6,11 @@ export const sqliteSnapshotStagingEntrypoints = {
     sourceWorkerName: "sqlite-snapshot-source",
     distWorkerPath: "infra/sqlite-snapshot-source.js",
   },
+  owner: {
+    currentModuleUrl,
+    sourceWorkerName: "sqlite-snapshot-staging-owner",
+    distWorkerPath: "infra/sqlite-snapshot-staging-owner.js",
+  },
   cleanup: {
     currentModuleUrl,
     sourceWorkerName: "sqlite-readonly-location-cleanup",

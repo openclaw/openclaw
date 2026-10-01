@@ -50,12 +50,14 @@ import {
   fingerprintPreparedModelCatalogGeneration,
   fingerprintPreparedModelCatalogPluginContext,
   fingerprintPreparedModelWorkerRequest,
-  type PreparedModelCatalogWorkerInput,
-  type PreparedModelCatalogWorkerData,
-  type PreparedModelCatalogWorkerTask,
-  type PreparedModelWorkerRequest,
-  type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
+import type {
+  PreparedModelCatalogWorkerInput,
+  PreparedModelCatalogWorkerData,
+  PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerRequest,
+  PreparedModelWorkerResult,
+} from "./prepared-model-catalog-worker.types.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   ownPreparedPluginGeneration,

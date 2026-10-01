@@ -5,11 +5,9 @@ import {
   serializeConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
-import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
@@ -18,7 +16,6 @@ import {
 } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { overlayPluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
-import { createPluginSourceCaptureRoot } from "../plugins/plugin-source-capture-directory.js";
 import { captureProviderSyntheticAuthFacts } from "../plugins/provider-runtime.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -27,9 +24,17 @@ import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
-import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import {
+  createCatalogPool,
+  GATEWAY_CATALOG_WORKERS,
+  type CatalogPool,
+} from "./prepared-model-catalog-pool.js";
+import type {
+  PreparedModelCatalogWorkerInput,
+  PreparedModelWorkerCommand,
+  PreparedModelWorkerRequest,
+  PreparedModelWorkerResult,
+} from "./prepared-model-catalog-worker.types.js";
 import {
   setPreparedModelFullCatalogAuth,
   type PreparedModelRuntimeAuth,
@@ -42,85 +47,17 @@ import type {
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
-import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.lifecycle.js";
+import {
+  capturePreparedModelRuntimeLifetime,
+  registerPreparedModelRuntimeClose,
+} from "./prepared-model-runtime.lifecycle.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
-import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
-
-export type PreparedModelCatalogWorkerInput = Readonly<{
-  generationFingerprint: string;
-  input: PreparedModelRuntimeInput & { env: NodeJS.ProcessEnv };
-  sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
-  configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
-  sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
-  authStore: AuthProfileStore;
-  providerIds: readonly string[];
-  catalogFacts: Pick<
-    PreparedModelRuntimeAgentFacts,
-    "configuredModelRefs" | "configuredRuntimeModels"
-  >;
-  preferBuiltPluginArtifacts: boolean;
-  pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
-}>;
-
-export type PreparedModelCatalogWorkerData = {
-  sourceCaptureDirectory: string;
-  sourceCaptureManagedRoot?: string;
-};
-
-export type PreparedModelCatalogWorkerTask = {
-  value: PreparedModelCatalogWorkerInput;
-  request: PreparedModelWorkerRequest;
-};
-
-type PreparedModelWorkerCommand =
-  | Readonly<{ kind: "catalog"; providerIds?: readonly string[] }>
-  | Readonly<{
-      kind: "auth-refresh";
-      profileIds?: readonly string[];
-      providerIds: readonly string[];
-    }>;
-
-export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
-  Readonly<{
-    syntheticAuth: PreparedSyntheticAuthFacts;
-    clawInstallSchemaVersions: ReturnType<typeof captureClawInstallSchemaVersionFacts>;
-  }>;
-
-export type PreparedModelWorkerResult =
-  | Readonly<
-      PreparedModelRuntimeAuth & {
-        status: "ok";
-        generationFingerprint: string;
-        credentials: Readonly<AuthStorageData>;
-      } & (
-          | {
-              kind: "catalog";
-              snapshot: ModelCatalogSnapshot;
-              runtimeModels: Map<string, Model[]>;
-              providerExpiries: Map<string, number>;
-              hookRows: Map<string, Set<string>>;
-              configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
-              providerAuthLabels: ModelCatalogAuthLabels;
-            }
-          | { kind: "auth-refresh" }
-        )
-    >
-  | Readonly<{
-      status: "generation-mismatch";
-      generationFingerprint: string;
-      reconstructedFingerprint: string;
-    }>
-  | Readonly<{ status: "failed"; error: string }>;
 
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
 export const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 
-const GATEWAY_CATALOG_WORKERS = 1;
-// Leave room for source loaders and overlapping generations without inheriting the host heap budget.
-const CATALOG_WORKER_HEAP_LIMIT_MB = 512;
-type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
 type CatalogPoolBorrower = {
   agentDir: string;
   isCurrent: () => boolean;
@@ -154,46 +91,12 @@ export function getPreparedModelCatalogWorkerPoolSnapshot() {
   );
 }
 
-function createCatalogPool(
-  env: NodeJS.ProcessEnv,
-  validateResult: (result: PreparedModelWorkerResult) => void,
-  assertCurrent?: () => void,
-): CatalogPool {
-  return new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
-    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: CATALOG_WORKER_HEAP_LIMIT_MB } },
-    maxWorkers: GATEWAY_CATALOG_WORKERS,
-    // Only the inventory owner can replace captured code; idle retirement or crash restart
-    // would import a different source generation into an existing publication.
-    idleTimeoutMs: 0,
-    restartOnError: false,
-    prepareWorker: () => {
-      assertCurrent?.();
-      const capture = createPluginSourceCaptureRoot(
-        resolveStateDir(env),
-        "openclaw-model-catalog-",
-      );
-      return {
-        releaseResources: capture.release,
-        options: {
-          workerData: {
-            sourceCaptureDirectory: capture.directory,
-            sourceCaptureManagedRoot: capture.managedRoot,
-          } satisfies PreparedModelCatalogWorkerData,
-          // Establish state/config before imported modules observe process.env.
-          env,
-        },
-      };
-    },
-    validateResult,
-  });
-}
-
 async function getGatewayCatalogPool(
   input: PreparedModelCatalogWorkerInput,
   metadata: PluginMetadataSnapshot,
   environmentFingerprint: string,
 ): Promise<GatewayCatalogPool> {
+  const assertLifetime = capturePreparedModelRuntimeLifetime();
   const cache = getPluginMetadataSnapshotCache(metadata);
   getPluginCacheRetirementSignal(cache).throwIfAborted();
   if (gatewayCatalog.rotating) {
@@ -220,64 +123,116 @@ async function getGatewayCatalogPool(
   }
   gatewayCatalog.rotating = (async () => {
     await gatewayCatalog.current?.close();
+    assertLifetime();
     const signal = getPluginCacheRetirementSignal(cache);
     signal.throwIfAborted();
     const env = input.input.env;
-    const current: GatewayCatalogPool = {
-      cache,
-      envFingerprint: environmentFingerprint,
-      borrowers: new Set(),
-      recover: (error) =>
-        (current.recovery ??= (async () => {
-          const borrowers = [...current.borrowers];
-          if (!signal.aborted) {
-            for (const borrower of borrowers) {
-              borrower.notifyRecovery(error);
-            }
-          }
-          // Fence every old catalog before releasing the native slot. Recovery publishes new
-          // prepared owners; it never replays a failed request under its former source generation.
-          const stopping = borrowers.map((borrower) => borrower.stop(error));
-          await current.close(error);
-          await Promise.all(stopping);
-          if (gatewayCatalog.current === current) {
-            gatewayCatalog.current = undefined;
-          }
-          const { recoverPreparedModelRuntimeCatalogWorker } =
-            await import("./prepared-model-runtime.js");
-          await recoverPreparedModelRuntimeCatalogWorker(borrowers);
-        })()),
-      close: async (error) => {
-        signal.removeEventListener("abort", retire);
-        await current.pool.close(error);
-        current.validate = undefined;
-        release();
-      },
-      validate: undefined,
-      pool: createCatalogPool(
-        env,
-        (result) => {
-          const validate = current.validate;
-          current.validate = undefined;
-          validate?.(result);
-        },
-        () => signal.throwIfAborted(),
-      ),
+    let openingClosedError: Error | undefined;
+    const assertPoolCurrent = () => {
+      if (openingClosedError) {
+        throw openingClosedError;
+      }
+      assertLifetime();
+      signal.throwIfAborted();
     };
+    let published: GatewayCatalogPool | undefined;
+    let opening: Promise<CatalogPool> | undefined;
     const retire = () => {
-      void current.close(signal.reason).catch((error: unknown) => {
+      void published?.close(signal.reason).catch((error: unknown) => {
         process.emitWarning(`Gateway catalog worker failed to retire: ${String(error)}`);
       });
     };
-    // Shutdown can refuse registration; do not expose retirement until release exists.
+    // Register before acquisition so process close also joins an unpublished capture.
     const release = registerPreparedModelRuntimeClose(async (error) => {
-      await current.close(error);
-      if (gatewayCatalog.current === current) {
-        gatewayCatalog.current = undefined;
+      if (published) {
+        await published.close(error);
+        if (gatewayCatalog.current === published) {
+          gatewayCatalog.current = undefined;
+        }
+      } else {
+        openingClosedError ??= error;
+        const pool = await opening?.catch((openingError: unknown) => {
+          if (openingError !== openingClosedError) {
+            throw openingError;
+          }
+          return undefined;
+        });
+        await pool?.close(error);
+        release();
       }
     });
-    signal.addEventListener("abort", retire, { once: true });
-    gatewayCatalog.current = current;
+    try {
+      opening = createCatalogPool(
+        env,
+        (result) => {
+          const validate = published?.validate;
+          if (published) {
+            published.validate = undefined;
+          }
+          validate?.(result);
+        },
+        assertPoolCurrent,
+      );
+      const pool = await opening;
+      assertPoolCurrent();
+      const current: GatewayCatalogPool = {
+        cache,
+        envFingerprint: environmentFingerprint,
+        borrowers: new Set(),
+        recover: (error) =>
+          (current.recovery ??= (async () => {
+            const borrowers = [...current.borrowers];
+            if (!signal.aborted) {
+              for (const borrower of borrowers) {
+                borrower.notifyRecovery(error);
+              }
+            }
+            // Fence every old catalog before releasing the native slot. Recovery publishes new
+            // prepared owners; it never replays a failed request under its former source generation.
+            const stopping = borrowers.map((borrower) => borrower.stop(error));
+            await current.close(error);
+            await Promise.all(stopping);
+            if (gatewayCatalog.current === current) {
+              gatewayCatalog.current = undefined;
+            }
+            const { recoverPreparedModelRuntimeCatalogWorker } =
+              await import("./prepared-model-runtime.js");
+            await recoverPreparedModelRuntimeCatalogWorker(borrowers);
+          })()),
+        close: async (error) => {
+          signal.removeEventListener("abort", retire);
+          await current.pool.close(error);
+          current.validate = undefined;
+          release();
+        },
+        validate: undefined,
+        pool,
+      };
+      published = current;
+      signal.addEventListener("abort", retire, { once: true });
+      gatewayCatalog.current = current;
+    } catch (error) {
+      let acquired: CatalogPool | undefined;
+      let cleaned = false;
+      try {
+        acquired = await opening;
+        await acquired?.close(error instanceof Error ? error : new Error(String(error)));
+        cleaned = true;
+      } catch (cleanupError) {
+        if (cleanupError !== error) {
+          throw createSqliteLifecycleAggregateError(
+            [error, cleanupError],
+            "Gateway catalog preparation and cleanup failed",
+            error,
+          );
+        }
+      } finally {
+        if (!acquired || cleaned) {
+          release();
+        }
+      }
+      throw error;
+    }
   })();
   try {
     await gatewayCatalog.rotating;
@@ -478,6 +433,7 @@ export function createPreparedModelCatalogWorker(
     params.agentFacts.input.env === undefined;
   const environmentFingerprint = fingerprintPreparedRuntimeFacts(workerInput.input.env);
   let pool: CatalogPool | undefined;
+  let poolOpening: Promise<CatalogPool> | undefined;
   let sharedOwner: GatewayCatalogPool | undefined;
   const mismatch = (
     message: Extract<PreparedModelWorkerResult, { status: "generation-mismatch" }>,
@@ -512,6 +468,11 @@ export function createPreparedModelCatalogWorker(
     if (gatewayOwned) {
       await Promise.allSettled(tasks.keys());
     } else {
+      await poolOpening?.catch((openingError: unknown) => {
+        if (openingError !== stoppedError) {
+          throw openingError;
+        }
+      });
       await pool?.close(stoppedError);
     }
     sharedOwner?.borrowers.delete(borrower);
@@ -604,8 +565,28 @@ export function createPreparedModelCatalogWorker(
         sharedOwner = shared;
         shared.borrowers.add(borrower);
       }
-      requestPool = pool =
-        shared?.pool ?? pool ?? createCatalogPool(workerInput.input.env, validate);
+      assertCurrent();
+      controller.signal.throwIfAborted();
+      if (shared) {
+        requestPool = pool = shared.pool;
+      } else if (pool) {
+        requestPool = pool;
+      } else {
+        const opening = (poolOpening ??= createCatalogPool(
+          workerInput.input.env,
+          validate,
+          assertCurrent,
+        ).then((opened) => (pool = opened)));
+        try {
+          requestPool = await opening;
+        } finally {
+          if (poolOpening === opening) {
+            poolOpening = undefined;
+          }
+        }
+        assertCurrent();
+        controller.signal.throwIfAborted();
+      }
       pending = requestPool.run(
         () => {
           assertCurrent();

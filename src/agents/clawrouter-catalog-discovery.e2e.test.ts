@@ -20,11 +20,11 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
-import {
-  createPreparedModelCatalogWorkerInput,
-  type PreparedModelCatalogWorkerTask,
-  type PreparedModelWorkerResult,
-} from "./prepared-model-catalog-worker.js";
+import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
+import type {
+  PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerResult,
+} from "./prepared-model-catalog-worker.types.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 
 describe("ClawRouter cold prepared catalog", () => {

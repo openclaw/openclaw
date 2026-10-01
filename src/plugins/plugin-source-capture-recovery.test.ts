@@ -10,7 +10,9 @@ import * as temporaryDirectories from "../commands/doctor/shared/temporary-direc
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as census from "../infra/openclaw-process-census.js";
 import * as sqliteDiagnostics from "../infra/sqlite-error-diagnostics.js";
+import * as stagingOwner from "../infra/sqlite-snapshot-staging-owner.js";
 import * as stagingToken from "../infra/sqlite-staging-token.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -21,16 +23,22 @@ import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.
 import * as captureDirectory from "./plugin-source-capture-directory.js";
 import {
   createPluginNativeCaptureRoot,
-  createPluginSourceCaptureRoot,
+  startPluginSourceCaptureRoot,
   retainPluginNativeCapturePath,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
 import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
+import {
+  expectCaptureFinalRemovalRetry,
+  expectReclamationRetryAfterTargetLoss,
+} from "./plugin-source-capture-recovery-native.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     clearPluginMetadataLifecycleCaches();
     await closeOpenClawStateDatabaseAsync();
+    // Join the shared native broker before removing its temporary socket directory.
+    await drainGlobalSingletonLifecycleState();
     cleanup();
   }),
 );
@@ -49,6 +57,92 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.useRealTimers();
+});
+
+it.each([
+  "release",
+  "preparation",
+  "directory-replacement",
+  "token-replacement",
+  "root-absent",
+] as const)("retains original authority through partial final removal (%s)", async (scenario) => {
+  await expectCaptureFinalRemovalRetry(temp.make("capture-final-removal-"), scenario);
+});
+
+it("retries original non-destructive reclamation cleanup after target loss and sibling release", async () => {
+  await expectReclamationRetryAfterTargetLoss(temp.make("capture-original-token-retry-"));
+}, 30_000);
+
+it("retains a capture without warning on real held-token contention, then reclaims after release", async () => {
+  const stateDir = temp.make("capture-held-token-");
+  const root = path.join(stateDir, "tmp", "plugin-captures", "held-producer");
+  const captures = path.join(root, "captures");
+  const payload = path.join(captures, "source.js");
+  fs.mkdirSync(captures, { recursive: true });
+  fs.writeFileSync(payload, "source held by the original producer");
+  const producer = stagingToken.acquireSqliteStagingToken(root, "create");
+  let held = true;
+  const old = new Date(Date.now() - 2 * hour);
+  fs.utimesSync(root, old, old);
+  const admissions: Array<ReturnType<typeof stagingOwner.startWorkerOwnedSqliteStagingToken>> = [];
+  const start = stagingOwner.startWorkerOwnedSqliteStagingToken;
+  const observing = vi
+    .spyOn(stagingOwner, "startWorkerOwnedSqliteStagingToken")
+    .mockImplementation((...args) => {
+      const admission = start(...args);
+      if (args[0] === root && args[1] === "reclaim") {
+        admissions.push(admission);
+      }
+      return admission;
+    });
+  const warning = vi.spyOn(process, "emitWarning");
+  warning.mockClear();
+  try {
+    // Only stat the held token; closing another descriptor could drop its POSIX lock.
+    await sweepPluginSourceCapturesForTest(stateDir);
+    expect(admissions.length).toBe(1);
+    const blocked = admissions[0];
+    if (!blocked) {
+      throw new Error("Expected an actual reclaim attempt against the held token");
+    }
+    const refusal = blocked.read();
+    expect(refusal.status).toBe("rejected");
+    if (refusal.status !== "rejected") {
+      throw new Error("The original producer did not fence native reclamation");
+    }
+    expect(fs.existsSync(root)).toBe(true);
+    expect(fs.readFileSync(payload, "utf8")).toBe("source held by the original producer");
+    expect(warning.mock.calls.length).toBe(0);
+    expect(sqliteDiagnostics.sqliteErrorCode(refusal.error)).toBe("ERR_SQLITE_ERROR");
+    expect(sqliteDiagnostics.sqliteExtendedResultCode(refusal.error)).toBe(5);
+    await blocked.startClose().result;
+    producer();
+    held = false;
+    fs.utimesSync(root, old, old);
+    await sweepPluginSourceCapturesForTest(stateDir);
+    expect(admissions.length).toBe(2);
+    const resumed = admissions[1];
+    if (!resumed) {
+      throw new Error("Expected native reclamation after the producer released its token");
+    }
+    expect(resumed.read().status).toBe("fulfilled");
+    expect(fs.existsSync(root)).toBe(false);
+    expect(warning.mock.calls.length).toBe(0);
+  } finally {
+    observing.mockRestore();
+    try {
+      if (held) {
+        producer();
+      }
+    } finally {
+      const closed = await Promise.allSettled(
+        admissions.map(async (admission) => await admission.startClose().result),
+      );
+      for (const outcome of closed) {
+        expect(outcome.status).toBe("fulfilled");
+      }
+    }
+  }
 });
 
 it.each(["failed removal", "maintenance failed removal", "identity-change return"] as const)(
@@ -70,27 +164,35 @@ it.each(["failed removal", "maintenance failed removal", "identity-change return
       code: mode === "identity-change return" ? "EACCES" : "SQLITE_BUSY",
     });
     let closeRefused = false;
-    let original: ReturnType<typeof stagingToken.acquireSqliteStagingToken> | undefined;
-    const acquire = stagingToken.acquireSqliteStagingToken;
+    let original: ReturnType<typeof stagingOwner.startWorkerOwnedSqliteStagingToken> | undefined;
+    const start = stagingOwner.startWorkerOwnedSqliteStagingToken;
     const acquiring = vi
-      .spyOn(stagingToken, "acquireSqliteStagingToken")
+      .spyOn(stagingOwner, "startWorkerOwnedSqliteStagingToken")
       .mockImplementation((...args) => {
-        const token = acquire(...args);
+        const admission = start(...args);
         if (args[0] !== root || args[1] !== "reclaim") {
-          return token;
+          return admission;
         }
-        original = token;
-        if (mode === "identity-change return") {
-          // A second link invalidates destructive custody without opening or closing the held inode.
-          fs.linkSync(tokenPath, extraLink);
-        }
-        return Object.assign((retiring?: boolean) => {
-          if (!retiring && !closeRefused) {
-            closeRefused = true;
-            throw cleanup;
-          }
-          token(retiring);
-        }, token);
+        original = admission;
+        return {
+          ...admission,
+          result: admission.result.then((token) => {
+            if (mode === "identity-change return") {
+              // A second link invalidates destructive custody without touching the held descriptor.
+              fs.linkSync(tokenPath, extraLink);
+            }
+            return {
+              ...token,
+              async close() {
+                if (!closeRefused) {
+                  closeRefused = true;
+                  throw cleanup;
+                }
+                await token.close();
+              },
+            };
+          }),
+        };
       });
     const remove = fsPromises.rm.bind(fsPromises);
     const removal = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
@@ -156,8 +258,11 @@ it.each(["failed removal", "maintenance failed removal", "identity-change return
       removal.mockRestore();
       acquiring.mockRestore();
       classification.mockRestore();
-      original?.();
-      fs.rmSync(extraLink, { force: true });
+      try {
+        fs.rmSync(extraLink, { force: true });
+      } finally {
+        await original?.startRelease().result;
+      }
     }
     fs.utimesSync(root, old, old);
     const after = await collectWarnings();
@@ -166,82 +271,153 @@ it.each(["failed removal", "maintenance failed removal", "identity-change return
   },
 );
 
-it("preserves the preparation cause when synchronous token cleanup also fails", async () => {
-  const stateDir = temp.make("capture-error-cause-");
-  const instance = retainPluginSourceCaptureInstance(stateDir);
-  await sweepPluginSourceCapturesForTest(stateDir);
-  const primary = new Error("Fixture first capture refused");
-  const cleanup = new Error("Fixture token retirement refused once");
-  let ownedRoot: string | undefined;
-  let refuseCleanup = true;
-  const acquire = stagingToken.acquireSqliteStagingToken;
-  vi.spyOn(stagingToken, "acquireSqliteStagingToken").mockImplementation((...args) => {
-    const token = acquire(...args);
-    ownedRoot = args[0];
-    return Object.assign((retiring?: boolean) => {
-      if (retiring && refuseCleanup) {
-        refuseCleanup = false;
-        throw cleanup;
-      }
-      token(retiring);
-    }, token);
-  });
-  const mkdtemp = fs.mkdtempSync.bind(fs);
-  vi.spyOn(fs, "mkdtempSync").mockImplementation((...args) => {
-    if (ownedRoot && args[0].startsWith(path.join(ownedRoot, "captures") + path.sep)) {
-      throw primary;
+it.each(["sync", "async"] as const)(
+  "preserves the original %s preparation failure when token cleanup also fails",
+  async (mode) => {
+    const stateDir = temp.make("capture-error-cause-");
+    const instance = mode === "sync" ? retainPluginSourceCaptureInstance(stateDir) : undefined;
+    await sweepPluginSourceCapturesForTest(stateDir);
+    const primary = new Error("Fixture first capture refused");
+    const cleanup = new Error("Fixture token retirement refused once");
+    let ownedRoot: string | undefined;
+    let refuseCleanup = true;
+    let admission: ReturnType<typeof stagingOwner.startWorkerOwnedSqliteStagingToken> | undefined;
+    let capture: ReturnType<typeof startPluginSourceCaptureRoot> | undefined;
+    if (mode === "sync") {
+      const acquire = stagingToken.acquireSqliteStagingToken;
+      vi.spyOn(stagingToken, "acquireSqliteStagingToken").mockImplementation((...args) => {
+        const token = acquire(...args);
+        ownedRoot = args[0];
+        return Object.assign((retiring?: boolean) => {
+          if (retiring && refuseCleanup) {
+            refuseCleanup = false;
+            throw cleanup;
+          }
+          token(retiring);
+        }, token);
+      });
+      const mkdtemp = fs.mkdtempSync.bind(fs);
+      vi.spyOn(fs, "mkdtempSync").mockImplementation((...args) => {
+        if (ownedRoot && args[0].startsWith(path.join(ownedRoot, "captures") + path.sep)) {
+          throw primary;
+        }
+        return mkdtemp(...args);
+      });
+    } else {
+      const start = stagingOwner.startWorkerOwnedSqliteStagingToken;
+      vi.spyOn(stagingOwner, "startWorkerOwnedSqliteStagingToken").mockImplementation((...args) => {
+        const started = start(...args);
+        admission = started;
+        ownedRoot = args[0];
+        vi.spyOn(started, "startClose").mockImplementationOnce(() => {
+          refuseCleanup = false;
+          throw cleanup;
+        });
+        return started;
+      });
+      const mkdtemp = fsPromises.mkdtemp.bind(fsPromises);
+      vi.spyOn(fsPromises, "mkdtemp").mockImplementation(async (...args) => {
+        if (ownedRoot && args[0].startsWith(path.join(ownedRoot, "captures") + path.sep)) {
+          throw primary;
+        }
+        return mkdtemp(...args);
+      });
     }
-    return mkdtemp(...args);
-  });
-  try {
-    let failure: unknown;
     try {
-      instance.createDirectory();
-    } catch (error) {
-      failure = error;
+      let failure: unknown;
+      try {
+        if (instance) {
+          instance.createDirectory();
+        } else {
+          capture = startPluginSourceCaptureRoot(stateDir, "capture-error-");
+          await capture.result;
+        }
+      } catch (error) {
+        failure = error;
+      }
+      if (!(failure instanceof AggregateError)) {
+        throw new Error("Expected the paired preparation and cleanup refusal", { cause: failure });
+      }
+      expect(failure.cause).toBe(primary);
+      expect(failure.errors.length).toBe(2);
+      expect(failure.errors[0]).toBe(primary);
+      expect(failure.errors[1]).toBe(cleanup);
+      expect(refuseCleanup).toBe(false);
+      if (capture) {
+        const blocked = startPluginSourceCaptureRoot(stateDir, "capture-blocked-");
+        try {
+          await expect(blocked.result).rejects.toThrow(
+            "Plugin source instance cleanup is incomplete",
+          );
+        } finally {
+          await blocked.release();
+        }
+        await expect(capture.release()).rejects.toBe(cleanup);
+        await expect(capture.result).rejects.toBe(failure);
+        expect(ownedRoot !== undefined && fs.existsSync(ownedRoot)).toBe(true);
+      }
+    } finally {
+      vi.restoreAllMocks();
+      try {
+        await instance?.releaseAsync();
+        await capture?.release();
+      } finally {
+        await admission?.startClose().result;
+      }
     }
-    if (!(failure instanceof AggregateError)) {
-      throw new Error("Expected the paired preparation and cleanup refusal", { cause: failure });
+    expect(ownedRoot !== undefined && fs.existsSync(ownedRoot)).toBe(false);
+    if (capture) {
+      const recovered = startPluginSourceCaptureRoot(stateDir, "capture-recovered-");
+      try {
+        const root = await recovered.result;
+        root.assertCurrent();
+        expect(fs.existsSync(root.directory)).toBe(true);
+      } finally {
+        await recovered.release();
+      }
     }
-    expect(failure.cause).toBe(primary);
-    expect(failure.errors.length).toBe(2);
-    expect(failure.errors[0]).toBe(primary);
-    expect(failure.errors[1]).toBe(cleanup);
-    expect(refuseCleanup).toBe(false);
-  } finally {
-    vi.restoreAllMocks();
-    await instance.releaseAsync();
-  }
-  expect(ownedRoot !== undefined && fs.existsSync(ownedRoot)).toBe(false);
-});
+  },
+);
 
 it("recovers a removed captures directory without releasing a live instance", async () => {
   const stateDir = temp.make("capture-recovery-missing-");
-  const instance = retainPluginSourceCaptureInstance(stateDir);
-  const first = instance.createDirectory();
-  const captures = path.dirname(first);
-  const root = path.dirname(captures);
-  await sweepPluginSourceCapturesForTest(stateDir);
-  fs.rmSync(captures, { recursive: true });
-  let worker: ReturnType<typeof createPluginSourceCaptureRoot> | undefined;
+  const first = startPluginSourceCaptureRoot(stateDir, "capture-first-");
+  let worker: ReturnType<typeof startPluginSourceCaptureRoot> | undefined;
+  let next: ReturnType<typeof startPluginSourceCaptureRoot> | undefined;
   try {
-    worker = createPluginSourceCaptureRoot(stateDir, "openclaw-model-catalog-");
-    fs.writeFileSync(path.join(worker.directory, "source.js"), "recovered capture");
+    const firstRoot = await first.result;
+    const captures = path.dirname(firstRoot.directory);
+    const root = path.dirname(captures);
+    await sweepPluginSourceCapturesForTest(stateDir);
+    fs.rmSync(captures, { recursive: true });
+    worker = startPluginSourceCaptureRoot(stateDir, "openclaw-model-catalog-");
+    const workerRoot = await worker.result;
+    fs.writeFileSync(path.join(workerRoot.directory, "source.js"), "recovered capture");
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 2 * hour);
     await sweepPluginSourceCapturesForTest(stateDir);
-    expect(fs.readFileSync(path.join(worker.directory, "source.js"), "utf8")).toBe(
+    expect(fs.readFileSync(path.join(workerRoot.directory, "source.js"), "utf8")).toBe(
       "recovered capture",
     );
     await worker.release();
     expect(fs.existsSync(root)).toBe(true);
-    const next = instance.createDirectory();
-    expect(fs.readdirSync(captures)).toEqual([path.basename(next)]);
+    next = startPluginSourceCaptureRoot(stateDir, "capture-next-");
+    const nextRoot = await next.result;
+    expect(fs.readdirSync(captures)).toEqual([path.basename(nextRoot.directory)]);
+    await next.release();
+    await first.release();
+    expect(fs.existsSync(root)).toBe(false);
   } finally {
-    await worker?.release();
-    await instance.releaseAsync();
+    try {
+      await next?.release();
+    } finally {
+      try {
+        await worker?.release();
+      } finally {
+        await first.release();
+      }
+    }
   }
-  expect(fs.existsSync(root)).toBe(false);
 });
 
 it.each(["sync", "async"])(
@@ -250,29 +426,50 @@ it.each(["sync", "async"])(
     const stateDir = temp.make("native-capture-retention-");
     const committed = createPluginNativeCaptureRoot(stateDir);
     const pending = createPluginNativeCaptureRoot(stateDir);
-    const worker = createPluginSourceCaptureRoot(stateDir, "openclaw-model-catalog-");
-    const payload = path.join(committed.directory, "package", "bin", "native");
-    fs.mkdirSync(path.dirname(payload), { recursive: true });
-    fs.writeFileSync(payload, "retained native bytes");
-    fs.writeFileSync(path.join(pending.directory, "native"), "unpublished bytes");
-    committed.commit();
-    if (mode === "sync") {
-      committed.dispose();
-      pending.dispose();
-    } else {
-      await committed.disposeAsync();
-      await pending.disposeAsync();
+    const worker = startPluginSourceCaptureRoot(stateDir, "openclaw-model-catalog-");
+    try {
+      const workerRoot = await worker.result;
+      const payload = path.join(committed.directory, "package", "bin", "native");
+      fs.mkdirSync(path.dirname(payload), { recursive: true });
+      fs.writeFileSync(payload, "retained native bytes");
+      fs.writeFileSync(path.join(pending.directory, "native"), "unpublished bytes");
+      committed.commit();
+      if (mode === "sync") {
+        committed.dispose();
+        pending.dispose();
+      } else {
+        await committed.disposeAsync();
+        await pending.disposeAsync();
+      }
+      await worker.release();
+      expect(fs.existsSync(pending.directory)).toBe(false);
+      expect(fs.existsSync(workerRoot.directory)).toBe(false);
+      const instance = path.dirname(path.dirname(committed.directory));
+      expect(fs.existsSync(path.join(instance, "owner.sqlite"))).toBe(true);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 2 * hour);
+      await sweepPluginSourceCapturesForTest(stateDir);
+      expect(fs.readFileSync(payload, "utf8")).toBe("retained native bytes");
+      expect(fs.existsSync(path.join(instance, "owner.sqlite"))).toBe(true);
+    } finally {
+      try {
+        await worker.release();
+      } finally {
+        if (mode === "sync") {
+          try {
+            committed.dispose();
+          } finally {
+            pending.dispose();
+          }
+        } else {
+          try {
+            await committed.disposeAsync();
+          } finally {
+            await pending.disposeAsync();
+          }
+        }
+      }
     }
-    await worker.release();
-    expect(fs.existsSync(pending.directory)).toBe(false);
-    expect(fs.existsSync(worker.directory)).toBe(false);
-    const instance = path.dirname(path.dirname(committed.directory));
-    expect(fs.existsSync(path.join(instance, "owner.sqlite"))).toBe(true);
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(Date.now() + 2 * hour);
-    await sweepPluginSourceCapturesForTest(stateDir);
-    expect(fs.readFileSync(payload, "utf8")).toBe("retained native bytes");
-    expect(fs.existsSync(path.join(instance, "owner.sqlite"))).toBe(true);
   },
 );
 
@@ -318,38 +515,41 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
   const instance = mode === "sync" ? retainPluginSourceCaptureInstance(stateDir) : undefined;
   const worker =
     mode === "async"
-      ? createPluginSourceCaptureRoot(stateDir, "openclaw-model-catalog-")
+      ? startPluginSourceCaptureRoot(stateDir, "openclaw-model-catalog-")
       : undefined;
-  await sweepPluginSourceCapturesForTest(stateDir);
-  const directory = worker?.directory ?? instance!.createDirectory();
-  const root = path.dirname(path.dirname(directory));
-  const payload = path.join(directory, "source.js");
-  fs.writeFileSync(payload, "export default 1");
-  const removeSync = fs.rmSync.bind(fs);
-  const remove = fsPromises.rm.bind(fsPromises);
-  const interruptRemoval = (target: fs.PathLike) => {
-    if (target === root) {
-      // Recursive rm can unlink the token before encountering a locked payload.
-      removeSync(path.join(root, "owner.sqlite"), { force: true });
-      throw locked;
-    }
-    if (target === directory || target === path.join(root, "captures")) {
-      throw locked;
-    }
-  };
-  vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
-    interruptRemoval(target);
-    removeSync(target, options);
-  });
-  vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
-    interruptRemoval(target);
-    await remove(target, options);
-  });
+  let retainedRoot: string | undefined;
   try {
+    const workerRoot = await worker?.result;
+    await sweepPluginSourceCapturesForTest(stateDir);
+    const directory = workerRoot?.directory ?? instance!.createDirectory();
+    const root = path.dirname(path.dirname(directory));
+    retainedRoot = root;
+    const payload = path.join(directory, "source.js");
+    fs.writeFileSync(payload, "export default 1");
+    const removeSync = fs.rmSync.bind(fs);
+    const remove = fsPromises.rm.bind(fsPromises);
+    const interruptRemoval = (target: fs.PathLike) => {
+      if (target === root) {
+        // Recursive rm can unlink the token before encountering a locked payload.
+        removeSync(path.join(root, "owner.sqlite"), { force: true });
+        throw locked;
+      }
+      if (target === directory || target === path.join(root, "captures")) {
+        throw locked;
+      }
+    };
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      interruptRemoval(target);
+      removeSync(target, options);
+    });
+    vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+      interruptRemoval(target);
+      await remove(target, options);
+    });
     if (instance) {
       expect(() => instance.release()).toThrow(locked);
     } else {
-      await worker!.release();
+      await expect(worker!.release()).rejects.toBe(locked);
     }
     expect(fs.readFileSync(payload, "utf8")).toBe("export default 1");
     const tokenless = fs
@@ -358,13 +558,19 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
     expect(tokenless).toEqual([]);
   } finally {
     vi.restoreAllMocks();
-    instance?.release();
-    await worker?.release();
+    try {
+      instance?.release();
+    } finally {
+      await worker?.release();
+    }
   }
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(Date.now() + 2 * hour);
   await sweepPluginSourceCapturesForTest(stateDir);
-  expect(fs.existsSync(root)).toBe(false);
+  if (!retainedRoot) {
+    throw new Error("Expected the original capture root for disposal verification");
+  }
+  expect(fs.existsSync(retainedRoot)).toBe(false);
 });
 
 it.each(["lease", "canonical path", "captures", "first capture"])(

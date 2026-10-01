@@ -16,6 +16,7 @@ import type {
   SqliteSnapshotStagingLaunch,
   SqliteSnapshotStagingReply,
 } from "./sqlite-snapshot-staging.types.js";
+import { readSqliteStagingTokenIdentity } from "./sqlite-staging-token.js";
 import { readDatabaseFileIdentity } from "./sqlite-worker-identity.js";
 import { serveOwnedWorkerTasks } from "./worker-task-server.js";
 
@@ -26,8 +27,14 @@ if (!(resourcePort instanceof MessagePort)) {
   throw new Error("SQLite snapshot staging requires its native lifetime owner");
 }
 const native = createSqliteReadOnlyNativeResourceClient(resourcePort);
-const runtime = createSqliteSnapshotStagingRuntime((launch) => native.createSession(launch));
-const directories = new Map<string, { retire: () => Promise<void>; removed: boolean }>();
+const runtime = createSqliteSnapshotStagingRuntime((launch, token) =>
+  native.createSession(launch, token),
+);
+const directories = new Map<
+  string,
+  | { kind: "snapshot"; retire: () => Promise<void>; removed: boolean }
+  | { kind: "token"; settle: () => Promise<"retired" | "closed" | "not-started"> }
+>();
 
 function readPath(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || value.includes("\0")) {
@@ -67,7 +74,6 @@ function readLaunch(value: unknown): SqliteSnapshotStagingLaunch {
 function readCommand(value: unknown): SqliteSnapshotStagingCommand {
   if (
     !isRecord(value) ||
-    typeof value.allowLegacyWorker !== "boolean" ||
     typeof value.preparationId !== "number" ||
     !Number.isSafeInteger(value.preparationId) ||
     value.preparationId < 1
@@ -75,6 +81,19 @@ function readCommand(value: unknown): SqliteSnapshotStagingCommand {
     throw new Error("SQLite snapshot staging requires an allocation command");
   }
   const launch = readLaunch(value.launch);
+  if (value.type === "token" && (value.mode === "create" || value.mode === "reclaim")) {
+    return {
+      type: "token",
+      preparationId: value.preparationId,
+      directory: path.resolve(launch.cwd, readPath(value.directory)),
+      mode: value.mode,
+      identity: readSqliteStagingTokenIdentity(value.identity),
+      launch,
+    };
+  }
+  if (typeof value.allowLegacyWorker !== "boolean") {
+    throw new Error("SQLite snapshot staging requires allocation policy");
+  }
   const allocation = {
     preparationId: value.preparationId,
     root: path.resolve(launch.cwd, readPath(value.root)),
@@ -113,6 +132,11 @@ function readCommand(value: unknown): SqliteSnapshotStagingCommand {
 async function closeDirectory(directory: string): Promise<void> {
   const owned = directories.get(directory);
   if (!owned) {
+    return;
+  }
+  if (owned.kind === "token") {
+    await owned.settle();
+    directories.delete(directory);
     return;
   }
   if (!owned.removed) {
@@ -155,6 +179,31 @@ serveOwnedWorkerTasks<SqliteSnapshotStagingReply>(
     let abort: ((message: unknown) => void) | undefined;
     try {
       const command = readCommand(value);
+      if (command.type === "token") {
+        if (directories.has(command.directory)) {
+          throw new Error("SQLite staging directory already has an owner");
+        }
+        const token = runtime.startToken(
+          command.directory,
+          command.mode,
+          command.identity,
+          command.launch,
+          command.preparationId,
+        );
+        directories.set(command.directory, { kind: "token", settle: token.settle });
+        try {
+          const identity = await token.result;
+          return { type: "token", directory: command.directory, identity };
+        } catch (error) {
+          const encoded = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
+          if (!encoded) {
+            throw error;
+          }
+          // The host already retains this admission's cleanup operation. Its disposition
+          // differs for a fresh producer versus a non-destructive reclaim attempt.
+          return { type: "failed", error: encoded, directory: command.directory };
+        }
+      }
       const controller = new AbortController();
       if (command.type === "prepare" && port) {
         abort = (message) => {
@@ -173,7 +222,7 @@ serveOwnedWorkerTasks<SqliteSnapshotStagingReply>(
           command.preparationId,
         );
         directory = owned.directory;
-        directories.set(directory, { retire: owned.retire, removed: false });
+        directories.set(directory, { kind: "snapshot", retire: owned.retire, removed: false });
         if (command.type === "allocate") {
           return { type: "allocated", directory };
         }
