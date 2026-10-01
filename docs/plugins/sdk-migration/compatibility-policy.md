@@ -66,6 +66,14 @@ offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not
 need to provide it.
 
+### WebSocket options and constructors
+
+`websocket-runtime` retains the `ws.ClientOptions` alias and `WebSocket`
+constructor signatures shipped in OpenClaw 2026.9.6. Host-internal TLS type
+corrections must not change plugin callback typing or constructor overloads.
+A source-incompatible correction to this public contract requires an approved,
+versioned SDK migration.
+
 ### Gateway worker environment creation
 
 `GatewayRequestHandlerOptions` from `core` and `gateway-runtime` retains the

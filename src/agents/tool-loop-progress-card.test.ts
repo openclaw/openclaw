@@ -53,8 +53,8 @@ function createFixture() {
 
 describe("progress-card loop outcomes", () => {
   it.each<Params>([
-    { markdown },
     {
+      markdown,
       plan: [
         { step: "Review", status: "pending" },
         { step: "Verify", status: "pending" },
@@ -147,25 +147,19 @@ describe("progress-card loop outcomes", () => {
     }
     expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(1);
   });
-  it("does not erase arbitrary revisions or errors from other outcomes", () => {
-    for (const [toolName, isError] of [
-      ["read", false],
-      ["progress_card", true],
-      ["progress_card", false],
-    ] as const) {
-      const state = makeState();
-      for (let revision = 1; revision <= 2; revision++) {
-        recordToolCallOutcome(state, {
-          toolName,
-          toolParams: { markdown },
-          result: {
-            isError,
-            details: { revision, steps: null },
-            content: [{ type: "text", text: "Read failed at revision " + revision }],
-          },
-        });
-      }
-      expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(2);
+  it("does not normalize unmarked progress-card receipts", () => {
+    const state = makeState();
+    for (let revision = 1; revision <= 2; revision++) {
+      recordToolCallOutcome(state, {
+        toolName: "progress_card",
+        toolParams: { markdown },
+        result: {
+          isError: false,
+          details: { revision, steps: null },
+          content: [{ type: "text", text: "Read failed at revision " + revision }],
+        },
+      });
     }
+    expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(2);
   });
 });

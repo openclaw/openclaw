@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { PluginConfigUiHint } from "../plugins/manifest-types.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { applySharedChannelFieldHelp } from "./schema.channel-field-help.js";
@@ -11,7 +12,6 @@ import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import { applySensitiveHints, applySensitiveUrlHints } from "./schema.hints.js";
 import {
   asSchemaObject,
-  cloneSchema,
   type ConfigJsonSchemaObject as JsonSchemaObject,
   type ConfigSchemaResponse,
 } from "./schema.shared.js";
@@ -26,13 +26,11 @@ type JsonSchemaNode = Record<string, unknown>;
 
 function isObjectSchema(schema: JsonSchemaObject): boolean {
   const type = schema.type;
-  if (type === "object") {
-    return true;
-  }
-  if (Array.isArray(type) && type.includes("object")) {
-    return true;
-  }
-  return Boolean(schema.properties || schema.additionalProperties);
+  return (
+    type === "object" ||
+    (Array.isArray(type) && type.includes("object")) ||
+    Boolean(schema.properties || schema.additionalProperties)
+  );
 }
 
 function mergeObjectSchema(base: JsonSchemaObject, extension: JsonSchemaObject): JsonSchemaObject {
@@ -61,13 +59,7 @@ export type PluginUiMetadata = {
   description?: string;
   configSecretInputPaths?: readonly string[];
   configGroups?: ConfigUiHint["groups"];
-  configUiHints?: Record<
-    string,
-    Pick<
-      ConfigUiHint,
-      "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder" | "presentation"
-    >
-  >;
+  configUiHints?: Record<string, PluginConfigUiHint>;
   configSchema?: JsonSchemaNode;
 };
 
@@ -121,27 +113,20 @@ function limitExtensionSchemas(params: {
     return true;
   };
 
-  const plugins = params.plugins.map((plugin) => {
-    if (!plugin.configSchema || keepSchema(plugin.configSchema)) {
-      return plugin;
-    }
-    return {
-      ...plugin,
-      configSchema: buildOmittedExtensionConfigSchema("plugin", plugin.id),
-    };
-  });
+  const limitSchemas = <T extends PluginUiMetadata | ChannelUiMetadata>(
+    entries: T[],
+    kind: "plugin" | "channel",
+  ): T[] =>
+    entries.map((entry) =>
+      !entry.configSchema || keepSchema(entry.configSchema)
+        ? entry
+        : { ...entry, configSchema: buildOmittedExtensionConfigSchema(kind, entry.id) },
+    );
 
-  const channels = params.channels.map((channel) => {
-    if (!channel.configSchema || keepSchema(channel.configSchema)) {
-      return channel;
-    }
-    return {
-      ...channel,
-      configSchema: buildOmittedExtensionConfigSchema("channel", channel.id),
-    };
-  });
-
-  return { plugins, channels };
+  return {
+    plugins: limitSchemas(params.plugins, "plugin"),
+    channels: limitSchemas(params.channels, "channel"),
+  };
 }
 
 function collectExtensionHintKeys(
@@ -319,10 +304,12 @@ function mergeExtensionSchemas(
     if (!entriesNode || !plugin.configSchema) {
       continue;
     }
-    const entryObject: JsonSchemaObject = entryBase ? cloneSchema(entryBase) : { type: "object" };
+    const entryObject: JsonSchemaObject = entryBase
+      ? structuredClone(entryBase)
+      : { type: "object" };
     const baseConfigSchema = asSchemaObject(entryObject.properties?.config);
     // The merged response owns plugin fragments independently of manifest metadata.
-    const pluginConfigSchema = cloneSchema(plugin.configSchema);
+    const pluginConfigSchema = structuredClone(plugin.configSchema);
     const pluginSchema = asSchemaObject(pluginConfigSchema);
     const nextConfigSchema =
       baseConfigSchema &&
@@ -355,7 +342,7 @@ function mergeExtensionSchemas(
     if (existing && incoming && isObjectSchema(existing) && isObjectSchema(incoming)) {
       channelProps[channel.id] = mergeObjectSchema(existing, incoming);
     } else {
-      channelProps[channel.id] = cloneSchema(channel.configSchema);
+      channelProps[channel.id] = structuredClone(channel.configSchema);
     }
   }
 
@@ -508,7 +495,7 @@ export function buildConfigSchemaCore(params?: {
     applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
     extensionHintKeys,
   );
-  const mergedSchema = mergeExtensionSchemas(cloneSchema(base.schema), channels, plugins);
+  const mergedSchema = mergeExtensionSchemas(structuredClone(base.schema), channels, plugins);
   const changedRoots = [
     ...(plugins.length ? ["plugins"] : []),
     ...(channels.length ? ["channels"] : []),

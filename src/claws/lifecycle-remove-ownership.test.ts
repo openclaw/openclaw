@@ -116,9 +116,6 @@ describe("Claw removal operation ownership", () => {
               if (directory === current.workspace && !raced) {
                 raced = true;
                 await fs.rm(trackedDirectory, { recursive: true });
-                return entries.toSorted((left, right) =>
-                  left.name.toString().localeCompare(right.name.toString()),
-                );
               }
               return entries;
             });

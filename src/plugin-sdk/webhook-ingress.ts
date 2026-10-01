@@ -1,9 +1,21 @@
 /**
  * Public SDK subpath for webhook ingress guards, targets, and request helpers.
  */
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
+import {
+  createGatewayAuthRateLimiter,
+  type AuthRateLimiter,
+  type RateLimitConfig,
+} from "../gateway/auth-rate-limit.js";
 import { resolveRequestClientIpFromHeaders } from "../gateway/net.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
+import { getBoundLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+
+export { getWebhookLegacyListener };
 
 export {
   createBoundedCounter,
@@ -54,13 +66,33 @@ export function resolveRequestClientIp(
   trustedProxies?: string[],
   allowRealIpFallback = false,
 ): string | undefined {
-  // The Gateway validates managed ingress before plugin dispatch; raw requests remain fallback.
+  // Legacy ports keep the channel's proxy policy; the Gateway port uses validated attribution.
   return (
-    getPluginRuntimeGatewayRequestScope()?.client?.clientIp ??
-    resolveRequestClientIpFromHeaders(req, trustedProxies, allowRealIpFallback)
+    (!req || !getWebhookLegacyListener(req)
+      ? getPluginRuntimeGatewayRequestScope()?.client?.clientIp
+      : undefined) ?? resolveRequestClientIpFromHeaders(req, trustedProxies, allowRealIpFallback)
   );
 }
-export { createGatewayAuthRateLimiter as createAuthRateLimiter } from "../gateway/auth-rate-limit.js";
+export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter & {
+  updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
+} {
+  const host = getBoundLegacyPluginSdkResourceHost();
+  const scheduler = host?.scheduler ?? new GatewayScheduler();
+  const limiter = createGatewayAuthRateLimiter(config, {
+    scheduler,
+    id: host ? `auth/sdk:${randomUUID()}` : "auth:standalone",
+  });
+  if (!host) {
+    const dispose = limiter.dispose.bind(limiter);
+    limiter.dispose = () => {
+      // Only synchronous pruning uses this standalone owner. Dispose settles the
+      // request-owned penalty waits before closing it; no asynchronous jobs remain.
+      dispose();
+      void scheduler.stop();
+    };
+  }
+  return limiter;
+}
 export type { AuthRateLimiter, RateLimitConfig } from "../gateway/auth-rate-limit.js";
 export { rawDataToString } from "../infra/ws.js";
 export { normalizePluginHttpPath } from "../plugins/http-path.js";

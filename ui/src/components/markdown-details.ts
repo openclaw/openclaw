@@ -69,19 +69,20 @@ function markdownDisclosureTagKind(raw: string): MarkdownDisclosureTagKind | nul
 /** Disclosure markup is structural only when it starts the current Markdown block line. */
 export function scanMarkdownDisclosureLine(
   line: string,
-  codeSpans: ReadonlyArray<readonly [number, number]> = findMarkdownCodeSpans(line),
+  codeSpans?: ReadonlyArray<readonly [number, number]>,
   lineOffset = 0,
 ): MarkdownDisclosureTag[] | null {
   const first = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/i.exec(line);
   if (!first) {
     return null;
   }
+  const spans = codeSpans ?? findMarkdownCodeSpans(line);
   const tags: MarkdownDisclosureTag[] = [];
   for (const match of line.matchAll(DISCLOSURE_TAG_RE)) {
     const start = match.index ?? 0;
     if (
       isEscapedMarkdownCharacter(line, start) ||
-      isInsideMarkdownCode(lineOffset + start, codeSpans)
+      isInsideMarkdownCode(lineOffset + start, spans)
     ) {
       continue;
     }
@@ -336,20 +337,11 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
         continue;
       }
 
-      let level = token.level;
-      const replacement: DetailsToken[] = [];
       const sink: DetailsTokenSink = {
         push(type, tag, nesting) {
           const next = new state.Token(type, tag, nesting);
           next.block = true;
-          if (nesting < 0) {
-            level -= 1;
-          }
-          next.level = level;
-          if (nesting > 0) {
-            level += 1;
-          }
-          replacement.push(next);
+          output.push(next);
           return next;
         },
       };
@@ -379,7 +371,6 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
         pushDisclosureLine(sink, line, lineNumber, stack, tags);
       }
       flushHtml();
-      output.push(...replacement);
     }
 
     // Streaming can end with open details; balance only our structured tokens at EOF.

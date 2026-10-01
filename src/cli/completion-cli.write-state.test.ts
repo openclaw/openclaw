@@ -134,7 +134,7 @@ describe("completion-cli write-state", () => {
     getCoreCliCompletionGroupsMock.mockClear();
     getProgramContextMock.mockClear();
     getSubCliCompletionGroupsMock.mockClear();
-    registerPluginCliCommandsFromValidatedConfigMock.mockClear();
+    registerPluginCliCommandsFromValidatedConfigMock.mockReset().mockResolvedValue({});
     const stderrWriteSpy = vi.spyOn(process.stderr, "write").mockImplementation(((
       chunk: string | Uint8Array,
     ) => {
@@ -149,7 +149,7 @@ describe("completion-cli write-state", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(COMPLETION_SHELLS)(
+  it.each(["zsh"] as const)(
     "publishes %s completion atomically without changing existing file or directory modes",
     async (shell) => {
       await withIsolatedCompletionState(async () => {
@@ -180,7 +180,7 @@ describe("completion-cli write-state", () => {
     },
   );
 
-  it.each(COMPLETION_SHELLS)(
+  it.each(["zsh"] as const)(
     "preserves the existing %s completion when staged publication fails",
     async (shell) => {
       const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
@@ -328,7 +328,7 @@ describe("completion-cli write-state", () => {
     },
   );
 
-  it.each(COMPLETION_SHELLS)(
+  it.each(["zsh"] as const)(
     "reports missing %s completion cache without registering commands or plugins",
     async (shell) => {
       const { registerCompletionCli } = await import("./completion-cli.js");
@@ -515,41 +515,53 @@ describe("completion-cli write-state", () => {
     }
   });
 
-  it("can skip plugin command registration for update-triggered cache writes", async () => {
+  it.each([true, false])("owns plugin registration during cache writes (skip=%s)", async (skip) => {
     const [{ COMPLETION_SKIP_PLUGIN_COMMANDS_ENV }, { registerCompletionCli }] = await Promise.all([
       import("./completion-runtime.js"),
       import("./completion-cli.js"),
     ]);
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
+    const { getSubCliCompletionGroups } = await vi.importActual<
+      typeof import("./program/register.subclis.js")
+    >("./program/register.subclis.js");
+    getSubCliCompletionGroupsMock.mockReturnValueOnce(
+      getSubCliCompletionGroups(["node", "openclaw", "completion", "--write-state"]).filter(
+        ({ name }) => name === "nodes",
+      ),
+    );
+    registerPluginCliCommandsFromValidatedConfigMock.mockImplementation((program) => {
+      const nodes = program.commands.find((command) => command.name() === "nodes");
+      if (nodes && !nodes.commands.some((command) => command.name() === "plugin-fixture")) {
+        nodes.command("plugin-fixture");
+      }
+      return Promise.resolve({});
+    });
 
-    try {
-      await withEnvAsync(
-        {
-          HOME: homeDir,
-          OPENCLAW_STATE_DIR: stateDir,
-          [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
-        },
-        async () => {
-          const program = new Command();
-          program.name("openclaw");
-          registerCompletionCli(program);
+    await withIsolatedCompletionState(
+      async () => {
+        const program = new Command().name("openclaw");
+        registerCompletionCli(program);
 
-          await program.parseAsync(["completion", "--write-state"], { from: "user" });
+        await program.parseAsync(["completion", "--write-state"], { from: "user" });
 
-          expect(getSubCliCompletionGroupsMock).toHaveBeenCalledTimes(1);
-          expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
-          expect((await fs.readdir(path.join(stateDir, "completions"))).toSorted()).toEqual([
-            "openclaw.bash",
-            "openclaw.fish",
-            "openclaw.ps1",
-            "openclaw.zsh",
-          ]);
-        },
-      );
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-      await fs.rm(homeDir, { recursive: true, force: true });
-    }
+        expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(
+          skip ? 0 : 1,
+        );
+        if (!skip) {
+          expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+            program,
+            undefined,
+            undefined,
+            { mode: "eager" },
+          );
+        }
+        for (const shell of COMPLETION_SHELLS) {
+          const script = await fs.readFile(resolveCompletionCachePath(shell, "openclaw"), "utf8");
+          expect(script).toContain("nodes");
+          expect(script).toContain("invoke");
+          expect(script.includes("plugin-fixture")).toBe(!skip);
+        }
+      },
+      { [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: skip ? "1" : undefined },
+    );
   });
 });

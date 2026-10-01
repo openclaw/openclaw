@@ -684,8 +684,6 @@ describe("session progress card Gateway response boundary", () => {
 
   it.each([
     ["global", "main", "global", "global", "global"],
-    ["global", "main", "agent:research:main", "global", "global"],
-    ["global", "conversation", "global", "global", "global"],
     ["global", "conversation", "agent:research:conversation", "global", "global"],
     [
       "agent:main:main",

@@ -17,6 +17,7 @@ import type {
   StructuredInputCompilerOptions,
   StructuredInputField,
   StructuredInputRecord,
+  StructuredInputValue,
 } from "./structured-input-boundary.js";
 import type { AgentHarnessUserInputOption } from "./user-input-types.js";
 
@@ -387,10 +388,7 @@ function buildField(
     question: {
       id: context.questionId,
       header: boundText(title, 12),
-      question: boundText(
-        details.length > 0 ? `${title}\n${details.join(" ")}` : title,
-        MAX_FIELD_TEXT,
-      ),
+      question: boundText(`${title}\n${details.join(" ")}`, MAX_FIELD_TEXT),
       ...(params.multiSelect ? { multiSelect: true } : {}),
       isOther: params.isOther,
       isSecret: context.secret,
@@ -406,7 +404,7 @@ function buildField(
         return decoded;
       }
       const selectedDeclaredChoice = params.options?.some(
-        (choice) => choice.label.toLowerCase() === values[0]?.trim().toLowerCase(),
+        (choice) => choice.label.trim().toLowerCase() === values[0]?.trim().toLowerCase(),
       );
       const selectedOther =
         context.otherFieldId &&
@@ -458,14 +456,7 @@ function readChoices(
     if (!Array.isArray(oneOfValue)) {
       return "has an invalid oneOf.";
     }
-    return normalizeChoices(
-      oneOfValue.map((entry) => ({
-        value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-        label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-        description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-      })),
-      options.minimumChoiceCount ?? 1,
-    );
+    return normalizeChoices(oneOfValue.map(readChoice), options.minimumChoiceCount ?? 1);
   }
   return undefined;
 }
@@ -481,14 +472,15 @@ function readArrayChoices(
   if (!Array.isArray(entries)) {
     return "must declare string enum, anyOf, or oneOf array choices.";
   }
-  return normalizeChoices(
-    entries.map((entry) => ({
-      value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-      label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-      description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-    })),
-    options.minimumChoiceCount ?? 1,
-  );
+  return normalizeChoices(entries.map(readChoice), options.minimumChoiceCount ?? 1);
+}
+
+function readChoice(entry: StructuredInputValue) {
+  return {
+    value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
+    label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
+    description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
+  };
 }
 
 function normalizeChoices(
@@ -586,7 +578,7 @@ function matchesStringFormat(value: string, format: string): boolean {
 function findChoice(choices: readonly Choice[], raw: string | undefined): Choice | undefined {
   const value = raw?.trim().toLowerCase();
   return choices.find(
-    (choice) => choice.label.toLowerCase() === value || choice.value.toLowerCase() === value,
+    (choice) => choice.label.trim().toLowerCase() === value || choice.value.toLowerCase() === value,
   );
 }
 

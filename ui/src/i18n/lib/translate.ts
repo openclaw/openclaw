@@ -1,4 +1,4 @@
-// Control UI i18n module implements translate behavior.
+import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
 import {
@@ -7,8 +7,9 @@ import {
   isSupportedLocale,
   loadLazyLocaleTranslation,
   resolveNavigatorLocale,
+  type Locale,
 } from "./registry.ts";
-import type { Locale, TranslationMap } from "./types.ts";
+import type { TranslationMap } from "./types.ts";
 
 function lookupTranslation(map: TranslationMap | undefined, keys: readonly string[]): unknown {
   let value: unknown = map;
@@ -63,36 +64,24 @@ class I18nManager {
   }
 
   private readStoredLocale(): string | null {
-    const storage = getSafeLocalStorage();
-    if (!storage) {
-      return null;
-    }
     try {
-      return storage.getItem("openclaw.i18n.locale");
+      return getSafeLocalStorage()?.getItem("openclaw.i18n.locale") ?? null;
     } catch {
       return null;
     }
   }
 
-  private persistLocale(locale: Locale) {
+  private persistLocale(locale: Locale | null) {
     const storage = getSafeLocalStorage();
     if (!storage) {
       return;
     }
     try {
-      storage.setItem("openclaw.i18n.locale", locale);
-    } catch {
-      // Ignore storage write failures in private/blocked contexts.
-    }
-  }
-
-  private clearPersistedLocale() {
-    const storage = getSafeLocalStorage();
-    if (!storage) {
-      return;
-    }
-    try {
-      storage.removeItem("openclaw.i18n.locale");
+      if (locale === null) {
+        storage.removeItem("openclaw.i18n.locale");
+      } else {
+        storage.setItem("openclaw.i18n.locale", locale);
+      }
     } catch {
       // Ignore storage write failures in private/blocked contexts.
     }
@@ -103,9 +92,7 @@ class I18nManager {
     if (isSupportedLocale(saved)) {
       return { locale: saved, shouldPersist: true };
     }
-    const language =
-      typeof globalThis.navigator?.language === "string" ? globalThis.navigator.language : null;
-    return { locale: resolveNavigatorLocale(language ?? ""), shouldPersist: false };
+    return { locale: this.getSystemLocale(), shouldPersist: false };
   }
 
   private loadLocale() {
@@ -114,12 +101,10 @@ class I18nManager {
       this.locale = DEFAULT_LOCALE;
       syncDocumentLocale(DEFAULT_LOCALE);
       if (!initial.shouldPersist) {
-        this.clearPersistedLocale();
+        this.persistLocale(null);
       }
       return;
     }
-    // Use the normal locale setter so startup locale loading follows the same
-    // translation-loading + notify path as manual locale changes.
     void this.applyLocale(initial.locale, false, initial.shouldPersist);
   }
 
@@ -141,29 +126,13 @@ class I18nManager {
     return this.applyLocale(this.getSystemLocale(), false, false);
   }
 
-  private loadLocaleTranslationOnce(locale: Locale): Promise<TranslationMap | null> {
-    const existing = this.inFlightLocaleLoads.get(locale);
-    if (existing) {
-      return existing;
-    }
-    const load = this.loadLocaleTranslation(locale);
-    const clearSettledLoad = () => {
-      if (this.inFlightLocaleLoads.get(locale) === load) {
-        this.inFlightLocaleLoads.delete(locale);
-      }
-    };
-    this.inFlightLocaleLoads.set(locale, load);
-    void load.then(clearSettledLoad, clearSettledLoad);
-    return load;
-  }
-
   private async applyLocale(locale: Locale, retrying: boolean, shouldPersist: boolean) {
     const requestGeneration = ++this.localeRequestGeneration;
     const needsTranslationLoad = locale !== DEFAULT_LOCALE && !this.translations[locale];
     if (!shouldPersist) {
       // System mode is an unset preference. Clear it before any async chunk
       // load so a failed load cannot resurrect the previous explicit locale.
-      this.clearPersistedLocale();
+      this.persistLocale(null);
     }
     if (this.locale === locale && !needsTranslationLoad) {
       this.pendingLocale = null;
@@ -177,21 +146,18 @@ class I18nManager {
       this.pendingLocale = locale;
       this.pendingLocaleShouldPersist = shouldPersist;
       try {
-        const translation = await this.loadLocaleTranslationOnce(locale);
+        const translation = await getOrCreatePromise(
+          this.inFlightLocaleLoads,
+          locale,
+          () => this.loadLocaleTranslation(locale),
+          { evictOnSettled: true },
+        );
         if (!translation) {
-          if (this.localeRequestGeneration === requestGeneration) {
-            this.pendingLocale = locale;
-            this.pendingLocaleShouldPersist = shouldPersist;
-          }
           return;
         }
         this.translations[locale] = translation;
       } catch (e) {
         const isCurrentRequest = this.localeRequestGeneration === requestGeneration;
-        if (isCurrentRequest) {
-          this.pendingLocale = locale;
-          this.pendingLocaleShouldPersist = shouldPersist;
-        }
         if (retrying && isCurrentRequest && this.localeLoadRecovery?.isUnrecoverableError(e)) {
           if (shouldPersist) {
             this.persistLocale(locale);

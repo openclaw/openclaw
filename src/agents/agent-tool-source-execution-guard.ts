@@ -76,7 +76,26 @@ export function captureAgentToolSourceExecutionGuard(signal?: AbortSignal): () =
   };
 }
 
-const sourceExecutionGuards = new WeakMap<AnyAgentTool, () => void>();
+const SOURCE_EXECUTION_GUARD = Symbol.for("openclaw.agentToolSourceExecutionGuard");
+type GuardedAgentTool = AnyAgentTool & { [SOURCE_EXECUTION_GUARD]?: () => void };
+
+function appendSourceExecutionGuard(tool: GuardedAgentTool, guard: () => void): void {
+  const inherited = tool[SOURCE_EXECUTION_GUARD];
+  if (inherited === guard) {
+    return;
+  }
+  // The source edge can cross plugin views; a tool-object WeakMap loses that binding.
+  Object.defineProperty(tool, SOURCE_EXECUTION_GUARD, {
+    value: inherited
+      ? () => {
+          inherited();
+          guard();
+        }
+      : guard,
+    configurable: true,
+    enumerable: false,
+  });
+}
 
 /** Bind a host-owned guard without mutating a tool that another attempt may reuse. */
 export function bindAgentToolSourceExecutionGuard(
@@ -84,20 +103,21 @@ export function bindAgentToolSourceExecutionGuard(
   guard: () => void,
 ): AnyAgentTool {
   const bound = copyAgentToolMetadata(tool, { ...tool });
-  sourceExecutionGuards.set(bound, guard);
+  copyAgentToolSourceExecutionGuard(tool, bound);
+  appendSourceExecutionGuard(bound, guard);
   return bound;
 }
 
 export function copyAgentToolSourceExecutionGuard(
-  source: AnyAgentTool,
-  target: AnyAgentTool,
+  source: GuardedAgentTool,
+  target: GuardedAgentTool,
 ): void {
-  const guard = sourceExecutionGuards.get(source);
+  const guard = source[SOURCE_EXECUTION_GUARD];
   if (guard) {
-    sourceExecutionGuards.set(target, guard);
+    appendSourceExecutionGuard(target, guard);
   }
 }
 
-export function runAgentToolSourceExecutionGuard(tool: AnyAgentTool): void {
-  sourceExecutionGuards.get(tool)?.();
+export function runAgentToolSourceExecutionGuard(tool: GuardedAgentTool): void {
+  tool[SOURCE_EXECUTION_GUARD]?.();
 }

@@ -37,6 +37,7 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { CommandLane } from "../../process/lanes.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const hoisted = getHoisted();
@@ -86,6 +87,7 @@ describe("native attempt queued automation admission", () => {
           return { status: "ok" as const };
         });
         const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
           storePath,
           cronEnabled: false,
           defaultAgentId: "main",
@@ -183,10 +185,13 @@ describe("native attempt queued automation admission", () => {
                   createDefaultEmbeddedSession({
                     prompt: async () => {
                       const submittedTool = tool;
+                      // The cron lane stays blocked until after this reply, so the
+                      // run cannot finish within the call; return its queued ack.
                       const ack = await submittedTool.execute("queued-automation", {
                         action: "run",
                         jobId: job.id,
                         runMode: "force",
+                        timeoutMs: 1,
                       });
                       expect(ack.details).toMatchObject({ ok: true, enqueued: true });
                       if (outcome === "permission change") {

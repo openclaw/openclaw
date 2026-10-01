@@ -78,7 +78,7 @@ enum ChatCodeHighlighter {
         var output = AttributedString()
         for token in self.tokens(code: code, language: language) {
             var piece = AttributedString(token.text)
-            if let color = self.color(for: token.kind) {
+            if let color = ChatCodeSyntaxPalette.color(for: token.kind) {
                 piece.foregroundColor = color
             }
             output += piece
@@ -251,22 +251,7 @@ enum ChatCodeHighlighter {
     }
 
     private static func matches(_ chars: [Character], at index: Int, _ needle: String) -> Bool {
-        let needleChars = Array(needle)
-        guard index + needleChars.count <= chars.count else { return false }
-        for offset in 0..<needleChars.count where chars[index + offset] != needleChars[offset] {
-            return false
-        }
-        return true
-    }
-
-    private static func color(for kind: ChatCodeTokenKind) -> Color? {
-        switch kind {
-        case .plain: nil
-        case .keyword: ChatCodeSyntaxPalette.keyword
-        case .string: ChatCodeSyntaxPalette.string
-        case .comment: ChatCodeSyntaxPalette.comment
-        case .number: ChatCodeSyntaxPalette.number
-        }
+        chars[index...].starts(with: needle)
     }
 
     // MARK: - Language profiles
@@ -380,20 +365,14 @@ public enum ChatCodeHighlightCache {
 }
 
 enum ChatCodeSyntaxPalette {
-    static var keyword: Color {
-        self.adaptive(light: (0.68, 0.24, 0.64), dark: (1.00, 0.48, 0.70))
-    }
-
-    static var string: Color {
-        self.adaptive(light: (0.82, 0.18, 0.11), dark: (1.00, 0.51, 0.44))
-    }
-
-    static var number: Color {
-        self.adaptive(light: (0.15, 0.16, 0.85), dark: (0.85, 0.79, 0.49))
-    }
-
-    static var comment: Color {
-        self.adaptive(light: (0.44, 0.50, 0.55), dark: (0.50, 0.55, 0.60))
+    static func color(for kind: ChatCodeTokenKind) -> Color? {
+        switch kind {
+        case .plain: nil
+        case .keyword: self.adaptive(light: (0.68, 0.24, 0.64), dark: (1.00, 0.48, 0.70))
+        case .string: self.adaptive(light: (0.82, 0.18, 0.11), dark: (1.00, 0.51, 0.44))
+        case .number: self.adaptive(light: (0.15, 0.16, 0.85), dark: (0.85, 0.79, 0.49))
+        case .comment: self.adaptive(light: (0.44, 0.50, 0.55), dark: (0.50, 0.55, 0.60))
+        }
     }
 
     private static func adaptive(

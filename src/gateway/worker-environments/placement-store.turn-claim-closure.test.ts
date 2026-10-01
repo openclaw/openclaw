@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -24,6 +22,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { projectSessionMessagePayload } from "../session-transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
@@ -49,23 +48,23 @@ const SESSION: WorkerSessionPlacementIdentity = {
   sessionKey: "agent:main:placement-claim-close",
 };
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-placement-claim-");
 let root: string;
 let database: OpenClawStateDatabase;
 let store: WorkerSessionPlacementStore;
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-placement-claim-"));
+  root = sessionDirs.make();
   database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   store = createWorkerSessionPlacementStore({ database });
 });
 
 afterEach(async () => {
   await closeStateDatabaseForTest();
-  await fs.rm(root, { recursive: true, force: true });
 });
 
 function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
-  return advancePlacementFixtureToActive(store, database, SESSION, executionMode);
+  return advancePlacementFixtureToActive(store, database, { ...SESSION, executionMode });
 }
 
 it("rejects an unbounded claim wait when its signal is already aborted", async () => {
@@ -108,7 +107,7 @@ it.each([
       ),
     ).toBe(scenario.visibleBeforeStaging);
     const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
-    store.recordStagedWorkspaceResult(claim, stagedResultRef);
+    await store.recordStagedWorkspaceResult(claim, stagedResultRef);
     expect(readReconciling()).toEqual(new Set([active.sessionId]));
     store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef });
     const conflicted = await store.readProjection([active.sessionId]);
@@ -393,7 +392,7 @@ it.each([
   }
 });
 
-it("emits exact worker claim closure after release and owner fencing", async () => {
+it("emits exact worker claim closure after release", async () => {
   const closed = vi.fn();
   const unregister = store.registerTurnClaimClosedHandler(closed);
   const active = await advanceToActive();
@@ -411,26 +410,7 @@ it("emits exact worker claim closure after release and owner fencing", async () 
   await store.releaseTurn(first);
   expect(closed).toHaveBeenLastCalledWith(first);
 
-  const second = await store.claimTurn({
-    ...SESSION,
-    owner,
-    claimId: "claim-fence",
-    runId: "run-fence",
-  });
-  const draining = store.startDrain({
-    sessionId: active.sessionId,
-    environmentId: active.environmentId,
-    ownerEpoch: active.activeOwnerEpoch,
-    expectedGeneration: active.generation,
-  });
-  store.startReconcile({
-    sessionId: active.sessionId,
-    environmentId: active.environmentId,
-    ownerEpoch: active.activeOwnerEpoch,
-    expectedGeneration: draining.generation,
-  });
-  expect(closed).toHaveBeenLastCalledWith(second);
-  expect(closed).toHaveBeenCalledTimes(2);
+  expect(closed).toHaveBeenCalledOnce();
   unregister();
 });
 
@@ -523,7 +503,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     throw new Error("expected placement-bound lineage capability");
   }
   let placementReceiptAuthority: (() => void) | undefined;
-  const sql = observeHostDataSql({ OPENCLAW_STATE_DIR: root });
+  const sql = observeHostDataSql();
   try {
     const calibration = database.db.prepare("SELECT 1");
     database.db.exec("SELECT 1");

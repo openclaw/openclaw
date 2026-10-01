@@ -85,7 +85,7 @@ export type ApplicationPlacementStartup = ApplicationPlacementStartupRuntime;
 // Submitted display survives transport loss; a changed connection owner revokes it.
 export function capturePlacementStartupConnection(
   gateway: ApplicationGateway,
-  { gatewayUrl, recoveryScope }: Pick<SessionPlacementRecovery, "gatewayUrl" | "recoveryScope">,
+  { gatewayUrl, recoveryScope }: { gatewayUrl: string; recoveryScope?: string },
 ): () => boolean {
   const revision = gateway.connectionRevision;
   const presentationScope = gatewayPresentationScope(gateway);
@@ -98,7 +98,7 @@ export function capturePlacementStartupConnection(
       gateway.connectionRevision === revision &&
       gatewayPresentationScope(gateway) === presentationScope &&
       gateway.connection.gatewayUrl === gatewayUrl &&
-      (!currentScope || currentScope === recoveryScope)
+      (recoveryScope === undefined || !currentScope || currentScope === recoveryScope)
     );
   };
 }

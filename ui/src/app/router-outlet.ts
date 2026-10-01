@@ -13,6 +13,7 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import {
   RouterOutletController,
   selectRenderedRouteMatch,
+  type RouterOutletInputs,
   type RouterOutletSnapshot,
 } from "./router-outlet-controller.ts";
 import {
@@ -20,8 +21,6 @@ import {
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
-
-export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
   render: (data: TData | undefined, loaderPending: boolean, presented?: boolean) => unknown;
@@ -163,12 +162,6 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
       )
     : renderedPage();
 }
-
-type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
-  router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  onNotFound?: () => boolean | void;
-  notFoundRecoveryReady?: boolean;
-};
 
 class LitRouterOutletController<
   TRouteId extends string,

@@ -20,7 +20,6 @@ import {
   dispatchClaudeCliStreamingToolEvent,
   dispatchClaudeCliThinking,
   dispatchGeminiCliStreamingToolEvent,
-  isClaudeToolUseBlockType,
   partitionLeadingTaggedReasoning,
   projectCliBackendEvent,
   projectCliTaggedReasoning,
@@ -31,6 +30,7 @@ import {
   isClaudeStreamJsonDialect,
   isClaudeSyntheticNoResponse,
   isClaudeSubagentRecord,
+  isClaudeToolUseBlockType,
   isGeminiStreamJsonDialect,
   missingMessageBoundarySeparator,
   parseClaudeCliJsonlResult,
@@ -38,6 +38,7 @@ import {
   pickCliResumeCheckpointId,
   pickCliSessionId,
   preferGeminiCliStreamJsonError,
+  readClaudeAttributedSubagentProgressId,
   preferStreamedClaudeTextOverResult,
   readCliUsage,
   readGeminiCliStreamJsonError,
@@ -93,19 +94,18 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
   let currentTaggedReasoningText = "";
 
+  const appendAssistantText = (delta: string) => {
+    assistantText += delta;
+    params.onAssistantDelta({ text: assistantText, delta, sessionId, usage });
+  };
+
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {
       return;
     }
     const delta = pendingClaudeText;
     pendingClaudeText = "";
-    assistantText = `${assistantText}${delta}`;
-    params.onAssistantDelta({
-      text: assistantText,
-      delta,
-      sessionId,
-      usage,
-    });
+    appendAssistantText(delta);
   };
 
   const flushPendingClaudeCommentaryText = () => {
@@ -148,9 +148,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     pendingMessageSeparator = false;
     sawToolUseSinceText = false;
-    const deltaText = `${separator}${delta}`;
-    assistantText = `${assistantText}${deltaText}`;
-    params.onAssistantDelta({ text: assistantText, delta: deltaText, sessionId, usage });
+    appendAssistantText(`${separator}${delta}`);
   };
 
   const routeTaggedReasoningDeltas = (
@@ -284,6 +282,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (parseErrorText) {
       return;
     }
+    const attributedParentToolUseId = readClaudeAttributedSubagentProgressId(parsed);
+    if (attributedParentToolUseId) {
+      params.onAttributedSubagentProgress?.(attributedParentToolUseId);
+    }
     if (
       claudeStreamJson &&
       parsed.type === "system" &&
@@ -306,11 +308,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     observeSessionId(parsed);
     const nextUsage = readCliUsage(parsed);
-    const isClaudeTerminalResult =
-      isClaudeStreamJsonDialect({
-        backend: params.backend,
-        providerId: params.providerId,
-      }) && parsed.type === "result";
+    const isClaudeTerminalResult = claudeStreamJson && parsed.type === "result";
     if (isClaudeTerminalResult && nextUsage && usage) {
       diagnosticUsage = nextUsage;
     }
@@ -577,13 +575,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       ) {
         const deltaText = parsed.content;
         if (deltaText) {
-          assistantText = `${assistantText}${deltaText}`;
-          params.onAssistantDelta({
-            text: assistantText,
-            delta: deltaText,
-            sessionId,
-            usage,
-          });
+          appendAssistantText(deltaText);
         }
       } else if (
         isGeminiStreamJsonDialect(params) &&

@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Discord tests cover security audit plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { collectDiscordSecurityAuditFindings } from "./security-audit.js";
@@ -141,56 +140,31 @@ describe("Discord security audit findings", () => {
   });
 
   it.each([
-    {
-      name: "flags missing guild user allowlists",
-      cfg: {
-        commands: { native: true },
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            groupPolicy: "allowlist",
-            guilds: {
-              "123": {
-                channels: {
-                  general: { enabled: true },
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      expectFinding: true,
-    },
+    { name: "flags missing guild user allowlists", dm: undefined, expectFinding: true },
     {
       name: "does not flag when dm.allowFrom includes a Discord snowflake id",
-      cfg: {
-        commands: { native: true },
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            dm: { allowFrom: ["387380367612706819"] },
-            groupPolicy: "allowlist",
-            guilds: {
-              "123": {
-                channels: {
-                  general: { enabled: true },
-                },
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
+      dm: { allowFrom: ["387380367612706819"] },
       expectFinding: false,
     },
-  ])("$name", async (testCase) => {
-    const discordConfig = testCase.cfg.channels?.discord;
+  ])("$name", async ({ dm, expectFinding }) => {
+    const cfg = {
+      commands: { native: true },
+      channels: {
+        discord: {
+          enabled: true,
+          token: "t",
+          dm,
+          groupPolicy: "allowlist",
+          guilds: { "123": { channels: { general: { enabled: true } } } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const discordConfig = cfg.channels?.discord;
     if (!discordConfig) {
       throw new Error("discord config required");
     }
     const findings = await collectFindings({
-      cfg: testCase.cfg,
+      cfg,
       config: discordConfig,
     });
 
@@ -198,7 +172,7 @@ describe("Discord security audit findings", () => {
       findings.some(
         (finding) => finding.checkId === "channels.discord.commands.native.no_allowlists",
       ),
-    ).toBe(testCase.expectFinding);
+    ).toBe(expectFinding);
   });
 
   it.each([

@@ -3,14 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-  type WorkerSessionToolResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+  WORKER_GATEWAY_TOOL_METHODS,
+} from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_INFERENCE_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createNoisyPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
+import { prepareCoreToolPolicy } from "../../../agents/prepared-tool-surface.js";
 import type { SessionPlacementTurnParams } from "../../../agents/session-placement-admission.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -43,31 +46,8 @@ import {
   admit,
   setupWorkerProtocolTestState,
 } from "./message-handler.worker.test-support.js";
+import { buildWorkerHello } from "./worker-connection-frames.js";
 
-const SESSION_TOOL_CASES = [
-  {
-    name: "spawn",
-    method: "worker.sessions.spawn",
-    toolName: "sessions_spawn",
-    request: { toolCallId: "call-spawn", task: "run the child" },
-  },
-  {
-    name: "send",
-    method: "worker.sessions.send",
-    toolName: "sessions_send",
-    request: {
-      toolCallId: "call-send",
-      sessionKey: "agent:main:dashboard:child",
-      message: "status",
-    },
-  },
-  {
-    name: "portal",
-    method: "worker.portal",
-    toolName: "portal",
-    request: { toolCallId: "call-portal", action: "open", port: 3000 },
-  },
-] as const;
 describe("dedicated worker websocket protocol", () => {
   setupWorkerProtocolTestState();
 
@@ -81,6 +61,114 @@ describe("dedicated worker websocket protocol", () => {
       connectionKind: "worker",
       connect: { role: "worker" },
     });
+  });
+
+  it.each([true, false])(
+    "delivers the surface in hello only with its build-bound feature: %s",
+    async (enabled) => {
+      vi.useFakeTimers();
+      const identity = {
+        ...ATTACHED_IDENTITY,
+        protocolFeatures: ATTACHED_IDENTITY.protocolFeatures.filter(
+          (feature) => enabled || feature !== WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+        ),
+      };
+      const harness = attachHarness({ identity });
+      harness.sendConnect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.service.getToolSurface).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      expect(harness.responses[0]).toMatchObject({ ok: true });
+      if (enabled) {
+        expect(harness.responses[0]).toMatchObject({
+          payload: { toolSurface: { generation: "generation-1" } },
+        });
+      } else {
+        expect(harness.responses[0]).not.toHaveProperty("payload.toolSurface");
+      }
+    },
+  );
+
+  it.each([0, 1])(
+    "budgets the complete encoded hello at the control limit plus %s byte",
+    async (extra) => {
+      vi.useFakeTimers();
+      const harness = attachHarness({ identity: ATTACHED_IDENTITY });
+      const definition = { name: "read", label: "Read", description: "", parameters: {} };
+      const surface = {
+        generation: "surface",
+        tools: [{ id: "read", execution: "placement" as const, definition }],
+        policy: prepareCoreToolPolicy({}),
+      };
+      const frame = {
+        type: "res",
+        id: "connect-1",
+        ok: true,
+        payload: { ...buildWorkerHello(ATTACHED_IDENTITY), toolSurface: surface },
+      };
+      const available =
+        WORKER_PROTOCOL_MAX_PAYLOAD_BYTES - Buffer.byteLength(JSON.stringify(frame));
+      definition.description = "x".repeat(available + extra);
+      harness.service.getToolSurface.mockResolvedValue({ ok: true, result: surface });
+      harness.sendConnect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.responses[0]).toMatchObject(
+        extra
+          ? {
+              ok: false,
+              error: { message: "Worker tool surface exceeds the admission frame limit" },
+            }
+          : { ok: true, payload: { toolSurface: surface } },
+      );
+      expect(harness.advanceHandshakePhase.mock.calls.flat().includes("ready")).toBe(extra === 0);
+    },
+  );
+
+  it("does not finish hello after its socket closes while preparing tools", async () => {
+    vi.useFakeTimers();
+    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
+    const pending = createDeferredCore();
+    const prepare = harness.service.getToolSurface.getMockImplementation()!;
+    harness.service.getToolSurface.mockImplementation(async (identity) => {
+      await pending.promise;
+      return prepare(identity);
+    });
+    harness.sendConnect();
+    await vi.advanceTimersByTimeAsync(0);
+    harness.cleanup();
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.responses).toHaveLength(0);
+    expect(harness.advanceHandshakePhase).not.toHaveBeenCalledWith("ready");
+  });
+
+  it("carries connection cancellation into Gateway tool dispatch", async () => {
+    vi.useFakeTimers();
+    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
+    const completion = createDeferredCore();
+    let connectionSignal: AbortSignal | undefined;
+    harness.service.invokeGatewayTool.mockImplementation(
+      async (_identity, _request, _sink, signal) => {
+        connectionSignal = signal;
+        await completion.promise;
+        return { ok: true, result: { content: [] } };
+      },
+    );
+    harness.sendConnect();
+    await vi.advanceTimersByTimeAsync(0);
+    harness.sendRequest(WORKER_GATEWAY_TOOL_METHODS.invoke, {
+      generation: "generation-1",
+      toolId: "presence",
+      toolCallId: "call-presence",
+      arguments: { action: "person", person: "me", include: ["devices"] },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connectionSignal?.aborted).toBe(false);
+
+    harness.cleanup();
+    expect(connectionSignal?.aborted).toBe(true);
+    completion.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.responses).toHaveLength(1);
   });
 
   it("does not mark a synchronously closed hello ready or recreate its expiry timer", async () => {
@@ -108,24 +196,6 @@ describe("dedicated worker websocket protocol", () => {
       ok: false,
       error: { code: "UNAVAILABLE", retryable: true },
     });
-  });
-
-  it("returns a bounded admission rejection", async () => {
-    const reason = "invalid-credential" as const;
-    const harness = attachHarness({ admissionFailure: reason });
-    harness.sendConnect();
-
-    await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
-    );
-    expect(harness.responses[0]).toMatchObject({
-      ok: false,
-      error: { details: { reason: "invalid-handshake" } },
-    });
-    expect(harness.logWsControl.warn).toHaveBeenCalledWith(
-      `worker admission rejected reason=${reason}`,
-    );
-    expect(harness.setClient).not.toHaveBeenCalled();
   });
 
   it("fails closed when public ingress context is missing", async () => {
@@ -164,6 +234,7 @@ describe("dedicated worker websocket protocol", () => {
       );
       expect(harness.setCloseCause).toHaveBeenCalledWith(internalReason);
       expect(recordFailure).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+      expect(harness.setClient).not.toHaveBeenCalled();
     },
   );
 
@@ -284,148 +355,6 @@ describe("dedicated worker websocket protocol", () => {
       payload: { status: "cancelled" },
     });
     expect(harness.service.cancelInference).toHaveBeenCalledWith(ATTACHED_IDENTITY, INFERENCE_IDS);
-  });
-
-  it.each(SESSION_TOOL_CASES)(
-    "keeps heartbeats flowing while $name is pending",
-    async (testCase) => {
-      const operation = createDeferredCore<WorkerSessionToolResult>();
-      const harness = attachHarness({
-        identity: ATTACHED_IDENTITY,
-        onSessionTool: () => operation.promise,
-      });
-      await admit(harness);
-      harness.sendRequest(testCase.method, testCase.request, `${testCase.name}-1`);
-      await waitForWorkerProtocol(() =>
-        expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
-      );
-
-      harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" }, "heartbeat-1");
-      await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
-      expect(harness.responses[1]).toMatchObject({
-        id: "heartbeat-1",
-        ok: true,
-        payload: { status: "ok" },
-      });
-
-      operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
-      await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(3));
-      expect(harness.responses[2]).toMatchObject({ id: `${testCase.name}-1`, ok: true });
-    },
-  );
-
-  it.each(SESSION_TOOL_CASES)(
-    "rejects an in-flight duplicate $name request id",
-    async (testCase) => {
-      const operation = createDeferredCore<WorkerSessionToolResult>();
-      const harness = attachHarness({
-        identity: ATTACHED_IDENTITY,
-        onSessionTool: () => operation.promise,
-      });
-      await admit(harness);
-      harness.sendRequest(testCase.method, testCase.request, "duplicate-session-operation");
-      await waitForWorkerProtocol(() =>
-        expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
-      );
-
-      harness.sendRequest(testCase.method, testCase.request, "duplicate-session-operation");
-      await waitForWorkerProtocol(() =>
-        expect(harness.close).toHaveBeenCalledWith(1008, "invalid-frame"),
-      );
-      expect(harness.service.executeSessionTool).toHaveBeenCalledOnce();
-      operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
-    },
-  );
-
-  it.each(SESSION_TOOL_CASES)(
-    "continues durable $name work but suppresses its response after cleanup",
-    async (testCase) => {
-      let operationStarted = false;
-      let operationSignal: AbortSignal | undefined;
-      const operation = createDeferredCore<WorkerSessionToolResult>();
-      const harness = attachHarness({
-        identity: ATTACHED_IDENTITY,
-        onSessionTool: (signal) => {
-          operationStarted = true;
-          operationSignal = signal;
-          return operation.promise;
-        },
-      });
-      await admit(harness);
-      harness.sendRequest(testCase.method, testCase.request, `${testCase.name}-1`);
-      await waitForWorkerProtocol(() => expect(operationStarted).toBe(true));
-
-      harness.cleanup();
-      expect(operationSignal).toBeUndefined();
-      operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
-      await Promise.resolve();
-      expect(harness.responses).toHaveLength(1);
-    },
-  );
-
-  it.each(SESSION_TOOL_CASES)("routes and frames $name responses", async (testCase) => {
-    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-    await admit(harness);
-    harness.sendRequest(testCase.method, testCase.request, `${testCase.name}-route`);
-
-    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
-    expect(harness.service.executeSessionTool).toHaveBeenCalledWith(
-      ATTACHED_IDENTITY,
-      testCase.toolName,
-      testCase.request,
-      undefined,
-    );
-    expect(harness.responses[1]).toMatchObject({
-      id: `${testCase.name}-route`,
-      ok: true,
-      payload: { resultJson: expect.any(String) },
-    });
-    expect(harness.setLastFrameMeta).toHaveBeenLastCalledWith({
-      type: "req",
-      method: testCase.method,
-    });
-  });
-
-  it.each(SESSION_TOOL_CASES)("feature-gates $name independently", async (testCase) => {
-    const requiredFeature =
-      testCase.toolName === "portal"
-        ? WORKER_PORTAL_PROTOCOL_FEATURE
-        : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
-    const harness = attachHarness({
-      identity: {
-        ...ATTACHED_IDENTITY,
-        protocolFeatures: ATTACHED_IDENTITY.protocolFeatures.filter(
-          (feature) => feature !== requiredFeature,
-        ),
-      },
-    });
-    await admit(harness);
-    harness.sendRequest(testCase.method, testCase.request);
-
-    await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
-    );
-    expect(harness.service.executeSessionTool).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["an invalid action", { toolCallId: "call-portal", action: "delete", port: 3000 }],
-    [
-      "an unexpected field",
-      { toolCallId: "call-portal", action: "open", port: 3000, unexpected: true },
-    ],
-  ])("rejects portal parameters with %s before execution", async (_reason, request) => {
-    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-    await admit(harness);
-    harness.sendRequest("worker.portal", request);
-
-    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
-    expect(harness.responses[1]).toMatchObject({
-      ok: false,
-      error: { details: { reason: "invalid-frame" } },
-    });
-    expect(harness.service.executeSessionTool).not.toHaveBeenCalled();
-    expect(harness.close).not.toHaveBeenCalled();
   });
 
   it("dispatches semantic transcript commits on the closed worker allowlist", async () => {
@@ -738,6 +667,7 @@ describe("dedicated worker websocket protocol", () => {
             ...session,
             storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
           },
+          promptCacheContext: { boundaryCount: 0 },
           assertSourceCurrent: () => {},
           turn: {
             preparedRunAdmission,

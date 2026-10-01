@@ -68,8 +68,26 @@ export const UserProfileSchema = closedObject({
   role: Type.Optional(UserProfileRoleSchema),
 });
 
-export const UsersListParamsSchema = closedObject({});
-export const UsersListResultSchema = closedObject({ profiles: Type.Array(UserProfileSchema) });
+export const UsersListParamsSchema = closedObject({
+  githubAccountIds: Type.Optional(
+    Type.Array(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }), {
+      maxItems: 500,
+      uniqueItems: true,
+    }),
+  ),
+});
+export const UsersListResultSchema = closedObject({
+  profiles: Type.Array(UserProfileSchema),
+  githubProfiles: Type.Optional(
+    Type.Array(
+      closedObject({
+        accountId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+        profileId: UserProfileIdSchema,
+      }),
+      { maxItems: 500 },
+    ),
+  ),
+});
 
 // The profile and relative path are derived from the authenticated connection.
 export const UsersPersonalFileGetParamsSchema = closedObject({ agentId: NonEmptyString });
@@ -99,6 +117,18 @@ export const UsersLinkEmailParamsSchema = closedObject({
   targetProfileId: UserProfileIdSchema,
 });
 export const UsersLinkEmailResultSchema = closedObject({ profile: UserProfileSchema });
+
+export const UsersMergeParamsSchema = closedObject({
+  sourceProfileId: UserProfileIdSchema,
+  targetProfileId: UserProfileIdSchema,
+});
+export const UsersMergeResultSchema = closedObject({
+  profile: UserProfileSchema,
+  movedAliasKinds: Type.Array(
+    Type.Union([Type.Literal("email"), Type.Literal("provider"), Type.Literal("channel")]),
+    { maxItems: 3, uniqueItems: true },
+  ),
+});
 
 const ChannelIdentityPartSchema = Type.String({
   minLength: 1,
@@ -304,6 +334,8 @@ export type UsersSelfParams = Static<typeof UsersSelfParamsSchema>;
 export type UsersSelfResult = Static<typeof UsersSelfResultSchema>;
 export type UsersLinkEmailParams = Static<typeof UsersLinkEmailParamsSchema>;
 export type UsersLinkEmailResult = Static<typeof UsersLinkEmailResultSchema>;
+export type UsersMergeParams = Static<typeof UsersMergeParamsSchema>;
+export type UsersMergeResult = Static<typeof UsersMergeResultSchema>;
 export type UsersLinkChannelIdentityParams = Static<typeof UsersLinkChannelIdentityParamsSchema>;
 export type UsersLinkChannelIdentityResult = Static<typeof UsersLinkChannelIdentityResultSchema>;
 export type UsersUnlinkChannelIdentityParams = Static<

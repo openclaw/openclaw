@@ -1,5 +1,6 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
 import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
@@ -7,10 +8,6 @@ import {
 import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
-
-function pluralize(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
 
 function formatJobNameList(names: string[]): string {
   const preview = names.slice(0, 5).map((name) => `\`${name}\``);
@@ -92,19 +89,6 @@ export function formatLegacyGatewayExecAdvisory(names: string[]): string | null 
   ].join("\n");
 }
 
-/** Advisory for legacy default caps that were captured before configured MCP was final. */
-export function formatIncompleteInheritedAuthorityAdvisory(names: string[]): string | null {
-  if (names.length === 0) {
-    return null;
-  }
-  return [
-    `${pluralize(names.length, "automation")} ${names.length === 1 ? "has" : "have"} an inherited default tool cap captured before final configured-MCP provenance was recorded${formatJobNameList(names)}.`,
-    "- The stored finite cap remains unchanged; doctor will not silently widen or rewrite it.",
-    "- If the job uses Codex configured MCP, reauthorize in place with an exact explicit list: `openclaw automations edit <id> --tools <tool,...>`.",
-  ].join("\n");
-}
-
-/** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const descriptions: Record<string, string> = {
     jobId: "still uses legacy `jobId`",
@@ -174,7 +158,6 @@ export function mergeLegacyCronJobs(params: {
   return { jobs: merged, importedCount };
 }
 
-/** Attach runtime SQLite state columns back onto a config-defined cron job row. */
 export function mergeRuntimeEntryIntoConfigJob(params: {
   job: Record<string, unknown>;
   runtimeEntry?: { updatedAtMs?: number; state?: Record<string, unknown> };

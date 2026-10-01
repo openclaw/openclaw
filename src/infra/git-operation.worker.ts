@@ -46,6 +46,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
               );
             case "workspace.manifest.stage-input":
             case "workspace.manifest.tree-input":
+            case "workspace.manifest.remote-capture":
               // Streamed fs-safe creation owns native descriptors until cleanup settles.
               return control.runNativeSection(async () => {
                 const { executeWorkspaceManifestComputation } =

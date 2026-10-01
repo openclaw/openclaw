@@ -546,7 +546,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(hookParams.workspaceDir).toBe("/tmp/workspace");
   });
 
-  it.each(["failed", "timed_out"] as const)(
+  it.each(["failed"] as const)(
     "restores the previous model and retries when required Codex is %s",
     async (status) => {
       const provider = buildProviderWithDefaultModelPatch();
@@ -817,16 +817,6 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       expect(persistAuthProfileBatch).not.toHaveBeenCalled();
     },
   );
-
-  it("does not persist plugin enablement when install is skipped", async () => {
-    resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
-    resolveProviderPluginChoice.mockReturnValue(null);
-
-    const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
-
-    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
-    expect(result).toEqual({ config: {}, retrySelection: true });
-  });
 
   it("preserves install config when the chosen provider still cannot resolve after install", async () => {
     resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());

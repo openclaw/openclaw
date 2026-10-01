@@ -9,7 +9,7 @@ import {
   currentGitHubPublicationConfig,
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
-  resolveGitHubPublicationWorkspaceOwner,
+  prepareGitHubPublicationWorkspaceOwner,
   sameGitHubPublicationWorkspace,
 } from "../github-publication-availability.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
@@ -26,7 +26,11 @@ export async function prepareWorkerGitHubBinding(params: {
     if (params.assertCurrent?.() === false) {
       return undefined;
     }
-    const workspace = resolveGitHubPublicationWorkspaceOwner(params);
+    const currentWorkspace = await prepareGitHubPublicationWorkspaceOwner(params);
+    const workspace = currentWorkspace();
+    if (params.assertCurrent?.() === false) {
+      return undefined;
+    }
     const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId).catch(() => {
       const config = currentGitHubPublicationConfig();
       const managed = (["agent", "system"] as const).some((scope) =>
@@ -52,7 +56,7 @@ export async function prepareWorkerGitHubBinding(params: {
       return undefined;
     }
     if (
-      !sameGitHubPublicationWorkspace(workspace, resolveGitHubPublicationWorkspaceOwner(params)) ||
+      !sameGitHubPublicationWorkspace(workspace, currentWorkspace()) ||
       !matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity })
     ) {
       return undefined;

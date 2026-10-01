@@ -7,7 +7,6 @@ import {
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
-  isCodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
@@ -20,9 +19,11 @@ import {
 import {
   assertCodexThreadForkResponse,
   assertCodexThreadStartResponse,
+  assertExactSupervisionModelSelection,
   readSupervisionResponseThreadId,
 } from "./protocol-validators.js";
 import type { CodexDynamicToolSpec, CodexThread, CodexThreadForkParams } from "./protocol.js";
+import { matchesPendingSupervisionBranch } from "./session-binding-record.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
@@ -44,7 +45,7 @@ import {
   codexThreadSandboxOrPermissions,
   resolveCodexThreadApprovalsReviewer,
 } from "./thread-requests.js";
-import { projectBoundedCodexThreadHistory } from "./transcript-mirror.js";
+import { projectBoundedCodexThreadHistory } from "./transcript-history-projection.js";
 
 type PendingSupervisionMaterializationParams = Omit<
   CodexThreadConfigurationOptions,
@@ -216,25 +217,9 @@ export async function materializePendingSupervisionBranch(
 
     const nativeAttempt = { ...params.attempt, modelId: nativeModel };
     const startParams = buildThreadStartParams(nativeAttempt, {
-      cwd: params.cwd,
-      dynamicTools: params.dynamicTools,
-      appServer: params.appServer,
-      developerInstructions: params.developerInstructions,
-      skillsInstructions: params.skillsInstructions,
-      config: params.config,
-      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-      nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-      webSearchAllowed: params.webSearchAllowed,
-      environmentSelection: params.environmentSelection,
+      ...params,
       model: nativeModel,
       modelProvider: nativeModelProvider,
-      hostSystemAgentActive: params.hostSystemAgentActive,
-      restrictedToolSurfaceInheritedMcpServerNames:
-        params.restrictedToolSurfaceInheritedMcpServerNames,
-      shellEnvironment: params.shellEnvironment,
-      shellPathPrepend: params.shellPathPrepend,
-      disableLoginShell: params.disableLoginShell,
     });
     assertExactSupervisionModelSelection(startParams, {
       model: nativeModel,
@@ -427,7 +412,7 @@ export async function materializePendingSupervisionBranch(
       }
     }
     const unsafeCleanup =
-      cleanup.remaining.length > 0 || isCodexAppServerUnsafeSubscriptionError(error);
+      cleanup.remaining.length > 0 || error instanceof CodexAppServerUnsafeSubscriptionError;
     if (unsafeCleanup) {
       await params.abandonClient();
     }
@@ -459,19 +444,7 @@ function buildPendingSupervisionProbeForkParams(
   params: PendingSupervisionMaterializationParams,
   pending: CodexAppServerPendingSupervisionBranch,
 ): CodexThreadForkParams {
-  const runtimeConfig = buildCodexRuntimeThreadConfigForRun(params.attempt, params.config, {
-    nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-    nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-    nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-    webSearchAllowed: params.webSearchAllowed,
-    appServer: params.appServer,
-    hostSystemAgentActive: params.hostSystemAgentActive,
-    restrictedToolSurfaceInheritedMcpServerNames:
-      params.restrictedToolSurfaceInheritedMcpServerNames,
-    shellEnvironment: params.shellEnvironment,
-    shellPathPrepend: params.shellPathPrepend,
-    disableLoginShell: params.disableLoginShell,
-  });
+  const runtimeConfig = buildCodexRuntimeThreadConfigForRun(params.attempt, params.config, params);
   return {
     threadId: pending.sourceThreadId,
     ...(pending.lastTurnId ? { lastTurnId: pending.lastTurnId } : {}),
@@ -530,34 +503,14 @@ function requireNativeSupervisionModelProvider(params: {
   return responseProvider;
 }
 
-function assertExactSupervisionModelSelection(
-  value: { model?: string | null; modelProvider?: string | null },
-  expected: { model: string; modelProvider: string; operation: string },
-): void {
-  if (value.model !== expected.model || value.modelProvider !== expected.modelProvider) {
-    throw new Error(
-      `Codex supervision ${expected.operation} changed native model selection: ` +
-        `${value.modelProvider ?? "unknown"}/${value.model ?? "unknown"}`,
-    );
-  }
-}
-
 function matchesPendingSupervisionState(
   binding: CodexAppServerThreadBinding | undefined,
   expected: CodexAppServerPendingSupervisionBranch,
 ): boolean {
-  const pending = binding?.pendingSupervisionBranch;
-  const cleanupThreadIds = pending?.cleanupThreadIds ?? [];
-  const expectedCleanupThreadIds = expected.cleanupThreadIds ?? [];
   return (
-    binding?.threadId === expected.sourceThreadId &&
-    binding.connectionScope === "supervision" &&
+    binding?.connectionScope === "supervision" &&
     binding.supervisionSourceThreadId === expected.sourceThreadId &&
-    pending?.sourceThreadId === expected.sourceThreadId &&
-    pending.connectionFingerprint === expected.connectionFingerprint &&
-    pending.lastTurnId === expected.lastTurnId &&
-    cleanupThreadIds.length === expectedCleanupThreadIds.length &&
-    cleanupThreadIds.every((threadId, index) => threadId === expectedCleanupThreadIds[index])
+    matchesPendingSupervisionBranch(binding, expected)
   );
 }
 
@@ -616,33 +569,25 @@ async function recoverPendingSupervisionArtifacts(
   }
   const cleanup = await cleanPendingSupervisionArtifacts(params.client, pending);
   const next = withPendingSupervisionCleanup(pending, cleanup.remaining);
-  if (cleanup.remaining.length > 0) {
-    if (cleanup.remaining.length !== pending.cleanupThreadIds.length) {
-      const updated = await params.bindingStore.mutate(params.bindingIdentity, {
-        kind: "patch-pending-supervision-branch",
-        expected: pending,
-        pending: next,
-      });
-      if (!updated) {
-        throw new CodexThreadBindingConflictError(
-          pending.sourceThreadId,
-          "recording supervised Codex cleanup recovery",
-        );
-      }
+  const incomplete = cleanup.remaining.length > 0;
+  if (!incomplete || cleanup.remaining.length !== pending.cleanupThreadIds.length) {
+    const updated = await params.bindingStore.mutate(params.bindingIdentity, {
+      kind: "patch-pending-supervision-branch",
+      expected: pending,
+      pending: next,
+    });
+    if (!updated) {
+      throw new CodexThreadBindingConflictError(
+        pending.sourceThreadId,
+        incomplete
+          ? "recording supervised Codex cleanup recovery"
+          : "recovering a supervised Codex branch",
+      );
     }
+  }
+  if (incomplete) {
     throw new Error(
       `Codex supervised branch cleanup must finish before retry: ${cleanup.remaining.join(", ")}`,
-    );
-  }
-  const updated = await params.bindingStore.mutate(params.bindingIdentity, {
-    kind: "patch-pending-supervision-branch",
-    expected: pending,
-    pending: next,
-  });
-  if (!updated) {
-    throw new CodexThreadBindingConflictError(
-      pending.sourceThreadId,
-      "recovering a supervised Codex branch",
     );
   }
   return next;

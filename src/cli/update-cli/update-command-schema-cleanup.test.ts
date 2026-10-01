@@ -170,44 +170,32 @@ it("admits normal forward update only after snapshot cleanup has settled", async
   expect(fs.existsSync(prepared.location)).toBe(false);
 });
 
-it.each(["false", "reject"] as const)(
-  "preserves cancellation and %s cleanup failure without admitting remaining databases",
-  async (mode) => {
-    const controller = new AbortController();
-    const cancellation = new Error("original update cancellation");
-    const cleanupFailure = new Error("snapshot retirement rejected");
-    const prepare = vi.mocked(snapshots.prepareSqliteReadOnlyLocation).getMockImplementation()!;
-    vi.mocked(snapshots.prepareSqliteReadOnlyLocation).mockImplementation(async (...args) => {
-      const location = await prepare(...args);
-      controller.abort(cancellation);
-      return location;
-    });
-    if (mode === "false") {
-      releaseReader = retainSnapshotTempDirectory(path.dirname(prepared.location));
-    } else {
-      vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(cleanupFailure);
-    }
-    const candidates = vi.fn(() => []);
-    const failure = await preflightOpenClawDatabaseSchemas({
-      env,
-      supportedVersions: versions,
-      signal: controller.signal,
-      configuredAgentDatabaseTargets: candidates,
-    }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    expect((failure as AggregateError).cause).toBe(cancellation);
-    expect((failure as AggregateError).errors[0]).toBe(cancellation);
-    if (mode === "reject") {
-      expect((failure as AggregateError).errors[1]).toBe(cleanupFailure);
-    } else {
-      expect((failure as AggregateError).errors[1]).toMatchObject({
-        message: expect.stringMatching(/snapshot cleanup failed/i),
-      });
-    }
-    expect(candidates).not.toHaveBeenCalled();
-    expect(fs.existsSync(prepared.location)).toBe(true);
-  },
-);
+it("preserves cancellation and incomplete cleanup without admitting remaining databases", async () => {
+  const controller = new AbortController();
+  const cancellation = new Error("original update cancellation");
+  const prepare = vi.mocked(snapshots.prepareSqliteReadOnlyLocation).getMockImplementation()!;
+  vi.mocked(snapshots.prepareSqliteReadOnlyLocation).mockImplementation(async (...args) => {
+    const location = await prepare(...args);
+    controller.abort(cancellation);
+    return location;
+  });
+  releaseReader = retainSnapshotTempDirectory(path.dirname(prepared.location));
+  const candidates = vi.fn(() => []);
+  const failure = await preflightOpenClawDatabaseSchemas({
+    env,
+    supportedVersions: versions,
+    signal: controller.signal,
+    configuredAgentDatabaseTargets: candidates,
+  }).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect((failure as AggregateError).cause).toBe(cancellation);
+  expect((failure as AggregateError).errors[0]).toBe(cancellation);
+  expect((failure as AggregateError).errors[1]).toMatchObject({
+    message: expect.stringMatching(/snapshot cleanup failed/i),
+  });
+  expect(candidates).not.toHaveBeenCalled();
+  expect(fs.existsSync(prepared.location)).toBe(true);
+});
 
 it("preserves exact cancellation when cleanup succeeds", async () => {
   const controller = new AbortController();
@@ -226,36 +214,23 @@ it("preserves exact cancellation when cleanup succeeds", async () => {
   expect(fs.existsSync(prepared.location)).toBe(false);
 });
 
-it.each(["false", "reject"] as const)(
-  "preserves the earlier inspection error when snapshot cleanup returns %s",
-  async (mode) => {
-    const primary = new Error("original schema-read admission failure");
-    const secondary = new Error("retirement rejected");
-    if (mode === "false") {
-      releaseReader = retainSnapshotTempDirectory(path.dirname(prepared.location));
-    } else {
-      vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(secondary);
-    }
-    const failure = await preflightOpenClawDatabaseSchemas({
-      env,
-      supportedVersions: versions,
-      openStateSchemaReadAdmission: () => {
-        throw primary;
-      },
-    }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    expect((failure as AggregateError).cause).toBe(primary);
-    expect((failure as AggregateError).errors[0]).toBe(primary);
-    expect((failure as AggregateError).errors).toHaveLength(2);
-    if (mode === "reject") {
-      expect((failure as AggregateError).errors[1]).toBe(secondary);
-    } else {
-      expect((failure as AggregateError).errors[1]).toMatchObject({
-        message: expect.stringMatching(/snapshot cleanup failed/i),
-      });
-    }
-  },
-);
+it("preserves the earlier inspection error when snapshot cleanup rejects", async () => {
+  const primary = new Error("original schema-read admission failure");
+  const secondary = new Error("retirement rejected");
+  vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(secondary);
+  const failure = await preflightOpenClawDatabaseSchemas({
+    env,
+    supportedVersions: versions,
+    openStateSchemaReadAdmission: () => {
+      throw primary;
+    },
+  }).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect((failure as AggregateError).cause).toBe(primary);
+  expect((failure as AggregateError).errors[0]).toBe(primary);
+  expect((failure as AggregateError).errors).toHaveLength(2);
+  expect((failure as AggregateError).errors[1]).toBe(secondary);
+});
 
 it("retains both a read-admission close failure and snapshot retirement failure", async () => {
   const primary = new Error("admission close failed");

@@ -44,21 +44,9 @@ vi.mock("../../system-agent/onboarding-welcome.js", () => ({
   buildOnboardingWelcome: onboardingWelcomeMocks.buildOnboardingWelcome,
 }));
 
-type FakeEngine = {
-  handle: ReturnType<typeof vi.fn>;
-  seedHistory: ReturnType<typeof vi.fn>;
-  historyLength: ReturnType<typeof vi.fn>;
-  historySince: ReturnType<typeof vi.fn>;
-  getPendingOperatorProposal: ReturnType<typeof vi.fn>;
-  resolveOperatorApproval: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
-  loadOverview: ReturnType<typeof vi.fn>;
-  noteAssistantMessage: ReturnType<typeof vi.fn>;
-  planGreeting: ReturnType<typeof vi.fn>;
-  decorateRejoinReply: ReturnType<typeof vi.fn>;
-};
+type FakeEngine = ReturnType<typeof makeEngine>;
 
-function makeEngine(): FakeEngine {
+function makeEngine() {
   const history: Array<{ role: "user" | "assistant"; text: string }> = [];
   return {
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),

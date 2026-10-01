@@ -1,6 +1,7 @@
 /** Non-blocking process-owned queue for audit metadata persistence. */
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -9,11 +10,8 @@ import {
   formatAuditWriterError,
   formatAuditWriterRequestError,
 } from "./audit-event-writer.errors.js";
-import type {
-  AuditWriterOperations,
-  AuditWriterRequest,
-  AuditWriterResult,
-} from "./audit-event-writer.types.js";
+import type { AuditWriterRequest, AuditWriterResult } from "./audit-event-writer.types.js";
+import type { AuditWriterOperations } from "./audit-event-writer.worker.js";
 import { parseExecutionDecisionWork } from "./execution-decision-work.js";
 import type { ExecutionDecisionWork } from "./execution-decision-work.types.js";
 import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admission.js";
@@ -40,14 +38,14 @@ export type AuditEventWriter = {
 };
 
 /** Start one bounded queue; retain the owner environment or claimed state rejects its writes. */
-export function createAuditEventWriter(
-  options: {
-    stateDir?: string;
-    maxPending?: number;
-    onContention?: (message: string) => void;
-    onError?: (error: string) => void;
-  } = {},
-): AuditEventWriter {
+export function createAuditEventWriter(options: {
+  scheduler: GatewayScheduler;
+  stateDir?: string;
+  maxPending?: number;
+  onContention?: (message: string) => void;
+  onError?: (error: string) => void;
+}): AuditEventWriter {
+  const { scheduler } = options;
   const database = {
     env: { ...process.env, OPENCLAW_STATE_DIR: options.stateDir ?? resolveStateDir(process.env) },
   };
@@ -243,11 +241,15 @@ export function createAuditEventWriter(
       }
     }
   }
-  const maintenanceTimer = setInterval(() => {
-    maintenancePending = true;
-    schedule();
-  }, AUDIT_MAINTENANCE_INTERVAL_MS);
-  maintenanceTimer.unref?.();
+  const maintenanceJob = scheduler.schedule({
+    id: "audit:maintenance",
+    atMs: scheduler.now() + AUDIT_MAINTENANCE_INTERVAL_MS,
+    everyMs: AUDIT_MAINTENANCE_INTERVAL_MS,
+    run: () => {
+      maintenancePending = true;
+      schedule();
+    },
+  });
   schedule();
 
   const enqueue = (message: AuditWriterRequest): boolean => {
@@ -297,7 +299,7 @@ export function createAuditEventWriter(
         return stopPromise;
       }
       stopped = true;
-      clearInterval(maintenanceTimer);
+      maintenanceJob.cancel();
       maintenancePending = true;
       stopPromise = new Promise<void>((resolve) => {
         resolveStop = resolve;

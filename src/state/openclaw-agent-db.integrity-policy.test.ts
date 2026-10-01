@@ -19,23 +19,40 @@ import {
   clearOpenClawAgentIntegrityVerification,
   readOpenClawAgentIntegrityVerification,
 } from "./openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const logger = vi.hoisted(() => ({ info: vi.fn() }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => {
+      const original = actual.createSubsystemLogger(name);
+      return name === "state/agent-db" ? { ...original, info: logger.info } : original;
+    },
+  };
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
+  logger.info.mockClear();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
 
-it.each(
-  (["clean", "missing", "unclean", "version", "replacement"] as const).flatMap((mode) =>
+it.each([
+  ...(["clean", "missing", "unclean", "version", "replacement"] as const).flatMap((mode) =>
     (mode === "unclean" ? ["reset", "retained"] : ["reset", "retained", "shared"]).map(
       (runtimeProof) => ({ mode, runtimeProof }),
     ),
   ),
-)(
+  { mode: "clean", runtimeProof: "foreign" },
+])(
   "uses durable $mode state for the next open ($runtimeProof runtime proof)",
   ({ mode, runtimeProof }) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-integrity-policy-") };
@@ -50,10 +67,18 @@ it.each(
     const before = readOpenClawAgentIntegrityVerification(original.path, env);
     expect(before?.clean_close).toBe(1);
     const lease =
-      runtimeProof === "shared"
+      runtimeProof === "shared" || runtimeProof === "foreign"
         ? claimOpenClawAgentDatabaseLease({ ...options, path: original.path })
         : undefined;
     try {
+      if (runtimeProof === "foreign") {
+        // A live foreign lease disallows reuse of this process's retained proof.
+        openOpenClawStateDatabase({ env })
+          .db.prepare(
+            "UPDATE agent_database_leases SET owner_pid = ?, owner_start_time = NULL WHERE lease_id = ?",
+          )
+          .run(process.ppid, lease!);
+      }
       if (mode === "missing") {
         clearOpenClawAgentIntegrityVerification(original.path, env);
       } else if (mode === "unclean") {
@@ -83,6 +108,7 @@ it.each(
       const queued = vi
         .spyOn(verifier, "requestOpenClawAgentDatabaseQuickCheck")
         .mockImplementation(() => {});
+      logger.info.mockClear();
       const reopened = openOpenClawAgentDatabase(options);
       expect(
         reopened.db
@@ -90,9 +116,33 @@ it.each(
           .get(),
       ).toEqual({ state_json: '{"ok":true}' });
       const reusedRuntime =
-        runtimeProof !== "reset" && mode !== "missing" && mode !== "replacement";
-      const reused = mode === "clean" || reusedRuntime;
+        runtimeProof !== "reset" &&
+        runtimeProof !== "foreign" &&
+        mode !== "missing" &&
+        mode !== "replacement";
+      const reused = (mode === "clean" && runtimeProof !== "foreign") || reusedRuntime;
       expect(diagnostics?.integrityGateOutcome).toBe(reused ? "cached" : "healthy");
+      if (reused) {
+        expect(logger.info).not.toHaveBeenCalled();
+      } else {
+        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
+          "agent database integrity gate",
+          expect.objectContaining({
+            agentId: options.agentId,
+            path: original.path,
+            admissionMode: "sync",
+            integrityGateOutcome: "healthy",
+            integrityGateReason:
+              mode === "missing"
+                ? "revoked"
+                : runtimeProof === "foreign"
+                  ? "lease-class"
+                  : mode === "unclean"
+                    ? "dirty-receipt"
+                    : "no-proof",
+          }),
+        );
+      }
       expect(queued).toHaveBeenCalledTimes(reused && !reusedRuntime ? 1 : 0);
       expect(readOpenClawAgentIntegrityVerification(original.path, env)?.clean_close).toBe(0);
     } finally {

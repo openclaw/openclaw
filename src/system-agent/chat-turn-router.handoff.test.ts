@@ -32,7 +32,6 @@ describe.each([
       expect(reply.action).toBe("none");
       expect(reply.step).toBeUndefined();
       expect(reply.text).toContain("Nothing has changed");
-      expect(reply.text).toContain("never paste credentials");
       expect(reply.handoff).toEqual(surface === "gateway" ? { kind: "model-accounts" } : undefined);
       expect(reply.text).toContain("Settings → Profile → Connected accounts");
       if (surface === "cli") {

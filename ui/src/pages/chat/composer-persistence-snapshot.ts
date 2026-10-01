@@ -6,6 +6,7 @@ import {
   rememberDraftRevision,
   readDraftRevisionState,
 } from "../../lib/chat/outbox-store-draft-state.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   notifyStoredChatOutboxChanges,
   readStoredOutboxStore as readStore,
@@ -15,7 +16,6 @@ import {
   storageTargetForGateway,
   writeStoredOutboxStore as writeStore,
   type ChatComposerScope,
-  type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store.ts";
 import {
   resolveUiConversationIdentity,

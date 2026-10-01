@@ -1,9 +1,12 @@
 import { vi } from "vitest";
+import { WebSocket } from "ws";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
 export const buildSessionLookup = (
@@ -232,3 +235,31 @@ export {
   updatePairedDevicePresenceMock,
   runtimeMocks,
 };
+
+export function makeNodeClient(connId: string, nodeId: string): GatewayWsClient {
+  return {
+    connId,
+    usesSharedGatewayAuth: false,
+    socket: {
+      readyState: WebSocket.OPEN,
+      send: () => {},
+    } as unknown as GatewayWsClient["socket"],
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "node-host",
+        version: "1.0.0",
+        platform: "linux",
+        mode: "node",
+      },
+      device: {
+        id: nodeId,
+        publicKey: "public-key",
+        signature: "signature",
+        signedAt: 1,
+        nonce: "nonce",
+      },
+    } as GatewayWsClient["connect"],
+  };
+}

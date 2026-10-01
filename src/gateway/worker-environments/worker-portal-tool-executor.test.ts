@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createGatewayPortalService } from "../portals/portal-service.js";
@@ -14,15 +14,6 @@ import {
 } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerPortalToolExecutor } from "./worker-portal-tool-executor.js";
-
-const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
-
-vi.mock("../session-utils.js", () => ({
-  loadGatewaySessionEntryReadOnly: (sessionKey: string) => ({
-    canonicalKey: sessionKey,
-    entry: structuredClone(sessionEntries.get(sessionKey)),
-  }),
-}));
 
 const SOURCE = {
   agentId: "main",
@@ -62,6 +53,37 @@ describe("worker portal tool execution", () => {
   const portalCarrierClose = vi.fn();
   const portalChanged = vi.fn();
   const actualServices = new Set<ReturnType<typeof createGatewayPortalService>>();
+  const sourceAuthorities = new Map<
+    string,
+    Awaited<ReturnType<WorkerSessionPlacementStore["prepareTurnClaimAuthority"]>>
+  >();
+
+  async function runPortal(
+    request: Parameters<typeof execute>[0]["request"],
+    workerIdentity = identity,
+    signal?: AbortSignal,
+  ) {
+    const claim = workerIdentity.turnClaim;
+    if (!claim || claim.owner.kind !== "worker") {
+      throw new Error("Missing worker turn claim");
+    }
+    const authority =
+      sourceAuthorities.get(claim.claimId) ?? (await placements.prepareTurnClaimAuthority(claim));
+    sourceAuthorities.set(claim.claimId, authority);
+    return {
+      resultJson: JSON.stringify(
+        await execute(
+          { identity: workerIdentity, toolName: "portal", request, signal },
+          { sessionId: claim.sessionId, turnClaim: { ...claim, owner: claim.owner } },
+          () => {
+            if (!authority.isCurrent()) {
+              throw new Error("Worker source session placement changed");
+            }
+          },
+        ),
+      ),
+    };
+  }
 
   function useActualPortalService() {
     const httpServers: import("node:http").Server[] = [];
@@ -125,7 +147,11 @@ describe("worker portal tool execution", () => {
         ownerEpoch: SOURCE.ownerEpoch,
       },
     });
-    placements.authorizeWorkerTurnTools(sourceClaim, ["portal"]);
+    await placements.authorizeWorkerTurnTools(sourceClaim, ["portal"]);
+    sourceAuthorities.set(
+      sourceClaim.claimId,
+      await placements.prepareTurnClaimAuthority(sourceClaim),
+    );
     identity = {
       environmentId: SOURCE.environmentId,
       credentialHash: "credential-hash",
@@ -138,8 +164,6 @@ describe("worker portal tool execution", () => {
       protocolFeatures: ["worker-portal-v1"],
       credentialExpiresAtMs: Date.now() + 60_000,
     };
-    sessionEntries.clear();
-    sessionEntries.set(SOURCE.sessionKey, { sessionId: SOURCE.sessionId, updatedAt: Date.now() });
     portalOpen.mockReset().mockResolvedValue(PORTAL);
     portalList.mockReset().mockReturnValue([PORTAL]);
     portalWorkerList.mockReset().mockReturnValue([PORTAL]);
@@ -189,22 +213,22 @@ describe("worker portal tool execution", () => {
   afterEach(async () => {
     await Promise.all([...actualServices].map((service) => service.closeAll()));
     actualServices.clear();
+    for (const authority of sourceAuthorities.values()) {
+      authority.release();
+    }
+    sourceAuthorities.clear();
     vi.restoreAllMocks();
     await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
   it("opens, lists, and closes node-backed worker portals through the authorized source turn", async () => {
-    const opened = await execute({
-      identity,
-      toolName: "portal",
-      request: {
-        toolCallId: "open-worker-portal",
-        action: "open",
-        port: 4321,
-        title: "Worker app",
-        path: "/app",
-      },
+    const opened = await runPortal({
+      toolCallId: "open-worker-portal",
+      action: "open",
+      port: 4321,
+      title: "Worker app",
+      path: "/app",
     });
 
     expect(JSON.parse(opened.resultJson)).toMatchObject({
@@ -233,27 +257,25 @@ describe("worker portal tool execution", () => {
         remotePort: 4321,
       },
       onClose: portalCarrierClose,
+      ownerSignal: undefined,
+      resourceOwnerKey: undefined,
       origin: "cloud-profile",
       title: "Worker app",
       path: "/app",
     });
 
-    const listed = await execute({
-      identity,
-      toolName: "portal",
-      request: { toolCallId: "list-worker-portals", action: "list" },
-    });
+    const listed = await runPortal({ toolCallId: "list-worker-portals", action: "list" });
     expect(JSON.parse(listed.resultJson).details.portals).toHaveLength(1);
-    expect(portalWorkerList).toHaveBeenCalledWith(SOURCE.environmentId, SOURCE.ownerEpoch);
+    expect(portalWorkerList).toHaveBeenCalledWith(
+      SOURCE.environmentId,
+      SOURCE.ownerEpoch,
+      undefined,
+    );
 
-    const closed = await execute({
-      identity,
-      toolName: "portal",
-      request: {
-        toolCallId: "close-worker-portal",
-        action: "close",
-        id: "worker-source-4321",
-      },
+    const closed = await runPortal({
+      toolCallId: "close-worker-portal",
+      action: "close",
+      id: "worker-source-4321",
     });
     expect(JSON.parse(closed.resultJson).details).toEqual({ closed: true });
     expect(portalClose).toHaveBeenCalledWith("worker-source-4321", expect.any(Function));
@@ -271,11 +293,7 @@ describe("worker portal tool execution", () => {
     ]);
     portalWorkerList.mockClear();
 
-    const result = await execute({
-      identity,
-      toolName: "portal",
-      request: { toolCallId: "list-owned-worker-portals", action: "list" },
-    });
+    const result = await runPortal({ toolCallId: "list-owned-worker-portals", action: "list" });
 
     expect(JSON.parse(result.resultJson).details.portals).toEqual([
       expect.objectContaining({ id: "worker-source-4321" }),
@@ -283,18 +301,18 @@ describe("worker portal tool execution", () => {
     expect(result.resultJson).not.toContain("local-secret");
     expect(result.resultJson).not.toContain("foreign-secret");
     expect(portalList).not.toHaveBeenCalled();
-    expect(portalWorkerList).toHaveBeenCalledWith(SOURCE.environmentId, SOURCE.ownerEpoch);
+    expect(portalWorkerList).toHaveBeenCalledWith(
+      SOURCE.environmentId,
+      SOURCE.ownerEpoch,
+      undefined,
+    );
   });
 
   it("rejects attempts to close gateway-host or other-worker portals", async () => {
     for (const id of ["local-portal", "foreign-worker-portal"]) {
-      await expect(
-        execute({
-          identity,
-          toolName: "portal",
-          request: { toolCallId: `close-${id}`, action: "close", id },
-        }),
-      ).rejects.toThrow("Worker portal is not owned by the active environment");
+      await expect(runPortal({ toolCallId: `close-${id}`, action: "close", id })).rejects.toThrow(
+        "Worker portal is not owned by the active environment",
+      );
     }
 
     expect(portalClose).not.toHaveBeenCalled();
@@ -303,20 +321,15 @@ describe("worker portal tool execution", () => {
 
   it("rejects stale owner epochs and replaced source placements before opening a portal", async () => {
     await expect(
-      execute({
-        identity: { ...identity, ownerEpoch: SOURCE.ownerEpoch + 1 },
-        toolName: "portal",
-        request: { toolCallId: "stale-worker-portal", action: "open", port: 4321 },
-      }),
+      runPortal(
+        { toolCallId: "stale-worker-portal", action: "open", port: 4321 },
+        { ...identity, ownerEpoch: SOURCE.ownerEpoch + 1 },
+      ),
     ).rejects.toThrow("Worker source environment changed");
 
     await placements.releaseTurn(sourceClaim);
     await expect(
-      execute({
-        identity,
-        toolName: "portal",
-        request: { toolCallId: "replaced-worker-portal", action: "open", port: 4321 },
-      }),
+      runPortal({ toolCallId: "replaced-worker-portal", action: "open", port: 4321 }),
     ).rejects.toThrow("Worker source session placement changed");
     expect(portalCarrierOpen).not.toHaveBeenCalled();
   });
@@ -331,14 +344,28 @@ describe("worker portal tool execution", () => {
     });
 
     await expect(
-      execute({
-        identity,
-        toolName: "portal",
-        request: { toolCallId: "replaced-worker-forward", action: "open", port: 4321 },
-      }),
+      runPortal({ toolCallId: "replaced-worker-forward", action: "open", port: 4321 }),
     ).rejects.toThrow("Worker source environment changed");
     expect(portalCarrierClose).toHaveBeenCalledOnce();
     expect(portalOpen).not.toHaveBeenCalled();
+  });
+
+  it("releases a carrier when the invocation is cancelled during preparation", async () => {
+    const abort = new AbortController();
+    portalCarrierOpen.mockImplementationOnce(async () => {
+      abort.abort(new Error("portal cancelled"));
+      return { connect: portalCarrierConnect, close: portalCarrierClose };
+    });
+    await expect(
+      runPortal(
+        { toolCallId: "cancelled-portal", action: "open", port: 4321 },
+        identity,
+        abort.signal,
+      ),
+    ).rejects.toThrow("portal cancelled");
+    expect(portalCarrierClose).toHaveBeenCalledOnce();
+    expect(portalOpen).not.toHaveBeenCalled();
+    expect(portalChanged).not.toHaveBeenCalled();
   });
 
   it("retains the environment-owned portal when its source turn closes after publication", async () => {
@@ -350,11 +377,7 @@ describe("worker portal tool execution", () => {
     });
 
     await expect(
-      execute({
-        identity,
-        toolName: "portal",
-        request: { toolCallId: "created-worker-portal", action: "open", port: 4321 },
-      }),
+      runPortal({ toolCallId: "created-worker-portal", action: "open", port: 4321 }),
     ).rejects.toThrow("Worker source session placement changed");
 
     expect(service.list()).toHaveLength(1);
@@ -367,27 +390,24 @@ describe("worker portal tool execution", () => {
 
   it("keeps the successor portal when the original open loses authority during listener startup", async () => {
     const actualListen = httpListen.listenGatewayHttpServer;
-    let notifyBindStarted!: () => void;
-    let releaseBind!: () => void;
-    const bindStarted = new Promise<void>((resolve) => {
-      notifyBindStarted = resolve;
-    });
-    const bindReleased = new Promise<void>((resolve) => {
-      releaseBind = resolve;
-    });
+    const { promise: bindStarted, resolve: notifyBindStarted } = createDeferred();
+    const { promise: bindReleased, resolve: releaseBind } = createDeferred();
     vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
       notifyBindStarted();
       await bindReleased;
       await actualListen(params);
     });
     const { service, httpServers } = useActualPortalService();
-    const first = execute({
-      identity,
-      toolName: "portal",
-      request: { toolCallId: "first-opening-portal", action: "open", port: 4321 },
+    const successorOpening = createDeferred();
+    portalOpen.mockImplementation((params) => {
+      if (portalOpen.mock.calls.length === 2) {
+        successorOpening.resolve();
+      }
+      return service.open(params);
     });
+    const first = runPortal({ toolCallId: "first-opening-portal", action: "open", port: 4321 });
     const firstRejected = expect(first).rejects.toThrow("Worker source session placement changed");
-    let successor: ReturnType<typeof execute> | undefined;
+    let successor: ReturnType<typeof runPortal> | undefined;
     try {
       await bindStarted;
       await placements.releaseTurn(sourceClaim);
@@ -399,18 +419,17 @@ describe("worker portal tool execution", () => {
         runId: "successor-run",
         owner: sourceClaim.owner,
       });
-      placements.authorizeWorkerTurnTools(nextClaim, ["portal"]);
-      successor = execute({
-        identity: { ...identity, runId: nextClaim.runId, turnClaim: nextClaim },
-        toolName: "portal",
-        request: {
+      await placements.authorizeWorkerTurnTools(nextClaim, ["portal"]);
+      successor = runPortal(
+        {
           toolCallId: "successor-opening-portal",
           action: "open",
           port: 4321,
           title: "Successor app",
         },
-      });
-      await vi.waitFor(() => expect(portalOpen).toHaveBeenCalledTimes(2));
+        { ...identity, runId: nextClaim.runId, turnClaim: nextClaim },
+      );
+      await successorOpening.promise;
       releaseBind();
       await firstRejected;
       const result = JSON.parse((await successor).resultJson);
@@ -431,24 +450,16 @@ describe("worker portal tool execution", () => {
     sourceSshEndpoint = { host: "worker.example" };
 
     await expect(
-      execute({
-        identity,
-        toolName: "portal",
-        request: { toolCallId: "ssh-worker-portal", action: "open", port: 4321 },
-      }),
+      runPortal({ toolCallId: "ssh-worker-portal", action: "open", port: 4321 }),
     ).rejects.toThrow("move the session back to the gateway with sessions.move");
     expect(portalCarrierOpen).not.toHaveBeenCalled();
   });
 
   it("rejects worker portal access when the active turn was not granted portal authority", async () => {
-    placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send"]);
+    await placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send"]);
 
     await expect(
-      execute({
-        identity,
-        toolName: "portal",
-        request: { toolCallId: "unauthorized-worker-portal", action: "open", port: 4321 },
-      }),
+      runPortal({ toolCallId: "unauthorized-worker-portal", action: "open", port: 4321 }),
     ).rejects.toThrow("Worker session tool authority changed");
     expect(portalCarrierOpen).not.toHaveBeenCalled();
   });

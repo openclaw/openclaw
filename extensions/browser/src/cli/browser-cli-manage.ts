@@ -1,7 +1,3 @@
-/**
- * Browser CLI management commands for lifecycle, profiles, tabs, and doctor
- * checks.
- */
 import type { Command } from "commander";
 import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -15,7 +11,6 @@ import type {
   BrowserResetProfileResult,
   BrowserStatus,
   BrowserTab,
-  BrowserTransport,
   ProfileStatus,
   SystemProfileInfo,
 } from "../browser/client.js";
@@ -46,21 +41,13 @@ function sanitizeTableCell(value: string): string {
   return value.replace(/\p{Cc}/gu, " ");
 }
 
-async function fetchBrowserStatus(
+async function fetchBrowserManagement<T>(
   parent: BrowserParentOpts,
-  profile?: string,
-): Promise<BrowserStatus> {
-  return await callBrowserRequest<BrowserStatus>(
-    parent,
-    {
-      method: "GET",
-      path: "/",
-      query: resolveProfileQuery(profile),
-    },
-    {
-      timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
-    },
-  );
+  path: string,
+  query?: Parameters<typeof callBrowserRequest>[1]["query"],
+  timeoutMs = BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  return await callBrowserRequest<T>(parent, { method: "GET", path, query }, { timeoutMs });
 }
 
 async function runBrowserToggle(
@@ -76,7 +63,11 @@ async function runBrowserToggle(
     path: params.path,
     query: resolveProfileQuery(params.profile, params.query),
   });
-  const status = await fetchBrowserStatus(parent, params.profile);
+  const status = await fetchBrowserManagement<BrowserStatus>(
+    parent,
+    "/",
+    resolveProfileQuery(params.profile),
+  );
   if (printJsonResult(parent, status)) {
     return;
   }
@@ -113,37 +104,33 @@ function formatDoctorLine(check: BrowserDoctorCheck): string {
   return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
-function isGatewaySecretRefUnavailableErrorShape(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const errorRecord = error as Error & { code?: unknown };
-  return (
-    errorRecord.name === "GatewaySecretRefUnavailableError" ||
-    errorRecord.code === "GATEWAY_SECRET_REF_UNAVAILABLE"
-  );
-}
-
 function formatBrowserDoctorGatewayError(error: unknown): string {
-  if (!isGatewaySecretRefUnavailableErrorShape(error)) {
-    return String(error);
+  if (
+    error instanceof Error &&
+    (error.name === "GatewaySecretRefUnavailableError" ||
+      (error as Error & { code?: unknown }).code === "GATEWAY_SECRET_REF_UNAVAILABLE")
+  ) {
+    return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
   }
-  return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
+  return String(error);
 }
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
+  const probe = async (name: string, read: () => Promise<Omit<BrowserDoctorCheck, "name">>) => {
+    try {
+      checks.push({ name, ...(await read()) });
+    } catch (error) {
+      checks.push({ name, ok: false, detail: String(error) });
+    }
+  };
   let report: BrowserDoctorReport;
 
   try {
-    report = await callBrowserRequest<BrowserDoctorReport>(
+    report = await fetchBrowserManagement<BrowserDoctorReport>(
       parent,
-      {
-        method: "GET",
-        path: "/doctor",
-        query: resolveProfileQuery(profile),
-      },
-      { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+      "/doctor",
+      resolveProfileQuery(profile),
     );
     checks.push({
       name: "gateway",
@@ -196,65 +183,38 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     });
   }
 
-  try {
-    const profiles = await callBrowserRequest<{ profiles: ProfileStatus[] }>(
+  await probe("profiles", async () => {
+    const profiles = await fetchBrowserManagement<{ profiles: ProfileStatus[] }>(
       parent,
-      { method: "GET", path: "/profiles" },
-      { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+      "/profiles",
     );
-    checks.push({
-      name: "profiles",
+    return {
       ok: true,
       detail: `${profiles.profiles?.length ?? 0} configured`,
-    });
-  } catch (err) {
-    checks.push({
-      name: "profiles",
-      ok: false,
-      detail: String(err),
-    });
-  }
+    };
+  });
 
   if (status.running) {
-    try {
-      const result = await callBrowserRequest<{ running: boolean; tabs: BrowserTab[] }>(
+    await probe("tabs", async () => {
+      const result = await fetchBrowserManagement<{ running: boolean; tabs: BrowserTab[] }>(
         parent,
-        {
-          method: "GET",
-          path: "/tabs",
-          query: resolveProfileQuery(profile),
-        },
-        { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+        "/tabs",
+        resolveProfileQuery(profile),
       );
       const tabs = result.tabs ?? [];
-      checks.push({
-        name: "tabs",
+      return {
         ok: true,
         detail: `${tabs.length} visible${tabs.length > 0 && tabs[0]?.suggestedTargetId ? `, use tab reference ${tabs[0].suggestedTargetId}` : ""}`,
-      });
-    } catch (err) {
-      checks.push({
-        name: "tabs",
-        ok: false,
-        detail: String(err),
-      });
-    }
+      };
+    });
   }
 
   if (deep && status.running) {
-    try {
-      const result = await callBrowserRequest<
+    await probe("live-snapshot", async () => {
+      const result = await fetchBrowserManagement<
         | { ok: true; format: "aria"; nodes?: unknown[] }
         | { ok: true; format: "ai"; snapshot?: string }
-      >(
-        parent,
-        {
-          method: "GET",
-          path: "/snapshot",
-          query: resolveProfileQuery(profile, { format: "aria", limit: 25 }),
-        },
-        { timeoutMs: 10_000 },
-      );
+      >(parent, "/snapshot", resolveProfileQuery(profile, { format: "aria", limit: 25 }), 10_000);
       const count =
         result.format === "aria"
           ? Array.isArray(result.nodes)
@@ -263,40 +223,25 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
           : typeof result.snapshot === "string"
             ? result.snapshot.split("\n").length
             : 0;
-      checks.push({
-        name: "live-snapshot",
+      return {
         ok: count > 0,
         detail: count > 0 ? `${count} nodes/lines` : "snapshot returned no content",
-      });
-    } catch (err) {
-      checks.push({
-        name: "live-snapshot",
-        ok: false,
-        detail: String(err),
-      });
-    }
+      };
+    });
   }
 
   return { ok: checks.every((check) => check.ok), checks, status };
 }
 
-type BrowserProfileDriver = "openclaw" | "existing-session" | "extension";
-
-function usesChromeMcpTransport(params: {
-  transport?: BrowserTransport;
-  driver?: BrowserProfileDriver;
-}): boolean {
+function usesChromeMcpTransport(params: Pick<BrowserStatus, "transport" | "driver">): boolean {
   return params.transport === "chrome-mcp" || params.driver === "existing-session";
 }
 
-function formatBrowserConnectionSummary(params: {
-  transport?: BrowserTransport;
-  driver?: BrowserProfileDriver;
-  isRemote?: boolean;
-  cdpPort?: number | null;
-  cdpUrl?: string | null;
-  userDataDir?: string | null;
-}): string {
+function formatBrowserConnectionSummary(
+  params: Partial<
+    Pick<BrowserStatus, "transport" | "driver" | "cdpPort" | "cdpUrl" | "userDataDir">
+  > & { isRemote?: boolean },
+): string {
   if (usesChromeMcpTransport(params)) {
     if (params.cdpUrl) {
       return `transport: chrome-mcp, cdpUrl: ${redactCdpUrl(params.cdpUrl)}`;
@@ -315,7 +260,6 @@ function formatBrowserConnectionSummary(params: {
   return `port: ${params.cdpPort ?? "(unset)"}`;
 }
 
-/** Registers Browser lifecycle, profile, tab, and doctor commands. */
 export function registerBrowserManageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -326,7 +270,11 @@ export function registerBrowserManageCommands(
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
-        const status = await fetchBrowserStatus(parent, parent?.browserProfile);
+        const status = await fetchBrowserManagement<BrowserStatus>(
+          parent,
+          "/",
+          resolveProfileQuery(parent?.browserProfile),
+        );
         if (printJsonResult(parent, status)) {
           return;
         }
@@ -490,46 +438,30 @@ export function registerBrowserManageCommands(
       });
     });
 
-  tab
-    .command("select")
-    .description("Focus tab by index (1-based)")
-    .argument("<index>", "Tab index (1-based)", parseTabIndex)
-    .action(async (index: number, _opts, cmd) => {
-      const parent = parentOpts(cmd);
-      if (!Number.isSafeInteger(index) || index < 1) {
-        defaultRuntime.error(danger("index must be a positive integer"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      await runBrowserCliRequest({
-        parent,
-        path: "/tabs/action",
-        body: { action: "select", index: index - 1 },
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
-        successMessage: `selected tab ${index}`,
+  for (const [action, description, argument] of [
+    ["select", "Focus tab by index (1-based)", "<index>"],
+    ["close", "Close tab by index (1-based); default: first tab", "[index]"],
+  ] as const) {
+    tab
+      .command(action)
+      .description(description)
+      .argument(argument, "Tab index (1-based)", parseTabIndex)
+      .action(async (index: number | undefined, _opts, cmd) => {
+        const parent = parentOpts(cmd);
+        if (index !== undefined && (!Number.isSafeInteger(index) || index < 1)) {
+          defaultRuntime.error(danger("index must be a positive integer"));
+          defaultRuntime.exit(1);
+          return;
+        }
+        await runBrowserCliRequest({
+          parent,
+          path: "/tabs/action",
+          body: { action, index: index === undefined ? undefined : index - 1 },
+          timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+          successMessage: action === "select" ? `selected tab ${index}` : "closed tab",
+        });
       });
-    });
-
-  tab
-    .command("close")
-    .description("Close tab by index (1-based); default: first tab")
-    .argument("[index]", "Tab index (1-based)", parseTabIndex)
-    .action(async (index: number | undefined, _opts, cmd) => {
-      const parent = parentOpts(cmd);
-      if (typeof index === "number" && (!Number.isSafeInteger(index) || index < 1)) {
-        defaultRuntime.error(danger("index must be a positive integer"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      const idx = typeof index === "number" ? index - 1 : undefined;
-      await runBrowserCliRequest({
-        parent,
-        path: "/tabs/action",
-        body: { action: "close", index: idx },
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
-        successMessage: "closed tab",
-      });
-    });
+  }
 
   browser
     .command("open")
@@ -579,7 +511,6 @@ export function registerBrowserManageCommands(
       });
     });
 
-  // Profile management commands
   browser
     .command("profiles")
     .description("List all browser profiles")
@@ -752,4 +683,3 @@ export function registerBrowserManageCommands(
       });
     });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

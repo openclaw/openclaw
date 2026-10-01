@@ -1,8 +1,4 @@
-import type { MeetingParticipationAttempt } from "openclaw/plugin-sdk/meeting-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -33,7 +29,9 @@ function setupWithSqlite(env: NodeJS.ProcessEnv) {
   if (!tool) {
     throw new Error("Expected Google Meet tool registration");
   }
-  return { ...harness, tool };
+  const execute = async (params: Record<string, unknown>) =>
+    (await tool.execute("participation-call", params)).details;
+  return { ...harness, execute };
 }
 
 describe("Google Meet registered participation lifecycle", () => {
@@ -70,11 +68,8 @@ describe("Google Meet registered participation lifecycle", () => {
           expect(joined.details.session.state).toBe("active");
           expect(launch).toHaveBeenCalledOnce();
 
-          const context = await harness.tool.execute("context-call", {
-            action: "participation_context",
-            sessionId,
-          });
-          expect(context.details).toEqual({
+          const contextRequest = { action: "participation_context", sessionId };
+          expect(await harness.execute(contextRequest)).toEqual({
             sessionId,
             active: true,
             sourceOrder: 0,
@@ -88,25 +83,10 @@ describe("Google Meet registered participation lifecycle", () => {
             requestId: "unsupported-reaction",
             participationAction: { type: "reaction", reaction: "👍" },
           };
-          const first = await harness.tool.execute("participate-call", request);
-          const firstResult = requireRecord(first.details, "participation result");
+          const firstResult = requireRecord(await harness.execute(request), "participation result");
           expect(firstResult).toMatchObject({
             requestId: request.requestId,
             status: "unsupported",
-          });
-          const ledger = createPluginStateKeyedStoreForTests<MeetingParticipationAttempt>(
-            "google-meet",
-            {
-              namespace: "meeting-participation",
-              maxEntries: 10_000,
-              overflowPolicy: "reject-new",
-              env: state.env,
-            },
-          );
-          expect(await ledger.lookup(`${sessionId}:request:${request.requestId}`)).toMatchObject({
-            requestId: request.requestId,
-            actionType: "reaction",
-            result: first.details,
           });
 
           const left = await getMeetTool(harness).execute("leave-call", {
@@ -121,25 +101,20 @@ describe("Google Meet registered participation lifecycle", () => {
               tab: { targetId: "participation-tab", openedByPlugin: true },
             }),
           );
-          expect(
-            (
-              await harness.tool.execute("ended-context", {
-                action: "participation_context",
-                sessionId,
-              })
-            ).details,
-          ).toEqual({ sessionId, active: false, sourceOrder: 0, capabilities: [], sources: [] });
-          expect((await harness.tool.execute("same-result", request)).details).toEqual({
+          const endedContext = {
+            sessionId,
+            active: false,
+            sourceOrder: 0,
+            capabilities: [],
+            sources: [],
+          };
+          expect(await harness.execute(contextRequest)).toEqual(endedContext);
+          expect(await harness.execute(request)).toEqual({
             ...firstResult,
             replayed: true,
           });
           expect(
-            (
-              await harness.tool.execute("new-request-after-leave", {
-                ...request,
-                requestId: "request-after-leave",
-              })
-            ).details,
+            await harness.execute({ ...request, requestId: "request-after-leave" }),
           ).toMatchObject({ status: "rejected" });
           expect(harness.nodesInvoke).not.toHaveBeenCalled();
           expect(harness.runCommandWithTimeout).not.toHaveBeenCalled();
@@ -149,25 +124,13 @@ describe("Google Meet registered participation lifecycle", () => {
           await closeOpenClawStateDatabaseAsync();
           resetPluginStateStoreForTests();
           const restarted = setupWithSqlite(state.env);
-          expect(
-            (
-              await restarted.tool.execute("restarted-context", {
-                action: "participation_context",
-                sessionId,
-              })
-            ).details,
-          ).toEqual({ sessionId, active: false, sourceOrder: 0, capabilities: [], sources: [] });
-          expect((await restarted.tool.execute("restarted-replay", request)).details).toEqual({
+          expect(await restarted.execute(contextRequest)).toEqual(endedContext);
+          expect(await restarted.execute(request)).toEqual({
             ...firstResult,
             replayed: true,
           });
           expect(
-            (
-              await restarted.tool.execute("restarted-new-request", {
-                ...request,
-                requestId: "request-after-restart",
-              })
-            ).details,
+            await restarted.execute({ ...request, requestId: "request-after-restart" }),
           ).toMatchObject({ status: "rejected" });
           expect(launch).toHaveBeenCalledOnce();
           expect(leave).toHaveBeenCalledOnce();

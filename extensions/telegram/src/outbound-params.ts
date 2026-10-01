@@ -1,18 +1,12 @@
-import {
-  parseStrictInteger,
-  parseStrictNonNegativeInteger,
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+
+export {
+  parseStrictInteger as normalizeTelegramReplyToMessageId,
+  parseStrictNonNegativeInteger as parseTelegramMessageThreadId,
 } from "openclaw/plugin-sdk/number-runtime";
 
-export function parseTelegramMessageThreadId(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
-}
-
-export function normalizeTelegramReplyToMessageId(value: unknown): number | undefined {
-  return parseStrictInteger(value);
-}
-
 export function parseTelegramReplyToMessageId(replyToId?: unknown): number | undefined {
-  return normalizeTelegramReplyToMessageId(replyToId);
+  return parseStrictInteger(replyToId);
 }
 
 export function parseTelegramThreadId(threadId?: string | number | null): number | undefined {

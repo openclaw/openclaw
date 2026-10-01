@@ -1,7 +1,10 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.takeCodePoints
+import ai.openclaw.app.takeUtf8Bytes
 import ai.openclaw.app.ui.chat.providerQualifiedRef
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProxyCapability
@@ -75,8 +78,8 @@ internal class WearProxyController(
           WearRpcMethod.AgentsSelect -> selectAgent(request.params)
           WearRpcMethod.ModelsList -> listModels(request.params)
           WearRpcMethod.ModelsSelect -> selectModel(request.params)
-          WearRpcMethod.GatewayConnect -> gatewayConnect(request.params)
-          WearRpcMethod.GatewayDisconnect -> gatewayDisconnect(request.params)
+          WearRpcMethod.GatewayConnect -> setGatewayEnabled(request.params, enabled = true)
+          WearRpcMethod.GatewayDisconnect -> setGatewayEnabled(request.params, enabled = false)
           WearRpcMethod.ReplyText -> replyText(sourceNodeId, request.params)
           WearRpcMethod.ChatHistory -> chatHistory(request.params)
           WearRpcMethod.ChatSend -> sendChat(request.params)
@@ -200,11 +203,7 @@ internal class WearProxyController(
       .firstOrNull { (id) -> id == selected }
       ?.takeIf { selectedAgent -> boundedAgents.none { (id) -> id == selectedAgent.first } }
       ?.let { selectedAgent ->
-        if (boundedAgents.size == MAX_AGENT_COUNT) {
-          boundedAgents[boundedAgents.lastIndex] = selectedAgent
-        } else {
-          boundedAgents += selectedAgent
-        }
+        boundedAgents[boundedAgents.lastIndex] = selectedAgent
       }
     return buildJsonObject {
       put(
@@ -320,15 +319,12 @@ internal class WearProxyController(
       ?.trim()
       ?.takeIf { ref -> ref.isNotEmpty() && ref.codePointCount() <= MAX_MODEL_REF_CHARS }
 
-  private suspend fun gatewayConnect(params: JsonObject): JsonObject {
+  private suspend fun setGatewayEnabled(
+    params: JsonObject,
+    enabled: Boolean,
+  ): JsonObject {
     params.requireOnly()
-    connectGateway()
-    return proxyStatus(buildJsonObject {})
-  }
-
-  private suspend fun gatewayDisconnect(params: JsonObject): JsonObject {
-    params.requireOnly()
-    disconnectGateway()
+    if (enabled) connectGateway() else disconnectGateway()
     return proxyStatus(buildJsonObject {})
   }
 
@@ -356,7 +352,6 @@ internal class WearProxyController(
         .asArrayOrNull()
         ?.mapNotNull { projectSession(it, agentId) }
         .orEmpty()
-        .toMutableList()
     val selectedSessionValid =
       selectedSessionKey
         ?.takeIf { selectedKey -> sessions.none { session -> session.stringOrNull("key") == selectedKey } }
@@ -456,11 +451,8 @@ internal class WearProxyController(
     const val DEFAULT_HISTORY_CHARS = 2_000
     const val MAX_HISTORY_CHARS = 2_000
     const val MAX_HISTORY_OFFSET = 100_000
-    const val MAX_SESSION_KEY_CHARS = 512
     const val MAX_ATTEMPT_ID_CHARS = 128
     const val MAX_MESSAGE_CHARS = 4_000
-    const val MAX_IDEMPOTENCY_KEY_CHARS = 128
-    const val MAX_RUN_ID_CHARS = 128
     const val MAX_STATUS_CHARS = 200
     const val MAX_AGENT_COUNT = 32
     const val MAX_AGENT_ID_CHARS = 200
@@ -469,10 +461,7 @@ internal class WearProxyController(
     const val MAX_MODEL_COUNT = 50
     const val MAX_MODEL_REF_CHARS = 200
     const val MAX_MODEL_NAME_CHARS = 200
-    const val MAX_SESSION_LABEL_CHARS = 200
-    const val MAX_EVENT_TEXT_CHARS = 2_000
     const val MAX_ERROR_CODE_CHARS = 64
-    const val MAX_ERROR_MESSAGE_CHARS = 300
   }
 }
 
@@ -492,30 +481,14 @@ internal fun projectWearChatEvent(payload: JsonElement): JsonObject? {
   }
 }
 
-internal fun projectedWearMessageText(message: JsonElement?): String? {
-  val content = (message as? JsonObject)?.get("content")
-  val text =
-    when (content) {
-      is JsonPrimitive -> {
-        content.contentOrNull
-      }
-
-      is JsonArray -> {
-        content.joinToString(separator = "") { part ->
-          when (part) {
-            is JsonPrimitive -> part.contentOrNull.orEmpty()
-            is JsonObject -> part.stringOrNull("text").orEmpty()
-            else -> ""
-          }
-        }
-      }
-
-      else -> {
-        null
-      }
-    }
+internal fun wearStreamMessageText(message: JsonElement?): String? {
+  val source = message as? JsonObject ?: return null
+  if (source.stringOrNull("role") == null) return null
   // Empty canonical content is a replacement, not an absent message/delta.
-  return text
+  return when (source["content"]) {
+    is JsonPrimitive, is JsonArray -> wearReplyText(source)
+    else -> null
+  }
 }
 
 private fun projectHistory(source: JsonObject): JsonObject =
@@ -695,8 +668,6 @@ private fun JsonObject.optionalBooleanParam(name: String): Boolean? {
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyGatewayException("invalid_response", "$method returned an invalid response")
 
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
-
 private fun JsonObject.stringOrNull(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
 private fun JsonObject.providerQualifiedModelRef(): String? {
@@ -733,32 +704,6 @@ private fun kotlinx.serialization.json.JsonObjectBuilder.copyBoolean(
 }
 
 private fun String.codePointCount(): Int = codePointCount(0, length)
-
-private fun String.takeCodePoints(maxCodePoints: Int): String {
-  if (codePointCount() <= maxCodePoints) return this
-  return substring(0, offsetByCodePoints(0, maxCodePoints))
-}
-
-private fun String.takeUtf8Bytes(maxBytes: Int): String {
-  var end = 0
-  var usedBytes = 0
-  while (end < length) {
-    val codePoint = codePointAt(end)
-    val charCount = Character.charCount(codePoint)
-    val byteCount =
-      when {
-        codePoint <= 0x7f -> 1
-        codePoint <= 0x7ff -> 2
-        codePoint <= 0xffff -> 3
-        else -> 4
-      }
-    if (usedBytes + byteCount > maxBytes) break
-    usedBytes += byteCount
-    end += charCount
-  }
-  if (end == length) return this
-  return substring(0, end)
-}
 
 private const val MAX_SESSION_KEY_CHARS = 512
 private const val MAX_PROJECTED_AGENT_ID_CHARS = 200

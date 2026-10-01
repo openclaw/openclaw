@@ -1,10 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import * as taskRuntime from "../tasks/runtime-internal.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import type { MediaGenerationOperation } from "./media-generation-activity.js";
+import * as mediaActivity from "./media-generation-activity.js";
 import { buildRuntimeFactsContext } from "./runtime-facts-prompt.js";
 
 const params = { capabilityToolNames: new Set(["exec"]), agentId: "main", cfg: {} };
@@ -99,36 +98,31 @@ describe("approved executable runtime facts", () => {
   );
 });
 
-function createMediaTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
+function createMediaTask(
+  overrides: Partial<MediaGenerationOperation> = {},
+): MediaGenerationOperation {
   return {
     taskId: "image-1",
-    runtime: "cli",
     taskKind: "image_generation",
     sourceId: "image_generate:provider",
     requesterSessionKey: "agent:main:media",
     requesterAgentId: "main",
-    ownerKey: "agent:main:media",
-    scopeKind: "session",
     task: "Generate media",
     status: "running",
-    deliveryStatus: "not_applicable",
-    notifyPolicy: "silent",
     createdAt: 1,
     ...overrides,
   };
 }
 
 describe("media task runtime facts", () => {
-  it("uses one awaited owner snapshot for enabled media and refreshes it next turn", async () => {
-    const lookup = createDeferred<TaskRecord[]>();
-    const read = vi.spyOn(taskRuntime, "listFreshTasksForOwnerKey").mockReturnValue(lookup.promise);
+  it("uses one native owner snapshot for enabled media and refreshes it next turn", async () => {
+    const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations");
     const mediaParams = {
       ...params,
       sessionKey: "agent:main:media",
       capabilityToolNames: new Set(["video_generate", "image_generate", "music_generate"]),
     };
-    const pending = buildRuntimeFactsContext(mediaParams);
-    lookup.resolve([
+    read.mockReturnValue([
       createMediaTask({
         taskId: "video-1",
         taskKind: "video_generation",
@@ -143,7 +137,7 @@ describe("media task runtime facts", () => {
         sourceId: "music_generate",
       }),
     ]);
-    expect(await pending).toEqual([
+    expect(await buildRuntimeFactsContext(mediaParams)).toEqual([
       {
         kind: "conversation-data",
         text: [
@@ -154,9 +148,9 @@ describe("media task runtime facts", () => {
         ].join("\n"),
       },
     ]);
-    expect(read).toHaveBeenCalledExactlyOnceWith("agent:main:media");
+    expect(read).toHaveBeenCalledExactlyOnceWith("agent:main:media", "main");
 
-    read.mockResolvedValue([]);
+    read.mockReturnValue([]);
     expect(await buildRuntimeFactsContext(mediaParams)).toEqual([
       {
         kind: "conversation-data",
@@ -182,7 +176,7 @@ describe("media task runtime facts", () => {
         "## Media Generation Tasks\n- tool=music_generate; task=music-1; status=running\n- tool=video_generate; none",
     },
   ])("includes only enabled media sections: $tools", async ({ tools, expected }) => {
-    const read = vi.spyOn(taskRuntime, "listFreshTasksForOwnerKey").mockResolvedValue([
+    const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations").mockReturnValue([
       createMediaTask(),
       createMediaTask({
         taskId: "music-1",
@@ -197,13 +191,13 @@ describe("media task runtime facts", () => {
         capabilityToolNames: new Set(tools),
       }),
     ).toEqual([{ kind: "conversation-data", text: expected }]);
-    expect(read).toHaveBeenCalledExactlyOnceWith("agent:main:media");
+    expect(read).toHaveBeenCalledExactlyOnceWith("agent:main:media", "main");
   });
 
   it.each([undefined, "", "   "])(
     "keeps explicit empty media facts without session %j",
     async (sessionKey) => {
-      const read = vi.spyOn(taskRuntime, "listFreshTasksForOwnerKey");
+      const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations");
       expect(
         await buildRuntimeFactsContext({
           ...params,
@@ -221,7 +215,7 @@ describe("media task runtime facts", () => {
   );
 
   it("does not read owner tasks without an enabled media capability", async () => {
-    const read = vi.spyOn(taskRuntime, "listFreshTasksForOwnerKey");
+    const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations");
     expect(
       await buildRuntimeFactsContext({
         ...params,

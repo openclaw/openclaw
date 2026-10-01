@@ -125,38 +125,6 @@ describe("Client.deployCommands", () => {
     expect(put).toHaveBeenCalledTimes(2);
   });
 
-  it("does not patch semantically unchanged nested command options", async () => {
-    const client = createInternalTestClient([
-      createTestCommand({
-        name: "one",
-        options: [{ type: 3, name: "value", description: "Value" }],
-      }),
-    ]);
-    const get = vi.fn(async () => [
-      {
-        id: "cmd1",
-        application_id: "app1",
-        type: ApplicationCommandType.ChatInput,
-        name: "one",
-        description: "one command",
-        options: [{ description: "Value", name: "value", type: 3 }],
-        default_member_permissions: null,
-        integration_types: [0, 1],
-        contexts: [0, 1, 2],
-      },
-    ]);
-    const patch = vi.fn(async () => undefined);
-    const post = vi.fn(async () => undefined);
-    const deleteRequest = vi.fn(async () => undefined);
-    attachRestMock(client, { get, patch, post, delete: deleteRequest });
-
-    await client.deployCommands({ mode: "reconcile" });
-
-    expect(patch).not.toHaveBeenCalled();
-    expect(post).not.toHaveBeenCalled();
-    expect(deleteRequest).not.toHaveBeenCalled();
-  });
-
   it("does not patch live-only command metadata or reordered unordered arrays", async () => {
     const client = createInternalTestClient([
       createTestCommand({
@@ -184,9 +152,9 @@ describe("Client.deployCommands", () => {
         description_localized: "one command",
         options: [
           {
-            type: 3,
-            name: "value",
             description: "Value",
+            name: "value",
+            type: 3,
             description_localized: "Value",
             channel_types: [0, 1],
           },

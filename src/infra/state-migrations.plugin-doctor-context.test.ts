@@ -1,11 +1,70 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
+
+describe("plugin doctor ingress authority", () => {
+  it("rolls back a queued claim when the repair owner expires before native commit", async () => {
+    await withOpenClawTestState(
+      { label: "doctor-ingress-commit", applyEnv: false },
+      async ({ env, stateDir }) => {
+        let active = true;
+        const context = createPluginDoctorStateMigrationContext({
+          pluginId: "line",
+          env,
+          config: {},
+          channelIngress: {
+            channelIds: ["line"],
+            stateDir,
+            mutation: {
+              assertCurrent() {
+                if (!active) {
+                  throw new Error("repair owner expired");
+                }
+              },
+            },
+          },
+        });
+        const queue = context.channelIngressQueues?.[0]?.openChannelIngressQueue?.();
+        if (!queue) {
+          throw new Error("Missing Doctor repair queue");
+        }
+        await queue.enqueue("pending", { text: "retained" });
+        const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
+        const observer = vi
+          .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) =>
+            createAdmission((request, grant) => {
+              if (request.stage === "commit") {
+                active = false;
+              }
+              admit(request, grant);
+            }, attachment),
+          );
+        try {
+          const outcome = await queue.claim("pending").then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          const reader = createChannelIngressQueue({ channelId: "line", stateDir });
+          expect((await reader.listPending()).map((row) => row.id)).toEqual(["pending"]);
+          expect(await reader.listClaims()).toEqual([]);
+          expect(outcome).toMatchObject({
+            message: expect.stringContaining("repair owner expired"),
+          });
+        } finally {
+          observer.mockRestore();
+        }
+      },
+    );
+  });
+});
 
 describe("plugin doctor session identity evidence", () => {
   it("preserves two current keys sharing an identity instead of inventing a main owner", async () => {
@@ -235,6 +294,48 @@ describe("plugin doctor session identity evidence", () => {
           context.readSessionIdentityEvidenceBatch?.([{ agentId: "main", sessionId: "gone" }]),
         ).rejects.toThrow("repair owner expired");
         await expect(store.lookup("binding:retained")).resolves.toEqual({ sessionId: "gone" });
+      },
+    );
+  });
+
+  it("revokes retained ingress purge after Doctor repair authority expires", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-doctor-expired-purge", applyEnv: false },
+      async ({ env, stateDir }) => {
+        let active = true;
+        const context = createPluginDoctorStateMigrationContext({
+          pluginId: "migration-fixture",
+          env,
+          config: {},
+          channelIngress: {
+            channelIds: ["migration-fixture"],
+            stateDir,
+            mutation: {
+              assertCurrent() {
+                if (!active) {
+                  throw new Error("repair owner expired");
+                }
+              },
+            },
+          },
+        });
+        const ingress = context.channelIngressQueues?.[0];
+        const queue = ingress?.openChannelIngressQueue?.<string>();
+        const inspection = ingress?.openChannelIngressQueueForInspection<string>();
+        const purge = queue?.purge?.bind(queue);
+        if (!queue || !purge || !inspection) {
+          throw new Error("Doctor repair did not provide ingress purge");
+        }
+
+        await queue.enqueue("authorized", "inside repair");
+        await expect(purge()).resolves.toBe(1);
+        await expect(queue.listPending()).resolves.toEqual([]);
+
+        await queue.enqueue("retained", "must survive expired repair");
+        active = false;
+
+        await expect(Promise.resolve().then(() => purge())).rejects.toThrow("repair owner expired");
+        expect((await inspection.listPending()).map((entry) => entry.id)).toEqual(["retained"]);
       },
     );
   });

@@ -19,8 +19,7 @@ import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
-  createPlacementSessionToolOperationOps,
-} from "./placement-session-tool-operations.js";
+} from "./placement-session-tool-operations.kernel.js";
 import {
   publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
@@ -152,6 +151,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
   const claimWorkspaceResult = (
     input: WorkerTurnClaimInput,
     purpose: "reclaim" | "mutation",
+    beforePublish?: (claim: WorkerSessionTurnClaim) => void,
   ): WorkerSessionTurnClaim =>
     write((db) => {
       if (purpose === "mutation" && getRequired(db, input.sessionId).state !== "active") {
@@ -166,6 +166,8 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       // Mutation admission and its recovery custody must commit together: an
       // interrupted remote operation cannot leave unowned workspace changes.
       insertWorkerWorkspacePendingResult(db, claim, updatedAtMs, instanceId);
+      // Recovery must deny operational use before commit observers can mint credentials.
+      beforePublish?.(claim);
       return claim;
     });
 
@@ -174,11 +176,14 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       return write((db) => claimTurnInDatabase(db, input, now()));
     },
 
-    claimReclaimWorkspaceResult(input: WorkerTurnClaimInput): WorkerSessionTurnClaim {
+    claimReclaimWorkspaceResult(
+      input: WorkerTurnClaimInput,
+      beforePublish?: (claim: WorkerSessionTurnClaim) => void,
+    ): WorkerSessionTurnClaim {
       if (input.claimId !== input.runId || !input.claimId.startsWith("reclaim-")) {
         throw new Error(`Session ${input.sessionId} workspace result is not owned by reclaim`);
       }
-      return claimWorkspaceResult(input, "reclaim");
+      return claimWorkspaceResult(input, "reclaim", beforePublish);
     },
 
     claimWorkspaceMutationResult(
@@ -186,8 +191,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     ): WorkerSessionTurnClaim {
       return claimWorkspaceResult({ ...input, runId: input.claimId }, "mutation");
     },
-
-    ...createPlacementSessionToolOperationOps(runtime),
 
     releaseTurn(claim: WorkerSessionTurnClaim): WorkerSessionPlacementRecord {
       const sessionId = required(claim.sessionId, "session id");

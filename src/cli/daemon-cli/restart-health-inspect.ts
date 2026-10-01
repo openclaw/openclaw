@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
-import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import type { ConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
@@ -35,6 +34,8 @@ export async function inspectGatewayRestart(params: {
   probeHosts?: readonly string[];
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Bound Gateway requests separately from native service/listener inspection. */
+  probeTimeoutMs?: number;
   deadline?: GatewayRestartDeadline;
   phase?: string;
 }): Promise<GatewayRestartSnapshot> {
@@ -45,15 +46,18 @@ export async function inspectGatewayRestart(params: {
       ? params.deadline.read(`${params.phase ?? "inspection"}:${phase}`, operation)
       : operation();
   const startedAtMs = performance.now();
-  const remainingTimeoutMs = () => {
+  const remainingTimeoutMs = (probeTimeoutMs?: number) => {
     const remaining =
       params.timeoutMs === undefined
         ? undefined
         : Math.max(1, params.timeoutMs - (performance.now() - startedAtMs));
     // The overall readiness deadline must not replace a shorter inspection budget.
-    return params.deadline
+    const allowance = params.deadline
       ? Math.min(Math.max(1, params.deadline.remainingMs()), remaining ?? Infinity)
       : remaining;
+    return probeTimeoutMs === undefined
+      ? allowance
+      : Math.min(probeTimeoutMs, allowance ?? Infinity);
   };
   const env = params.env ?? process.env;
   const probeHosts =
@@ -77,37 +81,17 @@ export async function inspectGatewayRestart(params: {
     expectedVersion || expectedBuildId || params.requirePluginHealth === false,
   );
   let reachability: GatewayReachability | null = null;
-  let probeError: string | undefined;
-  let staleConnection: GatewayReachability["staleConnection"];
-  let gatewayBootId: string | undefined;
-  let gatewayVersion: string | null | undefined;
-  let gatewayBuildId: string | null | undefined;
-  let activatedPluginErrors: PluginHealthErrorSummary[] = [];
-  let unavailablePlugins: GatewayReachability["unavailablePlugins"] = [];
-  let channelProbeErrors: Array<{ id: string; error: string }> = [];
-  const loadReachability = async () => {
-    if (!reachability) {
-      reachability = await read("gateway-health", () =>
-        confirmGatewayReachable({
-          port: params.port,
-          ...params.probeContext,
-          ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
-          env,
-          timeoutMs: remainingTimeoutMs(),
-          ...(signal ? { signal } : {}),
-        }),
-      );
-      probeError = reachability.probeError;
-      staleConnection = reachability.staleConnection;
-      gatewayBootId = reachability.gatewayBootId;
-      gatewayVersion = reachability.gatewayVersion;
-      gatewayBuildId = reachability.gatewayBuildId;
-      activatedPluginErrors = reachability.activatedPluginErrors;
-      unavailablePlugins = reachability.unavailablePlugins;
-      channelProbeErrors = reachability.channelProbeErrors;
-    }
-    return reachability;
-  };
+  const loadReachability = () =>
+    read("gateway-health", () =>
+      confirmGatewayReachable({
+        port: params.port,
+        ...params.probeContext,
+        ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
+        env,
+        timeoutMs: remainingTimeoutMs(params.probeTimeoutMs),
+        ...(signal ? { signal } : {}),
+      }),
+    );
   let runtime: GatewayServiceRuntime;
   try {
     runtime = await read("service-runtime", () =>
@@ -154,17 +138,17 @@ export async function inspectGatewayRestart(params: {
           readGatewayStartupPhase({
             configuredProbe,
             port: params.port,
-            timeoutMs: remainingTimeoutMs(),
+            timeoutMs: remainingTimeoutMs(params.probeTimeoutMs),
             ...(signal ? { signal } : {}),
           }),
         )
       : undefined;
   if (startupPhase && (expectedVersion || expectedBuildId)) {
     // Startup cannot conceal a previous install or a definitive plugin/channel failure.
-    await loadReachability();
+    reachability = await loadReachability();
   }
   if (!startupPhase && portUsage.status === "busy" && runtime.status !== "running") {
-    const reachable = await loadReachability();
+    const reachable = (reachability ??= await loadReachability());
     if (reachable.reachable) {
       return finalizeGatewayRestartSnapshot(
         {
@@ -208,18 +192,13 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort && !startupPhase;
-  if (requiresGatewayProbe && healthy && portUsage.status === "busy") {
-    const reachable = await loadReachability();
-    healthy = reachable.reachable;
-  }
   if (
-    !healthy &&
     !startupPhase &&
     running &&
     portUsage.status === "busy" &&
-    !requiresGatewayProbe
+    (requiresGatewayProbe ? healthy : !healthy)
   ) {
-    const reachable = await loadReachability();
+    const reachable = (reachability ??= await loadReachability());
     healthy = reachable.reachable;
   }
   // Read after probes: an owner can acquire the coordinator while health is unavailable.
@@ -250,6 +229,16 @@ export async function inspectGatewayRestart(params: {
         ),
       );
 
+  const {
+    gatewayBootId,
+    gatewayVersion,
+    gatewayBuildId,
+    probeError,
+    staleConnection,
+    activatedPluginErrors,
+    unavailablePlugins,
+    channelProbeErrors,
+  } = reachability ?? {};
   return finalizeGatewayRestartSnapshot(
     {
       runtime,
@@ -262,9 +251,9 @@ export async function inspectGatewayRestart(params: {
       ...(startupPhase ? { startupPhase } : {}),
       ...(probeError ? { probeError } : {}),
       ...(staleConnection ? { staleConnection } : {}),
-      ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
-      ...(unavailablePlugins.length ? { unavailablePlugins } : {}),
-      ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
+      ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
+      ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
+      ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
     },
     expectedVersion,
     expectedBuildId,

@@ -78,12 +78,11 @@ function reconcilePendingChatOutboxInput(
     return "blocked";
   }
   const inputReceipt = readChatInputReceipt(history, item);
-  if (inputReceipt === "pending") {
+  if (inputReceipt === "pending" || inputReceipt === "cancelled") {
     const pending = history.pendingInputs?.items.find((input) => input.runId === item.sendRunId);
+    const cancelled = inputReceipt === "cancelled" || pending?.state === "cancelled";
     const confirmsLocal = Boolean(
-      pending?.state !== "cancelled" &&
-      historySessionId &&
-      (!item.sessionId || item.sendState === "unconfirmed"),
+      !cancelled && historySessionId && (!item.sessionId || item.sendState === "unconfirmed"),
     );
     if (confirmsLocal && !confirmQueuedMessageCustody(host, item, historySessionId)) {
       return "blocked";
@@ -93,9 +92,9 @@ function reconcilePendingChatOutboxInput(
       historySessionId === host.currentSessionId &&
       pendingBefore === undefined
     ) {
-      applyChatPendingInputs(host, history.pendingInputs);
+      applyChatPendingInputs(host, history.pendingInputs, { receipts: history.inputReceipts });
     }
-    if (pending?.state === "cancelled") {
+    if (cancelled) {
       return removeDeliveredQueuedChatSendForRun(host, item.sendRunId, outbox) !== null ||
         !readStoredChatOutbox(host, outbox)?.queue.some((entry) => entry.id === item.id)
         ? "continue"

@@ -3,7 +3,7 @@ import type {
   AgentHarnessSessionDeletionParams,
   AgentHarness,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -40,7 +40,8 @@ async function releaseSessionSubscription(
   assertCurrent?.();
   // End child ownership before the parent subscription, so late completions
   // cannot deliver into a replacement OpenClaw session generation.
-  codexNativeSubagentMonitorRuntime.retireParent(client, binding.threadId);
+  await codexNativeSubagentMonitorRuntime.retireParent(client, binding.threadId);
+  assertCurrent?.();
   const released = await releaseCodexAppServerLiveThread(client, binding.threadId, assertCurrent);
   assertCurrent?.();
   if (!released && isIncognitoSessionKey(sessionKey)) {

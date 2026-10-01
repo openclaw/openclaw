@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { hasEffectivePairedDeviceRole } from "../../infra/device-pairing.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
-  formatNodeRunnerUpdateRequired,
+  formatNodeRunnerInventoryIssue,
   type NodeRunnerInventoryIssue,
 } from "../../infra/node-runner-inventory.js";
 import {
@@ -53,7 +53,7 @@ export async function resolveDeviceWorkerAvailability(
 
 export function deviceUnavailableText(deviceId: string, availability: DeviceWorkerAvailability) {
   if (availability.issue) {
-    return formatNodeRunnerUpdateRequired(deviceId, availability.issue);
+    return formatNodeRunnerInventoryIssue(deviceId, availability.issue);
   }
   switch (availability.unavailableReason) {
     case "unpaired":

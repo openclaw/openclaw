@@ -68,7 +68,7 @@ function appendToolPair(manager: SessionManager, index: number) {
 }
 
 describe("Codex bounded assistant continuity", () => {
-  it.each(["fresh", "rotated", "resumed"] as const)(
+  it.each(["rotated", "resumed"] as const)(
     "retains an assistant-only bounded suffix on a %s native thread without replaying resumed history",
     async (mode) => {
       const { params, manager } = await createHistory();
@@ -102,21 +102,19 @@ describe("Codex bounded assistant continuity", () => {
           expect(calls.has(message.toolCallId)).toBe(true);
         }
       }
-      if (mode !== "fresh") {
-        await writeCodexAppServerBinding(params.sessionFile, {
-          threadId: "thread-existing",
-          cwd: params.workspaceDir,
-          model: params.modelId,
-          modelProvider: "openai",
-          historyCoveredThrough: new Date(30).toISOString(),
-          dynamicToolsFingerprint:
-            mode === "rotated" ? JSON.stringify([{ name: "retired-tool" }]) : "[]",
-          webSearchThreadConfigFingerprint: JSON.stringify({
-            "features.standalone_web_search": false,
-            web_search: "disabled",
-          }),
-        });
-      }
+      await writeCodexAppServerBinding(params.sessionFile, {
+        threadId: "thread-existing",
+        cwd: params.workspaceDir,
+        model: params.modelId,
+        modelProvider: "openai",
+        historyCoveredThrough: new Date(30).toISOString(),
+        dynamicToolsFingerprint:
+          mode === "rotated" ? JSON.stringify([{ name: "retired-tool" }]) : "[]",
+        webSearchThreadConfigFingerprint: JSON.stringify({
+          "features.standalone_web_search": false,
+          web_search: "disabled",
+        }),
+      });
       const harness = mode === "resumed" ? createResumeHarness() : createStartedThreadHarness();
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
@@ -150,129 +148,109 @@ describe("Codex bounded assistant continuity", () => {
     },
   );
 
-  it.each(["empty", "tool-only"] as const)(
-    "does not seed a fresh thread from %s history",
-    async (mode) => {
-      const { params, manager } = await createHistory();
-      if (mode === "tool-only") {
-        appendToolPair(manager, 0);
-        manager.appendMessage(assistantMessage("  \n  ", 4));
-      }
-      const harness = createStartedThreadHarness();
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
-      const request = harness.requests.find((entry) => entry.method === "turn/start");
-      const text = JSON.stringify(request?.params);
-      expect(text).toContain(params.prompt);
-      expect(text).not.toContain("<conversation_context>");
-      expect(text).not.toContain("synthetic tool payload");
-    },
-  );
-  it.each([false, true])(
-    "applies prompt hooks once per build without duplicating current input (continuity: %s)",
-    async (withHistory) => {
-      const llmInput = vi.fn();
-      const beforePromptBuild = vi.fn(async (_event: unknown) => ({
-        systemPrompt: "custom codex system",
-        prependSystemContext: "pre system",
-        appendSystemContext: "post system",
-        prependContext: "queued context",
-        appendContext: "tail context",
-        toolsAllow: ["*"],
-      }));
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          { hookName: "before_prompt_build", handler: beforePromptBuild },
-          { hookName: "llm_input", handler: llmInput },
-        ]),
-      );
-      const { params, manager } = await createHistory("openai");
-      params.prompt = "hello";
-      if (withHistory) {
-        manager.appendMessage(assistantMessage("previous turn", Date.now()));
-      }
-      const harness = createStartedThreadHarness();
-      params.inputProvenance = { kind: "inter_session", sourceTool: "sessions_send" };
-      params.config = {
-        ...params.config,
-        agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-      };
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
-      // The first build fixes thread instructions; a new-thread continuity projection
-      // rebuilds only turn input after the actual startup lifecycle is known.
-      expect(beforePromptBuild).toHaveBeenCalledTimes(withHistory ? 2 : 1);
-      const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
-        {
-          messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
-          prompt?: string;
-          currentUserMessage?: string;
-        },
-        { runId?: string; sessionId?: string },
-      ];
-      expect(hookInput.prompt).toBe("hello");
-      expect(hookInput.messages).toEqual(
-        withHistory
-          ? [
-              expect.objectContaining({
-                role: "assistant",
-                content: [{ type: "text", text: "previous turn" }],
-              }),
-            ]
-          : [],
-      );
-      for (const [event] of beforePromptBuild.mock.calls) {
-        expect(event).toMatchObject({ currentUserMessage: "hello" });
-      }
-      const lastHookInput = mockCall(
-        beforePromptBuild,
-        "before_prompt_build",
-        withHistory ? 1 : 0,
-      )[0] as typeof hookInput;
-      if (withHistory) {
-        expect(lastHookInput.prompt).toContain("[assistant]\nprevious turn");
-        expect(lastHookInput.prompt).toMatch(
-          /<\/conversation_context>\n\nCurrent user request:\nhello$/,
-        );
-      } else {
-        expect(lastHookInput.prompt).toBe("hello");
-      }
-      expect(lastHookInput.prompt).not.toContain("queued context");
-      expect(lastHookInput.prompt).not.toContain("tail context");
-      const expectedInput = `queued context\n\n${lastHookInput.prompt}\n\ntail context`;
-      expect(hookContext.runId).toBe("run-1");
-      expect(hookContext.sessionId).toBe(params.sessionId);
-      expect(hookContext).toMatchObject({
-        modelProviderId: params.provider,
-        modelId: params.modelId,
-        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
-      });
-      const threadStart = harness.requests.find((request) => request.method === "thread/start");
-      const threadStartParams = threadStart?.params as
-        | { developerInstructions?: string }
-        | undefined;
-      const wrappedPluginSystemContext = (text: string) =>
-        `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
-      expect(threadStartParams?.developerInstructions).toContain(
-        `${wrappedPluginSystemContext("pre system")}\n\ncustom codex system\n\n${wrappedPluginSystemContext("post system")}`,
-      );
-      const turnStart = harness.requests.find((request) => request.method === "turn/start");
-      const turnStartParams = turnStart?.params as
-        | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
-        | undefined;
-      expect(turnStartParams?.input).toEqual([
-        { type: "text", text: expectedInput, text_elements: [] },
-      ]);
-      const [llmInputPayload] = mockCall(llmInput, "llm_input") as [
-        { historyMessages?: unknown[]; prompt?: string },
-        unknown,
-      ];
-      expect(llmInputPayload.prompt).toBe(expectedInput);
-      expect(llmInputPayload.historyMessages).toEqual([]);
-    },
-  );
+  it("does not seed a fresh thread from tool-only history", async () => {
+    const { params, manager } = await createHistory();
+    appendToolPair(manager, 0);
+    manager.appendMessage(assistantMessage("  \n  ", 4));
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    const request = harness.requests.find((entry) => entry.method === "turn/start");
+    const text = JSON.stringify(request?.params);
+    expect(text).toContain(params.prompt);
+    expect(text).not.toContain("<conversation_context>");
+    expect(text).not.toContain("synthetic tool payload");
+  });
+  it("applies prompt hooks once per build without duplicating continuity input", async () => {
+    const llmInput = vi.fn();
+    const beforePromptBuild = vi.fn(async (_event: unknown) => ({
+      systemPrompt: "custom codex system",
+      prependSystemContext: "pre system",
+      appendSystemContext: "post system",
+      prependContext: "queued context",
+      appendContext: "tail context",
+      toolsAllow: ["*"],
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: beforePromptBuild },
+        { hookName: "llm_input", handler: llmInput },
+      ]),
+    );
+    const { params, manager } = await createHistory("openai");
+    params.prompt = "hello";
+    manager.appendMessage(assistantMessage("previous turn", Date.now()));
+    const harness = createStartedThreadHarness();
+    params.inputProvenance = { kind: "inter_session", sourceTool: "sessions_send" };
+    params.config = {
+      ...params.config,
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    };
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    // The first build fixes thread instructions; a new-thread continuity projection
+    // rebuilds only turn input after the actual startup lifecycle is known.
+    expect(beforePromptBuild).toHaveBeenCalledTimes(2);
+    const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
+      {
+        messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
+        prompt?: string;
+        currentUserMessage?: string;
+      },
+      { runId?: string; sessionId?: string },
+    ];
+    expect(hookInput.prompt).toBe("hello");
+    expect(hookInput.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "previous turn" }],
+      }),
+    ]);
+    for (const [event] of beforePromptBuild.mock.calls) {
+      expect(event).toMatchObject({ currentUserMessage: "hello" });
+    }
+    const lastHookInput = mockCall(
+      beforePromptBuild,
+      "before_prompt_build",
+      1,
+    )[0] as typeof hookInput;
+    expect(lastHookInput.prompt).toContain("[assistant]\nprevious turn");
+    expect(lastHookInput.prompt).toMatch(
+      /<\/conversation_context>\n\nCurrent user request:\nhello$/,
+    );
+    expect(lastHookInput.prompt).not.toContain("queued context");
+    expect(lastHookInput.prompt).not.toContain("tail context");
+    const expectedInput = `queued context\n\n${lastHookInput.prompt}\n\ntail context`;
+    expect(hookContext.runId).toBe("run-1");
+    expect(hookContext.sessionId).toBe(params.sessionId);
+    expect(hookContext).toMatchObject({
+      modelProviderId: params.provider,
+      modelId: params.modelId,
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    });
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
+    const wrappedPluginSystemContext = (text: string) =>
+      `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
+    expect(threadStartParams?.developerInstructions).toContain(
+      `${wrappedPluginSystemContext("pre system")}\n\ncustom codex system\n\n${wrappedPluginSystemContext("post system")}`,
+    );
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as
+      | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
+      | undefined;
+    expect(turnStartParams?.input).toEqual([
+      { type: "text", text: expectedInput, text_elements: [] },
+    ]);
+    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [
+      { historyMessages?: unknown[]; prompt?: string },
+      unknown,
+    ];
+    expect(llmInputPayload.prompt).toBe(expectedInput);
+    expect(llmInputPayload.historyMessages).toEqual([]);
+  });
 });

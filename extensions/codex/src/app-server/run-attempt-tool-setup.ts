@@ -4,6 +4,7 @@ import {
   materializeRequesterScopedMcpToolsForHarnessRun,
   resolveAgentDir,
   runAgentCleanupStep,
+  supportsModelTools,
   type EmbeddedRunAttemptParams,
   type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -27,6 +28,10 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import {
+  resolveInactiveCodexHeartbeatResponseDescriptor,
+  selectInactiveCodexHeartbeatResponseTool,
+} from "./heartbeat-tool-fallback.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
@@ -42,10 +47,6 @@ import {
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
 import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
-
-function isAuthorityResolutionOperationAbort(error: unknown, signal: AbortSignal | undefined) {
-  return signal?.aborted === true && error === signal.reason;
-}
 
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
@@ -104,7 +105,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   } = {
     yieldDetected: false,
     yieldAcknowledgment: undefined,
-    persistentWebSearchAllowed: undefined as boolean | undefined,
+    persistentWebSearchAllowed: undefined,
     webSearchAllowed: false,
   };
   const toolOutcomeOrdinals = new Map<string, number>();
@@ -253,7 +254,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
               // same live turn. Substantive discovery/auth/policy failures stay cached.
               if (
                 creatorAuthorityPromise === pending &&
-                isAuthorityResolutionOperationAbort(error, options?.signal)
+                options?.signal?.aborted === true &&
+                error === options.signal.reason
               ) {
                 creatorAuthorityPromise = undefined;
               }
@@ -440,46 +442,48 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       policyContext,
       warn: (message: string) => embeddedAgentLog.warn(message),
     };
-    configuredMcp = configuredMcpSurface
-      ? await materializeStaticMcpToolsForHarnessRun({
-          ...mcpOptions,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: sessionAgentId,
-          reservedToolNames,
-          projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
-          ...(configuredMcpSurface === "transient"
-            ? {
-                requestInteractiveCodexApproval: (approval) =>
-                  requestInteractiveMcpApproval(
-                    approval,
-                    approval.mode === "prompt"
-                      ? ["allow-once", "deny"]
-                      : ["allow-once", "allow-always", "deny"],
-                  ),
-              }
-            : {}),
-        })
-      : undefined;
+    configuredMcp =
+      params.requireWorkspaceOnly !== true && configuredMcpSurface
+        ? await materializeStaticMcpToolsForHarnessRun({
+            ...mcpOptions,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            agentId: sessionAgentId,
+            reservedToolNames,
+            projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
+            ...(configuredMcpSurface === "transient"
+              ? {
+                  requestInteractiveCodexApproval: (approval) =>
+                    requestInteractiveMcpApproval(
+                      approval,
+                      approval.mode === "prompt"
+                        ? ["allow-once", "deny"]
+                        : ["allow-once", "allow-always", "deny"],
+                    ),
+                }
+              : {}),
+          })
+        : undefined;
     // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
     // Specs come from the session advertised-catalog cache so fingerprints stay stable.
-    scopedMcpTools = authenticatedScheduledMode
-      ? undefined
-      : await materializeRequesterScopedMcpToolsForHarnessRun({
-          ...mcpOptions,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          // Requester servers cannot consume stored grants; Allow Always would re-prompt.
-          requestInteractiveCodexApproval: (approval) =>
-            requestInteractiveMcpApproval(approval, ["allow-once", "deny"]),
-          requesterSenderId: params.senderId,
-          agentAccountId: params.agentAccountId,
-          messageChannel: params.messageChannel ?? params.messageProvider,
-          reservedToolNames: [
-            ...reservedToolNames,
-            ...(configuredMcp?.tools.map((tool) => tool.name) ?? []),
-          ],
-        });
+    scopedMcpTools =
+      authenticatedScheduledMode || params.requireWorkspaceOnly === true
+        ? undefined
+        : await materializeRequesterScopedMcpToolsForHarnessRun({
+            ...mcpOptions,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            // Requester servers cannot consume stored grants; Allow Always would re-prompt.
+            requestInteractiveCodexApproval: (approval) =>
+              requestInteractiveMcpApproval(approval, ["allow-once", "deny"]),
+            requesterSenderId: params.senderId,
+            agentAccountId: params.agentAccountId,
+            messageChannel: params.messageChannel ?? params.messageProvider,
+            reservedToolNames: [
+              ...reservedToolNames,
+              ...(configuredMcp?.tools.map((tool) => tool.name) ?? []),
+            ],
+          });
     // Restricted dynamic-tool profiles (private QA, exclusion lists) gate scoped
     // MCP tools exactly like every other dynamic tool. Filter both lists with the
     // same rule so execution and advertised specs stay name-aligned.
@@ -526,9 +530,32 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? { turnSourceThreadId: params.currentThreadTs }
         : {}),
     };
+    const heartbeatFallbackDescriptor = resolveInactiveCodexHeartbeatResponseDescriptor({
+      registeredTools: registeredWithScopedMcp,
+      ...(nativeSpecs ? { registeredSpecs: nativeSpecs } : {}),
+    });
+    const heartbeatFallbackTool =
+      heartbeatFallbackDescriptor && supportsModelTools(params.model)
+        ? selectInactiveCodexHeartbeatResponseTool({
+            descriptor: heartbeatFallbackDescriptor,
+            disableTools: params.disableTools,
+            toolsAllow: params.toolsAllow,
+            pluginConfig,
+          })
+        : undefined;
+    const registeredFallbackTools =
+      params.trigger === "heartbeat" ||
+      params.enableHeartbeatTool === true ||
+      params.forceHeartbeatTool === true ||
+      !heartbeatFallbackTool
+        ? undefined
+        : params.hostCapabilities.bindToolSurface([heartbeatFallbackTool], {
+            cwd: effectiveCwd ?? effectiveWorkspace,
+          });
     const toolBridge = createCodexDynamicToolBridge({
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      registeredFallbackTools,
       registeredSpecs: nativeSpecs,
       signal: runAbortController.signal,
       computerContextEpoch,
@@ -649,9 +676,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     }
     return {
       tools: toolsWithScopedMcp,
-      registeredTools: registeredWithScopedMcp,
       requireExplicitMessageTarget,
-      scopedMcpTools,
       configuredMcp,
       disposeTools,
       configuredMcpOwnershipVersion:
@@ -665,7 +690,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolState,
       toolOutcomeOrdinals,
       suppressedDynamicToolOutcomeOrdinals,
-      onCodexToolOutcome,
       allocateCodexToolOutcomeOrdinal,
       runtimeYieldCompletionClaim,
     };

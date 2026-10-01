@@ -58,7 +58,7 @@ export const en = {
       verificationFailedError: "Verification failed: {error}",
       verificationFailedStatus: "Verification failed: status {status}",
       verificationSuccessful: "Verification successful.",
-      validUrl: "Please enter a valid URL (e.g. http://...)",
+      validUrl: "Please enter a valid HTTP or HTTPS URL (e.g. http://localhost:11434/v1)",
     },
     gateway: {
       auth: "Gateway auth",
@@ -300,6 +300,7 @@ export const en = {
       accessQuestion: "How should I set things up?",
       aiAccessTitle: "AI access",
       appliedTitle: "Inference ready",
+      localSetupTitle: "Local setup",
       alreadySetUp: "Everything's already set up here — your AI just passed a fresh check.",
       applyFailedFallback:
         "Something went wrong while applying setup: {detail}\nLet's finish together in chat instead.",
@@ -321,6 +322,9 @@ export const en = {
       lookAroundYes: "Yes, take a look",
       settingUp: "Setting up your workspace, gateway, and sessions…",
       setupDone: "Everything's in place.",
+      setupFailed: "Setup failed",
+      workspaceSetupFailed: "Workspace setup failed",
+      gatewaySetupFailed: "Gateway setup failed",
       complete: "OpenClaw is ready.",
       completeWithoutAi: "OpenClaw setup is saved. Connect AI before opening chat.",
       detected: "AI detection complete.",
@@ -436,6 +440,12 @@ export const en = {
         "Existing agents currently use {current}. The requested workspace is {requested}. Changing this fleet-wide default can disconnect agents from their memory and bootstrap files.",
       workspaceConflictTitle: "Existing agent workspace",
       workspaceDirectory: "Workspace directory",
+      workspaceNotDirectory: '"{path}" is not a directory. Choose a workspace inside a directory.',
+      workspacePathError: 'Cannot inspect "{path}": {error}. Check the path and try again.',
+      workspaceSymlinkLoop:
+        '"{path}" cannot be resolved because of a symlink loop. Fix the symbolic links or choose another workspace.',
+      workspaceSymlinkNotDirectory:
+        '"{path}" is a symbolic link that does not resolve to an existing directory. Choose a workspace inside a directory.',
     },
     security: {
       askForHelp:
@@ -1189,6 +1199,7 @@ export const en = {
       outroSeeded:
         "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above.",
       quickstartNodeRuntime: "QuickStart uses Node for the Gateway service (stable + supported).",
+      quickstartBunRuntime: "QuickStart uses Bun for the Gateway service.",
       reinstall: "Reinstall",
       rerunInstallDaemon: "Or rerun with: {command}",
       restart: "Restart",

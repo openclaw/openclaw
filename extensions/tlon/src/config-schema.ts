@@ -12,6 +12,7 @@ const ChannelNestSchema = z.string().min(1);
 const TlonChannelRuleSchema = z.object({
   mode: z.enum(["restricted", "open"]).optional(),
   allowedShips: z.array(ShipSchema).optional(),
+  requireMentionInBotThreads: z.boolean().optional(),
 });
 
 const TlonAuthorizationSchema = z.object({
@@ -40,6 +41,7 @@ const tlonCommonConfigFields = {
   autoDiscoverChannels: z.boolean().optional(),
   showModelSignature: z.boolean().optional(),
   responsePrefix: z.string().optional(),
+  requireMentionInBotThreads: z.boolean().optional(),
   implicitMentions: ChannelImplicitMentionsSchema.optional(),
   // Auto-accept settings
   autoAcceptDmInvites: z.boolean().optional(), // Auto-accept DMs from ships in dmAllowlist
@@ -60,9 +62,19 @@ export const TlonConfigSchema = z.object({
   accounts: z.record(z.string(), TlonAccountSchema).optional(),
 });
 
+const botThreadMentionHint = {
+  label: "Require Mention in Bot Threads",
+  help: "Override mention gating when this account's ship authored the thread root. False allows unmentioned replies; true requires a mention even after the bot participates. Omit to preserve existing behavior. Sender authorization still applies.",
+};
+
 export const tlonChannelConfigSchema = buildChannelConfigSchema(TlonConfigSchema, {
-  uiHints: createChannelConfigUiHints({
-    channelLabel: "Tlon",
-    implicitMentions: true,
-  }),
+  uiHints: {
+    ...createChannelConfigUiHints({
+      channelLabel: "Tlon",
+      implicitMentions: true,
+    }),
+    requireMentionInBotThreads: botThreadMentionHint,
+    "accounts.*.requireMentionInBotThreads": botThreadMentionHint,
+    "authorization.channelRules.*.requireMentionInBotThreads": botThreadMentionHint,
+  },
 });

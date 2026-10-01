@@ -3,8 +3,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
-import { trimToValue } from "../mantis-options.runtime.js";
 import {
   copyCrabboxArtifacts,
   type CommandRunner,
@@ -18,7 +18,11 @@ import {
   runCommand,
   shellQuote,
 } from "./crabbox-runtime.js";
-import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
+import {
+  renderMantisCrabboxReport,
+  type MantisCrabboxReportSummary,
+  type MantisCrabboxRunResult,
+} from "./report.js";
 
 export type MantisDesktopBrowserSmokeOptions = MantisCrabboxLeaseOptions & {
   browserProfileArchiveEnv?: string;
@@ -34,15 +38,6 @@ export type MantisDesktopBrowserSmokeOptions = MantisCrabboxLeaseOptions & {
   videoDurationSeconds?: number;
 };
 
-type MantisDesktopBrowserSmokeResult = {
-  outputDir: string;
-  reportPath: string;
-  screenshotPath?: string;
-  status: "pass" | "fail";
-  summaryPath: string;
-  videoPath?: string;
-};
-
 type MantisDesktopBrowserSmokeSummary = MantisCrabboxReportSummary & {
   browserUrl: string;
   htmlFile?: string;
@@ -50,7 +45,6 @@ type MantisDesktopBrowserSmokeSummary = MantisCrabboxReportSummary & {
 };
 
 const DEFAULT_BROWSER_URL = "https://openclaw.ai";
-const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const BROWSER_PROFILE_ARCHIVE_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64";
 const BROWSER_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_DIR";
 const DEFAULT_VIDEO_DURATION_SECONDS = 10;
@@ -98,9 +92,11 @@ function renderRemoteScript(params: {
   const shellOutputDir = shellQuote(params.remoteOutputDir);
   const videoDurationSeconds = Math.max(1, Math.floor(params.videoDurationSeconds));
   const profileArchiveEnv = params.browserProfileArchiveEnv;
-  const profileDir = shellQuote(
-    params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`,
-  );
+  const profilePath = params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`;
+  const homePrefix = /^(?:~|\$HOME)\//u.exec(profilePath)?.[0];
+  const profileDir = homePrefix
+    ? `"$HOME"/${shellQuote(profilePath.slice(homePrefix.length))}`
+    : shellQuote(profilePath);
   const temporaryProfile = params.browserProfileDir ? "false" : "true";
   const inputModeJson = shellQuote(JSON.stringify(params.htmlBase64 ? "html-file" : "url"));
   const openedUrlJson = shellQuote(
@@ -203,7 +199,7 @@ function renderReport(summary: MantisDesktopBrowserSmokeSummary) {
 
 export async function runMantisDesktopBrowserSmoke(
   opts: MantisDesktopBrowserSmokeOptions = {},
-): Promise<MantisDesktopBrowserSmokeResult> {
+): Promise<MantisCrabboxRunResult> {
   const env = opts.env ?? process.env;
   const startedAt = (opts.now ?? (() => new Date()))();
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
@@ -217,7 +213,6 @@ export async function runMantisDesktopBrowserSmoke(
   const reportPath = path.join(outputDir, "mantis-desktop-browser-smoke-report.md");
   const crabboxBin = await resolveCrabboxBin({
     env,
-    envName: CRABBOX_BIN_ENV,
     explicit: opts.crabboxBin,
     repoRoot,
   });
@@ -265,7 +260,17 @@ export async function runMantisDesktopBrowserSmoke(
     provider,
     runner,
   });
-  let summary: MantisDesktopBrowserSmokeSummary | undefined;
+  const summary: MantisDesktopBrowserSmokeSummary = {
+    artifacts: { reportPath, summaryPath },
+    browserUrl,
+    htmlFile,
+    crabbox: session.describe(),
+    finishedAt: startedAt.toISOString(),
+    outputDir,
+    remoteOutputDir,
+    startedAt: startedAt.toISOString(),
+    status: "fail",
+  };
 
   try {
     const leaseId = await session.acquire({ idleTimeout, machineClass, ttl });
@@ -312,22 +317,9 @@ export async function runMantisDesktopBrowserSmoke(
       throw new Error("Desktop browser screenshot was not copied back from Crabbox.");
     }
     const copiedVideoPath = (await pathExists(videoPath)) ? videoPath : undefined;
-    summary = {
-      artifacts: {
-        reportPath,
-        screenshotPath,
-        summaryPath,
-        videoPath: copiedVideoPath,
-      },
-      browserUrl,
-      htmlFile,
-      crabbox: session.describe(inspected),
-      finishedAt: new Date().toISOString(),
-      outputDir,
-      remoteOutputDir,
-      startedAt: startedAt.toISOString(),
-      status: "pass",
-    };
+    summary.artifacts = { reportPath, screenshotPath, summaryPath, videoPath: copiedVideoPath };
+    summary.crabbox = session.describe(inspected);
+    summary.status = "pass";
     return {
       outputDir,
       reportPath,
@@ -337,21 +329,8 @@ export async function runMantisDesktopBrowserSmoke(
       videoPath: copiedVideoPath,
     };
   } catch (error) {
-    summary = {
-      artifacts: {
-        reportPath,
-        summaryPath,
-      },
-      browserUrl,
-      htmlFile,
-      crabbox: session.describe(),
-      error: formatErrorMessage(error),
-      finishedAt: new Date().toISOString(),
-      outputDir,
-      remoteOutputDir,
-      startedAt: startedAt.toISOString(),
-      status: "fail",
-    };
+    summary.crabbox = session.describe();
+    summary.error = formatErrorMessage(error);
     await fs.writeFile(path.join(outputDir, "error.txt"), `${summary.error}\n`, "utf8");
     return {
       outputDir,
@@ -360,12 +339,10 @@ export async function runMantisDesktopBrowserSmoke(
       summaryPath,
     };
   } finally {
-    if (summary) {
-      summary.finishedAt = new Date().toISOString();
-      await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-      await fs.writeFile(reportPath, renderReport(summary), "utf8");
-    }
-    if (summary?.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
+    summary.finishedAt = new Date().toISOString();
+    await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+    await fs.writeFile(reportPath, renderReport(summary), "utf8");
+    if (summary.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
       await session.stop();
     }
   }

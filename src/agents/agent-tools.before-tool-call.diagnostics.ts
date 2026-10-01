@@ -183,10 +183,6 @@ export function finalizeToolTerminalPresentation(params: {
   });
 }
 
-/**
- * Error used when before_tool_call intentionally vetoes a tool call.
- */
-
 export const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
   () => import("./agent-tools.before-tool-call.runtime.js"),
   ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
@@ -412,6 +408,30 @@ export function findSkillUsageMatch(params: {
     }
   }
 
+  if (params.toolName === "skills_read") {
+    const name = isPlainObject(params.toolParams) ? params.toolParams.name : undefined;
+    if (typeof name !== "string") {
+      return undefined;
+    }
+    const snapshot = params.ctx?.skillsSnapshot;
+    const skill = (snapshot?.discoverySkills ?? snapshot?.resolvedSkills)?.find(
+      (entry) => entry.name === name.trim() && !entry.disableModelInvocation,
+    );
+    if (!skill) {
+      return undefined;
+    }
+    const usage = params.ctx?.skillUsagePaths?.find(
+      (entry) => entry.skillName === skill.name && entry.readPath === skill.filePath,
+    );
+    return usage
+      ? {
+          skillFile: usage.skillFile,
+          skillName: usage.skillName,
+          skillSource: usage.skillSource,
+          activation: "read",
+        }
+      : resolvedSkillUsageMatch({ activation: "read", skill });
+  }
   if (params.toolName !== "read") {
     return undefined;
   }
@@ -526,9 +546,6 @@ export function emitToolBlockedSecurityEvent(params: {
     },
   });
 }
-
-// Once-per-plugin-per-process deprecation signal; the field is ignored at
-// runtime because unresolved approvals always fail closed on timeout.
 
 export function buildToolContentPrivateData(
   policy: DiagnosticModelContentCapturePolicy,
@@ -697,5 +714,3 @@ export async function recordLoopOutcome(args: {
     args.ctx.onToolOutcome?.(recordedOutcome);
   }
 }
-
-/** Run the full before_tool_call policy chain for a pending tool call. */

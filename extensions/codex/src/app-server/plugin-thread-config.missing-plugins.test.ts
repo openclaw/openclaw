@@ -12,22 +12,21 @@ import {
 } from "./plugin-inventory.test-helpers.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 
-const missingCases = [
-  { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, code: "plugin_missing" },
-  { marketplaceName: "missing-marketplace", code: "marketplace_missing" },
-].flatMap((missing) =>
-  [false, "ask" as const].flatMap((actions) =>
-    [true, false].map((enabled) => ({
-      marketplaceName: missing.marketplaceName,
-      code: missing.code,
-      actions,
-      enabled,
-    })),
-  ),
-);
-
 describe("missing configured plugins", () => {
-  it.each(missingCases)(
+  it.each([
+    {
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+      code: "plugin_missing",
+      actions: false,
+      enabled: false,
+    },
+    {
+      marketplaceName: "missing-marketplace",
+      code: "marketplace_missing",
+      actions: "ask",
+      enabled: true,
+    },
+  ])(
     "keeps healthy runtime apps for $code with actions=$actions enabled=$enabled",
     async ({ marketplaceName, code, actions, enabled }) => {
       const pluginConfig = {

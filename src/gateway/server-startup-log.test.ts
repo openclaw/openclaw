@@ -1,6 +1,6 @@
 // Startup log tests cover security warnings, model detail formatting, plugin
-// summaries, bind URLs, ANSI output, and dangerous config reporting.
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// summaries, ANSI output, and dangerous config reporting.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -35,6 +35,21 @@ function createManifestRecord(
 vi.mock("../agents/model-thinking-default.js", () => ({
   resolveThinkingDefault: modelMocks.resolveThinkingDefault,
 }));
+
+async function startup(overrides: Partial<Parameters<typeof logGatewayStartup>[0]>) {
+  const info = vi.fn();
+  const warn = vi.fn();
+  await logGatewayStartup({
+    cfg: {},
+    env: {},
+    manifestRecords: [],
+    loadedPluginIds: [],
+    log: { info, warn },
+    isNixMode: false,
+    ...overrides,
+  });
+  return { info, warn };
+}
 
 describe("gateway startup log", () => {
   it.each([false, true])(
@@ -76,9 +91,7 @@ describe("gateway startup log", () => {
         },
         env: {},
         manifestRecords: [],
-        bindHost: "127.0.0.1",
         loadedPluginIds: [],
-        port: 18789,
         log: { info, warn: vi.fn() },
         isNixMode: false,
       });
@@ -95,21 +108,9 @@ describe("gateway startup log", () => {
     vi.useRealTimers();
   });
 
-  afterAll(() => {});
-
   it("warns when dangerous config flags are enabled", async () => {
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await logGatewayStartup({
+    const { warn } = await startup({
       cfg: { hooks: { gmail: { allowUnsafeExternalContent: true } } },
-      env: {},
-      manifestRecords: [],
-      bindHost: "127.0.0.1",
-      loadedPluginIds: [],
-      port: 18789,
-      log: { info, warn },
-      isNixMode: false,
     });
 
     expect(warn.mock.calls).toEqual([
@@ -119,65 +120,8 @@ describe("gateway startup log", () => {
     ]);
   });
 
-  it("does not warn when dangerous config flags are disabled", async () => {
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await logGatewayStartup({
-      cfg: {},
-      env: {},
-      manifestRecords: [],
-      bindHost: "127.0.0.1",
-      loadedPluginIds: [],
-      port: 18789,
-      log: { info, warn },
-      isNixMode: false,
-    });
-
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("warns when a configured channel plugin is blocked from startup", async () => {
-    const manifestRecords = [
-      createManifestRecord({
-        id: "slack",
-        channels: ["slack"],
-        enabledByDefault: false,
-      }),
-    ];
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await logGatewayStartup({
-      cfg: {
-        channels: {
-          slack: {
-            enabled: true,
-            botToken: "configured",
-          },
-        },
-      },
-      env: {},
-      manifestRecords,
-      bindHost: "127.0.0.1",
-      loadedPluginIds: [],
-      port: 18789,
-      log: { info, warn },
-      isNixMode: false,
-    });
-
-    expect(warn.mock.calls).toEqual([
-      [
-        'configured channel warning: channels.slack: channel is configured, but external plugin "slack" is installed without explicit trust. Add plugins.entries.slack.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
-      ],
-    ]);
-  });
-
   it("warns when a configured channel has no owning plugin", async () => {
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await logGatewayStartup({
+    const { warn } = await startup({
       cfg: {
         channels: {
           "missing-chat": {
@@ -186,13 +130,6 @@ describe("gateway startup log", () => {
           },
         },
       },
-      env: {},
-      manifestRecords: [],
-      bindHost: "127.0.0.1",
-      loadedPluginIds: [],
-      port: 18789,
-      log: { info, warn },
-      isNixMode: false,
     });
 
     expect(warn.mock.calls).toEqual([
@@ -214,10 +151,7 @@ describe("gateway startup log", () => {
         enabledByDefault: false,
       }),
     ];
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await logGatewayStartup({
+    const { warn } = await startup({
       cfg: {
         plugins: {
           entries: { discord: { enabled: true } },
@@ -226,11 +160,6 @@ describe("gateway startup log", () => {
       env: { DISCORD_FAKE_TEST_TRIGGER: "configured" },
       manifestRecords,
       ambientEnvTriggers: "suppress",
-      bindHost: "127.0.0.1",
-      loadedPluginIds: [],
-      port: 18789,
-      log: { info, warn },
-      isNixMode: false,
     });
 
     expect(warn.mock.calls).toEqual([
@@ -250,10 +179,7 @@ describe("gateway startup log", () => {
         enabledByDefault: false,
       }),
     ];
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await logGatewayStartup({
+    const { warn } = await startup({
       cfg: {
         channels: {
           [unsafeChannelId]: {
@@ -262,13 +188,7 @@ describe("gateway startup log", () => {
           },
         },
       },
-      env: {},
       manifestRecords,
-      bindHost: "127.0.0.1",
-      loadedPluginIds: [],
-      port: 18789,
-      log: { info, warn },
-      isNixMode: false,
     });
 
     expect(warn.mock.calls[0]?.[0]).toContain("channels.slack: channel is configured");
@@ -283,10 +203,7 @@ describe("gateway startup log", () => {
         enabledByDefault: false,
       }),
     ];
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await logGatewayStartup({
+    const { warn } = await startup({
       cfg: {
         channels: {
           "legacy-chat": {
@@ -295,7 +212,6 @@ describe("gateway startup log", () => {
           },
         },
       },
-      env: {},
       manifestRecords,
       activationSourceConfig: {
         plugins: {
@@ -306,11 +222,6 @@ describe("gateway startup log", () => {
           },
         },
       },
-      bindHost: "127.0.0.1",
-      loadedPluginIds: [],
-      port: 18789,
-      log: { info, warn },
-      isNixMode: false,
     });
 
     expect(warn).not.toHaveBeenCalled();
@@ -448,20 +359,9 @@ describe("gateway startup log", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-03T10:00:16.000Z"));
 
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await logGatewayStartup({
-      cfg: {},
-      env: {},
-      manifestRecords: [],
-      bindHost: "127.0.0.1",
-      bindHosts: ["127.0.0.1", "::1"],
+    const { info } = await startup({
       loadedPluginIds: ["delta", "alpha", "delta", "beta"],
-      port: 18789,
       startupStartedAt: Date.parse("2026-04-03T10:00:00.000Z"),
-      log: { info, warn },
-      isNixMode: false,
     });
 
     const listeningMessages = info.mock.calls

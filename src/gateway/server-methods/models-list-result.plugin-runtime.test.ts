@@ -1,6 +1,9 @@
 import { Check } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
-import { ModelsListResultSchema } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
+import {
+  type ModelsListResult,
+  ModelsListResultSchema,
+} from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,7 +17,8 @@ import {
 } from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../server-model-catalog-auth.js";
-import type { GatewayModelCatalogContext } from "./models-list-context.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
 import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
@@ -140,35 +144,58 @@ describe("models.list plugin metadata handoff", () => {
           ...(chat ? [{ id: "custom", providers: ["custom"] }] : []),
         ],
       });
-      const projector = createGatewayAgentModelCatalogProjector({
-        cfg,
+      const preparedSnapshot = {
+        ...snapshot,
         agentId: "main",
-        snapshot,
+        agentDir: "/tmp/models-list-provider-agent",
+        workspaceDir: "/tmp/models-list-provider-workspace",
+        config: cfg,
+        observationConfig: cfg,
+        catalogComplete: true,
+        authModes: {},
+        authStore: { version: 1 as const, profiles: {} },
         metadataSnapshot,
-        preparedAuthStore: { version: 1, profiles: {} },
-      });
+        authMaterializations: [],
+        isCurrent: () => true,
+      };
       const loadGatewayModelCatalogSnapshot = vi.fn(() => {
         throw new Error("Unexpected runtime discovery");
       });
-      const context = {
-        getRuntimeConfig: () => cfg,
-        loadGatewayModelCatalogSnapshot,
-        logGateway: { debug: vi.fn() },
-      } satisfies GatewayModelCatalogContext;
-      const request = buildModelsListResult({
-        source: { kind: "gateway", context },
-        agentId: "main",
-        params: { view: "configured", ...(provider ? { provider } : {}) },
-        preloadedCatalog: { agentId: "main", config: cfg, snapshot },
-        preloadedOnly: true,
-        catalogProjector: projector,
+      registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
+        readPrepared: async () => preparedSnapshot,
+        loadDeferred: loadGatewayModelCatalogSnapshot,
+      });
+      const context = createGatewayRequestContext(
+        makeContextParams({ loadGatewayModelCatalogSnapshot }),
+      );
+      context.getRuntimeConfig = () => cfg;
+      context.getCommittedRuntimeConfig = () => cfg;
+      context.logGateway.debug = vi.fn();
+      const params = { view: "configured", ...(provider ? { provider } : {}) };
+      const respond = vi.fn();
+      await modelsHandlers["models.list"]!({
+        req: { type: "req", id: "provider-filter", method: "models.list", params },
+        params,
+        respond,
+        client: null,
+        isWebchatConnect: () => false,
+        context,
       });
       if (error) {
-        await expect(request).rejects.toThrow(error);
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: expect.stringContaining('Unknown model catalog provider "missing"'),
+          }),
+        );
+        expect(respond.mock.calls[0]?.[2]?.message).toContain("openclaw models list --all");
         expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
         return;
       }
-      const result = await request;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.anything(), undefined);
+      const result = respond.mock.calls[0]?.[1] as ModelsListResult;
       expect(result.models.map((entry) => entry.id)).toEqual(expectedChat ? ["chat"] : []);
       expect(result.decisionModels ?? []).toEqual(
         expected

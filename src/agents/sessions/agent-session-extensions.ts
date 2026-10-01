@@ -259,17 +259,17 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
         sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
       })),
     ].filter((tool) => isAllowedTool(tool.definition.name));
-    const definitionRegistry = new Map(
-      Array.from(this.baseToolDefinitions.entries())
-        .filter(([name]) => isAllowedTool(name))
-        .map(([name, definition]) => [
+    const builtInTools = Array.from(this.baseToolDefinitions.entries()).map(
+      ([name, definition]) =>
+        [
           name,
           {
             definition,
             sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
           },
-        ]),
+        ] as const,
     );
+    const definitionRegistry = new Map(builtInTools.filter(([name]) => isAllowedTool(name)));
     for (const tool of allCustomTools) {
       definitionRegistry.set(tool.definition.name, {
         definition: tool.definition,
@@ -292,14 +292,7 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     const runner = this.currentExtensionRunner;
     const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner);
     const wrappedBuiltInTools = wrapRegisteredTools(
-      Array.from(this.baseToolDefinitions.values())
-        .filter((definition) => isAllowedTool(definition.name))
-        .map((definition) => ({
-          definition,
-          sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, {
-            source: "builtin",
-          }),
-        })),
+      builtInTools.map(([, tool]) => tool).filter((tool) => isAllowedTool(tool.definition.name)),
       runner,
     );
 
@@ -309,9 +302,9 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     }
     this.toolRegistry = toolRegistry;
 
-    const nextActiveToolNames = (
-      options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]
-    ).filter((name) => isAllowedTool(name));
+    const nextActiveToolNames = (options?.activeToolNames ?? previousActiveToolNames).filter(
+      (name) => isAllowedTool(name),
+    );
 
     if (allowedToolNames) {
       for (const toolName of this.toolRegistry.keys()) {

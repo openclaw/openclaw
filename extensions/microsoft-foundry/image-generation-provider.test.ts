@@ -1,5 +1,6 @@
 // Microsoft Foundry image provider tests cover MAI request construction.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMicrosoftFoundryImageGenerationProvider } from "./image-generation-provider.js";
 import { PROVIDER_ID } from "./shared.js";
@@ -112,11 +113,21 @@ function buildConfig(
   };
 }
 
-function releasedJson(payload: unknown) {
+function imageResponse(base64 = Buffer.from("png").toString("base64")) {
   return {
-    response: Response.json(payload),
+    response: Response.json({ data: [{ b64_json: base64 }] }),
     release: vi.fn(async () => {}),
   };
+}
+
+function generateImage(overrides: Partial<ImageGenerationRequest> = {}) {
+  return buildMicrosoftFoundryImageGenerationProvider().generateImage({
+    provider: PROVIDER_ID,
+    model: "image-deployment",
+    prompt: "draw it",
+    cfg: buildConfig(),
+    ...overrides,
+  });
 }
 
 function requirePostJsonRequest(): Record<string, unknown> {
@@ -160,6 +171,7 @@ describe("microsoft foundry image generation provider", () => {
 
   it("exposes MAI image provider metadata and capabilities", () => {
     const provider = buildMicrosoftFoundryImageGenerationProvider();
+    const cfg = buildConfig();
     expect(provider.id).toBe(PROVIDER_ID);
     expect(provider.defaultModel).toBeUndefined();
     expect(provider.models).toEqual([]);
@@ -168,36 +180,19 @@ describe("microsoft foundry image generation provider", () => {
     expect(provider.capabilities.edit.maxInputImages).toBe(1);
     expect(provider.capabilities.geometry?.sizes).toBeUndefined();
     expect(provider.capabilities.output?.formats).toEqual(["png"]);
-    expect(provider.isConfigured?.({ agentDir: "/agent" })).toBe(true);
+    expect(provider.isConfigured?.({ agentDir: "/agent", cfg })).toBe(true);
     expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
       provider: PROVIDER_ID,
       agentDir: "/agent",
-    });
-  });
-
-  it("passes provider-owned configuration to shared image-auth readiness", () => {
-    const cfg = buildConfig();
-
-    expect(buildMicrosoftFoundryImageGenerationProvider().isConfigured?.({ cfg })).toBe(true);
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
-      provider: PROVIDER_ID,
       cfg,
     });
   });
 
   it("sends MAI image generation requests to the Foundry MAI endpoint with API-key auth", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        data: [{ b64_json: Buffer.from("png").toString("base64") }],
-      }),
-    );
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
+    postJsonRequestMock.mockResolvedValue(imageResponse());
 
-    const result = await provider.generateImage({
-      provider: PROVIDER_ID,
-      model: "image-deployment",
+    const result = await generateImage({
       prompt: "draw a clean product render",
-      cfg: buildConfig(),
       size: "768x1365",
       timeoutMs: 12_345,
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -247,76 +242,29 @@ describe("microsoft foundry image generation provider", () => {
     expect(result.images[0]?.mimeType).toBe("image/png");
   });
 
-  it("accepts a valid max-size MAI image JSON response", async () => {
-    const imageBytes = Buffer.alloc(6 * 1024 * 1024, 1);
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        data: [{ b64_json: imageBytes.toString("base64") }],
-      }),
-    );
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
-
-    const result = await provider.generateImage({
-      provider: PROVIDER_ID,
-      model: "image-deployment",
-      prompt: "draw it",
-      cfg: buildConfig(),
-    });
-
-    expect(result.images).toHaveLength(1);
-    expect(result.images[0]?.buffer.byteLength).toBe(imageBytes.byteLength);
-  });
-
   it("honors configured generated media caps above the default image limit", async () => {
     const imageBytes = Buffer.alloc(7 * 1024 * 1024, 1);
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        data: [{ b64_json: imageBytes.toString("base64") }],
-      }),
-    );
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
+    postJsonRequestMock.mockResolvedValue(imageResponse(imageBytes.toString("base64")));
 
-    const result = await provider.generateImage({
-      provider: PROVIDER_ID,
-      model: "image-deployment",
-      prompt: "draw it",
-      cfg: buildConfig({ mediaMaxMb: 8 }),
-    });
+    const result = await generateImage({ cfg: buildConfig({ mediaMaxMb: 8 }) });
 
     expect(result.images).toHaveLength(1);
     expect(result.images[0]?.buffer.byteLength).toBe(imageBytes.byteLength);
   });
 
   it("rejects oversized MAI image JSON responses", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        data: [{ b64_json: "x".repeat(10 * 1024 * 1024) }],
-      }),
-    );
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
+    postJsonRequestMock.mockResolvedValue(imageResponse("x".repeat(10 * 1024 * 1024)));
 
-    await expect(
-      provider.generateImage({
-        provider: PROVIDER_ID,
-        model: "image-deployment",
-        prompt: "draw it",
-        cfg: buildConfig(),
-      }),
-    ).rejects.toThrow("microsoft-foundry.image-generation: JSON response exceeds");
+    await expect(generateImage()).rejects.toThrow(
+      "microsoft-foundry.image-generation: JSON response exceeds",
+    );
   });
 
   it("uses AZURE_OPENAI_ENDPOINT when env API-key auth has no configured base URL", async () => {
     vi.stubEnv("AZURE_OPENAI_ENDPOINT", "https://env.services.ai.azure.com");
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        data: [{ b64_json: Buffer.from("png").toString("base64") }],
-      }),
-    );
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
+    postJsonRequestMock.mockResolvedValue(imageResponse());
 
-    await provider.generateImage({
-      provider: PROVIDER_ID,
-      model: "image-deployment",
+    await generateImage({
       prompt: "draw from env endpoint",
       cfg: buildConfig({ baseUrl: "" }),
     });
@@ -350,17 +298,11 @@ describe("microsoft foundry image generation provider", () => {
       }),
     );
     postMultipartRequestMock.mockResolvedValue(
-      releasedJson({
-        data: [{ b64_json: Buffer.from("edited").toString("base64") }],
-      }),
+      imageResponse(Buffer.from("edited").toString("base64")),
     );
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
 
-    const result = await provider.generateImage({
-      provider: PROVIDER_ID,
-      model: "image-deployment",
+    const result = await generateImage({
       prompt: "make it brighter",
-      cfg: buildConfig(),
       agentDir: "/agent",
       inputImages: [
         {
@@ -398,12 +340,8 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("rejects image edits for MAI text-to-image-only deployments", async () => {
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
-
     await expect(
-      provider.generateImage({
-        provider: PROVIDER_ID,
-        model: "image-deployment",
+      generateImage({
         prompt: "edit it",
         cfg: buildConfig({ modelName: "MAI-Image-2e" }),
         inputImages: [{ buffer: Buffer.from("input"), mimeType: "image/png" }],
@@ -414,32 +352,16 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("requires an explicit deployment name before making requests", async () => {
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
-
-    await expect(
-      provider.generateImage({
-        provider: PROVIDER_ID,
-        model: "",
-        prompt: "draw it",
-        cfg: buildConfig(),
-      }),
-    ).rejects.toThrow("requires a deployment name");
+    await expect(generateImage({ model: "" })).rejects.toThrow("requires a deployment name");
     expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
   it("allows custom MAI deployment names for generation when model metadata is absent", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        data: [{ b64_json: Buffer.from("png").toString("base64") }],
-      }),
-    );
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
+    postJsonRequestMock.mockResolvedValue(imageResponse());
 
-    await provider.generateImage({
-      provider: PROVIDER_ID,
+    await generateImage({
       model: "prod-image",
-      prompt: "draw it",
       cfg: buildConfig({ includeModel: false }),
       size: "800x1000",
     });
@@ -454,17 +376,10 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("allows custom mai-image deployment names for generation without model metadata", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        data: [{ b64_json: Buffer.from("png").toString("base64") }],
-      }),
-    );
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
+    postJsonRequestMock.mockResolvedValue(imageResponse());
 
-    await provider.generateImage({
-      provider: PROVIDER_ID,
+    await generateImage({
       model: "mai-image-2-live",
-      prompt: "draw it",
       cfg: buildConfig({ modelId: "mai-image-2-live", includeModel: false }),
     });
 
@@ -475,17 +390,10 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("allows manual custom deployment names when configured name only repeats the id", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        data: [{ b64_json: Buffer.from("png").toString("base64") }],
-      }),
-    );
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
+    postJsonRequestMock.mockResolvedValue(imageResponse());
 
-    await provider.generateImage({
-      provider: PROVIDER_ID,
+    await generateImage({
       model: "prod-image",
-      prompt: "draw it",
       cfg: buildConfig({ modelId: "prod-image", modelName: "prod-image" }),
     });
 
@@ -499,11 +407,8 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("requires MAI-Image-2.5 metadata before editing custom deployment names", async () => {
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
-
     await expect(
-      provider.generateImage({
-        provider: PROVIDER_ID,
+      generateImage({
         model: "prod-image",
         prompt: "edit it",
         cfg: buildConfig({ includeModel: false }),
@@ -515,13 +420,9 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("rejects non-MAI image deployments before making requests", async () => {
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
-
     await expect(
-      provider.generateImage({
-        provider: PROVIDER_ID,
+      generateImage({
         model: "gpt-deployment",
-        prompt: "draw it",
         cfg: buildConfig({ modelId: "gpt-deployment", modelName: "gpt-5.4" }),
       }),
     ).rejects.toThrow('supports MAI image deployments only, got "gpt-5.4"');
@@ -530,13 +431,9 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("rejects literal non-image MAI model names before making requests", async () => {
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
-
     await expect(
-      provider.generateImage({
-        provider: PROVIDER_ID,
+      generateImage({
         model: "MAI-DS-R1",
-        prompt: "draw it",
         cfg: buildConfig({ includeModel: false }),
       }),
     ).rejects.toThrow('supports MAI image deployments only, got "MAI-DS-R1"');
@@ -545,17 +442,7 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("rejects MAI image sizes outside Microsoft Foundry limits", async () => {
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
-
-    await expect(
-      provider.generateImage({
-        provider: PROVIDER_ID,
-        model: "image-deployment",
-        prompt: "draw it",
-        cfg: buildConfig(),
-        size: "512x512",
-      }),
-    ).rejects.toThrow("at least 768x768");
+    await expect(generateImage({ size: "512x512" })).rejects.toThrow("at least 768x768");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 });

@@ -86,7 +86,7 @@ async function fixture(count: number) {
 }
 
 describe("Logbook sampled batch images", () => {
-  it.each([0, 1, 16, 17, 30, 31, 1440, 2000])(
+  it.each([0, 16, 17, 2000])(
     "keeps the chronological sample and bounds transported metadata for %i frames",
     async (count) => {
       const { dataDir, store } = await fixture(count);

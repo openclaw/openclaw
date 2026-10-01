@@ -17,12 +17,12 @@ import {
   maxAsk,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalsLocked,
-  resolveExecApprovalsTranscriptPath,
   type ExecAsk,
   type ExecApprovalDecision,
   type ExecApprovalsResolved,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
 import type { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
@@ -41,20 +41,15 @@ import type { AgentToolResult } from "./runtime/index.js";
 
 /** Cap for deduplicating repeated follow-up dispatch failure log keys. */
 const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
-const loggedExecApprovalFollowupFailures = new Set<string>();
+const loggedExecApprovalFollowupFailures = new LruCache<boolean>(
+  MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS,
+);
 
 function rememberExecApprovalFollowupFailureKey(key: string): boolean {
-  if (loggedExecApprovalFollowupFailures.has(key)) {
+  if (loggedExecApprovalFollowupFailures.peek(key)) {
     return false;
   }
-  loggedExecApprovalFollowupFailures.add(key);
-  // Bound memory growth for long-lived processes that see many unique approval failures.
-  if (loggedExecApprovalFollowupFailures.size > MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS) {
-    const oldestKey = loggedExecApprovalFollowupFailures.values().next().value;
-    if (typeof oldestKey === "string") {
-      loggedExecApprovalFollowupFailures.delete(oldestKey);
-    }
-  }
+  loggedExecApprovalFollowupFailures.set(key, true);
   return true;
 }
 
@@ -232,68 +227,6 @@ async function createAndRegisterDefaultExecApprovalRequest(
   };
 }
 
-/** Builds the immutable follow-up target passed to async approval continuations. */
-export function buildExecApprovalFollowupTarget(
-  params: ExecApprovalFollowupTarget,
-): ExecApprovalFollowupTarget {
-  return {
-    approvalId: params.approvalId,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionKey: params.sessionKey,
-    expectedSessionId: params.expectedSessionId,
-    sessionStore: params.sessionStore,
-    turnSourceChannel: params.turnSourceChannel,
-    turnSourceTo: params.turnSourceTo,
-    turnSourceAccountId: params.turnSourceAccountId,
-    turnSourceThreadId: params.turnSourceThreadId,
-    direct: params.direct,
-    bashElevated: params.bashElevated,
-  };
-}
-
-/** Builds mutable approval decision state from a raw decision. */
-function createExecApprovalDecisionState(params: {
-  decision: string | null | undefined;
-  askFallback: ExecApprovalsResolved["agent"]["askFallback"];
-}) {
-  const baseDecision = resolveBaseExecApprovalDecision({
-    decision: params.decision ?? null,
-    askFallback: params.askFallback,
-  });
-  return {
-    baseDecision,
-    approvedByAsk: baseDecision.approvedByAsk,
-    deniedReason: baseDecision.deniedReason,
-  };
-}
-
-/** Prevents fallback approval from satisfying strict inline-eval/human-review paths. */
-function enforceStrictInlineEvalApprovalBoundary(params: {
-  baseDecision: {
-    timedOut: boolean;
-  };
-  approvedByAsk: boolean;
-  deniedReason: string | null;
-  requiresInlineEvalApproval: boolean;
-  requiresAutoReviewHumanApproval?: boolean;
-}): {
-  approvedByAsk: boolean;
-  deniedReason: string | null;
-} {
-  const requiresRealApproval =
-    params.requiresInlineEvalApproval || params.requiresAutoReviewHumanApproval === true;
-  if (!params.baseDecision.timedOut || !requiresRealApproval || !params.approvedByAsk) {
-    return {
-      approvedByAsk: params.approvedByAsk,
-      deniedReason: params.deniedReason,
-    };
-  }
-  return {
-    approvedByAsk: false,
-    deniedReason: params.deniedReason ?? "approval-timeout",
-  };
-}
-
 type ExecApprovalDecisionParams<TTimeoutContext> = {
   decision: string | null;
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
@@ -316,24 +249,26 @@ type ExecApprovalDecisionParams<TTimeoutContext> = {
   requiresAutoReviewHumanApproval?: boolean;
 };
 
-type ExecApprovalDecisionState<TTimeoutContext> = ReturnType<
-  typeof createExecApprovalDecisionState
-> & { timeoutContext: TTimeoutContext | undefined };
+type ExecApprovalDecisionState<TTimeoutContext> = {
+  baseDecision: ReturnType<typeof resolveBaseExecApprovalDecision>;
+  approvedByAsk: boolean;
+  deniedReason: string | null;
+  timeoutContext: TTimeoutContext | undefined;
+};
 
 /** Resolves explicit, timeout-fallback, and strict-human approval policy in one owner. */
 async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
   params: ExecApprovalDecisionParams<TTimeoutContext>,
 ): Promise<ExecApprovalDecisionState<TTimeoutContext>> {
-  const initial = createExecApprovalDecisionState({
+  const baseDecision = resolveBaseExecApprovalDecision({
     decision: params.decision,
     askFallback: params.askFallback,
   });
-  let approvedByAsk = initial.approvedByAsk;
-  let deniedReason = initial.deniedReason;
+  let { approvedByAsk, deniedReason } = baseDecision;
   let timeoutContext: TTimeoutContext | undefined;
 
-  if (initial.baseDecision.timedOut && params.resolveTimedOut) {
-    const timedOut = await params.resolveTimedOut(initial);
+  if (baseDecision.timedOut && params.resolveTimedOut) {
+    const timedOut = await params.resolveTimedOut({ baseDecision, approvedByAsk, deniedReason });
     approvedByAsk = timedOut.approvedByAsk;
     deniedReason = timedOut.deniedReason;
     timeoutContext = timedOut.context;
@@ -345,19 +280,16 @@ async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
     typeof params.requiresExplicitApproval === "function"
       ? params.requiresExplicitApproval(timeoutContext)
       : params.requiresExplicitApproval;
-  const strictDecision = enforceStrictInlineEvalApprovalBoundary({
-    baseDecision: initial.baseDecision,
-    approvedByAsk,
-    deniedReason,
-    requiresInlineEvalApproval: requiresExplicitApproval,
-    requiresAutoReviewHumanApproval: params.requiresAutoReviewHumanApproval,
-  });
-  return {
-    baseDecision: initial.baseDecision,
-    approvedByAsk: strictDecision.approvedByAsk,
-    deniedReason: strictDecision.deniedReason,
-    timeoutContext,
-  };
+  // Timeout fallback cannot satisfy an explicit-human approval boundary.
+  if (
+    baseDecision.timedOut &&
+    approvedByAsk &&
+    (requiresExplicitApproval || params.requiresAutoReviewHumanApproval === true)
+  ) {
+    approvedByAsk = false;
+    deniedReason ??= "approval-timeout";
+  }
+  return { baseDecision, approvedByAsk, deniedReason, timeoutContext };
 }
 
 type ExecApprovalRequestRoute<TTimeoutContext> =
@@ -422,22 +354,23 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): string {
   const runLabel = params.trigger === "cron" ? "Automation runs" : "Headless runs";
+  const approvalTarget = params.host === "node" ? "--node <id|name|ip>" : "--gateway";
   // The TUI and chat channels never receive automation approval cards
   // (server-request-context canDeliverApprovals), so only name surfaces that
   // can actually answer this run's approval.
   const approvalSurfaceFix =
     params.trigger === "cron" && params.host === "gateway"
       ? "- keep the Control UI or a macOS/iOS/Android app connected and answer the next run's approval card; Allow Always mints a standing grant"
-      : "- rerun interactively and approve when prompted (Control UI, TUI, or a chat channel with exec approvals)";
+      : "- rerun interactively and approve when prompted (Control UI or a chat channel with exec approvals)";
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
-    `Stricter values from tools.exec and ${resolveExecApprovalsTranscriptPath()} both apply.`,
+    "Stricter values from tools.exec and the execution host's approvals policy both apply.",
     "Fix one of these:",
-    '- align both files to security="full" and ask="off" for trusted local automation',
+    '- set tools.exec.mode="full" and align host approvals to security="full" and ask="off" for trusted local automation',
     "- keep allowlist mode and add an explicit allowlist entry for this command",
     approvalSurfaceFix,
-    'Tip: run "openclaw doctor" and "openclaw approvals get --gateway" to inspect the effective policy.',
+    `Tip: run "openclaw doctor" and "openclaw approvals get ${approvalTarget}" to inspect the effective policy.`,
   ].join("\n");
 }
 

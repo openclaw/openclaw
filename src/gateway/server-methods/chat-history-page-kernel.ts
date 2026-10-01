@@ -332,12 +332,14 @@ export async function readChatHistoryPageKernel(
     ...options,
   });
   const { readPage } = incrementalTail;
-  const isOffsetPage = offset !== undefined && !cliSessionId;
-  const includeActiveLeaf = !isOffsetPage || offset === 0;
+  const currentOffset = incrementalTail.windowReset ? 0 : offset;
+  const isOffsetPage = currentOffset !== undefined && !cliSessionId;
+  const includeActiveLeaf = !isOffsetPage || currentOffset === 0;
   const activeLeafEntryId = includeActiveLeaf
     ? resolveChatHistoryActiveLeafEntryId(readPage)
     : null;
   const buildTailPage = (messages: unknown[]): ChatHistoryPage => ({
+    ...(incrementalTail.windowReset ? { windowReset: true } : {}),
     ...(includeActiveLeaf ? { activeLeafEntryId } : {}),
     ...(includeActiveLeaf &&
     readPage.transcriptSource === "active" &&
@@ -349,9 +351,9 @@ export async function readChatHistoryPageKernel(
     ...(incrementalTail.projection.activity.length
       ? { activity: incrementalTail.projection.activity }
       : {}),
-    ...(isOffsetPage ? { responseOffset: offset } : {}),
+    ...(isOffsetPage ? { responseOffset: currentOffset } : {}),
     pagination: {
-      offset: offset ?? 0,
+      offset: currentOffset ?? 0,
       totalMessages: readPage.totalMessages,
       rawPageMessages: incrementalTail.rawPageMessages,
     },

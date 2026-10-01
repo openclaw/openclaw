@@ -3,6 +3,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   closeTestConfigReloaders,
   createReloaderHarness,
@@ -146,3 +148,49 @@ it.each(["resolve", "reject"] as const)(
     expect(harness.onConfigAccepted).not.toHaveBeenCalled();
   },
 );
+
+it("applies transcript changes through the plugin reload transaction without a plugin policy", async () => {
+  const registry = createTestRegistry([]);
+  setActivePluginRegistry(registry);
+  const config: OpenClawConfig = {
+    transcripts: { autoStart: [{ providerId: "capture", channelId: "old-room" }] },
+  };
+  const nextConfig: OpenClawConfig = {
+    transcripts: { autoStart: [{ providerId: "capture", channelId: "new-room" }] },
+  };
+  const drainSignal = new AbortController().signal;
+  const appliedRuntime = { operationId: "transcript-reload", generation: 2, pluginIds: ["notes"] };
+  const harness = createReloaderHarness(
+    async () => makeSnapshot({ config: nextConfig, sourceConfig: nextConfig, hash: "next" }),
+    {
+      initialConfig: config,
+      initialCompareConfig: config,
+      onHotReload: async (plan, next, ownership) => {
+        ownership.markRuntimeCommitted(next, plan);
+        return { status: "applied", runtime: appliedRuntime };
+      },
+    },
+  );
+  await harness.reloader.ready;
+  try {
+    const applied = harness.reloader.applyPluginLifecycleChange({
+      config: nextConfig,
+      pluginIds: ["notes"],
+      reason: "reload",
+      waitForDrain: true,
+      drainSignal,
+    });
+    await expect(applied).resolves.toEqual(appliedRuntime);
+    expect(harness.onHotReload).toHaveBeenCalledOnce();
+    expect(harness.onHotReload.mock.calls[0]?.[0]).toMatchObject({
+      pluginLifecycle: { waitForDrain: true, drainSignal },
+      reloadPlugins: true,
+      restartGateway: false,
+      changedPaths: ["transcripts.autoStart"],
+    });
+    expect(harness.onHotReload.mock.calls[0]?.[1]).toEqual(nextConfig);
+    expect(harness.onRestart).not.toHaveBeenCalled();
+  } finally {
+    await harness.reloader.stop();
+  }
+});

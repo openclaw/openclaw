@@ -90,7 +90,8 @@ struct RootSidebar: View {
     private var brandHeader: some View {
         HStack(spacing: 4) {
             HStack(spacing: 8) {
-                OpenClawProMark(size: 26, shadowRadius: 2)
+                // The shell keeps a hidden sidebar mounted; an unpaused mascot would redraw unseen.
+                OpenClawProMark(size: 26, shadowRadius: 2, paused: !self.isDismissButtonEnabled)
                     .accessibilityHidden(true)
                 Text(String(localized: "OpenClaw"))
                     .font(OpenClawType.headline)
@@ -678,6 +679,7 @@ struct RootSidebar: View {
             }
             .commandSessionActions(
                 session: session,
+                mainSessionKey: self.resolvedMainSessionKey,
                 categories: self.sessionCategories,
                 isEnabled: self.appModel.isOperatorGatewayConnected,
                 canArchive: ChatSessionSidebarModel.canArchiveSession(

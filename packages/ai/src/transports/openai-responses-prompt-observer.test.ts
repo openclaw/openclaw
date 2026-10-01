@@ -977,14 +977,8 @@ describe("OpenAI Responses provider prompt observer", () => {
   it("observes only SSE when automatic WebSocket fallback happens before send", async () => {
     const prompt = "PRIVATE-PRE-SEND-FALLBACK-PROMPT";
     const observations: ResponsesPromptObservation[] = [];
-    class FailingWebSocket {
-      constructor() {
-        throw new Error("websocket connect failed");
-      }
-      send(): void {}
-      close(): void {}
-      addEventListener(): void {}
-      removeEventListener(): void {}
+    function FailingWebSocket() {
+      throw new Error("websocket connect failed");
     }
     vi.stubGlobal("WebSocket", FailingWebSocket);
     vi.stubGlobal(

@@ -20,6 +20,8 @@ export function createAgentsApiSession(options: {
   sessionId: string;
   signal: AbortSignal;
   assertCurrent: () => void;
+  /** A fresh session whose creation request already admitted the sole input. */
+  initialInputSubmitted?: true;
   onEvent: (event: AgentsApiEvent) => void | Promise<void>;
   onReconcile?: (turn: Turn, items: AgentsApiItem[]) => Promise<void | boolean>;
   onReconcileHistory?: (entries: Array<{ turn: Turn; items: AgentsApiItem[] }>) => Promise<void>;
@@ -34,7 +36,7 @@ export function createAgentsApiSession(options: {
 }) {
   const { client, cleanupClient, sessionId, signal, assertCurrent } = options;
   let streamController = new AbortController();
-  let submitted = false;
+  let submitted = options.initialInputSubmitted ?? false;
   let inputAdmissionClosed = false;
   let stopped = false;
   let closed = false;
@@ -45,10 +47,10 @@ export function createAgentsApiSession(options: {
   let submission: Promise<void> = Promise.resolve();
   let admittedSubmission: Promise<void> = Promise.resolve();
   let cancellation: Promise<void> | undefined;
-  let admittedMessageCount = 0;
+  let admittedMessageCount = submitted ? 1 : 0;
   let baselineTurnId: string | undefined;
-  let baselineCaptured = false;
-  const observedInputItems = new Set<string>();
+  let baselineCaptured = submitted;
+  let observedInputItems = new Set<string>();
   const coordinatorTurnIds = new Set<string>();
   const excludedTurnIds = new Set<string>();
   const itemTurnIds = new Map<string, string>();
@@ -115,11 +117,6 @@ export function createAgentsApiSession(options: {
   };
   signal.addEventListener("abort", onAbort, { once: true });
 
-  const assertSessionUsable = (session: { status: string; error: string | null }) => {
-    if (session.status === "failed") {
-      throw new Error(session.error ?? "Agents API session failed");
-    }
-  };
   const readAdmittedTurns = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
     const turns = await readClient.turns(sessionId, readSignal, baselineTurnId);
     readSignal.throwIfAborted();
@@ -162,9 +159,6 @@ export function createAgentsApiSession(options: {
     for (const turn of turns) {
       const items = itemsByTurn.get(turn.id) ?? [];
       for (const item of items) {
-        if (item.turn_id && item.turn_id !== turn.id) {
-          throw new Error("Agents API saved item belongs to a different turn");
-        }
         rememberItemTurn(item.id, turn.id);
         if (item.type === "message" && item.role === "user") {
           inputItems.add(item.id);
@@ -172,10 +166,7 @@ export function createAgentsApiSession(options: {
       }
       entries.push({ turn, items });
     }
-    observedInputItems.clear();
-    for (const id of inputItems) {
-      observedInputItems.add(id);
-    }
+    observedInputItems = inputItems;
     return { turns, entries, itemsByTurn };
   };
   const projectSavedState = async (
@@ -267,10 +258,12 @@ export function createAgentsApiSession(options: {
     },
     async run(prompt: string, persistInput: () => Promise<void>, onSubmitted: () => void) {
       signal.throwIfAborted();
-      baselineTurnId = (await client.turns(sessionId, signal, undefined, true))[0]?.id;
-      baselineCaptured = true;
-      if (baselineTurnId) {
-        excludedTurnIds.add(baselineTurnId);
+      if (!options.initialInputSubmitted) {
+        baselineTurnId = (await client.turns(sessionId, signal, undefined, true))[0]?.id;
+        baselineCaptured = true;
+        if (baselineTurnId) {
+          excludedTurnIds.add(baselineTurnId);
+        }
       }
       const callAdmissions = new Map<string, { inputCount: number; relayed: boolean }>();
       const relayFunctions = async (): Promise<void> => {
@@ -437,7 +430,9 @@ export function createAgentsApiSession(options: {
         assertCurrent();
         const session = await client.session(sessionId, signal);
         assertCurrent();
-        assertSessionUsable(session);
+        if (session.status === "failed") {
+          throw new Error(session.error ?? "Agents API session failed");
+        }
         if (session.status === "requires_action") {
           await relayFunctions();
           if (settled) {
@@ -529,15 +524,36 @@ export function createAgentsApiSession(options: {
         await persistInput();
         assertCurrent();
         signal.throwIfAborted();
-        await submit(prompt);
+        if (!options.initialInputSubmitted) {
+          await submit(prompt);
+        }
         onSubmitted();
+        if (options.initialInputSubmitted) {
+          // Creation can finish inference before this non-replaying stream opens.
+          await settleFromSavedState(true);
+        }
         while (true) {
           if (settled) {
             break;
           }
-          let chunk: IteratorResult<AgentsApiEvent>;
+          let chunk: IteratorResult<AgentsApiEvent> | undefined;
           try {
-            chunk = await nextEvent;
+            if (options.initialInputSubmitted) {
+              // Creation events are not replayed, and saved records can lag them.
+              const refresh = new AbortController();
+              try {
+                chunk = await Promise.race([
+                  nextEvent,
+                  delay(1_000, undefined, {
+                    signal: AbortSignal.any([signal, refresh.signal]),
+                  }),
+                ]);
+              } finally {
+                refresh.abort();
+              }
+            } else {
+              chunk = await nextEvent;
+            }
           } catch (error) {
             signal.throwIfAborted();
             assertCurrent();
@@ -545,6 +561,10 @@ export function createAgentsApiSession(options: {
               throw error;
             }
             chunk = { done: true, value: undefined };
+          }
+          if (!chunk) {
+            await settleFromSavedState(true);
+            continue;
           }
           if (chunk.done) {
             streamController.abort();
@@ -617,9 +637,6 @@ export function createAgentsApiSession(options: {
           }
           if (event.type === "agent.session.requires_action") {
             await relayFunctions();
-            if (settled) {
-              break;
-            }
             continue;
           }
           if (["agent.session.failed", "agent.session.environment.failed"].includes(event.type)) {

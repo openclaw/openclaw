@@ -71,45 +71,19 @@ function normalizeModelCatalogThinkingLevelMap(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeSafeRecordKey(value: unknown): string {
-  const key = normalizeOptionalString(value) ?? "";
-  return key && !isBlockedObjectKey(key) ? key : "";
-}
-
-function normalizeOwnedProviderSet(providers: ReadonlySet<string>): ReadonlySet<string> {
-  const normalized = new Set<string>();
-  for (const provider of providers) {
-    const providerId = normalizeProviderId(provider);
-    if (providerId) {
-      normalized.add(providerId);
-    }
-  }
-  return normalized;
-}
-
 function normalizeStringMap(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const normalized: Record<string, string> = {};
   for (const [rawKey, rawValue] of Object.entries(value)) {
-    const key = normalizeSafeRecordKey(rawKey);
+    const key = normalizeOptionalString(rawKey);
     const mapValue = normalizeOptionalString(rawValue) ?? "";
-    if (key && mapValue) {
+    if (key && !isBlockedObjectKey(key) && mapValue) {
       normalized[key] = mapValue;
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-function mergeStringMaps(
-  base: Record<string, string> | undefined,
-  override: Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!base && !override) {
-    return undefined;
-  }
-  return { ...base, ...override };
 }
 
 function normalizeModelCatalogApi(value: unknown): ModelCatalogApi | undefined {
@@ -505,12 +479,22 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const headers = normalizeStringMap(value.headers);
   const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
+  const recommended = Array.isArray(value.recommendedModels)
+    ? value.recommendedModels.map(normalizeOptionalString)
+    : [];
+  const recommendedModels =
+    recommended.length > 0 &&
+    new Set(recommended).size === recommended.length &&
+    recommended.every((id): id is string => Boolean(id) && models.some((model) => model.id === id))
+      ? recommended
+      : [];
   return {
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),
     ...(defaultModel ? { defaultModel } : {}),
     ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
+    ...(recommendedModels.length > 0 ? { recommendedModels } : {}),
     models,
   };
 }
@@ -650,7 +634,9 @@ export function normalizeModelCatalog(
   if (!isRecord(value)) {
     return undefined;
   }
-  const ownedProviders = normalizeOwnedProviderSet(params.ownedProviders);
+  const ownedProviders = new Set(
+    [...params.ownedProviders].map(normalizeProviderId).filter(Boolean),
+  );
   const modelsDev = Object.fromEntries(
     Object.entries(normalizeStringMap(value.modelsDev) ?? {}).flatMap(
       ([rawProviderId, sourceId]) => {
@@ -699,7 +685,8 @@ export function normalizeModelCatalogProviderRows(params: {
     }
     const api = model.api ?? providerApi;
     const baseUrl = model.baseUrl ?? providerBaseUrl;
-    const headers = mergeStringMaps(providerHeaders, model.headers);
+    const headers =
+      providerHeaders || model.headers ? { ...providerHeaders, ...model.headers } : undefined;
     rows.push({
       ...model,
       provider,

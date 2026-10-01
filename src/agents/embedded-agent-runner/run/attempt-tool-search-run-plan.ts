@@ -7,15 +7,6 @@ import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 
 type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
 
-/** Derived tool allowlists used for visible prompt tools, replay tools, and empty-allowlist checks. */
-type ToolSearchRunPlan = {
-  visibleAllowedToolNames: Set<string>;
-  replayAllowedToolNames: Set<string>;
-  liveAllowedToolNames: Set<string>;
-  capabilityToolNames: Set<string>;
-  hasCallableTools: boolean;
-};
-
 function hasExplicitlyAllowedClientTool(params: {
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
   explicitAllowlistSources: Array<{ entries: string[] }>;
@@ -56,7 +47,7 @@ export function buildToolSearchRunPlan(params: {
   deferredToolsCallable?: boolean;
   controlNames?: readonly string[];
   explicitAllowlistSources: Array<{ entries: string[] }>;
-}): ToolSearchRunPlan {
+}) {
   const controlNames = params.controlNames ?? [...TOOL_SEARCH_CONTROL_TOOL_NAMES];
   const visibleAllowedToolNames = collectAllowedToolNames({
     tools: params.visibleTools,

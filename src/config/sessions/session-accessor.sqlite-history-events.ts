@@ -41,6 +41,7 @@ export function readSessionTranscriptHistoryEventPage(
     offset: number;
     beforeSeq?: number;
     maxBytes?: number;
+    allowOversizedFirst?: boolean;
     readOnly?: boolean;
     recentAtHead?: TranscriptRecentReadLimits;
   } & TranscriptReadWindowOptions,

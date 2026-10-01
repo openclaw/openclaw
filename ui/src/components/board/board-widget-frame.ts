@@ -9,6 +9,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
+import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
@@ -17,6 +18,8 @@ import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const WIDGET_BOARD_HOST_MESSAGE_TYPE = "openclaw:widget-board-host";
 const WIDGET_SCROLL_MESSAGE_TYPE = "openclaw:widget-scroll";
+const WIDGET_COMMAND_PALETTE_MESSAGE_TYPE = "openclaw:widget-command-palette";
+const WIDGET_SHORTCUT_HOST_MESSAGE_TYPE = "openclaw:widget-shortcut-host";
 const MAX_FRAME_REFRESH_ATTEMPTS = 3;
 const TICKET_REFRESH_LEAD_MS = 15_000;
 const TICKET_REFRESH_MIN_DELAY_MS = 1_000;
@@ -143,6 +146,7 @@ export class BoardWidgetFrameLifecycle {
   private frameRefreshAttempts = 0;
   private frameProbeGeneration = 0;
   private boardHostNonce = "";
+  private keyboardHostNonce = "";
   private lastFrameUrl = "";
   private messageListening = false;
   private visibilityListening = false;
@@ -230,10 +234,6 @@ export class BoardWidgetFrameLifecycle {
       this.suspend();
       return;
     }
-    this.resume();
-  }
-
-  private resume(): void {
     this.connect();
     this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
     this.updateSandboxHost();
@@ -266,6 +266,20 @@ export class BoardWidgetFrameLifecycle {
           loading="eager"
           title=${widget.title || widget.name}
           src=${sandboxSrc}
+          @openclaw:restore-focus=${(event: Event) => {
+            const frame = event.currentTarget;
+            if (
+              frame instanceof HTMLIFrameElement &&
+              this.host.active() &&
+              document.activeElement === frame &&
+              this.keyboardHostNonce
+            ) {
+              frame.contentWindow?.postMessage(
+                { type: "openclaw:widget-shortcut-focus", nonce: this.keyboardHostNonce },
+                this.sandboxOrigin,
+              );
+            }
+          }}
           @error=${() => {
             if (this.sandboxHost) {
               this.sandboxHost.handleFrameError();
@@ -412,11 +426,18 @@ export class BoardWidgetFrameLifecycle {
 
   private postBoardHostState(frame: HTMLIFrameElement): void {
     this.boardHostNonce = generateUUID();
+    this.keyboardHostNonce = this.sandboxOrigin ? generateUUID() : "";
     postWidgetTheme(frame, this.sandboxOrigin || "*");
     frame.contentWindow?.postMessage(
       { type: WIDGET_BOARD_HOST_MESSAGE_TYPE, nonce: this.boardHostNonce },
       this.sandboxOrigin || "*",
     );
+    if (this.keyboardHostNonce) {
+      frame.contentWindow?.postMessage(
+        { type: WIDGET_SHORTCUT_HOST_MESSAGE_TYPE, nonce: this.keyboardHostNonce },
+        this.sandboxOrigin,
+      );
+    }
   }
 
   private resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
@@ -476,6 +497,10 @@ export class BoardWidgetFrameLifecycle {
         this.host.requestUpdate();
       },
       onRendered: () => {
+        // The proxy replaces its inner document after the outer load event.
+        // Bind host state to that rendered document, including saved widgets
+        // whose wrapper predates the private bridge-ready notification.
+        this.postBoardHostState(frame);
         this.setError("");
         this.revealContent();
       },
@@ -515,9 +540,12 @@ export class BoardWidgetFrameLifecycle {
       return;
     }
     const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
+    if (!frame || event.source !== frame.contentWindow) {
+      return;
+    }
     const widget = this.host.widget();
     if (!this.host.active()) {
-      if (frame && event.source === frame.contentWindow && event.origin === this.sandboxOrigin) {
+      if (event.origin === this.sandboxOrigin) {
         this.sandboxHost?.handleMessage(event);
       }
       return;
@@ -529,9 +557,7 @@ export class BoardWidgetFrameLifecycle {
       nonce?: unknown;
     } | null;
     if (
-      frame &&
       widget &&
-      event.source === frame.contentWindow &&
       data?.type === WIDGET_SIZE_MESSAGE_TYPE &&
       typeof data.height === "number" &&
       Number.isFinite(data.height) &&
@@ -540,9 +566,7 @@ export class BoardWidgetFrameLifecycle {
       this.host.reportContentHeight(widget.name, data.height);
     }
     if (
-      frame &&
       widget &&
-      event.source === frame.contentWindow &&
       data?.type === WIDGET_SCROLL_MESSAGE_TYPE &&
       data.nonce === this.boardHostNonce &&
       typeof data.deltaY === "number" &&
@@ -552,11 +576,18 @@ export class BoardWidgetFrameLifecycle {
       this.host.scrollBy(data.deltaY);
     }
     if (
-      !frame ||
-      !widget?.viewTicket ||
-      event.source !== frame.contentWindow ||
-      event.origin !== this.sandboxOrigin
+      widget &&
+      data?.type === WIDGET_COMMAND_PALETTE_MESSAGE_TYPE &&
+      this.keyboardHostNonce &&
+      data.nonce === this.keyboardHostNonce &&
+      event.origin === this.sandboxOrigin &&
+      frame.isConnected &&
+      document.activeElement === frame &&
+      !document.openClawModalLayers?.size
     ) {
+      window.dispatchEvent(new CustomEvent(COMMAND_PALETTE_OPEN_EVENT));
+    }
+    if (!widget?.viewTicket || event.origin !== this.sandboxOrigin) {
       return;
     }
     const sandboxHost = this.syncSandboxHost(frame, widget);
@@ -564,12 +595,6 @@ export class BoardWidgetFrameLifecycle {
       return;
     }
     sandboxHost.handleMessage(event);
-    if (event.data?.type === "openclaw:widget-bridge-ready") {
-      // The sandbox proxy replaces its inner iframe after the outer frame's
-      // load event. Reissue per-document host state only after that replacement
-      // announces readiness so scroll authority reaches the live document.
-      this.postBoardHostState(frame);
-    }
   };
 
   private syncSandboxHost(

@@ -9,7 +9,6 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
-  isChatStopCommandText,
   registerChatAbortController,
   resolveAgentRunExpiresAtMs,
   resolveChatRunExpiresAtMs,
@@ -125,26 +124,6 @@ function expectRunAborted(params: {
   expect(params.entry.controller.signal.aborted).toBe(true);
   expect(params.ops.chatAbortControllers.has(params.runId)).toBe(false);
 }
-
-describe("isChatStopCommandText", () => {
-  it("matches slash and standalone multilingual stop forms", () => {
-    expect(isChatStopCommandText(" /STOP!!! ")).toBe(true);
-    expect(isChatStopCommandText("stop please")).toBe(true);
-    expect(isChatStopCommandText("do not do that")).toBe(true);
-    expect(isChatStopCommandText("停止")).toBe(true);
-    expect(isChatStopCommandText("停下来")).toBe(true);
-    expect(isChatStopCommandText("暂停")).toBe(true);
-    expect(isChatStopCommandText("やめて")).toBe(true);
-    expect(isChatStopCommandText("توقف")).toBe(true);
-    expect(isChatStopCommandText("остановись")).toBe(true);
-    expect(isChatStopCommandText("halt")).toBe(true);
-    expect(isChatStopCommandText("stopp")).toBe(true);
-    expect(isChatStopCommandText("pare")).toBe(true);
-    expect(isChatStopCommandText("/status")).toBe(false);
-    expect(isChatStopCommandText("please do not do that")).toBe(false);
-    expect(isChatStopCommandText("keep going")).toBe(false);
-  });
-});
 
 describe("registerChatAbortController", () => {
   it.each([
@@ -561,12 +540,6 @@ describe("abortChatRunById", () => {
       name: "resolves unscoped global aborts to the default agent subscribers",
       runId: "run-unscoped-global",
       createEntry: () => createActiveEntry("global"),
-      abort: abortChatRunById,
-    },
-    {
-      name: "preserves default-agent global delivery through tracked maintenance aborts",
-      runId: "run-tracked-global",
-      createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
       abort: abortChatRunById,
     },
   ]) {

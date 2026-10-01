@@ -1,6 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import type {
+  ControlUiSessionPullRequestSnapshot,
+  ControlUiSessionPullRequests,
+} from "./control-ui-contract.js";
 import type { ControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
 import { createTestControlUiSessionPrSubscriptions } from "./control-ui-session-pr-subscriptions.test-support.js";
 import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
@@ -8,9 +15,17 @@ import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-pr
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
 const READY: ControlUiSessionPullRequests = { pullRequests: [], rateLimited: false };
 let active: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+
+beforeEach(() => {
+  clock = createGatewaySchedulerClock(Date.now());
+  scheduler = createTestGatewayScheduler(clock.clock);
+});
 
 afterEach(async () => {
   await active?.stop();
+  await scheduler.stop();
   active = undefined;
   vi.useRealTimers();
 });
@@ -23,14 +38,22 @@ describe("recipient publication lifetimes", () => {
     source: null,
   };
   const changed: ControlUiSessionPullRequests = { ...READY, rateLimited: true };
-  const changedSessions = {
-    shared: { ...changed, status: "rate-limited" },
-  };
+  function publication(
+    connId: string,
+    key = "shared",
+    snapshot: ControlUiSessionPullRequestSnapshot = { ...changed, status: "rate-limited" },
+  ) {
+    return [
+      CHANGED_EVENT,
+      { sessions: { [key]: snapshot } },
+      new Set([connId]),
+      { sessionKeys: [key], agentId: "main" },
+    ] as const;
+  }
 
   it.each(["disconnect", "replace with another key", "replace with the same key"] as const)(
     "tracks shared cache ownership during %s of a preparing watcher",
     async (action) => {
-      vi.useFakeTimers();
       const entered = createDeferred();
       const held = createDeferred<ControlUiSessionPrTarget>();
       let holdPreparation = true;
@@ -40,6 +63,7 @@ describe("recipient publication lifetimes", () => {
           READY,
       );
       active = createTestControlUiSessionPrSubscriptions({
+        scheduler,
         broadcastToConnIds: vi.fn(),
         load,
         prepareRead: async (connId, session) => () => {
@@ -101,6 +125,7 @@ describe("recipient publication lifetimes", () => {
     let snapshot = READY;
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load: async () => snapshot,
       prepareRead: async (connId) => async () => {
@@ -134,21 +159,11 @@ describe("recipient publication lifetimes", () => {
       generation++;
       release.resolve();
       await poll;
-      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        CHANGED_EVENT,
-        { sessions: changedSessions },
-        new Set(["first"]),
-        { sessionKeys: ["shared"], agentId: "main" },
-      );
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(...publication("first"));
 
       await active.pollNow();
       expect(broadcastToConnIds.mock.calls).toEqual(
-        ["first", "recipient"].map((connId) => [
-          CHANGED_EVENT,
-          { sessions: changedSessions },
-          new Set([connId]),
-          { sessionKeys: ["shared"], agentId: "main" },
-        ]),
+        ["first", "recipient"].map((connId) => publication(connId)),
       );
       await active.pollNow();
       expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
@@ -168,6 +183,7 @@ describe("recipient publication lifetimes", () => {
     let holdNormal = false;
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load: async ({ refresh }) => {
         if (refresh) {
@@ -198,12 +214,7 @@ describe("recipient publication lifetimes", () => {
       forcedRelease.resolve();
       await Promise.all([poll, refresh]);
       expect(broadcastToConnIds.mock.calls).toEqual(
-        ["first", "recipient", "first"].map((connId) => [
-          CHANGED_EVENT,
-          { sessions: changedSessions },
-          new Set([connId]),
-          { sessionKeys: ["shared"], agentId: "main" },
-        ]),
+        ["first", "recipient", "first"].map((connId) => publication(connId)),
       );
     } finally {
       normalRelease.resolve();
@@ -221,6 +232,7 @@ describe("recipient publication lifetimes", () => {
     const load = vi.fn(async ({ refresh }: { refresh?: boolean }) => (refresh ? changed : READY));
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load,
       prepareRead: async (connId) => async () => {
@@ -250,12 +262,7 @@ describe("recipient publication lifetimes", () => {
       await Promise.all(operations);
       expect(load).toHaveBeenCalledTimes(1);
       expect(broadcastToConnIds.mock.calls).toEqual(
-        ["first", "recipient", "first"].map((connId) => [
-          CHANGED_EVENT,
-          { sessions: changedSessions },
-          new Set([connId]),
-          { sessionKeys: ["shared"], agentId: "main" },
-        ]),
+        ["first", "recipient", "first"].map((connId) => publication(connId)),
       );
     } finally {
       release.resolve();
@@ -277,6 +284,7 @@ describe("recipient publication lifetimes", () => {
     });
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load,
       prepareRead: async (_connId, session) => {
@@ -305,10 +313,7 @@ describe("recipient publication lifetimes", () => {
       release.resolve();
       await Promise.all([replacement, poll]);
       expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        CHANGED_EVENT,
-        { sessions: { new: { ...READY, status: "ready" } } },
-        new Set(["same"]),
-        { sessionKeys: ["new"], agentId: "main" },
+        ...publication("same", "new", { ...READY, status: "ready" }),
       );
     } finally {
       release.resolve();
@@ -334,6 +339,7 @@ describe("recipient publication lifetimes", () => {
     });
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load,
       prepareRead: async (_connId, session) => {
@@ -365,10 +371,7 @@ describe("recipient publication lifetimes", () => {
       loadRelease.resolve();
       await current;
       expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        CHANGED_EVENT,
-        { sessions: { shared: { ...READY, status: "ready" } } },
-        new Set(["same"]),
-        { sessionKeys: ["shared"], agentId: "main" },
+        ...publication("same", "shared", { ...READY, status: "ready" }),
       );
       blockedRelease.resolve();
       await old;
@@ -377,7 +380,7 @@ describe("recipient publication lifetimes", () => {
       oldRelease.resolve();
       blockedRelease.resolve();
       loadRelease.resolve();
-      await vi.advanceTimersByTimeAsync(10_000);
+      await clock.advanceBy(10_000);
       await Promise.all([old, current]);
     }
   });
@@ -389,6 +392,7 @@ describe("recipient publication lifetimes", () => {
     const load = vi.fn(async () => READY);
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load,
       prepareRead: async (_connId, session) => {
@@ -412,10 +416,7 @@ describe("recipient publication lifetimes", () => {
       await retired;
       expect(load).toHaveBeenCalledTimes(1);
       expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        CHANGED_EVENT,
-        { sessions: { current: { ...READY, status: "ready" } } },
-        new Set(["reused"]),
-        { sessionKeys: ["current"], agentId: "main" },
+        ...publication("reused", "current", { ...READY, status: "ready" }),
       );
     } finally {
       held.resolve();
@@ -423,33 +424,28 @@ describe("recipient publication lifetimes", () => {
     }
   });
 
-  it.each(["disconnect", "grant", "all"] as const)(
+  it.each(["grant", "all"] as const)(
     "keeps pending shared reads authorized by surviving viewers after %s retirement",
     async (retirement) => {
       vi.useFakeTimers();
       const entered = createDeferred();
       const held = createDeferred();
-      const connected = new Set(["survivor", "departing"]);
       const access = { survivor: new AbortController(), departing: new AbortController() };
       const broadcastToConnIds = vi.fn();
       let holdLoad = false;
       let authorized = false;
       active = createTestControlUiSessionPrSubscriptions({
+        scheduler,
         broadcastToConnIds,
-        isConnectionActive: (connId) => connected.has(connId),
         prepareRead: async (connId) => {
           const grant = connId === "survivor" ? access.survivor : access.departing;
           const preparedTarget = {
             ...target,
             assertCurrent: () => {
-              if (!connected.has(connId)) {
-                throw new Error("Connection retired");
-              }
               grant.signal.throwIfAborted();
             },
           };
-          return async () =>
-            connected.has(connId) && !grant.signal.aborted ? preparedTarget : undefined;
+          return async () => (grant.signal.aborted ? undefined : preparedTarget);
         },
         load: async (_params, _signal, read) => {
           if (!holdLoad) {
@@ -469,14 +465,9 @@ describe("recipient publication lifetimes", () => {
       const poll = active.pollNow();
       try {
         await entered.promise;
-        if (retirement === "disconnect") {
-          connected.delete("departing");
-          active.unsubscribe("departing");
-        } else {
-          access.departing.abort(new Error("Grant retired"));
-          if (retirement === "all") {
-            access.survivor.abort(new Error("Grant retired"));
-          }
+        access.departing.abort(new Error("Grant retired"));
+        if (retirement === "all") {
+          access.survivor.abort(new Error("Grant retired"));
         }
         held.resolve();
         await poll;
@@ -484,12 +475,7 @@ describe("recipient publication lifetimes", () => {
         if (retirement === "all") {
           expect(broadcastToConnIds).not.toHaveBeenCalled();
         } else {
-          expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-            CHANGED_EVENT,
-            { sessions: changedSessions },
-            new Set(["survivor"]),
-            { sessionKeys: ["shared"], agentId: "main" },
-          );
+          expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(...publication("survivor"));
         }
       } finally {
         held.resolve();
@@ -510,6 +496,7 @@ describe("recipient publication lifetimes", () => {
     let snapshot = READY;
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load: async () => snapshot,
       prepareRead: async (connId) => () => {
@@ -549,12 +536,7 @@ describe("recipient publication lifetimes", () => {
       await Promise.all(operations);
 
       expect(broadcastToConnIds.mock.calls).toEqual(
-        ["first", "joining"].map((connId) => [
-          CHANGED_EVENT,
-          { sessions: changedSessions },
-          new Set([connId]),
-          { sessionKeys: ["shared"], agentId: "main" },
-        ]),
+        ["first", "joining"].map((connId) => publication(connId)),
       );
     } finally {
       recipientRead.resolve(recipientTarget);
@@ -574,6 +556,7 @@ describe("recipient publication lifetimes", () => {
       let cacheSignal: AbortSignal | undefined;
       const broadcastToConnIds = vi.fn();
       active = createTestControlUiSessionPrSubscriptions({
+        scheduler,
         broadcastToConnIds,
         load: async (_params, signal) => {
           cacheSignal = signal;
@@ -610,12 +593,7 @@ describe("recipient publication lifetimes", () => {
         }
         await poll;
 
-        expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-          CHANGED_EVENT,
-          { sessions: changedSessions },
-          new Set(["first"]),
-          { sessionKeys: ["shared"], agentId: "main" },
-        );
+        expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(...publication("first"));
         active.unsubscribe("first");
         expect(cacheSignal?.aborted).toBe(true);
       } finally {
@@ -635,6 +613,7 @@ describe("recipient publication lifetimes", () => {
     let snapshot = READY;
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load: async () => snapshot,
       prepareRead: async (connId) => () => {
@@ -665,12 +644,7 @@ describe("recipient publication lifetimes", () => {
       await poll;
 
       expect(broadcastToConnIds.mock.calls).toEqual(
-        ["first", "last"].map((connId) => [
-          CHANGED_EVENT,
-          { sessions: changedSessions },
-          new Set([connId]),
-          { sessionKeys: ["shared"], agentId: "main" },
-        ]),
+        ["first", "last"].map((connId) => publication(connId)),
       );
       broadcastToConnIds.mockClear();
       await active.pollNow();

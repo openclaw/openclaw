@@ -1,6 +1,8 @@
 /**
  * Public SDK helpers for maintaining generated blocks inside Markdown files.
  */
+import { escapeRegExp } from "../shared/regexp.js";
+
 export type ManagedMarkdownBlockParams = {
   original: string;
   body: string;
@@ -8,10 +10,6 @@ export type ManagedMarkdownBlockParams = {
   endMarker: string;
   heading?: string;
 };
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function isLineWhitespace(value: string): boolean {
   return /^[\t \r\n]*$/.test(value);
@@ -27,10 +25,10 @@ export function replaceManagedMarkdownBlock(params: ManagedMarkdownBlockParams):
   const headingPrefix = params.heading ? `${params.heading}\n` : "";
   const managedBlock = `${headingPrefix}${params.startMarker}\n${params.body}\n${params.endMarker}`;
   const headingPattern = params.heading
-    ? `${escapeRegex(params.heading)}(?:[ \t]*(?:\r\n|\n|\r))+[ \t]*`
+    ? `${escapeRegExp(params.heading)}(?:[ \t]*(?:\r\n|\n|\r))+[ \t]*`
     : "";
   const existingPattern = new RegExp(
-    `${headingPattern}${escapeRegex(params.startMarker)}[\\s\\S]*?${escapeRegex(params.endMarker)}`,
+    `${headingPattern}${escapeRegExp(params.startMarker)}[\\s\\S]*?${escapeRegExp(params.endMarker)}`,
     "g",
   );
   const matches = Array.from(params.original.matchAll(existingPattern));

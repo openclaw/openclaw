@@ -11,6 +11,7 @@ import {
   type SystemInfoResult,
   validateSystemInfoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { validatePresenceActivityParams } from "../../../packages/gateway-protocol/src/schema/presence.js";
 import {
   SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
   validateSystemEventParams,
@@ -45,7 +46,7 @@ import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
 
 let advertisedLanHostPromise: Promise<string | null> | null = null;
 let stateDiskSnapshot:
@@ -172,6 +173,14 @@ export const systemHandlers: GatewayRequestHandlers = {
     setHeartbeatsEnabled(enabled);
     respond(true, { ok: true, enabled }, undefined);
   },
+  "presence.activity": defineValidatedGatewayMethod(
+    "presence.activity",
+    validatePresenceActivityParams,
+    ({ client, context, respond }) => {
+      context.recordClientActivity?.(client);
+      respond(true, { ok: true }, undefined);
+    },
+  ),
   "system-presence": async (options) => {
     const { respond, client, context } = options;
     const projection = getSessionRowProjection(context);

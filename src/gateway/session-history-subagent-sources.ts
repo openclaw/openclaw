@@ -2,7 +2,6 @@ import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly
 import { isSubagentSessionFromEntry } from "../agents/subagents/spawn/subagent-depth-policy.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import type { CurrentTranscriptProjection } from "../config/sessions/session-accessor.sqlite-projection-read.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { readGatewaySessionEntryFromSources } from "./session-utils-store-readonly.js";
@@ -64,17 +63,13 @@ export function createBoundSessionHistorySubagentSource(
     });
     let child = isSubagentSessionFromEntry(sessionKey, entry);
     if (!child && entry && (entry.parentSessionKey || entry.spawnedBy) && stateDatabase) {
-      const acp = withStateDatabaseCoordinatorRuntimeDirectory(
-        stateDatabase.coordinatorRuntime,
-        () =>
-          readAcpSessionMetaForEntry({
-            sessionKey,
-            agentId: parseAgentSessionKey(sessionKey)?.agentId,
-            entry,
-            databasePath: stateDatabase.path,
-            env: stateDatabase.environment,
-          }),
-      );
+      const acp = readAcpSessionMetaForEntry({
+        sessionKey,
+        agentId: parseAgentSessionKey(sessionKey)?.agentId,
+        entry,
+        databasePath: stateDatabase.path,
+        env: stateDatabase.environment,
+      });
       child = isSubagentSessionFromEntry(sessionKey, entry, acp);
     }
     sources.set(sessionKey, child);

@@ -10,6 +10,7 @@ import {
   resolveDateTimestampMs,
   resolveTimestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type MatrixVerificationMethod = "sas" | "show-qr" | "scan-qr";
 type MatrixVerificationPhase = VerificationPhase | -1;
@@ -264,9 +265,7 @@ export class MatrixVerificationManager {
     const declining = this.readRequestValue(() => request.declining, false);
     const pending = this.readRequestValue(() => request.pending, false);
     const methodsRaw = this.readRequestValue<unknown>(() => request.methods, []);
-    const methods = Array.isArray(methodsRaw)
-      ? methodsRaw.filter((entry): entry is string => typeof entry === "string")
-      : [];
+    const methods = filterStringEntries(methodsRaw);
     const sasCallbacks = session.sasCallbacks ?? session.activeVerifier?.getShowSasCallbacks();
     if (sasCallbacks) {
       session.sasCallbacks = sasCallbacks;
@@ -383,9 +382,7 @@ export class MatrixVerificationManager {
       return;
     }
     const methodsRaw = this.readRequestValue<unknown>(() => session.request.methods, []);
-    const methods = Array.isArray(methodsRaw)
-      ? methodsRaw.filter((entry): entry is string => typeof entry === "string")
-      : [];
+    const methods = filterStringEntries(methodsRaw);
     const chosenMethod = this.readRequestValue(() => session.request.chosenMethod, null);
     const supportsSas =
       methods.includes(VerificationMethod.Sas) || chosenMethod === VerificationMethod.Sas;
@@ -653,7 +650,6 @@ export class MatrixVerificationManager {
     }
     const verifier = await session.request.startVerification(VerificationMethod.Sas);
     this.attachVerifierToVerificationSession(session, verifier);
-    this.ensureVerificationStarted(session);
     return this.buildVerificationSummary(session);
   }
 
@@ -678,7 +674,6 @@ export class MatrixVerificationManager {
     }
     const verifier = await session.request.scanQRCode(new Uint8ClampedArray(qrBytes));
     this.attachVerifierToVerificationSession(session, verifier);
-    this.ensureVerificationStarted(session);
     return this.buildVerificationSummary(session);
   }
 

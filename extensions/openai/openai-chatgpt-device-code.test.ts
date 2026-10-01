@@ -20,6 +20,21 @@ function createJsonResponse(body: unknown, init?: { status?: number }) {
   });
 }
 
+function createDeviceCodeResponse(interval: string | number = "0") {
+  return createJsonResponse({
+    device_auth_id: "device-auth-123",
+    user_code: "CODE-12345",
+    interval,
+  });
+}
+
+function createAuthorizationResponse() {
+  return createJsonResponse({
+    authorization_code: "authorization-code-123",
+    code_verifier: "code-verifier-123",
+  });
+}
+
 function fetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, index: number) {
   const call = fetchMock.mock.calls[index];
   if (!call) {
@@ -222,13 +237,7 @@ describe("loginOpenAICodexDeviceCode", () => {
     try {
       const fetchMock = vi
         .fn<typeof fetch>()
-        .mockResolvedValueOnce(
-          createJsonResponse({
-            device_auth_id: "device-auth-123",
-            user_code: "CODE-12345",
-            interval: "0",
-          }),
-        )
+        .mockResolvedValueOnce(createDeviceCodeResponse())
         .mockResolvedValueOnce(new Response(null, { status: 404 }))
         .mockResolvedValueOnce(
           createJsonResponse({
@@ -301,9 +310,17 @@ describe("loginOpenAICodexDeviceCode", () => {
       const oauthTokenRequest = fetchCall(fetchMock, 3);
       expect(oauthTokenRequest[0]).toBe("https://auth.openai.com/oauth/token");
       expect(oauthTokenRequest[1]?.method).toBe("POST");
-      expect(await new Response(oauthTokenRequest[1]?.body).text()).toBe(
-        "grant_type=authorization_code&code=authorization-code-123&redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback&client_id=app_EMoamEEZ73f0CkXaXp7hrann&code_verifier=code-verifier-123",
-      );
+      expect(
+        Object.fromEntries(
+          new URLSearchParams(await new Response(oauthTokenRequest[1]?.body).text()),
+        ),
+      ).toEqual({
+        grant_type: "authorization_code",
+        code: "authorization-code-123",
+        redirect_uri: "https://auth.openai.com/deviceauth/callback",
+        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+        code_verifier: "code-verifier-123",
+      });
       expect(oauthTokenRequest[1]?.signal).toBeInstanceOf(AbortSignal);
       expect(oauthTokenRequest[1]?.headers).toEqual({
         "Content-Type": "application/x-www-form-urlencoded",
@@ -339,21 +356,14 @@ describe("loginOpenAICodexDeviceCode", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.endsWith("/api/accounts/deviceauth/usercode")) {
-        return createJsonResponse({
-          device_auth_id: "device-auth-123",
-          user_code: "CODE-12345",
-          interval: "0",
-        });
+        return createDeviceCodeResponse();
       }
       if (url.endsWith("/api/accounts/deviceauth/token")) {
         pollAttempts += 1;
         if (pollAttempts === 1) {
           return await waitForFetchAbort(init);
         }
-        return createJsonResponse({
-          authorization_code: "authorization-code-123",
-          code_verifier: "code-verifier-123",
-        });
+        return createAuthorizationResponse();
       }
       if (url.endsWith("/oauth/token")) {
         return createJsonResponse({
@@ -387,13 +397,7 @@ describe("loginOpenAICodexDeviceCode", () => {
       });
       const fetchMock = vi
         .fn<typeof fetch>()
-        .mockResolvedValueOnce(
-          createJsonResponse({
-            device_auth_id: "device-auth-123",
-            user_code: "CODE-12345",
-            interval: "2",
-          }),
-        )
+        .mockResolvedValueOnce(createDeviceCodeResponse("2"))
         .mockRejectedValueOnce(
           new TypeError("fetch failed", {
             cause: Object.assign(new Error("getaddrinfo ENOTFOUND auth.openai.com"), {
@@ -401,12 +405,7 @@ describe("loginOpenAICodexDeviceCode", () => {
             }),
           }),
         )
-        .mockResolvedValueOnce(
-          createJsonResponse({
-            authorization_code: "authorization-code-123",
-            code_verifier: "code-verifier-123",
-          }),
-        )
+        .mockResolvedValueOnce(createAuthorizationResponse())
         .mockResolvedValueOnce(
           createJsonResponse({
             access_token: accessToken,
@@ -436,13 +435,7 @@ describe("loginOpenAICodexDeviceCode", () => {
   it("still surfaces local authorization poll errors that are not transport failures", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          device_auth_id: "device-auth-123",
-          user_code: "CODE-12345",
-          interval: "0",
-        }),
-      )
+      .mockResolvedValueOnce(createDeviceCodeResponse())
       .mockRejectedValueOnce(new TypeError("undefined is not a function"));
 
     await expect(
@@ -462,13 +455,7 @@ describe("loginOpenAICodexDeviceCode", () => {
       try {
         const fetchMock = vi
           .fn<typeof fetch>()
-          .mockResolvedValueOnce(
-            createJsonResponse({
-              device_auth_id: "device-auth-123",
-              user_code: "CODE-12345",
-              interval: "5",
-            }),
-          )
+          .mockResolvedValueOnce(createDeviceCodeResponse("5"))
           .mockResolvedValueOnce(new Response(null, { status: 404 }));
 
         const login = loginOpenAICodexDeviceCode({
@@ -513,19 +500,8 @@ describe("loginOpenAICodexDeviceCode", () => {
     const expectedExpiry = resolveOpenAICodexAccessTokenExpiry(accessToken);
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          device_auth_id: "device-auth-123",
-          user_code: "CODE-12345",
-          interval: "0",
-        }),
-      )
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          authorization_code: "authorization-code-123",
-          code_verifier: "code-verifier-123",
-        }),
-      )
+      .mockResolvedValueOnce(createDeviceCodeResponse())
+      .mockResolvedValueOnce(createAuthorizationResponse())
       .mockResolvedValueOnce(
         createJsonResponse({
           access_token: accessToken,
@@ -553,19 +529,8 @@ describe("loginOpenAICodexDeviceCode", () => {
     });
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          device_auth_id: "device-auth-123",
-          user_code: "CODE-12345",
-          interval: "0",
-        }),
-      )
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          authorization_code: "authorization-code-123",
-          code_verifier: "code-verifier-123",
-        }),
-      )
+      .mockResolvedValueOnce(createDeviceCodeResponse())
+      .mockResolvedValueOnce(createAuthorizationResponse())
       .mockResolvedValueOnce(
         createJsonResponse({
           access_token: accessToken,
@@ -594,20 +559,9 @@ describe("loginOpenAICodexDeviceCode", () => {
       const expectedExpiry = resolveOpenAICodexAccessTokenExpiry(accessToken);
       const fetchMock = vi
         .fn<typeof fetch>()
-        .mockResolvedValueOnce(
-          createJsonResponse({
-            device_auth_id: "device-auth-123",
-            user_code: "CODE-12345",
-            interval: Number.MAX_SAFE_INTEGER,
-          }),
-        )
+        .mockResolvedValueOnce(createDeviceCodeResponse(Number.MAX_SAFE_INTEGER))
         .mockResolvedValueOnce(new Response(null, { status: 404 }))
-        .mockResolvedValueOnce(
-          createJsonResponse({
-            authorization_code: "authorization-code-123",
-            code_verifier: "code-verifier-123",
-          }),
-        )
+        .mockResolvedValueOnce(createAuthorizationResponse())
         .mockResolvedValueOnce(
           createJsonResponse({
             access_token: accessToken,
@@ -676,13 +630,7 @@ describe("loginOpenAICodexDeviceCode", () => {
   it("surfaces device authorization failures with sanitized payload details", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          device_auth_id: "device-auth-123",
-          user_code: "CODE-12345",
-          interval: "0",
-        }),
-      )
+      .mockResolvedValueOnce(createDeviceCodeResponse())
       .mockResolvedValueOnce(
         createJsonResponse(
           {
@@ -706,13 +654,7 @@ describe("loginOpenAICodexDeviceCode", () => {
   it("strips C1 terminal controls from reflected device-code errors", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          device_auth_id: "device-auth-123",
-          user_code: "CODE-12345",
-          interval: "0",
-        }),
-      )
+      .mockResolvedValueOnce(createDeviceCodeResponse())
       .mockResolvedValueOnce(
         createJsonResponse(
           {

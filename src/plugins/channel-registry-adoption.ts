@@ -101,6 +101,8 @@ export function adoptRuntimeChannelRegistrations(
     if (
       !record?.enabled ||
       !donorRecord ||
+      // The borrowing projection already bound this registration to the target lifetime.
+      record === donorRecord ||
       !local?.acceptingCalls ||
       !runtime?.acceptingCalls ||
       !registration ||

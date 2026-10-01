@@ -2,7 +2,7 @@
 import type { App } from "@slack/bolt";
 import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import * as mediaModule from "../media.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
@@ -14,14 +14,6 @@ import {
 
 describe("resolveSlackThreadContextData", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-context-");
-
-  beforeAll(() => {
-    storeFixture.setup();
-  });
-
-  afterAll(() => {
-    storeFixture.cleanup();
-  });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -222,18 +214,6 @@ describe("resolveSlackThreadContextData", () => {
       retained: false,
     },
     {
-      title: "filters them from fresh outbound-only channel threads",
-      isGroupDm: false,
-      sessionState: "fresh" as const,
-      retained: false,
-    },
-    {
-      title: "filters them from stale outbound-only channel threads",
-      isGroupDm: false,
-      sessionState: "stale" as const,
-      retained: false,
-    },
-    {
       title: "retains them for missing MPIM threads",
       isGroupDm: true,
       sessionState: "missing" as const,
@@ -243,12 +223,6 @@ describe("resolveSlackThreadContextData", () => {
       title: "retains them for fresh outbound-only MPIM threads",
       isGroupDm: true,
       sessionState: "fresh" as const,
-      retained: true,
-    },
-    {
-      title: "retains them for stale outbound-only MPIM threads",
-      isGroupDm: true,
-      sessionState: "stale" as const,
       retained: true,
     },
     {

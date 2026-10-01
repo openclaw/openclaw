@@ -9,7 +9,7 @@ import {
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { readOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
+import { readOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 import type { OperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.types.js";
 
 function hasOperatorToolSource(authority: OperatorToolGatewayAuthority | undefined): boolean {

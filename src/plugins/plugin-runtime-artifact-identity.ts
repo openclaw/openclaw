@@ -18,6 +18,7 @@ import {
   prefersBuiltPluginArtifacts,
   resolvePluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
+import { isPluginSourceEntry } from "./plugin-source-file.js";
 import { getPluginRegistryForContext } from "./runtime.js";
 import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
@@ -25,7 +26,8 @@ const MAX_RUNTIME_ARTIFACT_DEPTH = 64;
 const MAX_RUNTIME_ARTIFACT_ENTRIES = 50_000;
 const MAX_RUNTIME_ARTIFACT_FILE_BYTES = 256 * 1024 * 1024;
 const MAX_RUNTIME_ARTIFACT_TOTAL_BYTES = 512 * 1024 * 1024;
-const EXCLUDED_RUNTIME_ARTIFACT_DIRECTORIES = new Set([".git", ".hg", ".svn", "node_modules"]);
+const isRuntimeArtifactEntry = (name: string) =>
+  isPluginSourceEntry(name) && name !== ".hg" && name !== ".svn";
 
 export type PluginRuntimeArtifactIdentitySource = Readonly<{
   pluginId: string;
@@ -61,9 +63,8 @@ function listRuntimeArtifactFiles(rootDir: string): string[] {
     maxDepth: MAX_RUNTIME_ARTIFACT_DEPTH,
     maxEntries: MAX_RUNTIME_ARTIFACT_ENTRIES,
     symlinks: "include",
-    descend: (entry) => !EXCLUDED_RUNTIME_ARTIFACT_DIRECTORIES.has(entry.name),
-    include: (entry) =>
-      entry.kind !== "directory" && !EXCLUDED_RUNTIME_ARTIFACT_DIRECTORIES.has(entry.name),
+    descend: (entry) => isRuntimeArtifactEntry(entry.name),
+    include: (entry) => entry.kind !== "directory" && isRuntimeArtifactEntry(entry.name),
   });
   if (scan.truncated) {
     throw new Error("plugin runtime artifact exceeds the bounded file scan");

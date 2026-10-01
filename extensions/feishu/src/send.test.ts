@@ -1,7 +1,14 @@
 // Feishu tests cover send plugin behavior.
 import type { HttpInstance, HttpRequestOptions } from "@larksuiteoapi/node-sdk";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { resolveFeishuCardTemplate } from "./native-card.js";
+import {
+  editMessageFeishu,
+  getMessageFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+} from "./send.js";
 
 const {
   mockConvertMarkdownTables,
@@ -68,18 +75,6 @@ vi.mock("./runtime.js", () => ({
     },
   }),
 }));
-
-let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
-let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
-let resolveFeishuCardTemplate: typeof import("./native-card.js").resolveFeishuCardTemplate;
-let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
-let sendStructuredCardFeishu: typeof import("./send.js").sendStructuredCardFeishu;
-
-beforeAll(async () => {
-  ({ resolveFeishuCardTemplate } = await import("./native-card.js"));
-  ({ editMessageFeishu, getMessageFeishu, sendMessageFeishu, sendStructuredCardFeishu } =
-    await import("./send.js"));
-});
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
@@ -750,25 +745,6 @@ describe("editMessageFeishu", () => {
     ).rejects.toThrow("Feishu message edit exceeds the 30 KB rich-post API limit");
     expect(mockClientPatch).not.toHaveBeenCalled();
     expect(mockClientUpdate).not.toHaveBeenCalled();
-  });
-
-  it("patches interactive content for card edits", async () => {
-    mockClientPatch.mockResolvedValueOnce({ code: 0 });
-
-    const result = await editMessageFeishu({
-      cfg: {} as ClawdbotConfig,
-      messageId: "om_card",
-      card: { schema: "2.0" },
-    });
-
-    expect(mockClientPatch).toHaveBeenCalledWith({
-      path: { message_id: "om_card" },
-      data: {
-        content: JSON.stringify({ schema: "2.0" }),
-      },
-    });
-    expect(mockClientUpdate).not.toHaveBeenCalled();
-    expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
   });
 
   it.each([

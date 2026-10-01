@@ -9,6 +9,7 @@ import { resolveGatewayPort } from "../../src/config/paths.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveGatewayUrlOverride } from "../../src/gateway/client-bootstrap.js";
 import { reserveGatewayTestListener } from "../../src/gateway/test-helpers.listener.js";
+import { probeTcpListener } from "../../src/infra/ports-probe.js";
 import { captureFullEnv, withEnvAsync } from "../../src/test-utils/env.js";
 import {
   acquireTestPortBlock,
@@ -22,6 +23,28 @@ import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 describe("createOpenClawTestInstance acquisition", () => {
+  it("keeps an absent Gateway unreachable while retaining its port claims", async () => {
+    const instance = await createOpenClawTestInstance({
+      name: "absent-gateway",
+      reserveIdlePort: false,
+    });
+    await runQaGatewayFixture(
+      async () => {
+        await expect(probeTcpListener(instance.port, "127.0.0.1")).resolves.toBe("free");
+        await instance.stopGateway();
+        await expect(probeTcpListener(instance.port, "127.0.0.1")).resolves.toBe("free");
+        for (const port of [instance.port, instance.port + 1]) {
+          await expect(acquireTestPortBlock({ port, offsets: [0] })).rejects.toMatchObject({
+            code: "EADDRINUSE",
+          });
+        }
+      },
+      () => instance.cleanup(),
+    );
+    const released = await acquireTestPortBlock({ port: instance.port, offsets: [0, 1] });
+    await released.release();
+  });
+
   it.each([
     { platform: "win32", explicit: false, advances: true },
     { platform: "win32", explicit: true, advances: false },
@@ -443,15 +466,9 @@ const cases: Array<{
   explicit?: EndpointEnv;
   expected: { port: number; override: { url?: string; source?: "env" } };
 }> = [
-  { name: "clean environment", inherited: {}, expected: { port, override: {} } },
   {
-    name: "inherited port",
-    inherited: { OPENCLAW_GATEWAY_PORT: "19702" },
-    expected: { port, override: {} },
-  },
-  {
-    name: "inherited URL",
-    inherited: { OPENCLAW_GATEWAY_URL: inheritedUrl },
+    name: "inherited endpoints",
+    inherited: { OPENCLAW_GATEWAY_PORT: "19702", OPENCLAW_GATEWAY_URL: inheritedUrl },
     expected: { port, override: {} },
   },
   {

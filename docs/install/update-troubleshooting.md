@@ -215,6 +215,12 @@ that its installation has been replaced; restart the unit after the update.
 Use the unit name printed in your result, including any instance name, then
 check `openclaw gateway status --deep`.
 
+If the same Gateway unit exists in both user and system scopes, updates retain
+these system-scope restrictions. A differently named Gateway does not create this
+conflict. Installation-replacement restarts wait for the helper to confirm updater
+and cleanup settlement; an interrupted helper alone does not permit a restart.
+Inspect any surviving updater before manually restarting after an interruption.
+
 The restart remains operator-managed even when the updater runs as root:
 managed update handoffs own user-scope service supervision and recovery, not
 the system service's lifecycle. Pending Doctor or plugin maintenance is recorded
@@ -285,6 +291,26 @@ Verify the actual serving version/build through an authenticated Gateway RPC
 and check `/readyz` before declaring recovery or removing backups. The
 plain-start control did not verify these recovery steps or establish that
 restarting the same 2026.9.4 fleet resolves the failed-update condition.
+
+## Headless nodes waiting on 2026.9.6
+
+A headless node running published 2026.9.6 with the default plugins prepares an
+automatic update but never activates it. Its log shows
+`node auto-update <version> is ready; waiting for active work to finish` even
+when no commands run. That release's bundled File Transfer plugin does not
+report its idle state, and the running node makes the idle decision before any
+newer code loads, so a later release cannot repair this automatically.
+
+Update the node once through the normal workflow, then restart it:
+
+```bash
+openclaw update
+openclaw node restart
+```
+
+For a foreground node, stop `openclaw node run` and start it again instead.
+Later releases report File Transfer commands as idle between invocations, so
+subsequent automatic node updates activate normally.
 
 ## Plugin repair warnings
 
@@ -378,6 +404,13 @@ openclaw plugins enable <id>
 
 Updates from the fixed release onward inspect these plugins normally.
 
+The 2026.9.5 updater can also report `Cannot use 'import.meta' outside a module`
+for ESM plugins, including bundles using `import.meta.dir`. Use the same temporary
+disable/update/enable sequence: a new candidate cannot replace the parser already
+running in the installed updater. Version 2026.9.6 admits retained `import.meta`
+syntax. Current snapshot inventory also records unparseable entries as named
+plugin warnings instead of aborting the snapshot.
+
 ### Large model-catalog temporary directories
 
 Older releases can retain several complete plugin copies inside
@@ -400,7 +433,13 @@ Doctor preserves the captures and reports that PID and the inspection failure
 (including a missing or unreadable package manifest);
 this remains a maintenance warning and does not fail the update. Retry
 `openclaw doctor --fix` after resolving the reported inspection problem.
-Windows host-wide capture cleanup remains report-only.
+On macOS, unreadable arguments from a process owned by another UID do not block
+cleanup; Doctor records that exclusion once at debug level. Unreadable arguments
+from the same UID, or an unknown UID, still preserve legacy captures. Doctor also
+preserves legacy capture roots owned by another UID, including in privileged runs. Managed
+native captures use their recorded custody and installed-index references rather
+than the host process census, as they do during startup cleanup.
+Windows host-wide legacy capture cleanup remains report-only.
 
 ## Reason codes
 

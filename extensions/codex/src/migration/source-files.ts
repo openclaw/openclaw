@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { isDirectory, readJsonObject } from "./helpers.js";
@@ -133,12 +134,7 @@ async function discoverCodexMemoryFile(
     }
     return candidate;
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
+    if (extractErrorCode(error) === "ENOENT") {
       return undefined;
     }
     throw error;
@@ -147,7 +143,7 @@ async function discoverCodexMemoryFile(
 
 export async function discoverCodexMemorySources(codexHome: string): Promise<CodexMemorySource[]> {
   const memoriesDir = path.join(codexHome, "memories");
-  const memoryFiles = (
+  return (
     await Promise.all(
       [
         { id: "memory:codex:MEMORY.md", label: "Codex consolidated memory", name: "MEMORY.md" },
@@ -166,5 +162,4 @@ export async function discoverCodexMemorySources(codexHome: string): Promise<Cod
       ),
     )
   ).filter((entry): entry is CodexMemorySource => entry !== undefined);
-  return memoryFiles;
 }

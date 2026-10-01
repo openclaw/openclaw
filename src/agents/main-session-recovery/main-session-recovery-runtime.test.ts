@@ -14,7 +14,17 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-it.each(["admitted", "read-error", "failed", "failed-read-error", "failed-cancelled"] as const)(
+function createObserverRuntime() {
+  return createRecoveryRuntimeFixture({
+    callGateway: vi.fn(async () => {
+      throw new Error("Unexpected Gateway call");
+    }),
+    getDispatchSettlement: async () => {},
+    sendRecoveryNotice: async () => ({ suppressed: false }),
+  });
+}
+
+it.each(["read-error", "cancelled"] as const)(
   "settles the recovery observer and unsubscribes after %s",
   async (outcome) => {
     vi.useFakeTimers();
@@ -26,53 +36,34 @@ it.each(["admitted", "read-error", "failed", "failed-read-error", "failed-cancel
       status: "running" as const,
     };
     const read = vi.mocked(loadSessionEntry).mockReturnValue(initial);
-    const runtime = createRecoveryRuntimeFixture({
-      callGateway: vi.fn(async () => {
-        throw new Error("Unexpected Gateway call");
-      }),
-      getDispatchSettlement: async () => {},
-      sendRecoveryNotice: async () => ({ suppressed: false }),
-    });
+    const runtime = createObserverRuntime();
     const failure = new Error("fixture database read failed");
     const settled = vi.fn();
-    const failedRecovery = outcome.startsWith("failed");
     const cleanup = createDeferred();
     const stop = vi.fn(() => cleanup.promise);
     const cancellation = new AbortController();
-    const observation = failedRecovery
-      ? runtime.expectFailedRecovery(0, { stop }, cancellation.signal, scope)
-      : runtime.expectAdmission(0, scope);
+    const observation = runtime.expectFailedRecovery(0, { stop }, cancellation.signal, scope);
     const pending = observation.then(
       () => settled("finished"),
       (error: unknown) => settled(error),
     );
     try {
-      if (outcome.endsWith("cancelled")) {
+      if (outcome === "cancelled") {
         cancellation.abort(failure);
-      } else if (outcome.endsWith("read-error")) {
+      } else {
         read.mockImplementationOnce(() => {
           throw failure;
-        });
-      } else {
-        read.mockReturnValue({
-          ...initial,
-          abortedLastRun: false,
-          ...(failedRecovery ? { status: "failed" as const } : {}),
         });
       }
       sessionChanges.emit(scope);
       await vi.advanceTimersByTimeAsync(0);
 
-      if (failedRecovery) {
-        expect(stop).toHaveBeenCalledOnce();
-        expect(settled).not.toHaveBeenCalled();
-        cleanup.resolve();
-        await pending;
-      }
+      expect(stop).toHaveBeenCalledOnce();
+      expect(settled).not.toHaveBeenCalled();
+      cleanup.resolve();
+      await pending;
 
-      expect(settled).toHaveBeenCalledExactlyOnceWith(
-        outcome.endsWith("read-error") || outcome.endsWith("cancelled") ? failure : "finished",
-      );
+      expect(settled).toHaveBeenCalledExactlyOnceWith(failure);
       read.mockClear();
       sessionChanges.emit(scope);
       expect(read).not.toHaveBeenCalled();
@@ -100,19 +91,13 @@ it.each([false, true])(
         { sessionId: `session-${index}`, updatedAt: 1, status: "running", abortedLastRun: true },
       ]),
     );
-    vi.mocked(loadSessionEntry).mockImplementation((scope) => {
+    const read = vi.mocked(loadSessionEntry).mockImplementation((scope) => {
       if (!scope.storePath) {
         throw new Error("Expected a physical recovery store");
       }
       return entries.get(scope.storePath);
     });
-    const runtime = createRecoveryRuntimeFixture({
-      callGateway: vi.fn(async () => {
-        throw new Error("Unexpected Gateway call");
-      }),
-      getDispatchSettlement: async () => {},
-      sendRecoveryNotice: async () => ({ suppressed: false }),
-    });
+    const runtime = createObserverRuntime();
     const cancellation = new AbortController();
     const stop = vi.fn(async () => {});
     const observed = vi.fn();
@@ -140,6 +125,9 @@ it.each([false, true])(
       await pending;
       expect(observed).toHaveBeenCalledOnce();
       expect(stop).toHaveBeenCalledOnce();
+      read.mockClear();
+      sessionChanges.emitBatch(scopes);
+      expect(read).not.toHaveBeenCalled();
     } finally {
       scopes.forEach(complete);
       await pending;

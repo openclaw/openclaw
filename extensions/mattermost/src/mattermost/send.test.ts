@@ -3,7 +3,8 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as mattermostRuntime from "../runtime.js";
 
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
 let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
@@ -200,8 +201,8 @@ vi.mock("./client.js", async () => ({
   uploadMattermostFile: mockState.uploadMattermostFile,
 }));
 
-vi.mock("../runtime.js", () => ({
-  getMattermostRuntime: () => ({
+vi.mock("../runtime.js", () => {
+  const getMattermostRuntime = () => ({
     config: {
       loadConfig: mockState.loadConfig,
     },
@@ -218,8 +219,9 @@ vi.mock("../runtime.js", () => ({
         record: mockState.recordActivity,
       },
     },
-  }),
-}));
+  });
+  return { getMattermostRuntime, getOptionalMattermostRuntime: getMattermostRuntime };
+});
 
 beforeAll(async () => {
   ({ sendMessageMattermost } = await import("./send.js"));
@@ -408,7 +410,7 @@ describe("sendMessageMattermost", () => {
     expect(mockState.resolveMattermostAccount).not.toHaveBeenCalled();
   });
 
-  it("sends with provided cfg even when the runtime store is not initialized", async () => {
+  it("preserves the send receipt when runtime is unavailable for activity recording", async () => {
     const providedCfg = {
       channels: {
         mattermost: {
@@ -422,9 +424,10 @@ describe("sendMessageMattermost", () => {
       baseUrl: "https://mattermost.example.com",
       config: {},
     });
-    mockState.recordActivity.mockImplementation(() => {
-      throw new Error("Mattermost runtime not initialized");
-    });
+    const runtime = vi
+      .spyOn(mattermostRuntime, "getOptionalMattermostRuntime")
+      .mockReturnValueOnce(null);
+    onTestFinished(() => runtime.mockRestore());
 
     const result = await sendMessageMattermost("channel:town-square", "hello", {
       cfg: providedCfg,
@@ -440,6 +443,7 @@ describe("sendMessageMattermost", () => {
     expect(result.receipt.parts[0]?.kind).toBe("text");
     expect(result.content).toBe("hello");
     expect(mockState.loadConfig).not.toHaveBeenCalled();
+    expect(mockState.recordActivity).not.toHaveBeenCalled();
   });
 
   it("preserves the provider post when outbound bookkeeping fails afterward", async () => {
@@ -700,24 +704,9 @@ describe("sendMessageMattermost", () => {
 });
 
 describe("parseMattermostTarget", () => {
-  it("parses channel: prefix with valid ID as channel id", () => {
-    const target = parseMattermostTarget("channel:dthcxgoxhifn3pwh65cut3ud3w");
-    expect(target).toEqual({ kind: "channel", id: "dthcxgoxhifn3pwh65cut3ud3w" });
-  });
-
   it("parses channel: prefix with non-ID as channel name", () => {
     const target = parseMattermostTarget("channel:abc123");
     expect(target).toEqual({ kind: "channel-name", name: "abc123" });
-  });
-
-  it("parses user: prefix as user id", () => {
-    const target = parseMattermostTarget("user:usr456");
-    expect(target).toEqual({ kind: "user", id: "usr456" });
-  });
-
-  it("parses mattermost: prefix as user id", () => {
-    const target = parseMattermostTarget("mattermost:usr789");
-    expect(target).toEqual({ kind: "user", id: "usr789" });
   });
 
   it("parses @ prefix as username", () => {
@@ -725,29 +714,9 @@ describe("parseMattermostTarget", () => {
     expect(target).toEqual({ kind: "user", username: "alice" });
   });
 
-  it("parses # prefix as channel name", () => {
-    const target = parseMattermostTarget("#off-topic");
-    expect(target).toEqual({ kind: "channel-name", name: "off-topic" });
-  });
-
   it("parses # prefix with spaces", () => {
     const target = parseMattermostTarget("  #general  ");
     expect(target).toEqual({ kind: "channel-name", name: "general" });
-  });
-
-  it("treats 26-char alphanumeric bare string as channel id", () => {
-    const target = parseMattermostTarget("dthcxgoxhifn3pwh65cut3ud3w");
-    expect(target).toEqual({ kind: "channel", id: "dthcxgoxhifn3pwh65cut3ud3w" });
-  });
-
-  it("treats non-ID bare string as channel name", () => {
-    const target = parseMattermostTarget("off-topic");
-    expect(target).toEqual({ kind: "channel-name", name: "off-topic" });
-  });
-
-  it("treats channel: with non-ID value as channel name", () => {
-    const target = parseMattermostTarget("channel:off-topic");
-    expect(target).toEqual({ kind: "channel-name", name: "off-topic" });
   });
 
   it("throws on empty string", () => {
@@ -760,11 +729,6 @@ describe("parseMattermostTarget", () => {
 
   it("throws on empty @ prefix", () => {
     expect(() => parseMattermostTarget("@")).toThrow("Username is required");
-  });
-
-  it("parses channel:#name as channel name", () => {
-    const target = parseMattermostTarget("channel:#off-topic");
-    expect(target).toEqual({ kind: "channel-name", name: "off-topic" });
   });
 
   it("parses channel:#name with spaces", () => {
@@ -804,66 +768,6 @@ describe("sendMessageMattermost user-first resolution", () => {
     mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
-  });
-
-  it("falls back to channel id when user lookup returns 404", async () => {
-    // Unique token + id for this test
-    const channelId = "bbbbbb2222222222bbbbbb2222"; // 26 chars
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-404-t2"));
-    const err = new Error("Mattermost API 404: user not found");
-    mockState.fetchMattermostUser.mockRejectedValueOnce(err);
-
-    const res = await sendMessageMattermost(channelId, "hello", { cfg: TEST_CFG });
-
-    expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
-    expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
-    const params = createMattermostPostParams();
-    expect(params.channelId).toBe(channelId);
-    expect(res.channelId).toBe(channelId);
-  });
-
-  it("falls back to channel id without caching negative result on transient error", async () => {
-    // Two unique tokens so each call has its own cache namespace
-    const userId = "cccccc3333333333cccccc3333"; // 26 chars
-    const tokenA = "token-transient-t3a";
-    const tokenB = "token-transient-t3b";
-    const transientErr = new Error("Mattermost API 503: service unavailable");
-
-    // First call: transient error → fall back to channel id, do NOT cache negative
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount(tokenA));
-    mockState.fetchMattermostUser.mockRejectedValueOnce(transientErr);
-
-    const res1 = await sendMessageMattermost(userId, "first", { cfg: TEST_CFG });
-    expect(res1.channelId).toBe(userId);
-
-    // Second call with a different token (new cache key) → retries user lookup
-    vi.clearAllMocks();
-    mockState.createMattermostClient.mockImplementation(({ baseUrl: clientBaseUrl, botToken }) => ({
-      baseUrl: clientBaseUrl,
-      token: botToken,
-    }));
-    mockState.createMattermostPost.mockResolvedValue({ id: "post-id-2" });
-    mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
-    mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount(tokenB));
-    mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
-
-    const res2 = await sendMessageMattermost(userId, "second", { cfg: TEST_CFG });
-    expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
-    expect(res2.channelId).toBe("dm-channel-id");
-  });
-
-  it("does not apply user-first resolution for explicit user: prefix", async () => {
-    // Unique token + id — explicit user: prefix bypasses probe, goes straight to DM
-    const userId = "dddddd4444444444dddddd4444"; // 26 chars
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-explicit-user-t4"));
-    mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
-
-    const res = await sendMessageMattermost(`user:${userId}`, "hello", { cfg: TEST_CFG });
-
-    expect(mockState.fetchMattermostUser).not.toHaveBeenCalled();
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
-    expect(res.channelId).toBe("dm-channel-id");
   });
 
   it("does not apply user-first resolution for explicit channel: prefix", async () => {

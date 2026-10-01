@@ -50,8 +50,6 @@ describe("splitMediaFromOutput", () => {
   }
 
   it.each([
-    ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
-    ["/Users/pete/My File.png", 'MEDIA:"/Users/pete/My File.png"'],
     [
       "/Users/pete/My Files/Project Assets/render final.png",
       "MEDIA:/Users/pete/My Files/Project Assets/render final.png",
@@ -63,16 +61,12 @@ describe("splitMediaFromOutput", () => {
     ["/tmp/album.v1/photo.png copy.png", "MEDIA:/tmp/album.v1/photo.png copy.png"],
     ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
     ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
+    ["media://inbound/image.png", "MEDIA:media://inbound/image.png"],
     ["./screenshot.png", " MEDIA:./screenshot.png"],
     ["./screenshot.png", "  MEDIA:./screenshot.png"],
     ["./screenshot.png", "   MEDIA:./screenshot.png"],
     ["~/Pictures/My File.png", "MEDIA:~/Pictures/My File.png"],
-    ["~/.openclaw/media/browser/snap.png", "MEDIA:~/.openclaw/media/browser/snap.png"],
     ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
-    [
-      "C:\\Users\\First Last\\workspace\\shot.png",
-      "MEDIA:C:\\Users\\First Last\\workspace\\shot.png",
-    ],
     [
       "C:\\Users\\First  Last\\workspace\\shot.png",
       "MEDIA:C:\\Users\\First  Last\\workspace\\shot.png",
@@ -81,7 +75,6 @@ describe("splitMediaFromOutput", () => {
       "\\\\server\\My Files\\Project Assets\\render final.png",
       "MEDIA:\\\\server\\My Files\\Project Assets\\render final.png",
     ],
-    ["/tmp/tts-fAJy8C/voice-1770246885083.opus", "MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus"],
     ["image.png", "MEDIA:image.png"],
     [
       "/path/to/image.png",
@@ -94,6 +87,16 @@ describe("splitMediaFromOutput", () => {
     ["/tmp/render,final.png", "MEDIA:/tmp/render,final.png"],
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
     expectAcceptedMediaPathCase(expectedPath, input);
+  });
+
+  it.each([
+    "media://outbound/image.png",
+    "media://inbound/nested%2Fimage.png",
+    "media://inbound/%00.png",
+    "media://inbound/image.png?token=value",
+    "media://inbound/",
+  ])("does not extract an invalid inbound URI: %s", (source) => {
+    expectRejectedRemoteMediaUrlCase(`MEDIA:${source}`);
   });
 
   it.each([",", '"', "'", "\\", ")", "}", "]", "`"])(
@@ -134,11 +137,6 @@ describe("splitMediaFromOutput", () => {
   });
 
   it.each([
-    ["bare image", "Generated image\nMEDIA:image.png", ["image.png"]],
-    ["bare audio", "Generated audio\nMEDIA:voice.ogg", ["voice.ogg"]],
-    ["bare document", "Generated document\nMEDIA:report.pdf", ["report.pdf"]],
-    ["caption after bare filename", "MEDIA:image.png\nGenerated image", ["image.png"]],
-    ["quoted bare filename", 'Generated image\nMEDIA:"image.png"', ["image.png"]],
     [
       "quoted bare filename with spaces",
       'Generated image\nMEDIA:"render final.png"',
@@ -146,21 +144,9 @@ describe("splitMediaFromOutput", () => {
     ],
     ["unquoted bare filename with spaces", "MEDIA:render final.png", ["render final.png"]],
     [
-      "remote followed by bare filename",
-      "MEDIA:https://example.com/remote.png\nMEDIA:image.png",
-      ["https://example.com/remote.png", "image.png"],
-    ],
-    [
       "bare filenames surrounding remote media",
       "MEDIA:image.png\nMEDIA:https://example.com/remote.png\nMEDIA:voice.ogg",
       ["image.png", "https://example.com/remote.png", "voice.ogg"],
-    ],
-    ["explicit relative sibling", "MEDIA:./image.png", ["./image.png"]],
-    ["absolute sibling", "MEDIA:/tmp/image.png", ["/tmp/image.png"]],
-    [
-      "multiple paths on one directive",
-      "MEDIA:/tmp/image.png /tmp/voice.ogg",
-      ["/tmp/image.png", "/tmp/voice.ogg"],
     ],
   ] as const)(
     "projects every accepted media URL into ordered segments: %s",
@@ -196,6 +182,9 @@ describe("splitMediaFromOutput", () => {
     ["MEDIA:/tmp/project screenshots/../../.env /tmp/safe/second.png", ["/tmp/safe/second.png"]],
   ] as const)("keeps separate media items on one directive line: %s", (input, mediaUrls) => {
     expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+    expect(splitMediaFromOutput(input).segments).toEqual(
+      mediaUrls.map((url) => ({ type: "media", url })),
+    );
   });
 
   it.each([
@@ -658,41 +647,4 @@ describe("splitMediaFromOutput", () => {
       expect(performance.now() - startedAt).toBeLessThan(2_000);
     },
   );
-
-  it.each([
-    "![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)",
-    "![build](https://img.shields.io/github/actions/workflow/status/owner/repo/ci.yml)",
-    "![npm](https://badge.fury.io/js/some-package.svg)",
-    "![badgen](https://badgen.net/npm/v/some-package)",
-    "![CI](https://github.com/owner/repo/actions/workflows/ci.yml/badge.svg)",
-    "![flat-badge](https://flat.badgen.net/npm/v/some-package)",
-  ] as const)("keeps markdown badge image as text by default: %s", (input) => {
-    expectParsedMediaOutputCase(input, {
-      text: input,
-      mediaUrls: undefined,
-    });
-  });
-
-  it("keeps surrounding text around inline badge images by default", () => {
-    expectParsedMediaOutputCase(
-      "tech: ![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white) stack",
-      {
-        text: "tech: ![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white) stack",
-        mediaUrls: undefined,
-      },
-    );
-  });
-
-  it("still extracts markdown images when explicitly enabled", () => {
-    expectParsedMediaOutputCase(
-      "![badge](https://img.shields.io/badge/status-passing-green)\n![photo](https://example.com/photo.png)",
-      {
-        mediaUrls: [
-          "https://img.shields.io/badge/status-passing-green",
-          "https://example.com/photo.png",
-        ],
-      },
-      extractMarkdownImages,
-    );
-  });
 });

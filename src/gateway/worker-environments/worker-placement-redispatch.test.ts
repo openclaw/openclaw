@@ -23,6 +23,8 @@ function reader(
       placements: new Map([[record.sessionId, record]]),
       environments: new Map(environment ? [[environment.environmentId, environment]] : []),
       moves: new Map(),
+      pendingResults: new Map(),
+      workspaceJournalOwnerSessionIds: new Set<string>(),
       workspaceResultReconcilingSessionIds: new Set<string>(),
       workspaceRecoveryPendingSessionIds: new Set<string>(),
     }),

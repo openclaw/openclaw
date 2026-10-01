@@ -239,19 +239,18 @@ describe("doctor agent memory schema repair", () => {
     },
   );
 
-  it("leaves a later runtime admission untouched after the first repair loses maintenance", async () => {
+  it("blocks runtime admission until a lost Doctor repair releases maintenance", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
     const laterOptions = { agentId: "worker-2", env };
     const laterPath = openOpenClawAgentDatabase(laterOptions).path;
     closeOpenClawAgentDatabasesForTest();
     recreateUnreleasedInlineMemoryMetadata(databasePath);
     recreateUnreleasedInlineMemoryMetadata(laterPath);
+    const laterBefore = fs.readFileSync(laterPath);
     const agentDatabase = await import("../state/openclaw-agent-db.js");
     const integrityWorker = await import("../infra/sqlite-integrity-worker.js");
     const sqlite = await import("../infra/node-sqlite.js");
     const startAdmission = createDeferred();
-    const admissionChecked = createDeferred();
-    const releaseAdmission = createDeferred();
     // Register outside the old maintenance ALS scope: this is a new runtime owner.
     const newerAdmission = startAdmission.promise.then(() =>
       agentDatabase.withOpenClawAgentDatabaseAsync(laterOptions, (database) =>
@@ -259,17 +258,7 @@ describe("doctor agent memory schema repair", () => {
       ),
     );
     void newerAdmission.catch(() => {});
-    const check = integrityWorker.assertSqliteIntegrityInWorker;
-    const scan = vi
-      .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
-      .mockImplementation(async (...args) => {
-        await check(...args);
-        if (args[0] === laterPath) {
-          // Keep the real pending admission alive before it converges the legacy shape.
-          admissionChecked.resolve();
-          await releaseAdmission.promise;
-        }
-      });
+    const scan = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
     const open = sqlite.openNodeSqliteDatabase;
     const inspectedPaths: string[] = [];
     const inspection = vi
@@ -294,7 +283,7 @@ describe("doctor agent memory schema repair", () => {
         inspectedPaths.length = 0;
         close.mockClear();
         startAdmission.resolve();
-        await Promise.race([admissionChecked.promise, newerAdmission]);
+        await newerAdmission.catch(() => {});
       });
     try {
       await expect(
@@ -303,14 +292,17 @@ describe("doctor agent memory schema repair", () => {
       expect(repair.mock.calls.map(([options]) => options.pathname)).toEqual([databasePath]);
       expect(inspectedPaths).not.toContain(laterPath);
       expect(close.mock.calls.some(([pathname]) => pathname === laterPath)).toBe(false);
+      expect(scan.mock.calls.filter(([pathname]) => pathname === laterPath)).toHaveLength(0);
+      await expect(newerAdmission).rejects.toThrow("undergoing offline maintenance");
+      expect(fs.readFileSync(laterPath)).toEqual(laterBefore);
+      await expect(
+        agentDatabase.withOpenClawAgentDatabaseAsync(laterOptions, (database) =>
+          database.db.prepare("SELECT id, text FROM memory_index_chunks").all(),
+        ),
+      ).resolves.toEqual([{ id: "pre-provenance-sentinel", text: "sentinel text" }]);
       expect(scan.mock.calls.filter(([pathname]) => pathname === laterPath)).toHaveLength(1);
-      releaseAdmission.resolve();
-      await expect(newerAdmission).resolves.toEqual([
-        { id: "pre-provenance-sentinel", text: "sentinel text" },
-      ]);
     } finally {
       startAdmission.resolve();
-      releaseAdmission.resolve();
       await newerAdmission.catch(() => {});
       repair.mockRestore();
       close.mockRestore();

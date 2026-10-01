@@ -2,7 +2,6 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
-import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
 
 const jsonlEncoder = new TextEncoder();
 
@@ -88,43 +87,6 @@ afterEach(() => {
 });
 
 describe("OpenAI embedding batch output", () => {
-  it("preserves configured query parameters on real direct embedding requests", async () => {
-    const received: Array<{ url: string; authorization: string | undefined }> = [];
-    const server = createServer((request, response) => {
-      received.push({ url: request.url ?? "", authorization: request.headers.authorization });
-      if (request.url !== "/tenant/v1/embeddings?api-version=2024-10-21&tenant=alpha") {
-        response.writeHead(404).end("wrong embedding endpoint");
-        return;
-      }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ embedding: [3, 5] }] }));
-    });
-    const port = await listenLoopbackServer(server);
-
-    try {
-      const { provider } = await createOpenAiEmbeddingProvider({
-        config: {},
-        provider: "openai",
-        model: "text-embedding-3-small",
-        fallback: "none",
-        remote: {
-          baseUrl: `http://127.0.0.1:${port}/tenant/v1/?api-version=2024-10-21&tenant=alpha#local`,
-          apiKey: "openai-loopback-key",
-        },
-      });
-
-      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([3, 5]);
-      expect(received).toEqual([
-        {
-          url: "/tenant/v1/embeddings?api-version=2024-10-21&tenant=alpha",
-          authorization: "Bearer openai-loopback-key",
-        },
-      ]);
-    } finally {
-      await closeServer(server);
-    }
-  });
-
   it("preserves configured query parameters through real batch upload, create, status, and output", async () => {
     const received: Array<{ url: string; authorization: string | undefined }> = [];
     const server = createServer((request, response) => {

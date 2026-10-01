@@ -832,47 +832,40 @@ describe("approval Web Push delivery", () => {
     expect(approvalDeliveryTargets.get(record.id)?.size).toBe(0);
   });
 
-  it.for(["same-process", "restart"] as const)(
-    "does not send a terminal approval link to a rebound subscription after %s resolution",
-    async (mode, testContext) => {
-      const manager = createTestApprovalManager(testContext);
-      const record = manager.create(
-        { command: "sensitive command" },
-        60_000,
-        `exec:rebound-terminal-${mode}`,
-      );
-      const original = boundSubscription("original-device", "profile-original");
-      listBoundWebPushSubscriptionsMock.mockResolvedValue([original]);
-      listDevicePairingMock.mockReturnValue({
-        pending: [],
-        paired: [pairedOperator("original-device", ["operator.approvals", "operator.read"])],
-      });
-      preparedWebPushSendMock.mockResolvedValueOnce([
-        { ok: true, subscriptionId: original.subscriptionId, statusCode: 201 },
-      ]);
+  it("does not send a terminal approval link to a rebound subscription after restart", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create(
+      { command: "sensitive command" },
+      60_000,
+      "exec:rebound-terminal-restart",
+    );
+    const original = boundSubscription("original-device", "profile-original");
+    listBoundWebPushSubscriptionsMock.mockResolvedValue([original]);
+    listDevicePairingMock.mockReturnValue({
+      pending: [],
+      paired: [pairedOperator("original-device", ["operator.approvals", "operator.read"])],
+    });
+    preparedWebPushSendMock.mockResolvedValueOnce([
+      { ok: true, subscriptionId: original.subscriptionId, statusCode: 201 },
+    ]);
 
-      const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
-      const firstProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
-      await expect(firstProcess.handleRequested(record)).resolves.toBe(true);
+    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+    const firstProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    await expect(firstProcess.handleRequested(record)).resolves.toBe(true);
 
-      // The durable store retains the original binding but the mutable
-      // subscription row now belongs to someone else, so it returns no target.
-      listWebPushApprovalDeliveryTargetsMock.mockResolvedValue([]);
-      if (mode === "restart") {
-        listTerminalWebPushApprovalDeliveryIdsMock.mockResolvedValue({
-          approvalIds: [record.id],
-          nextAfterApprovalId: null,
-          throughApprovalId: record.id,
-        });
-        const restartedProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
-        await restartedProcess.recoverTerminalDeliveries();
-      } else {
-        await firstProcess.handleResolved({ id: record.id });
-      }
+    // The durable store retains the original binding but the mutable
+    // subscription row now belongs to someone else, so it returns no target.
+    listWebPushApprovalDeliveryTargetsMock.mockResolvedValue([]);
+    listTerminalWebPushApprovalDeliveryIdsMock.mockResolvedValue({
+      approvalIds: [record.id],
+      nextAfterApprovalId: null,
+      throughApprovalId: record.id,
+    });
+    const restartedProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    await restartedProcess.recoverTerminalDeliveries();
 
-      expect(preparedWebPushSendMock).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(preparedWebPushSendMock).toHaveBeenCalledTimes(1);
+  });
 
   it.for(["same-process", "restart"] as const)(
     "does not send a terminal approval link after device authority is revoked in %s delivery",

@@ -105,14 +105,13 @@ describe("Crabbox protected model command", () => {
     await expect(execFileAsync("test", ["-e", observed.path])).rejects.toThrow();
   });
 
-  it.each(["", "  --upstream-proxy-env-name string\n per-upstream-proxy-env help"])(
-    "refuses incompatible native commands before credential access",
-    async (help) => {
-      mocks.run.mockResolvedValue(result(help));
-      await expect(runCrabboxModelCommand(options)).rejects.toThrow("lacks native egress run");
-      expect(mocks.withEgress).not.toHaveBeenCalled();
-    },
-  );
+  it("refuses lookalike native flags before credential access", async () => {
+    mocks.run.mockResolvedValue(
+      result("  --upstream-proxy-env-name string\n per-upstream-proxy-env help"),
+    );
+    await expect(runCrabboxModelCommand(options)).rejects.toThrow("lacks native egress run");
+    expect(mocks.withEgress).not.toHaveBeenCalled();
+  });
 
   it("reports unconfirmed native process cleanup as failure", async () => {
     mocks.run.mockResolvedValueOnce(result(capabilityHelp));

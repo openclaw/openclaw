@@ -24,18 +24,19 @@ import {
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
 import {
-  ensureExecApprovals,
+  ensureExecApprovalsSnapshot,
   loadExecApprovals,
   loadExecApprovalsReadOnly,
   loadExecApprovalsReadOnlyAsync,
   readExecApprovalsSnapshot,
-  restoreExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
-  saveExecApprovals,
   updateExecApprovals,
   withAgentExecApprovalsRemoved,
 } from "./exec-approvals-store.js";
-import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "./exec-approvals-store.test-support.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
@@ -253,10 +254,10 @@ describe("exec approvals SQLite store", () => {
     expect(updated?.file.defaults?.security).toBe("full");
   });
 
-  it("mints one socket token and reuses it on later initialization", () => {
-    const first = ensureExecApprovals();
+  it("mints one socket token and reuses it on later initialization", async () => {
+    const first = (await ensureExecApprovalsSnapshot()).file;
     const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
-    const second = ensureExecApprovals();
+    const second = (await ensureExecApprovalsSnapshot()).file;
     expect(writes).not.toHaveBeenCalled();
     writes.mockRestore();
     expect(first.socket?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
@@ -437,7 +438,7 @@ describe("exec approvals SQLite store", () => {
       throw new Error("missing newer snapshot");
     }
     expect(await restoreExecApprovalsSnapshotLocked(original, original.hash)).toBe(false);
-    restoreExecApprovalsSnapshot(original);
+    expect(await restoreExecApprovalsSnapshotLocked(original, newer.hash)).toBe(true);
     expect(loadExecApprovals().defaults?.security).toBe("allowlist");
   });
 
@@ -502,24 +503,6 @@ describe("exec approvals SQLite store", () => {
       expect(loadExecApprovals()).toMatchObject({ version: 1, agents: {} });
     },
   );
-
-  it("scopes the doctor command to the blocked state directory", () => {
-    // A bare `openclaw doctor --fix` repairs the default root, leaving a scoped
-    // install blocked by the same file it was told to repair (#115008).
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("missing test state dir");
-    }
-    const error = new ExecApprovalsMigrationRequiredError(
-      path.join(stateDir, "exec-approvals.json"),
-    );
-
-    // Prose, not `VAR=value cmd`: no Windows shell accepts that form, and a path
-    // containing spaces would need shell-specific quoting to survive a paste.
-    expect(error.message).toContain(
-      `Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${stateDir}`,
-    );
-  });
 
   it.each([
     [true, false, false],

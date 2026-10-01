@@ -88,21 +88,22 @@ it("bounds six Gateway connections and filters the shared refresh at each delive
         elapsed.push(Date.now() - started);
       }),
     );
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(elapsed).toHaveLength(6);
-    expect(Math.max(...elapsed)).toBeLessThanOrEqual(5_000);
+    expect(Math.max(...elapsed)).toBeLessThanOrEqual(1_000);
     expect(invokeNode).toHaveBeenCalledTimes(1);
     for (const call of calls) {
       expect(call.respond).toHaveBeenCalledWith(true, {
         catalogs: [
           expect.objectContaining({
-            hosts: [expect.objectContaining({ pending: true, sessions: [] })],
+            hosts: [],
+            error: expect.objectContaining({ code: "catalog_pending" }),
           }),
         ],
       });
     }
     clients[5]!.connect.scopes = ["operator.read"];
-    await vi.advanceTimersByTimeAsync(25_000);
+    await vi.advanceTimersByTimeAsync(29_000);
     await done;
     for (const [index, broadcast] of broadcasts.entries()) {
       expect(broadcast).toHaveBeenLastCalledWith(

@@ -40,7 +40,8 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     return;
   }
   const repositories = getSessionRepositoryWorkspaceStore();
-  const repository = repositories.get(workspaceId);
+  const preparedRepository = await repositories.prepare(workspaceId);
+  const repository = preparedRepository.workspace;
   if (
     !repository ||
     repository.agentId !== params.agentId ||
@@ -79,7 +80,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       current.entry?.sessionId !== params.sessionId ||
       current.entry.lifecycleRevision !== initial.entry?.lifecycleRevision ||
       current.entry.repositoryWorkspaceId !== workspaceId ||
-      repositories.get(workspaceId)?.revision !== repository.revision
+      preparedRepository.current()?.revision !== repository.revision
     ) {
       throw new Error("Repository workspace changed during Gateway materialization; retry move");
     }
@@ -218,10 +219,10 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
             // The checkout is unbound until verification. Failed preparation rolls it
             // back; a crash leaves the immutable checkpoint available for a fresh retry.
             journal: {
-              load: () => undefined,
-              begin: assertCurrent,
-              commit: assertCurrent,
-              abort: () => {},
+              load: async () => undefined,
+              begin: async () => assertCurrent(),
+              commit: async () => assertCurrent(),
+              abort: async () => {},
             },
           });
           if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {

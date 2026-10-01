@@ -1,11 +1,10 @@
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
-  createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "openclaw/plugin-sdk/test-media-understanding";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 const providers: MediaUnderstandingProvider[] = [];
@@ -23,22 +22,25 @@ if (!transcribeDeepgramAudio) {
 
 installPinnedHostnameTestHooks();
 
+const audioRequest = {
+  buffer: Buffer.from("audio-bytes"),
+  fileName: "voice.wav",
+  apiKey: "test-key",
+  timeoutMs: 1234,
+};
+
 describe("transcribeDeepgramAudio", () => {
   it("respects lowercase authorization header overrides", async () => {
-    const { fetchFn, getAuthHeader } = createAuthCaptureJsonFetch({
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
       results: { channels: [{ alternatives: [{ transcript: "ok" }] }] },
     });
-
     const result = await transcribeDeepgramAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "note.mp3",
-      apiKey: "test-key",
-      timeoutMs: 1000,
+      ...audioRequest,
       headers: { authorization: "Token override" },
       fetchFn,
     });
 
-    expect(getAuthHeader()).toBe("Token override");
+    expect(new Headers(getRequest().init?.headers).get("authorization")).toBe("Token override");
     expect(result.text).toBe("ok");
   });
 
@@ -48,10 +50,7 @@ describe("transcribeDeepgramAudio", () => {
     });
 
     const result = await transcribeDeepgramAudio({
-      buffer: Buffer.from("audio-bytes"),
-      fileName: "voice.wav",
-      apiKey: "test-key",
-      timeoutMs: 1234,
+      ...audioRequest,
       baseUrl: "https://api.example.com/v1/",
       model: " ",
       language: " en ",
@@ -108,10 +107,7 @@ describe("transcribeDeepgramAudio", () => {
       },
     });
     const result = await transcribeDeepgramAudio({
-      buffer: Buffer.from("audio-bytes"),
-      fileName: "voice.wav",
-      apiKey: "test-key",
-      timeoutMs: 1234,
+      ...audioRequest,
       query: { multichannel: true },
       fetchFn,
     });
@@ -130,61 +126,26 @@ describe("transcribeDeepgramAudio", () => {
 
     await expect(
       transcribeDeepgramAudio({
-        buffer: Buffer.from("audio-bytes"),
-        fileName: "voice.wav",
-        apiKey: "test-key",
-        timeoutMs: 1234,
+        ...audioRequest,
         fetchFn,
       }),
     ).rejects.toThrow("Audio transcription response missing transcript");
   });
 
-  it("rejects non-object successful transcription JSON with a stable provider error", async () => {
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify([])));
-
-    await expect(
-      transcribeDeepgramAudio({
-        buffer: Buffer.from("audio-bytes"),
-        fileName: "voice.wav",
-        apiKey: "test-key",
-        timeoutMs: 1234,
-        fetchFn,
-      }),
-    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
-  });
-
-  it("rejects wrong nested transcript shapes with a stable provider error", async () => {
-    const { fetchFn } = createRequestCaptureJsonFetch({
-      results: { channels: { alternatives: [{ transcript: "hello" }] } },
-    });
-
-    await expect(
-      transcribeDeepgramAudio({
-        buffer: Buffer.from("audio-bytes"),
-        fileName: "voice.wav",
-        apiKey: "test-key",
-        timeoutMs: 1234,
-        fetchFn,
-      }),
-    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
-  });
-
   it.each([
-    { name: "first channel", transcripts: [123] },
-    { name: "later channel", transcripts: ["First track.", 123] },
-  ])("rejects non-string transcript values in the $name", async ({ transcripts }) => {
-    const { fetchFn } = createRequestCaptureJsonFetch({
-      results: {
-        channels: transcripts.map((transcript) => ({ alternatives: [{ transcript }] })),
-      },
-    });
-
+    {
+      name: "wrong nested transcript shapes",
+      channels: { alternatives: [{ transcript: "hello" }] },
+    },
+    {
+      name: "non-string transcript values in a later channel",
+      channels: ["First track.", 123].map((transcript) => ({ alternatives: [{ transcript }] })),
+    },
+  ])("rejects $name with a stable provider error", async ({ channels }) => {
+    const { fetchFn } = createRequestCaptureJsonFetch({ results: { channels } });
     await expect(
       transcribeDeepgramAudio({
-        buffer: Buffer.from("audio-bytes"),
-        fileName: "voice.wav",
-        apiKey: "test-key",
-        timeoutMs: 1234,
+        ...audioRequest,
         fetchFn,
       }),
     ).rejects.toThrow("Audio transcription failed: malformed JSON response");

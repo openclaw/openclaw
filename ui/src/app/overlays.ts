@@ -181,19 +181,17 @@ export function createApplicationOverlays(
     }
     if (connected && !operatorAccess.canReviewApprovals) {
       approvalDecision = null;
+    }
+    if (!connected || !next.client || !operatorAccess.canReviewApprovals) {
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
       promptState.execApprovalErrors.clear();
       clearExecApprovalTimers(promptState);
     }
     if (!connected || !next.client) {
-      promptState.execApprovalQueue = [];
-      promptState.execApprovalBusy = false;
-      promptState.execApprovalErrors.clear();
       if (next.phase !== "reload-required" && !next.client) {
         connectedEpoch = 0;
       }
-      clearExecApprovalTimers(promptState);
       updates.synchronizeGateway(next);
       return;
     }

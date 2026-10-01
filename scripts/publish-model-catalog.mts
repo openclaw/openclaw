@@ -23,7 +23,9 @@ import type {
   RemoteModelCatalogPricing,
   RemoteModelCatalogPricingV2,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
+import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
+import { publishModelCatalogPair } from "./lib/publish-model-catalog-files.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 type ModelCatalogManifestInput = {
@@ -185,7 +187,12 @@ export async function assembleModelCatalogBundle(options: {
       if (Object.hasOwn(providers, providerId)) {
         throw new Error(`provider ${providerId} is declared by more than one plugin manifest`);
       }
-      providers[providerId] = provider;
+      if (isRecord(provider)) {
+        const { recommendedModels: _recommendedModels, ...v1Provider } = provider;
+        providers[providerId] = v1Provider;
+      } else {
+        providers[providerId] = provider;
+      }
     }
   }
 
@@ -964,20 +971,6 @@ export async function enrichModelCatalogPricing(options: {
   return { modelsEnriched: enriched, pricingEntries: hosted.size };
 }
 
-function sortCatalogValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortCatalogValue);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, sortCatalogValue(entry)]),
-  );
-}
-
 export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle): string {
   const providers = Object.fromEntries(
     Object.entries(bundle.providers)
@@ -990,7 +983,7 @@ export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle)
         },
       ]),
   );
-  return `${JSON.stringify(sortCatalogValue({ ...bundle, providers }), null, 2)}\n`;
+  return `${JSON.stringify(sortJsonValueKeys({ ...bundle, providers }), null, 2)}\n`;
 }
 
 function serializeStandalonePricing(prices: Map<string, SourcedPricing> | undefined) {
@@ -1019,14 +1012,28 @@ export async function assembleModelCatalogBundleV2(
   bundle: PublishedModelCatalogBundle,
   pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
   standalonePricing?: StandalonePricing,
+  manifests: ModelCatalogManifestInput[] = [],
 ): Promise<RemoteModelCatalogBundleV2> {
+  const recommendations = new Map<string, string[]>();
+  for (const entry of manifests) {
+    const catalog = normalizeModelCatalog(entry.manifest.modelCatalog, {
+      ownedProviders: new Set(entry.manifest.providers ?? []),
+    });
+    for (const [id, provider] of Object.entries(catalog?.providers ?? {})) {
+      if (provider.recommendedModels?.length) {
+        recommendations.set(id, provider.recommendedModels);
+      }
+    }
+  }
   const providers: RemoteModelCatalogBundleV2["providers"] = {};
   const models: RemoteModelCatalogBundleV2["models"] = [];
   for (const [providerId, provider] of Object.entries(bundle.providers)) {
+    const recommendedModels = recommendations.get(providerId);
     providers[providerId] = {
       api: provider.api,
       defaultModel: provider.defaultModel,
       defaultUtilityModel: provider.defaultUtilityModel,
+      ...(recommendedModels?.length ? { recommendedModels } : {}),
     };
     for (const model of provider.models) {
       const { cost, ...metadata } = model;
@@ -1078,7 +1085,7 @@ export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2
         Object.fromEntries(
           Object.entries(metadata)
             .toSorted(([left], [right]) => left.localeCompare(right))
-            .map(([key, value]) => [key, sortCatalogValue(value)]),
+            .map(([key, value]) => [key, sortJsonValueKeys(value)]),
         ),
       ),
     );
@@ -1086,7 +1093,7 @@ export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2
     Object.fromEntries(
       Object.entries(bundle)
         .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, value]) => [key, key === "models" ? models : sortCatalogValue(value)]),
+        .map(([key, value]) => [key, key === "models" ? models : sortJsonValueKeys(value)]),
     ),
     null,
     2,
@@ -1149,7 +1156,7 @@ export async function runPublishModelCatalog(
   const validateBundle = await loadClientBundleValidator();
   // Project while selection facts still refer to the assembled model objects.
   const bundleV2 = args.outV2
-    ? await assembleModelCatalogBundleV2(bundle, pricingSelections, standalonePricing)
+    ? await assembleModelCatalogBundleV2(bundle, pricingSelections, standalonePricing, manifests)
     : undefined;
   bundle = validateBundle(bundle);
   const summary = summarizeModelCatalogBundle(bundle);
@@ -1188,15 +1195,20 @@ export async function runPublishModelCatalog(
     throw new Error("output path is required outside dry-run mode");
   }
   const outputFile = path.resolve(rootDir, args.out);
-  fs.mkdirSync(path.dirname(outputFile), { recursive: true });
-  fs.writeFileSync(outputFile, serialized);
   if (args.outV2 && serializedV2) {
-    const outputV2File = path.resolve(rootDir, args.outV2);
-    fs.mkdirSync(path.dirname(outputV2File), { recursive: true });
-    fs.writeFileSync(outputV2File, serializedV2);
+    await publishModelCatalogPair(
+      [
+        { file: outputFile, content: serialized },
+        { file: path.resolve(rootDir, args.outV2), content: serializedV2 },
+      ],
+      (message) => process.stderr.write(`[${SCRIPT_LABEL}] warning: ${message}\n`),
+    );
     process.stdout.write(
       `[${SCRIPT_LABEL}] published schemaVersion=2 models=${summary.models} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
     );
+  } else {
+    fs.mkdirSync(path.dirname(outputFile), { recursive: true });
+    fs.writeFileSync(outputFile, serialized);
   }
   process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}`);
   return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };

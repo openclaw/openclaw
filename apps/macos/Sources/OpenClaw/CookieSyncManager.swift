@@ -330,15 +330,8 @@ final class CookieSyncManager: NSObject {
         guard self.shouldBeActive else { return }
         self.retryAttempt += 1
         let delaySeconds = min(30, 1 << min(self.retryAttempt - 1, 5))
-        self.retryTask?.cancel()
-        self.retryTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: UInt64(delaySeconds) * 1_000_000_000)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled, let self else { return }
-            self.scheduleReconcile(resetRetry: false, delay: 0)
+        SimpleTaskSupport.schedule(task: &self.retryTask, delay: TimeInterval(delaySeconds)) { [weak self] in
+            self?.scheduleReconcile(resetRetry: false, delay: 0)
         }
     }
 

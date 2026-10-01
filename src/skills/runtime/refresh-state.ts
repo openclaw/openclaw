@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type { Skill } from "../loading/skill-contract.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 
-// Skill refresh state types describe change notifications emitted by runtime reloads.
 type SkillsChangeEvent = {
   workspaceDir?: string;
   reason:
@@ -58,13 +58,7 @@ function bumpVersion(current: number): number {
 }
 
 function emit(event: SkillsChangeEvent) {
-  for (const listener of listeners) {
-    try {
-      listener(event);
-    } catch (err) {
-      listenerErrorHandler?.(err);
-    }
-  }
+  notifyListeners(listeners, event, (err) => listenerErrorHandler?.(err));
 }
 
 function publishChange(event: SkillsChangeEvent): number {

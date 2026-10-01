@@ -114,6 +114,51 @@ function createTransportFixture(testCase: {
   return { input, session, streamFn };
 }
 
+function createMediaTransportFixture(modelId: string, workspaceDir = "/tmp", agentId = "main") {
+  let providerOptions: ProviderStreamOptions | undefined;
+  const providerStream = vi.fn<StreamFn>((_model, _context, options) => {
+    providerOptions = options as ProviderStreamOptions;
+    return createAssistantMessageEventStream();
+  });
+  bindStreamLlmRuntime(providerStream, {
+    streamSimple: providerStream,
+    registry: { getApiProvider: () => undefined },
+  } as never);
+  const session = { agent: { streamFn: providerStream, transport: "auto" } };
+  const model = { api: "test-api", provider: "test-provider", id: modelId };
+  registerProviderStreamForModel.mockReturnValue(providerStream);
+  const input = {
+    attempt: {
+      config: {},
+      model,
+      modelId,
+      provider: model.provider,
+      runId: `run-${modelId}`,
+      admittedRunContext,
+      runtimePlan: {
+        auth: { forwardedAuthProfileId: undefined },
+        transport: { resolveExtraParams: () => ({}) },
+      },
+      sessionId: `session-${modelId}`,
+    },
+    session,
+    settingsManager: {
+      getGlobalSettings: () => ({}),
+      getProjectSettings: () => ({}),
+    },
+    sessionAgentId: agentId,
+    workspaceDir,
+    workspaceOnly: false,
+    agentDir: workspaceDir,
+    abortSignal: new AbortController().signal,
+    getProviderRuntimeHandle: () => ({ provider: model.provider, modelId }),
+    sandboxSessionKey: `agent:${agentId}:test`,
+    codeModeControlsEnabled: false,
+    providerPromptState: { state: {}, effectiveContextTokenBudget: 128_000 },
+  } as unknown as PrepareTransportInput;
+  return { input, session, model, getProviderOptions: () => providerOptions };
+}
+
 describe("prepareEmbeddedAttemptTransport", () => {
   beforeEach(() => {
     // These cases own prepared auth/config, not runtime plugin discovery.
@@ -124,42 +169,40 @@ describe("prepareEmbeddedAttemptTransport", () => {
     registerProviderStreamForModel.mockReset();
   });
 
-  it.each([undefined, "test-subscription"])(
-    "lets the provider select transport from the prepared auth flow %s",
-    async (authFlow) => {
-      const { input, session, streamFn } = createTransportFixture({
-        compaction: false,
-        pruning: false,
-        apiKey: "test-access-token",
-      });
-      streamFn.mockReturnValue(createAssistantMessageEventStream());
-      registerProviderStreamForModel.mockReturnValue(streamFn);
-      input.attempt.runtimePlan!.auth.selectedAuthMode = "oauth";
-      input.attempt.runtimePlan!.auth.selectedAuthFlow = authFlow;
-      extraParamsTesting.setProviderRuntimeDepsForTest({
-        wrapProviderStreamFn: ({ context }) => {
-          const base = context.streamFn;
-          if (!base) {
-            throw new Error("Expected prepared base stream");
-          }
-          return (model, messages, options) =>
-            base(model, messages, {
-              ...options,
-              transport: context.auth?.authFlow === "test-subscription" ? "sse" : "auto",
-            });
-        },
-      });
+  it("lets the provider select transport from the prepared auth flow", async () => {
+    const authFlow = "test-subscription";
+    const { input, session, streamFn } = createTransportFixture({
+      compaction: false,
+      pruning: false,
+      apiKey: "test-access-token",
+    });
+    streamFn.mockReturnValue(createAssistantMessageEventStream());
+    registerProviderStreamForModel.mockReturnValue(streamFn);
+    input.attempt.runtimePlan!.auth.selectedAuthMode = "oauth";
+    input.attempt.runtimePlan!.auth.selectedAuthFlow = authFlow;
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      wrapProviderStreamFn: ({ context }) => {
+        const base = context.streamFn;
+        if (!base) {
+          throw new Error("Expected prepared base stream");
+        }
+        return (model, messages, options) =>
+          base(model, messages, {
+            ...options,
+            transport: context.auth?.authFlow === "test-subscription" ? "sse" : "auto",
+          });
+      },
+    });
 
-      await prepareEmbeddedAttemptTransport(input);
-      await session.agent.streamFn(input.attempt.model, { messages: [] }, {});
+    await prepareEmbeddedAttemptTransport(input);
+    await session.agent.streamFn(input.attempt.model, { messages: [] }, {});
 
-      expect(streamFn).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        expect.objectContaining({ transport: authFlow ? "sse" : "auto" }),
-      );
-    },
-  );
+    expect(streamFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ transport: "sse" }),
+    );
+  });
 
   it.each([
     {
@@ -304,132 +347,95 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(sessionStream.mock.calls[0]?.[2]?.apiKey).toBeUndefined();
   });
 
-  describe.each([false, true])("with code mode enabled: %s", (codeModeControlsEnabled) => {
-    it.each([
-      { label: "foreground", toolExecutionAllow: undefined, expectedSearch: true },
-      { label: "skill review", toolExecutionAllow: ["skill_workshop"], expectedSearch: false },
-      { label: "explicit search", toolExecutionAllow: ["web_search"], expectedSearch: true },
-      { label: "no execution", toolExecutionAllow: [], expectedSearch: false },
-    ])("keeps $label authority on the provider payload", async (testCase) => {
-      const { input, streamFn } = createTransportFixture({
-        compaction: false,
-        pruning: false,
-        apiKey: "test-api-key",
-      });
-      input.attempt.model = {
-        ...input.attempt.model,
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://chatgpt.com/backend-api",
-      };
-      input.attempt.modelId = input.attempt.model.id;
-      input.attempt.provider = input.attempt.model.provider;
-      input.attempt.toolExecutionAllow = testCase.toolExecutionAllow;
-      input.attempt.config = {
-        auth: { profiles: { test: { provider: "openai", mode: "oauth" } } },
-        tools: { web: { search: { openaiCodex: { enabled: true } } } },
-      };
-      input.codeModeControlsEnabled = codeModeControlsEnabled;
-      extraParamsTesting.setProviderRuntimeDepsForTest({
-        wrapProviderStreamFn: ({ context }) =>
-          createCodexNativeWebSearchWrapper(context.streamFn, context),
-      });
-      const functionTools = (
-        codeModeControlsEnabled ? ["exec", "wait"] : ["read", "skill_workshop"]
-      ).map((name) => ({
+  it.each([
+    { label: "foreground", toolExecutionAllow: undefined, expectedSearch: true, codeMode: false },
+    {
+      label: "skill review",
+      toolExecutionAllow: ["skill_workshop"],
+      expectedSearch: false,
+      codeMode: false,
+    },
+    {
+      label: "explicit search",
+      toolExecutionAllow: ["web_search"],
+      expectedSearch: true,
+      codeMode: true,
+    },
+    { label: "no execution", toolExecutionAllow: [], expectedSearch: false, codeMode: true },
+  ])("keeps $label authority on the provider payload (code mode=$codeMode)", async (testCase) => {
+    const { input, streamFn } = createTransportFixture({
+      compaction: false,
+      pruning: false,
+      apiKey: "test-api-key",
+    });
+    input.attempt.model = {
+      ...input.attempt.model,
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      id: "gpt-5.4",
+      baseUrl: "https://chatgpt.com/backend-api",
+    };
+    input.attempt.modelId = input.attempt.model.id;
+    input.attempt.provider = input.attempt.model.provider;
+    input.attempt.toolExecutionAllow = testCase.toolExecutionAllow;
+    input.attempt.config = {
+      auth: { profiles: { test: { provider: "openai", mode: "oauth" } } },
+      tools: { web: { search: { openaiCodex: { enabled: true } } } },
+    };
+    input.codeModeControlsEnabled = testCase.codeMode;
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      wrapProviderStreamFn: ({ context }) =>
+        createCodexNativeWebSearchWrapper(context.streamFn, context),
+    });
+    const functionTools = (testCase.codeMode ? ["exec", "wait"] : ["read", "skill_workshop"]).map(
+      (name) => ({
         type: "function",
         name,
         description: name,
         parameters: Type.Object({}),
-      }));
-      const payload: { tools: Array<Record<string, unknown>> } = { tools: [...functionTools] };
-      const foregroundFunctionSchemas = JSON.stringify(functionTools);
-      streamFn.mockImplementation(async (model, _context, options) => {
-        await options?.onPayload?.(payload, model);
-        return createAssistantMessageEventStream();
-      });
-
-      await prepareEmbeddedAttemptTransport(input);
-      await input.session.agent.streamFn?.(
-        input.attempt.model,
-        { messages: [], tools: functionTools },
-        {},
-      );
-
-      expect(JSON.stringify(payload.tools.filter((tool) => tool.type === "function"))).toBe(
-        foregroundFunctionSchemas,
-      );
-      expect(payload.tools.some((tool) => tool.type === "web_search")).toBe(
-        testCase.expectedSearch,
-      );
+      }),
+    );
+    const payload: { tools: Array<Record<string, unknown>> } = { tools: [...functionTools] };
+    const foregroundFunctionSchemas = JSON.stringify(functionTools);
+    streamFn.mockImplementation(async (model, _context, options) => {
+      await options?.onPayload?.(payload, model);
+      return createAssistantMessageEventStream();
     });
+
+    await prepareEmbeddedAttemptTransport(input);
+    await input.session.agent.streamFn?.(
+      input.attempt.model,
+      { messages: [], tools: functionTools },
+      {},
+    );
+
+    expect(JSON.stringify(payload.tools.filter((tool) => tool.type === "function"))).toBe(
+      foregroundFunctionSchemas,
+    );
+    expect(payload.tools.some((tool) => tool.type === "web_search")).toBe(testCase.expectedSearch);
   });
 
   it("materializes native video from the prepared session agent workspace", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transport-video-"));
     const videoPath = path.join(workspaceDir, "history.mp4");
     await fs.writeFile(videoPath, MP4);
-    let providerOptions: ProviderStreamOptions | undefined;
-    const providerStream = vi.fn((_model, _context, options) => {
-      providerOptions = options as ProviderStreamOptions;
-      return {} as never;
-    });
-    bindStreamLlmRuntime(providerStream, {
-      streamSimple: providerStream,
-      registry: { getApiProvider: () => undefined },
-    } as never);
-    const session = {
-      agent: {
-        streamFn: providerStream,
-        transport: "auto",
-      },
-    };
-    const model = {
-      api: "test-api",
-      provider: "test-provider",
-      id: "test-model-video",
-    };
-    registerProviderStreamForModel.mockReturnValue(providerStream);
+    const { input, session, model, getProviderOptions } = createMediaTransportFixture(
+      "test-model-video",
+      workspaceDir,
+      "marketing",
+    );
+    input.attempt.config = { agents: { list: [{ id: "marketing", workspace: workspaceDir }] } };
 
     try {
-      await prepareEmbeddedAttemptTransport({
-        attempt: {
-          config: { agents: { list: [{ id: "marketing", workspace: workspaceDir }] } },
-          model,
-          modelId: model.id,
-          provider: model.provider,
-          runId: "run-native-video",
-          admittedRunContext,
-          runtimePlan: {
-            auth: { forwardedAuthProfileId: undefined },
-            transport: { resolveExtraParams: () => ({}) },
-          },
-          sessionId: "session-native-video",
-        },
-        session,
-        settingsManager: {
-          getGlobalSettings: () => ({}),
-          getProjectSettings: () => ({}),
-        },
-        sessionAgentId: "marketing",
-        workspaceDir,
-        workspaceOnly: false,
-        agentDir: workspaceDir,
-        abortSignal: new AbortController().signal,
-        getProviderRuntimeHandle: () => ({ provider: model.provider, modelId: model.id }),
-        sandboxSessionKey: "agent:marketing:test",
-        codeModeControlsEnabled: false,
-        providerPromptState: { state: {}, effectiveContextTokenBudget: 128_000 },
-      } as unknown as PrepareTransportInput);
+      await prepareEmbeddedAttemptTransport(input);
       const message = attachRuntimePromptMediaFacts(
         castAgentMessage({ role: "user", content: [{ type: "text", text: "inspect" }] }),
         [{ kind: "video", path: videoPath, contentType: "video/mp4" }],
       );
       const context = { systemPrompt: "system", messages: [message], tools: [] };
 
-      session.agent.streamFn(model as never, context as never, {});
-      const provider = await resolveProviderContext(context as never, providerOptions);
+      await session.agent.streamFn(model as never, context as never, {});
+      const provider = await resolveProviderContext(context as never, getProviderOptions());
 
       expect(provider.messages[0]?.content).toEqual([
         { type: "text", text: "inspect" },
@@ -441,51 +447,11 @@ describe("prepareEmbeddedAttemptTransport", () => {
   });
 
   it("records image hydration failures at the provider handoff", async () => {
-    let providerOptions: ProviderStreamOptions | undefined;
-    const providerStream = vi.fn((_model, _context, options) => {
-      providerOptions = options as ProviderStreamOptions;
-      return {} as never;
-    });
-    bindStreamLlmRuntime(providerStream, {
-      streamSimple: providerStream,
-      registry: { getApiProvider: () => undefined },
-    } as never);
-    const session = {
-      agent: { streamFn: providerStream, transport: "auto" },
-    };
-    const model = { api: "test-api", provider: "test-provider", id: "test-model-image" };
+    const { input, session, model, getProviderOptions } =
+      createMediaTransportFixture("test-model-image");
     const onCurrentTurnImageFailure = vi.fn();
-    registerProviderStreamForModel.mockReturnValue(providerStream);
-    await prepareEmbeddedAttemptTransport({
-      attempt: {
-        config: {},
-        model,
-        modelId: model.id,
-        provider: model.provider,
-        runId: "run-native-image-failure",
-        admittedRunContext,
-        runtimePlan: {
-          auth: { forwardedAuthProfileId: undefined },
-          transport: { resolveExtraParams: () => ({}) },
-        },
-        sessionId: "session-native-image-failure",
-      },
-      session,
-      settingsManager: {
-        getGlobalSettings: () => ({}),
-        getProjectSettings: () => ({}),
-      },
-      onCurrentTurnImageFailure,
-      sessionAgentId: "main",
-      workspaceDir: "/tmp",
-      workspaceOnly: false,
-      agentDir: "/tmp",
-      abortSignal: new AbortController().signal,
-      getProviderRuntimeHandle: () => ({ provider: model.provider, modelId: model.id }),
-      sandboxSessionKey: "agent:main:test",
-      codeModeControlsEnabled: false,
-      providerPromptState: { state: {}, effectiveContextTokenBudget: 128_000 },
-    } as unknown as PrepareTransportInput);
+    input.onCurrentTurnImageFailure = onCurrentTurnImageFailure;
+    await prepareEmbeddedAttemptTransport(input);
     const message = attachRuntimePromptMediaFacts(
       castAgentMessage({
         role: "user",
@@ -499,8 +465,8 @@ describe("prepareEmbeddedAttemptTransport", () => {
     );
     const context = { systemPrompt: "system", messages: [message], tools: [] };
 
-    session.agent.streamFn(model as never, context as never, {});
-    const provider = await resolveProviderContext(context as never, providerOptions);
+    await session.agent.streamFn(model as never, context as never, {});
+    const provider = await resolveProviderContext(context as never, getProviderOptions());
 
     expect(onCurrentTurnImageFailure).toHaveBeenCalledWith(1);
     expect(provider.messages[0]?.content).toEqual([

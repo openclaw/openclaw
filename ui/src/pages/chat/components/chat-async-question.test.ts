@@ -104,11 +104,11 @@ it("keeps questions from overlapping runs when either run's terminal arrives las
 });
 
 it("waits for recorded origin settlement before treating another run as a successor", () => {
-  const messages = [question("old", "run-1"), terminal("run-2")];
+  let messages = [question("old", "run-1"), terminal("run-2")];
   expect(present(messages).pending).toHaveLength(1);
-  messages.push(terminal("run-1"));
+  messages = [...messages, terminal("run-1")];
   expect(present(messages).pending).toHaveLength(1);
-  messages.push(terminal("run-3"));
+  messages = [...messages, terminal("run-3")];
   expect(present(messages).pending).toHaveLength(0);
 });
 
@@ -159,16 +159,20 @@ it("requires a completed later human turn when old questions lack run identity",
 });
 
 it("does not credit a late earlier-run terminal to a newer user turn for an unowned question", () => {
-  const messages = [
+  let messages: unknown[] = [
     { role: "user", runId: "run-1", content: "First task" },
     question(),
     { role: "user", runId: "run-2", content: "Next task" },
     terminal("run-1"),
   ];
   expect(present(messages).pending).toHaveLength(1);
-  messages.push(terminal("run-2"));
+  messages = [...messages, terminal("run-2")];
   expect(present(messages).pending).toHaveLength(1);
-  messages.push({ role: "user", runId: "run-3", content: "Another task" }, terminal("run-3"));
+  messages = [
+    ...messages,
+    { role: "user", runId: "run-3", content: "Another task" },
+    terminal("run-3"),
+  ];
   expect(present(messages).pending).toHaveLength(0);
 });
 
@@ -270,14 +274,14 @@ it("keeps a rejected in-flight answer and its retry error visible after a later 
   const state = presentationState();
   const send = createDeferred<boolean>();
   state.transcriptRenderContext.onAsyncQuestionSubmit.mockImplementation(() => send.promise);
-  const messages = [old, terminal("run-1")];
+  let messages = [old, terminal("run-1")];
   const panel = createAsyncQuestionPanelProps(
     readAsyncQuestions(old)!,
     present(messages, state),
     {},
   );
   const submitting = panel.onSubmit!({ "0": ["Everyone"] });
-  messages.push(terminal("run-2"));
+  messages = [...messages, terminal("run-2")];
   expect(present(messages, state).pending).toHaveLength(1);
   send.reject(new Error("Send rejected before admission"));
   await expect(submitting).rejects.toThrow("Send rejected before admission");
@@ -362,6 +366,15 @@ it("does not retire reminders on an aborted live terminal projection", () => {
   const aborted = terminal("run-2");
   rememberLiveTerminalRun(aborted, "run-2", undefined, "aborted");
   expect(present([question("old", "run-1"), terminal("run-1"), aborted]).pending).toHaveLength(1);
+});
+
+it("reconsiders reminders when a message-less terminal settles a published partial", () => {
+  const partial = { role: "assistant", runId: "run-1", content: "Partial work" };
+  const messages = [question("old", "run-1"), partial, terminal("run-2")];
+  expect(present(messages).pending).toHaveLength(1);
+  // The outcome is recorded beside the already published history array.
+  rememberLiveTerminalRun(partial, "run-1", undefined, "error");
+  expect(present(messages).pending).toHaveLength(0);
 });
 
 const historicalQuestion = (itemId = "old-question") => ({
@@ -586,7 +599,7 @@ it("projects answer delivery from the outbox, retries its payload, and waits for
   draw();
   expect(container.textContent).toContain("Awaiting delivery confirmation");
   expect(container.textContent).not.toContain("Answer sent");
-  messages.push(historicalAnswer);
+  props.messages = [...messages, historicalAnswer];
   draw();
   expect(container.textContent).toContain("Answer sent");
   expect(container.textContent).toContain("Everyone");

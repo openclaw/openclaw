@@ -1,7 +1,3 @@
-/**
- * Resolves workspace bootstrap files for agent runs and converts them into
- * bounded context files.
- */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
@@ -15,14 +11,15 @@ import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "./embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
+import { resolveWorkspaceBootstrapPath } from "./workspace-bootstrap-policy.js";
 import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -137,11 +134,7 @@ function sanitizeBootstrapFiles(
       );
       continue;
     }
-    const resolvedPath = path.isAbsolute(pathValue)
-      ? path.resolve(pathValue)
-      : pathValue.startsWith("~")
-        ? resolveUserPath(pathValue)
-        : path.resolve(workspaceRoot, pathValue);
+    const resolvedPath = resolveWorkspaceBootstrapPath(workspaceRoot, pathValue);
     const dedupeKey = path.normalize(path.relative(workspaceRoot, resolvedPath));
     if (seenPaths.has(dedupeKey)) {
       continue;
@@ -170,11 +163,7 @@ function filterCompletedWorkspaceBootstrapFile(
     if (!pathValue) {
       return true;
     }
-    const resolvedPath = path.isAbsolute(pathValue)
-      ? path.resolve(pathValue)
-      : pathValue.startsWith("~")
-        ? resolveUserPath(pathValue)
-        : path.resolve(workspaceRoot, pathValue);
+    const resolvedPath = resolveWorkspaceBootstrapPath(workspaceRoot, pathValue);
     return resolvedPath !== rootBootstrapPath;
   });
 }

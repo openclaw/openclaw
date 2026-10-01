@@ -1,6 +1,5 @@
 import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
-// Diagnostic memory helpers capture process memory facts for support diagnostics.
 import { getHeapStatistics } from "node:v8";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -10,7 +9,6 @@ import {
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
-// Diagnostic memory sampler with threshold/growth pressure detection and repeat suppression.
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;
@@ -90,7 +88,6 @@ const state: DiagnosticMemoryState = {
   lastPressureAtByKey: new Map(),
 };
 
-// Convert Node's runtime shape into the diagnostic event contract.
 function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage {
   return {
     rssBytes: memory.rss,
@@ -240,25 +237,20 @@ function pickGrowthPressure(params: {
   }
   const windowMs = minimum.ts - growth.baseline.ts;
   const rssGrowthBytes = minimum.memory.rssBytes - growth.baseline.memory.rssBytes;
-  if (rssGrowthBytes >= thresholds.rssGrowthCriticalBytes) {
-    return {
-      level: "critical",
-      reason: "rss_growth",
-      memory: current.memory,
-      thresholdBytes: thresholds.rssGrowthCriticalBytes,
-      rssGrowthBytes,
-      windowMs,
-    };
-  }
-  if (rssGrowthBytes >= thresholds.rssGrowthWarningBytes) {
-    return {
-      level: "warning",
-      reason: "rss_growth",
-      memory: current.memory,
-      thresholdBytes: thresholds.rssGrowthWarningBytes,
-      rssGrowthBytes,
-      windowMs,
-    };
+  for (const [level, thresholdBytes] of [
+    ["critical", thresholds.rssGrowthCriticalBytes],
+    ["warning", thresholds.rssGrowthWarningBytes],
+  ] as const) {
+    if (rssGrowthBytes >= thresholdBytes) {
+      return {
+        level,
+        reason: "rss_growth",
+        memory: current.memory,
+        thresholdBytes,
+        rssGrowthBytes,
+        windowMs,
+      };
+    }
   }
   return null;
 }
@@ -361,16 +353,36 @@ function logMemoryPressure(
     ` arrayBuffersBytes=${pressure.memory.arrayBuffersBytes}` +
     formatOptionalPressureMetric("workerHeapTotalBytes", pressure.memory.workerHeapTotalBytes) +
     formatOptionalPressureMetric("workerHeapUsedBytes", pressure.memory.workerHeapUsedBytes) +
+    formatOptionalPressureMetric("workerExternalBytes", pressure.memory.workerExternalBytes) +
+    formatOptionalPressureMetric(
+      "workerArrayBuffersBytes",
+      pressure.memory.workerArrayBuffersBytes,
+    ) +
     formatOptionalPressureMetric("workerCount", pressure.memory.workerCount) +
     formatOptionalPressureMetric("workerHeapSampledCount", pressure.memory.workerHeapSampledCount) +
+    formatOptionalPressureMetric(
+      "workerArrayBuffersSampledCount",
+      pressure.memory.workerArrayBuffersSampledCount,
+    ) +
+    (pressure.memory.workerMemoryCoverage
+      ? ` workerMemoryCoverage=${pressure.memory.workerMemoryCoverage} workerMemoryScope=direct`
+      : "") +
+    (pressure.memory.workerMemoryMissing?.length
+      ? ` workerMemoryMissing=${JSON.stringify(pressure.memory.workerMemoryMissing.slice(0, 5))}`
+      : "") +
     (pressure.memory.workerHeaps?.length
       ? ` workerHeaps=${JSON.stringify(
-          pressure.memory.workerHeaps.toSorted((a, b) => b.heapUsed - a.heapUsed).slice(0, 5),
+          pressure.memory.workerHeaps
+            .toSorted((a, b) => b.heapUsed + (b.external ?? 0) - a.heapUsed - (a.external ?? 0))
+            .slice(0, 5),
         )}`
       : "") +
     formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
     formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
     formatOptionalPressureMetric("windowMs", pressure.windowMs) +
+    (pressure.memory.workerCount
+      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested workers are not included."
+      : "") +
     ` ${nextStep}`;
   log.warn(message);
 }
@@ -421,7 +433,6 @@ export function emitDiagnosticMemorySample(options?: {
   return memory;
 }
 
-/** Clears process-local memory diagnostic state for isolated tests. */
 export function resetDiagnosticMemoryForTest(): void {
   state.growth = null;
   state.lastPressureAtByKey.clear();

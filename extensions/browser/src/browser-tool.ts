@@ -1,9 +1,3 @@
-/**
- * Browser agent tool registration.
- *
- * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
- * maps high-level actions onto browser control client calls.
- */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -23,7 +17,6 @@ import {
   resolveBrowserBaseUrl,
   resolveBrowserToolNodeTarget,
   resolveBrowserToolTimeoutMs,
-  type BrowserNodeTarget,
 } from "./browser-tool.routing.js";
 import {
   type AnyAgentTool,
@@ -184,7 +177,6 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
   });
 }
 
-/** Create the Browser tool exposed to agents. */
 export function createBrowserTool(
   opts?: BrowserScreenshotOptions & {
     sandboxBridgeUrl?: string;
@@ -340,8 +332,8 @@ export function createBrowserTool(
             signal,
             opts,
             sessionTabs: {
-              touch: () => {},
-              untrack: () => {},
+              touch: async () => {},
+              untrack: async () => {},
               trackOpened: async () => {
                 throw new Error("Dashboard owns its context.");
               },
@@ -386,15 +378,13 @@ export function createBrowserTool(
       // existing-session profiles can attach through the selected host or browser node,
       // but they must never fall back into the sandbox browser.
       const isUserBrowserProfile = profileCapabilities?.usesChromeMcp === true;
-      if (isUserBrowserProfile) {
-        if (target === "sandbox") {
-          throw new Error(
-            `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
-          );
-        }
+      if (isUserBrowserProfile && target === "sandbox") {
+        throw new Error(
+          `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
+        );
       }
 
-      let nodeTarget: BrowserNodeTarget | null = null;
+      let nodeTarget: Awaited<ReturnType<typeof resolveBrowserToolNodeTarget>> = null;
       try {
         nodeTarget = await resolveBrowserToolNodeTarget({
           requestedNode: requestedNode ?? undefined,

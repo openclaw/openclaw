@@ -14,6 +14,7 @@ import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { updateCandidateExitEntrypoints } from "../cli-entrypoint.test-support.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
@@ -24,6 +25,7 @@ const sourceImportArgs = exitFinalizationUrl.pathname.endsWith(".ts")
   : [];
 
 const mocks = vi.hoisted(() => ({
+  servicePid: process.pid + 100_000,
   captureManagedPreflight:
     vi.fn<
       typeof import("./update-command-managed-context.js").captureOwnedManagedUpdatePreflightContext
@@ -38,6 +40,11 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../infra/update-candidate-canary.js").validateUpdateCandidateCanary>(),
 }));
 
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  // The simulated running service has no corresponding native host process.
+  inspectServiceProcessMembershipSync: (pid: number) =>
+    pid === mocks.servicePid ? "outside" : "unknown",
+}));
 vi.mock("../../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: mocks.validateCanary,
 }));
@@ -142,9 +149,12 @@ it("settles a failed candidate without inference repair and preserves its proces
     inspected: true,
     runtimeInspected: true,
     running: true,
+    servicePid: mocks.servicePid,
     serviceEnv: env,
   });
+  const opts = { json: true, yes: true, run };
   const execution = await executeMutableUpdate({
+    executionGuards: createUpdateCommandExecutionGuards(opts, root),
     root,
     installKind: "package",
     updateInstallKind: "package",
@@ -164,7 +174,7 @@ it("settles a failed candidate without inference repair and preserves its proces
     packageInstallSpec: "openclaw@2026.9.4",
     packageTargetVersion: "2026.9.4",
     packageInstallTarget: target,
-    opts: { json: true, yes: true, run },
+    opts,
   });
   expect(execution).not.toBeNull();
   if (!execution) {

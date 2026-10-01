@@ -8,8 +8,10 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -161,8 +163,11 @@ describe("utility completion with an unavailable implicit harness", () => {
       ],
       touchSessionEntry: false,
     });
+    // Warm the fixture's database before timing utility completion.
+    await prewarmSessionHistoryWorker({ agentId: scope.agentId, env: state.env });
     const complete = vi.fn(defaultCompleteModel);
     const recaps = createSessionActivitySummaries({
+      scheduler: createTestGatewayScheduler(),
       getConfig: () => config,
       onChanged: vi.fn(),
       completeModel: complete,

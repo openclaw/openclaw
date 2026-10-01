@@ -18,7 +18,7 @@ import {
 } from "./notification.test-helpers.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import type { DeferredCronNotifications } from "./state.js";
-import { applyJobResult } from "./timer.js";
+import { applyJobResult } from "./timer-outcomes.js";
 
 const fixtures = setupCronRegressionFixtures({
   prefix: "cron-failure-alert-persistence-",
@@ -60,8 +60,8 @@ describe("cron failure alert persistence", () => {
         endedAt: now,
       });
       expect(job.state.lastFailureAlertAtMs).toBeUndefined();
-      expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
-      expect(sendCronFailureAlert.mock.calls[1]?.[0].payload.text).toContain("recovered");
+      expect(job.state.failureAlertIncident).toBeUndefined();
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       applyJobResultAndDrainNotifications(state, job, {
         status: "ok",
         delivered: false,
@@ -69,7 +69,7 @@ describe("cron failure alert persistence", () => {
         startedAt: now,
         endedAt: now,
       });
-      expect(sendCronFailureAlert).toHaveBeenCalledTimes(3);
+      expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -121,52 +121,23 @@ describe("cron failure alert persistence", () => {
     },
   );
 
-  it.each(
-    [
-      {
-        name: "recorded attempt",
-        notification: { status: "unknown" as const },
-        priorOffset: -20_000,
-        expectedOffset: 0,
-      },
-      {
-        name: "newer alert",
-        notification: { status: "delivered" as const, delivered: true },
-        priorOffset: 10_000,
-        expectedOffset: 10_000,
-      },
-      {
-        name: "future timestamp",
-        notification: { status: "unknown" as const },
-        priorOffset: 120_000,
-        expectedOffset: 0,
-      },
-      {
-        name: "suppressed alert",
-        notification: { status: "not-requested" as const },
-        priorOffset: -120_000,
-        expectedOffset: -120_000,
-      },
-      {
-        name: "absent fact",
-        notification: undefined,
-        priorOffset: -120_000,
-        expectedOffset: -120_000,
-      },
-    ].flatMap((testCase) =>
-      (["ok", "error", "skipped"] as const).flatMap((status) =>
-        [false, true].map((enabled) => ({ testCase, name: testCase.name, status, enabled })),
-      ),
-    ),
-  )(
-    "restores $status cooldown from $name (alerts enabled=$enabled) without transport",
-    ({ testCase, status, enabled }) => {
+  it.each([
+    ["recorded error", { status: "unknown" }, -20_000, 0, "error", true],
+    ["recorded intent with alerts disabled", { status: "unknown" }, -20_000, 0, "ok", false],
+    ["recorded skip", { status: "unknown" }, -20_000, 0, "skipped", true],
+    ["newer alert", { status: "delivered", delivered: true }, 10_000, 10_000, "error", false],
+    ["future timestamp", { status: "unknown" }, 120_000, 0, "skipped", false],
+    ["suppressed alert", { status: "not-requested" }, -120_000, -120_000, "ok", true],
+    ["absent fact", undefined, -120_000, -120_000, "error", true],
+  ] as const)(
+    "restores cooldown from %s without transport",
+    (_name, notification, priorOffset, expectedOffset, status, enabled) => {
       const endedAt = Date.parse("2026-08-01T14:50:00Z");
       const store = fixtures.makeStorePath();
       const job = createAlertJob({ id: "delivery-replay", dueAt: endedAt - 10 });
       job.delivery = { mode: "none" };
       job.failureAlert = enabled ? { after: 1, cooldownMs: 60_000, includeSkipped: true } : false;
-      job.state.lastFailureAlertAtMs = endedAt + testCase.priorOffset;
+      job.state.lastFailureAlertAtMs = endedAt + priorOffset;
       const sendCronFailureAlert = vi.fn(async () => undefined);
       const state = createAlertState({
         storePath: store.storePath,
@@ -187,13 +158,13 @@ describe("cron failure alert persistence", () => {
           completionStatus: "failed",
           deliveryStatus: "not-delivered",
           deliveryError: "primary rejected",
-          failureNotificationDelivery: testCase.notification,
+          failureNotificationDelivery: notification,
           runAtMs: endedAt - 10,
         },
       });
-      expect(job.state.lastFailureAlertAtMs).toBe(endedAt + testCase.expectedOffset);
+      expect(job.state.lastFailureAlertAtMs).toBe(endedAt + expectedOffset);
       expect(job.state.lastFailureNotificationDeliveryStatus).toBe(
-        testCase.notification?.status ?? "not-requested",
+        notification?.status ?? "not-requested",
       );
       expect(deferredNotifications).toEqual([]);
       expect(sendCronFailureAlert).not.toHaveBeenCalled();
@@ -354,7 +325,7 @@ describe("cron failure alert persistence", () => {
     });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TEMP TRIGGER reject_failure_alert_terminal_write
+      CREATE TRIGGER reject_failure_alert_terminal_write
       BEFORE UPDATE ON cron_jobs
       WHEN NEW.store_key = '${cronStoreKey(store.storePath)}' AND NEW.job_id = '${job.id}'
       BEGIN
@@ -452,11 +423,6 @@ describe("cron failure alert persistence", () => {
     });
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
 
-    sendCronFailureAlert.mockImplementationOnce(async () => {
-      expect(
-        (await loadCronStore(store.storePath)).jobs[0]?.state.failureAlertIncident,
-      ).toBeUndefined();
-    });
     const recoveredJob = reloadedState.store?.jobs[0];
     if (!recoveredJob) {
       throw new Error("expected reloaded cron job");
@@ -469,8 +435,10 @@ describe("cron failure alert persistence", () => {
       startedAt: now,
       endedAt: now + 10,
     });
-    expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
-    await sendCronFailureAlert.mock.results[1]?.value;
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+    expect(
+      (await loadCronStore(store.storePath)).jobs[0]?.state.failureAlertIncident,
+    ).toBeUndefined();
   });
 
   it.each([
@@ -501,14 +469,9 @@ describe("cron failure alert persistence", () => {
         endedAt: now + 1_001,
         triggerEval: { fired: false, stateChanged: false, ...(busy ? { busy: true } : {}) },
       });
-      expect(sendCronFailureAlert).toHaveBeenCalledTimes(recovered ? 2 : 1);
+      // Recovery is silent; only the original failure alert is ever sent.
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       if (recovered) {
-        expect(sendCronFailureAlert.mock.calls[1]?.[0]).toMatchObject({
-          payload: {
-            text: 'Automation "trigger-recovery-scope" recovered\nThe trigger check completed successfully; no run was needed.',
-          },
-        });
-        expect(sendCronFailureAlert.mock.calls[1]?.[0].runAtMs).toBeUndefined();
         expect(job.state.failureAlertIncident).toBeUndefined();
       } else {
         expect(job.state.failureAlertIncident).toBeDefined();
@@ -563,10 +526,8 @@ describe("cron failure alert persistence", () => {
         startedAt: now + 2_000,
         endedAt: now + 2_001,
       });
-      expect(sendCronFailureAlert).toHaveBeenCalledTimes(incidentAlerts + 1);
-      expect(sendCronFailureAlert.mock.calls[incidentAlerts]?.[0].payload.text).toContain(
-        "recovered",
-      );
+      expect(sendCronFailureAlert).toHaveBeenCalledTimes(incidentAlerts);
+      expect(job.state.failureAlertIncident).toBeUndefined();
     },
   );
 

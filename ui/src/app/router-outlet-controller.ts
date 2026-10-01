@@ -21,7 +21,7 @@ export type RouterOutletSnapshot<
   showPending: boolean;
 };
 
-type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
+export type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
   router?: Router<TRouteId, TLoadContext, TModule, TData>;
   onNotFound?: () => boolean | void;
   notFoundRecoveryReady?: boolean;

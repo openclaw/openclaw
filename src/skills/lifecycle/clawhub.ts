@@ -119,7 +119,7 @@ export async function preflightSkillFromClawHub(params: {
 }): Promise<ClawHubSkillInstallPreflightResult> {
   try {
     const tracking = resolveWorkspaceClawHubSkills(params.workspaceDir);
-    const preflightOwner = tracking?.preflightSkillOwnerState ?? preflightSkillOwnerState;
+    const preflightOwnerState = tracking?.preflightSkillOwnerState ?? preflightSkillOwnerState;
     const requested = parseRequestedClawHubSkillRef(params.slug);
     const resolved = await resolveInstallVersion({
       slug: requested.slug,
@@ -154,9 +154,8 @@ export async function preflightSkillFromClawHub(params: {
       };
     }
 
-    if (params.expectedIntegrity) {
-      const integrity = normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
-      const owner = await preflightOwner({
+    const preflightOwner = async (integrity: string) => {
+      const owner = await preflightOwnerState({
         workspaceDir: params.workspaceDir,
         requested,
         requestedLabel: params.slug,
@@ -164,6 +163,9 @@ export async function preflightSkillFromClawHub(params: {
         integrity,
       });
       return owner.ok && trust.warning ? { ...owner, warning: trust.warning } : owner;
+    };
+    if (params.expectedIntegrity) {
+      return await preflightOwner(normalizeExpectedArtifactIntegrity(params.expectedIntegrity));
     }
 
     const archive = await downloadClawHubSkillArchive({
@@ -181,14 +183,7 @@ export async function preflightSkillFromClawHub(params: {
           error: `Skill ${params.slug}@${params.version} did not resolve a valid artifact integrity.`,
         };
       }
-      const owner = await preflightOwner({
-        workspaceDir: params.workspaceDir,
-        requested,
-        requestedLabel: params.slug,
-        version: resolved.version,
-        integrity,
-      });
-      return owner.ok && trust.warning ? { ...owner, warning: trust.warning } : owner;
+      return await preflightOwner(integrity);
     } finally {
       await archive.cleanup().catch(() => undefined);
     }
@@ -197,21 +192,12 @@ export async function preflightSkillFromClawHub(params: {
   }
 }
 
-export async function installSkillFromClawHub(params: {
-  workspaceDir: string;
-  slug: string;
-  version?: string;
-  expectedIntegrity?: string;
-  baseUrl?: string;
-  force?: boolean;
-  forceInstall?: boolean;
-  confirmInstall?: () => boolean | Promise<boolean>;
-  logger?: Logger;
-  config?: OpenClawConfig;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  /** True when a Claw lifecycle caller already owns package coordination. */
-  clawManaged?: boolean;
-}): Promise<InstallClawHubSkillResult> {
+export async function installSkillFromClawHub(
+  params: Omit<
+    ClawHubInstallParams,
+    "ownerHandle" | "requestedReference" | "trustState" | "expectedClawHubState"
+  >,
+): Promise<InstallClawHubSkillResult> {
   if (params.clawManaged) {
     return await installRequestedSkillFromClawHub(params);
   }

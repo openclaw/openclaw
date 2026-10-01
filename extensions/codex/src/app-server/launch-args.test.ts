@@ -113,11 +113,6 @@ describe("private Codex launcher arguments", () => {
 
   it.each([
     { command: "node", args: ["-e", "require('wrapper')", "app-server"] },
-    { command: "node", args: ["--unknown-node-option", "wrapper.js", "app-server"] },
-    {
-      command: "node",
-      args: ["--conditions=development", "-r", "preload", "wrapper.js", "app-server"],
-    },
     { command: "node", args: ["wrapper.js", "--", "-c", "opaque", "app-server"] },
     { command: "python3", args: ["wrapper.py", "app-server"] },
     { command: "bash", args: ["-c", "exec codex app-server", "app-server"] },

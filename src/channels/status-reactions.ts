@@ -1,4 +1,3 @@
-// Status-reaction controller helpers for channel-visible agent activity.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { TOOL_DISPLAY_CONFIG } from "../agents/tool-display-config.js";
 import { resolveToolDisplay } from "../agents/tool-display.js";
@@ -14,30 +13,10 @@ export type StatusReactionAdapter = {
 };
 
 /** Optional emoji overrides for each status reaction state. */
-export type StatusReactionEmojis = {
-  queued?: string;
-  thinking?: string;
-  tool?: string;
-  coding?: string;
-  web?: string;
-  deploy?: string;
-  build?: string;
-  concierge?: string;
-  done?: string;
-  error?: string;
-  stallSoft?: string;
-  stallHard?: string;
-  compacting?: string;
-};
+export type StatusReactionEmojis = Partial<typeof DEFAULT_EMOJIS>;
 
 /** Timing controls for debounced status reactions and stall warnings. */
-export type StatusReactionTiming = {
-  debounceMs?: number;
-  stallSoftMs?: number;
-  stallHardMs?: number;
-  doneHoldMs?: number;
-  errorHoldMs?: number;
-};
+export type StatusReactionTiming = Partial<typeof DEFAULT_TIMING>;
 
 /** Controller API for agent status reaction state transitions. */
 export type StatusReactionController = {
@@ -54,7 +33,7 @@ export type StatusReactionController = {
 };
 
 /** Default emoji set used by status reaction controllers. */
-export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
+export const DEFAULT_EMOJIS = {
   queued: "👀",
   thinking: "🧠",
   tool: "🛠️",
@@ -71,7 +50,7 @@ export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
 };
 
 /** Default debounce, stall, and terminal hold timings for status reactions. */
-export const DEFAULT_TIMING: Required<StatusReactionTiming> = {
+export const DEFAULT_TIMING = {
   debounceMs: 700,
   stallSoftMs: 10_000,
   stallHardMs: 30_000,
@@ -173,17 +152,7 @@ export function resolveToolEmoji(
   return emojis[category];
 }
 
-/**
- * Create a status reaction controller.
- *
- * Features:
- * - Promise chain serialization (prevents concurrent API calls)
- * - Debouncing (intermediate states debounce, terminal states are immediate)
- * - Stall timers (soft/hard warnings on inactivity)
- * - Terminal state protection (done/error mark finished, subsequent updates ignored)
- * - Defers reaction removals until final cleanup to avoid visible flicker on
- *   platforms without atomic reaction replacement
- */
+/** Defer reaction removal until cleanup to avoid flicker without atomic replacement. */
 export function createStatusReactionController(params: {
   enabled: boolean;
   adapter: StatusReactionAdapter;
@@ -342,19 +311,17 @@ export function createStatusReactionController(params: {
 
     pendingEmoji = emoji;
     clearDebounceTimer();
+    const applyPendingEmoji = async () => {
+      await applyEmoji(emoji);
+      pendingEmoji = "";
+    };
 
     if (options.immediate) {
-      void enqueue(async () => {
-        await applyEmoji(emoji);
-        pendingEmoji = "";
-      });
+      void enqueue(applyPendingEmoji);
     } else {
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
-        void enqueue(async () => {
-          await applyEmoji(emoji);
-          pendingEmoji = "";
-        });
+        void enqueue(applyPendingEmoji);
       }, timing.debounceMs);
     }
 
@@ -401,8 +368,6 @@ export function createStatusReactionController(params: {
         }
       } else if (adapter.removeReaction) {
         await removeActiveEmojis();
-      } else {
-        // Telegram handles this atomically on the next setReaction.
       }
       currentEmoji = "";
       pendingEmoji = "";

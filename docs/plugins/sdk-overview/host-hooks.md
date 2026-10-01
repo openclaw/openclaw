@@ -27,7 +27,7 @@ plugins.
 | `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                        |
 | `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
 | `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
-| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, settings, or tab surfaces                                                                      |
+| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors; the `tab`, `widget`, and `link-reader` surfaces are rendered                                                          |
 | `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
 | `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                              |
 | `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
@@ -281,10 +281,8 @@ plugin code that calls
 `api.unscheduleSessionTurnsByTag` directly.
 
 `scheduleSessionTurn(...)` is a session-scoped convenience over the Gateway
-Cron scheduler. Cron owns timing and creates the background task record when the
-turn runs; the Plugin SDK only constrains the target session, plugin-owned
-naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
-turn when the work itself needs durable multi-step Task Flow state.
+Cron scheduler. Cron owns timing and run history; the Plugin SDK only constrains
+the target session, plugin-owned naming, and cleanup.
 
 Within session extensions, `openclaw/plugin-sdk/agent-sessions` provides the host's
 model-selection helpers. Exact provider/model IDs take precedence over case-insensitive

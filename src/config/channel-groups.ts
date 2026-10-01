@@ -6,6 +6,7 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 
 export type ChannelGroupConfig = {
   requireMention?: boolean;
+  requireMentionInBotThreads?: boolean;
   ingest?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

@@ -97,21 +97,17 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 }
             }
 
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.windowVisibilityChanged),
-                name: NSWindow.didBecomeKeyNotification,
-                object: nil)
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.windowVisibilityChanged),
-                name: NSWindow.didResignKeyNotification,
-                object: nil)
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.windowVisibilityChanged),
-                name: NSWindow.willCloseNotification,
-                object: nil)
+            for name in [
+                NSWindow.didBecomeKeyNotification,
+                NSWindow.didResignKeyNotification,
+                NSWindow.willCloseNotification,
+            ] {
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(self.windowVisibilityChanged),
+                    name: name,
+                    object: nil)
+            }
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(self.dockPreferenceChanged),

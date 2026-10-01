@@ -50,7 +50,7 @@ const CODEX_REASON_MISSING_AUTH_METADATA = "missing auth metadata";
 const CODEX_REASON_AUTH_STORAGE_NOT_IMPORTABLE = "credential storage is not importable";
 type CodexConfigPatchMode = "apply" | "none" | "return";
 
-export type CodexAuthSource = Pick<CodexSource, "codexHome" | "authPath" | "modelsCachePath">;
+export type CodexAuthSource = Pick<CodexSource, "codexHome" | "modelsCachePath">;
 
 type CodexAuthProfileConfig = {
   profileId: string;
@@ -70,14 +70,15 @@ function authItemId(credential: CodexAuthCredential): string {
 }
 
 function sourceCredentialFingerprint(credential: CodexAuthCredential): string {
-  const profile =
-    credential.kind === "oauth" ? credential.result.profiles[0]?.credential : undefined;
   const source =
     credential.kind === "api_key"
       ? credential.key
-      : profile?.type === "oauth"
-        ? [profile.access, profile.refresh, profile.accountId, profile.idToken]
-        : undefined;
+      : [
+          credential.credential.access,
+          credential.credential.refresh,
+          credential.credential.accountId,
+          credential.credential.idToken,
+        ];
   return createHash("sha256")
     .update(JSON.stringify([credential.kind, source]))
     .digest("hex");
@@ -140,12 +141,13 @@ async function buildCodexOAuthCredential(
     configPatch,
   });
   const profile = result.profiles[0];
-  return profile
+  return profile?.credential.type === "oauth"
     ? {
         kind: "oauth",
         provider: OPENAI_PROVIDER_ID,
         profileId: profile.profileId,
-        result,
+        credential: profile.credential,
+        configPatch: result.configPatch,
       }
     : null;
 }
@@ -263,7 +265,7 @@ function resolveRequestedCredentialKind(
 function authProfileConfigForCredential(
   credential: CodexAuthCredential,
   profileId: string,
-): CodexAuthProfileConfig | null {
+): CodexAuthProfileConfig {
   if (credential.kind === "api_key") {
     return {
       profileId,
@@ -272,16 +274,13 @@ function authProfileConfigForCredential(
       displayName: CODEX_IMPORT_DISPLAY_NAME,
     };
   }
-  const profile = credential.result.profiles[0];
-  if (!profile || profile.credential.type !== "oauth") {
-    return null;
-  }
+  const profile = credential.credential;
   return {
     profileId,
-    provider: profile.credential.provider,
+    provider: profile.provider,
     mode: "oauth",
-    ...(profile.credential.email ? { email: profile.credential.email } : {}),
-    ...(profile.credential.displayName ? { displayName: profile.credential.displayName } : {}),
+    ...(profile.email ? { email: profile.email } : {}),
+    ...(profile.displayName ? { displayName: profile.displayName } : {}),
   };
 }
 
@@ -299,12 +298,10 @@ async function applyCodexAuthProfileConfig(
       base: "runtime",
       afterWrite: { mode: "auto" },
       mutate(draft) {
-        const current = draft;
-        if (hasAuthProfileConfigConflict(current, profile, Boolean(ctx.overwrite))) {
+        if (hasAuthProfileConfigConflict(draft, profile, Boolean(ctx.overwrite))) {
           throw new CodexAuthConfigConflict();
         }
-        const next = applyConfig(current);
-        replaceConfigDraft(draft, next);
+        replaceConfigDraft(draft, applyConfig(draft));
       },
     });
     return "configured";
@@ -318,14 +315,12 @@ function applyCredentialConfig(
   credential: CodexAuthCredential,
   profileId: string,
 ): OpenClawConfig {
-  let next =
+  const next = applyAuthProfileConfig(
     credential.kind === "oauth"
-      ? (mergeMigrationConfigValue(config, credential.result.configPatch) as OpenClawConfig)
-      : config;
-  const profile = authProfileConfigForCredential(credential, profileId);
-  if (profile) {
-    next = applyAuthProfileConfig(next, { ...profile, preferProfileFirst: false });
-  }
+      ? (mergeMigrationConfigValue(config, credential.configPatch) as OpenClawConfig)
+      : config,
+    { ...authProfileConfigForCredential(credential, profileId), preferProfileFirst: false },
+  );
   return credential.kind === "oauth" ? applyDefaultModelIfMissing(next) : next;
 }
 
@@ -379,13 +374,11 @@ export async function buildCodexAuthItems(params: {
     );
     const existing = store.profiles[profileId];
     const configProfile = authProfileConfigForCredential(credential, profileId);
-    const configConflict = configProfile
-      ? hasAuthProfileConfigConflict(
-          params.ctx.config,
-          configProfile,
-          Boolean(params.ctx.overwrite),
-        )
-      : false;
+    const configConflict = hasAuthProfileConfigConflict(
+      params.ctx.config,
+      configProfile,
+      Boolean(params.ctx.overwrite),
+    );
     const conflict =
       ((existing && !matchedExisting && !params.ctx.overwrite) || configConflict) && !skipped;
     const unavailable =
@@ -491,10 +484,10 @@ async function applyCodexAuthItem(
       candidate.kind === credentialKind &&
       (!sourceProfileId || candidate.profileId === sourceProfileId),
   );
-  if (!credential) {
-    return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
-  }
-  if (item.details?.sourceCredentialFingerprint !== sourceCredentialFingerprint(credential)) {
+  if (
+    !credential ||
+    item.details?.sourceCredentialFingerprint !== sourceCredentialFingerprint(credential)
+  ) {
     return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
   }
   if (
@@ -504,16 +497,7 @@ async function applyCodexAuthItem(
     return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
   }
   ctx.signal?.throwIfAborted();
-  const oauthProfile = credential.kind === "oauth" ? credential.result.profiles[0] : undefined;
-  const oauthCredential =
-    oauthProfile?.credential.type === "oauth" ? oauthProfile.credential : undefined;
-  if (credential.kind === "oauth" && !oauthCredential) {
-    return [markMigrationItemError(item, CODEX_REASON_MISSING_AUTH_METADATA)];
-  }
   const configProfile = authProfileConfigForCredential(credential, profileId);
-  if (!configProfile) {
-    return [markMigrationItemError(item, CODEX_REASON_MISSING_AUTH_METADATA)];
-  }
   if (hasCurrentAuthProfileConfigConflict(ctx, configProfile)) {
     return [markMigrationItemConflict(item, CODEX_REASON_AUTH_PROFILE_EXISTS)];
   }
@@ -537,7 +521,7 @@ async function applyCodexAuthItem(
       if (!ctx.overwrite && existing) {
         const matchedProfileId =
           credential.kind === "oauth"
-            ? findMatchingOAuthProfile(effectiveStore, oauthCredential!)
+            ? findMatchingOAuthProfile(effectiveStore, credential.credential)
             : findMatchingApiKeyProfile(effectiveStore, credential.provider, credential.key);
         if (matchedProfileId === profileId) {
           // A matching account cannot turn an expired or fenced profile into a successful login.
@@ -547,16 +531,12 @@ async function applyCodexAuthItem(
         conflicted = true;
         return false;
       }
-      freshStore.profiles[profileId] =
-        credential.kind === "oauth"
-          ? {
-              ...oauthCredential!,
-              displayName: CODEX_IMPORT_DISPLAY_NAME,
-            }
-          : {
-              ...buildApiKeyCredential(credential.provider, credential.key),
-              displayName: CODEX_IMPORT_DISPLAY_NAME,
-            };
+      freshStore.profiles[profileId] = {
+        ...(credential.kind === "oauth"
+          ? credential.credential
+          : buildApiKeyCredential(credential.provider, credential.key)),
+        displayName: CODEX_IMPORT_DISPLAY_NAME,
+      };
       wrote = true;
       return true;
     },
@@ -607,38 +587,32 @@ function buildCodexAuthConfigPatchItems(
   profileId: string,
 ): MigrationItem[] {
   const next = applyCredentialConfig(ctx.config, credential, profileId);
-  const items: MigrationItem[] = [];
-  if (next.auth) {
-    items.push(
-      createMigrationItem({
-        id: `${item.id}:config:auth`,
-        kind: "config",
-        action: "merge",
-        status: "migrated",
-        target: "auth",
-        message: "Configure imported Codex auth profile.",
-        details: {
-          path: ["auth"],
-          value: next.auth,
-        },
-      }),
-    );
-  }
-  if (next.agents?.defaults) {
-    items.push(
-      createMigrationItem({
-        id: `${item.id}:config:agents-defaults`,
-        kind: "config",
-        action: "merge",
-        status: "migrated",
-        target: "agents.defaults",
-        message: "Configure imported Codex models.",
-        details: {
-          path: ["agents", "defaults"],
-          value: next.agents.defaults,
-        },
-      }),
-    );
-  }
-  return items;
+  return [
+    {
+      suffix: "auth",
+      path: ["auth"],
+      value: next.auth,
+      message: "Configure imported Codex auth profile.",
+    },
+    {
+      suffix: "agents-defaults",
+      path: ["agents", "defaults"],
+      value: next.agents?.defaults,
+      message: "Configure imported Codex models.",
+    },
+  ].flatMap(({ suffix, path, value, message }) =>
+    value
+      ? [
+          createMigrationItem({
+            id: `${item.id}:config:${suffix}`,
+            kind: "config",
+            action: "merge",
+            status: "migrated",
+            target: path.join("."),
+            message,
+            details: { path, value },
+          }),
+        ]
+      : [],
+  );
 }

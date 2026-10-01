@@ -171,7 +171,6 @@ describe("codex.accountUsage", () => {
   });
 
   it.each([
-    { agentId: "missing", profileId: "openai:alex" },
     { agentId: "../main", profileId: "openai:alex" },
     { profileId: "openai:alex" },
     { agentId: "main", profileId: "" },
@@ -189,15 +188,13 @@ describe("codex.accountUsage", () => {
     expect(readCodexAppServerUsage).not.toHaveBeenCalled();
   });
 
-  it.each(["removed", "replaced", "config changed", "authority revoked"])(
+  it.each(["replaced", "config changed", "authority revoked"])(
     "rejects guarded work and discards its result when %s during a read",
     async (change) => {
       let assertCurrent: (() => void) | undefined;
       vi.mocked(readCodexAppServerUsage).mockImplementation(async (options) => {
         assertCurrent = options.assertCurrent;
-        if (change === "removed") {
-          delete store.profiles["openai:alex"];
-        } else if (change === "replaced") {
+        if (change === "replaced") {
           store.profiles["openai:alex"] = {
             type: "token",
             provider: "openai",

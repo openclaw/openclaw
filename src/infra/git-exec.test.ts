@@ -314,12 +314,10 @@ describe("Git filesystem paths", () => {
     expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
   });
 
-  it.each(["/c", "/C", "/c/", "/c/Users/example/repo"])(
-    "leaves MSYS-shaped text unchanged on non-Windows hosts: %s",
-    (input) => {
-      expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
-    },
-  );
+  it("leaves MSYS-shaped text unchanged on non-Windows hosts", () => {
+    const input = "/c/Users/example/repo";
+    expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
+  });
 });
 
 const progress = Array.from({ length: 1000 }, (_, i) => `Updating files: ${i}/1000`).join("\r");

@@ -60,6 +60,13 @@ export function isDoctorRecoverableInvalidConfigError(err: unknown): boolean {
   return isInvalidConfigError(err) && err.recovery !== "manual";
 }
 
+/** An unavailable read cannot establish invalid authored settings or authorize Doctor repair. */
+export function createConfigReadError(configPath: string, details: string): Error {
+  return Object.assign(new Error(`Config could not be read at ${configPath}:\n${details}`), {
+    code: "CONFIG_READ_FAILED",
+  });
+}
+
 /** Logs and throws the standard invalid-config error for a validation result. */
 export function throwInvalidConfig(params: {
   configPath: string;

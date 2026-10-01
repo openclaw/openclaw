@@ -18,7 +18,7 @@ it("coalesces close custody while a sealed path is rebound to a replacement", as
   try {
     renameSync(file, `${file}.retired`);
     writeFileSync(file, "replacement");
-    const replacement = owner.publish(file);
+    const { identity: replacement } = owner.publish(file);
     expect(replacement.key).not.toBe(admission.identity.key);
     expect(owner.close(file, () => false)).toBe(closing);
     expect(() => owner.capture(file)).toThrow(/admission is closed/);

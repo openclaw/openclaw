@@ -144,6 +144,8 @@ deployments unchanged.
 Set a role's optional `accessPolicyPlugin` to the exact plugin ID when that plugin
 must confirm the person's current access. For example, the Visitor Access plugin
 requires `accessPolicyPlugin: "visitor-access"` on its restricted default role.
+A denied connection receives the `OPERATOR_ACCESS_DENIED` connect error detail,
+and the Control UI explains that the account has no access.
 The requirement belongs to Gateway configuration and remains enforced when the
 plugin or its manifest is missing, disabled, broken, or still starting. A loaded
 plugin must return current authority for the person; another plugin's policy
@@ -156,8 +158,14 @@ binding applies through the same live role-policy update described below.
 With live configuration reload enabled, edits to `gateway.roles` and
 `gateway.auth.identityScopes` apply without restarting the Gateway. Existing
 Gateway clients reconnect to receive the current scope ceiling, except for changes
-confined to model policies as described below. Pending
-handshakes and mutations recheck the policy before acquiring authority;
+confined to model policies as described below and identity-scope edits that leave
+an operator WebSocket login’s resolved grant set unchanged. Editing another login
+or reordering the same scopes preserves that connection, its accepted runs, and
+queued inputs. Changing its own resolved grants revokes retained and delegated
+work; restoring the grant does not revive the original authority. Clients without
+verified identities, node connections, HTTP requests, and plugin auth cookies do
+not consume identity-scope grants and are unaffected by these edits. Pending handshakes and
+mutations recheck the policy before acquiring authority;
 already-admitted runs retain their normal completion and cancellation lifecycle,
 including cancellation when their original access-policy grant expires or is revoked.
 
@@ -188,6 +196,13 @@ holding `operator.admin` retain their administrative session access.
 Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.
 The allowlist also applies when a run targets an already-existing session.
+Agent discovery and the Control UI agent picker show only agents allowed by the
+caller's role. An empty allowlist returns an empty agent roster; the Gateway's
+session-routing ownership remains unchanged.
+Discovery does not grant or revoke access to existing sessions: the role's
+separate session-read policy still governs which sessions the caller can read.
+The Control UI waits for a live agent roster after loading or reconnecting, so
+an older browser roster cannot restore agents excluded by the current role.
 
 Set a role's optional `modelPolicy` to limit the models used by its requests:
 
@@ -439,6 +454,10 @@ dispatch so authorization failures have one canonical structured response:
 - `sessions.delete` requires `operator.write` for an archived-only request
   with the supported fields, and `operator.admin` otherwise. Neither session
   scope authorizes deletion.
+- `session.reactions.list` accepts `operator.sessions.read` or broader read
+  access and requires current session visibility. `session.reactions.set` requires `operator.write`, an identified
+  author, and permission to send to or suggest in the session. A view-only
+  operator role cannot react.
 
 Project RPCs use these scopes:
 

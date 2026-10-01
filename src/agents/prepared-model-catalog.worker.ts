@@ -10,6 +10,7 @@ import {
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -22,6 +23,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -34,6 +36,7 @@ import {
 } from "./agent-dir-registry.js";
 import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runtime.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
+import { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
@@ -183,6 +186,7 @@ async function prepareWorkerGeneration(
   );
   const pluginGeneration = Object.freeze({
     ...(previous?.pluginGeneration ?? prepareConfiguredModelFacts(value.input.config, metadata)),
+    remoteCatalog: value.remoteCatalog,
     pluginMetadataSnapshot: metadata,
     pluginRegistry,
     preparedStaticProviderCatalog: undefined,
@@ -328,7 +332,13 @@ async function runCatalogRequest(
       env: value.input.env,
       workspaceDir: value.input.workspaceDir,
       pluginMetadataSnapshot,
-      providerDiscoveryProviderIds: exactAgentFacts.providerIds,
+      providerDiscoveryProviderIds: [
+        ...new Set([
+          ...value.providerIds,
+          ...Object.keys(credentials),
+          ...exactAgentFacts.providerIds,
+        ]),
+      ],
     });
     const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
     const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
@@ -459,6 +469,15 @@ async function runCatalogRequest(
         runtimeModels.set(provider, []);
       }
     }
+    const authLabelProviders = [
+      ...exactAgentFacts.providerIds,
+      ...Object.keys(catalogCredentials),
+      ...Object.keys(value.input.config.models?.providers ?? {}),
+      ...facts.modelCatalog.entries.map((entry) => entry.provider),
+      ...facts.modelCatalog.routeVariants.map((entry) => entry.provider),
+      ...(facts.modelCatalog.staticEntries ?? []).map((entry) => entry.provider),
+      ...Object.values(authStore.profiles).map((profile) => profile.provider),
+    ];
     const result: PreparedModelWorkerResult = {
       status: "ok",
       kind: "catalog",
@@ -469,24 +488,20 @@ async function runCatalogRequest(
       hookRows,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
-      providerAuthLabels: withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-        prepareModelCatalogAuthLabels({
-          config: value.input.config,
-          agentDir: value.input.agentDir,
-          workspaceDir: value.input.workspaceDir,
-          env: value.input.env,
-          store: authStore,
-          providers: [
-            ...exactAgentFacts.providerIds,
-            ...Object.keys(catalogCredentials),
-            ...Object.keys(value.input.config.models?.providers ?? {}),
-            ...facts.modelCatalog.entries.map((entry) => entry.provider),
-            ...facts.modelCatalog.routeVariants.map((entry) => entry.provider),
-            ...(facts.modelCatalog.staticEntries ?? []).map((entry) => entry.provider),
-            ...Object.values(authStore.profiles).map((profile) => profile.provider),
-          ],
-        }),
-      ),
+      providerAuthLabels:
+        authLabelProviders.length === 0
+          ? new Map()
+          : withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+              prepareModelCatalogAuthLabels({
+                config: value.input.config,
+                agentDir: value.input.agentDir,
+                authStorePath: resolveAuthStorePathForDisplay(value.input.agentDir),
+                workspaceDir: value.input.workspaceDir,
+                env: value.input.env,
+                store: authStore,
+                providers: authLabelProviders,
+              }),
+            ),
       authStore,
       authModes: resolveUsableAgentCredentialModes(catalogCredentials),
     };
@@ -546,49 +561,57 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
 
 if (parentPort) {
   const data = workerData as PreparedModelCatalogWorkerData;
-  // Agent/auth requests share registrations only when the complete plugin context matches.
-  let current: { fingerprint: string; prepared: WorkerGeneration } | undefined;
+  // Evicting another workspace recaptures native ESM graphs that Node cannot unload.
+  // Keep each workspace's current context within this inventory-owned worker lifetime.
+  const contexts = new Map<
+    string | undefined,
+    { fingerprint: string; prepared: WorkerGeneration }
+  >();
   serveWorkerTasks(async (input) => {
     // SAFETY: The typed catalog host is the sole producer of this private task envelope.
     const { value, request } = input as PreparedModelCatalogWorkerTask;
     if (!isRecord(value) || !isWorkerRequest(request)) {
       throw new Error("invalid prepared model catalog worker request");
     }
-    return withPluginSourceCaptureDirectory(
-      data.sourceCaptureDirectory,
-      async () => {
-        let previous = current;
-        const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
-        let attempted: WorkerGeneration | undefined;
-        try {
-          const work = new AsyncWorkScope();
-          const result = await withClawInstallSchemaVersionFacts(
-            request.clawInstallSchemaVersions,
-            () =>
-              work.run(() =>
-                runCatalogRequest(value, request, work, async () => {
-                  if (previous?.fingerprint === fingerprint) {
-                    return previous.prepared;
-                  }
-                  return (attempted = await prepareWorkerGeneration(value));
-                }),
-              ),
-          );
-          if (attempted && result.status === "ok") {
-            current = { fingerprint, prepared: attempted };
-            attempted = undefined;
-            // Acquire the replacement before releasing shared source registrations.
-            await previous?.prepared.release();
-            // Registry custody can retain this request's async context until retirement.
-            // Drop the settled predecessor instead of retaining its callbacks through that scope.
-            previous = undefined;
+    return withRemoteModelCatalogSnapshot(freezeJsonSnapshot(value.remoteCatalog), () =>
+      withPluginSourceCaptureDirectory(
+        data.sourceCaptureDirectory,
+        async () => {
+          const workspaceDir =
+            value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
+          let previous = contexts.get(workspaceDir);
+          const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
+          let attempted: WorkerGeneration | undefined;
+          try {
+            const work = new AsyncWorkScope();
+            const result = await withClawInstallSchemaVersionFacts(
+              request.clawInstallSchemaVersions,
+              () =>
+                work.run(() =>
+                  runCatalogRequest(value, request, work, async () => {
+                    if (previous?.fingerprint === fingerprint) {
+                      return previous.prepared;
+                    }
+                    return (attempted = await prepareWorkerGeneration(value));
+                  }),
+                ),
+            );
+            if (attempted && result.status === "ok") {
+              contexts.set(workspaceDir, { fingerprint, prepared: attempted });
+              attempted = undefined;
+              // Acquire the replacement before releasing shared source registrations.
+              await previous?.prepared.release();
+              // Registry custody can retain this request's async context until retirement.
+              // Drop the settled predecessor instead of retaining its callbacks through that scope.
+              previous = undefined;
+            }
+            return result;
+          } finally {
+            await attempted?.release();
           }
-          return result;
-        } finally {
-          await attempted?.release();
-        }
-      },
-      data.sourceCaptureManagedRoot,
+        },
+        data.sourceCaptureManagedRoot,
+      ),
     );
   });
 }

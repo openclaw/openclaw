@@ -74,40 +74,37 @@ describe("buildActiveSubagentRuntimeContext", () => {
     ).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "summarizes active child state without promising collector events: collect=%s",
-    async (collect) => {
-      const run = {
-        runId: "run-active-context",
-        childSessionKey: "agent:main:subagent:active-context",
-        controllerSessionKey: "agent:main:main",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "inspect subagent state",
-        taskName: "inspect_state",
-        label: "State worker",
-        collect,
-        expectsCompletionMessage: !collect,
-        cleanup: "keep",
-        createdAt: Date.now(),
-        execution: { status: "running", startedAt: Date.now() },
-      } satisfies SubagentRunRecord;
-      addSubagentRunForTests(run);
+  it("summarizes active child state without promising collector events", async () => {
+    const run = {
+      runId: "run-active-context",
+      childSessionKey: "agent:main:subagent:active-context",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "inspect subagent state",
+      taskName: "inspect_state",
+      label: "State worker",
+      collect: true,
+      expectsCompletionMessage: false,
+      cleanup: "keep",
+      createdAt: Date.now(),
+      execution: { status: "running", startedAt: Date.now() },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
 
-      const prompt = await buildActiveSubagentRuntimeContext({
-        cfg: {} as OpenClawConfig,
-        controllerSessionKey: "agent:main:main",
-      });
+    const prompt = await buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
 
-      expect(prompt).toContain("## Active Subagents");
-      expect(prompt).toContain('taskName_json="inspect_state"');
-      expect(prompt).toContain("session=agent:main:subagent:active-context");
-      expect(prompt).not.toContain("For announcing children");
-      expect(prompt).toContain("status=running");
-      expect(prompt).not.toMatch(/`subagents`|`sessions_list`/);
-      expect(prompt).not.toContain("reports/evidence");
-    },
-  );
+    expect(prompt).toContain("## Active Subagents");
+    expect(prompt).toContain('taskName_json="inspect_state"');
+    expect(prompt).toContain("session=agent:main:subagent:active-context");
+    expect(prompt).not.toContain("For announcing children");
+    expect(prompt).toContain("status=running");
+    expect(prompt).not.toMatch(/`subagents`|`sessions_list`/);
+    expect(prompt).not.toContain("reports/evidence");
+  });
 
   it("summarizes recently completed children when no active runs remain", async () => {
     const endedAt = Date.now() - 60_000;

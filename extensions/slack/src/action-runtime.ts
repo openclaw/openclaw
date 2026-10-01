@@ -79,11 +79,9 @@ export const slackActionRuntime = {
   readSlackMessages: bindSlackAction((runtime) => runtime.readSlackMessages),
   removeOwnSlackReactions: bindSlackAction((runtime) => runtime.removeOwnSlackReactions),
   removeSlackReaction: bindSlackAction((runtime) => runtime.removeSlackReaction),
-  resolveSlackConversationName: bindSlackAction((runtime) => runtime.resolveSlackConversationName),
   resolveSlackConversationInfo: bindSlackChannelType(
     (runtime) => runtime.resolveSlackConversationInfo,
   ),
-  resolveSlackChannelType: bindSlackChannelType((runtime) => runtime.resolveSlackChannelType),
   sendSlackMessage: bindSlackAction((runtime) => runtime.sendSlackMessage),
   unpinSlackMessage: bindSlackAction((runtime) => runtime.unpinSlackMessage),
 };
@@ -108,10 +106,6 @@ function resolveThreadTsFromContext(
   }
   // Planning stays pure so failed sends cannot consume a thread before delivery.
   return threadTs;
-}
-
-function isImageContentType(value: string | undefined): boolean {
-  return value?.trim().toLowerCase().startsWith("image/") === true;
 }
 
 function hasPotentialSlackNamedPolicy(params: {
@@ -831,10 +825,7 @@ export async function handleSlackAction(
           messageId: messageId ?? undefined,
         });
         const messages = result.messages.map((message) =>
-          withNormalizedTimestamp(
-            message as Record<string, unknown>,
-            (message as { ts?: unknown }).ts,
-          ),
+          withNormalizedTimestamp(message, message.ts),
         );
         return jsonResult({
           ok: true,
@@ -878,7 +869,7 @@ export async function handleSlackAction(
               "File could not be downloaded. Confirm the fileId came from the requested Slack channel or explicit thread and that the file is accessible and within the size limit.",
           });
         }
-        if (!isImageContentType(downloaded.contentType)) {
+        if (!downloaded.contentType?.trim().toLowerCase().startsWith("image/")) {
           return jsonResult({
             ok: true,
             fileId,
@@ -934,10 +925,7 @@ export async function handleSlackAction(
     const pins = await slackActionRuntime.listSlackPins(channelId, readOpts);
     const normalizedPins = pins.map((pin) => {
       const message = pin.message
-        ? withNormalizedTimestamp(
-            pin.message as Record<string, unknown>,
-            (pin.message as { ts?: unknown }).ts,
-          )
+        ? withNormalizedTimestamp(pin.message, pin.message.ts)
         : pin.message;
       return message ? Object.assign({}, pin, { message }) : pin;
     });

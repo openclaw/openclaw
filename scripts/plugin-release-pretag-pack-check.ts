@@ -35,7 +35,7 @@ export function pluginReleasePretagExitCode(error: unknown): number {
   return 1;
 }
 
-export function collectPluginReleasePretagPackTargets(
+function collectPluginReleasePretagPackTargets(
   rootDir = resolve("."),
 ): PluginReleasePretagPackTarget[] {
   const targets = new Map<string, PluginReleasePretagPackTarget>();

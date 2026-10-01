@@ -4,13 +4,8 @@ import { createInterface } from "node:readline";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
-/**
- * Built-in find session tool.
- *
- * Searches files by glob through fd/local operations and returns bounded, renderable results.
- */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -85,10 +80,7 @@ function formatFindCall(
 }
 
 function formatFindResult(
-  result: {
-    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-    details?: FindToolDetails;
-  },
+  result: AgentToolResult<FindToolDetails>,
   options: ToolRenderResultOptions,
   theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   showImages: boolean,
@@ -154,16 +146,7 @@ export function createFindToolDefinition(
     description: `Find by glob; paths relative to search dir. Respects .gitignore. Caps ${DEFAULT_LIMIT} results/${DEFAULT_MAX_BYTES / 1024}KB.`,
     promptSnippet: "Find files by glob pattern (respects .gitignore)",
     parameters: findSchema,
-    async execute(
-      toolCallId,
-      { pattern, path: searchDir, limit }: { pattern: string; path?: string; limit?: number },
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
-    ) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
+    async execute(_toolCallId, { pattern, path: searchDir, limit }, signal, _onUpdate, _ctx) {
       return new Promise((resolve, reject) => {
         if (signal?.aborted) {
           reject(new Error("Operation aborted"));
@@ -197,7 +180,6 @@ export function createFindToolDefinition(
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             // One extra candidate distinguishes an exact-size result from a truncated one.
             const observationLimit = effectiveLimit + 1;
-            // If custom operations provide glob(), use that instead of fd.
             if (customOps?.glob) {
               if (!(await customOps.exists(searchPath))) {
                 settle(() => reject(new Error(`Path not found: ${searchPath}`)));
@@ -239,7 +221,6 @@ export function createFindToolDefinition(
               return;
             }
 
-            // Default implementation uses fd.
             const fdPath = await ensureTool("fd", true);
             if (signal?.aborted) {
               settle(() => reject(new Error("Operation aborted")));

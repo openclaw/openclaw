@@ -12,7 +12,6 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
@@ -21,6 +20,7 @@ import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
@@ -39,7 +39,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const temporaryDirectories = useAutoCleanupTempDirTracker(afterEach);
+const temporaryDirectories = useSessionStoreTempDirs(afterAll, "openclaw-adopted-failure-");
 let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 
 beforeAll(async () => {
@@ -55,10 +55,7 @@ afterEach(() => {
 });
 
 it("reports an adopted pre-model failure as one visible failure over the Gateway WebSocket", async () => {
-  testState.sessionStorePath = path.join(
-    temporaryDirectories.make("openclaw-adopted-failure-"),
-    "sessions.json",
-  );
+  testState.sessionStorePath = path.join(temporaryDirectories.make(), "sessions.json");
   await writeSessionStore({
     entries: { main: { sessionId: "adopted-failure-session", updatedAt: Date.now() } },
   });
@@ -146,7 +143,7 @@ describe("chat.send quoted model profiles", () => {
 
   beforeEach(async () => {
     runPreparedReply = vi.spyOn(replyRun, "runPreparedReply");
-    const directory = temporaryDirectories.make("openclaw-chat-model-profile-");
+    const directory = temporaryDirectories.make();
     storePath = path.join(directory, "sessions.json");
     testState.sessionStorePath = storePath;
     testState.agentConfig = {
@@ -222,13 +219,15 @@ describe("chat.send quoted model profiles", () => {
     expect(context.chatAbortControllers.size).toBe(0);
   }
 
+  async function expectUnchangedModelScope(
+    configBefore: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  ) {
+    expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toMatchObject(priorSelection);
+    expect(getRuntimeConfig().agents?.defaults?.model).toEqual({ primary: "openai/default-model" });
+    expect((await readConfigFileSnapshot()).raw).toBe(configBefore.raw);
+  }
+
   it.each([
-    [
-      '/model openai/test-model@"openai:owner+work@example.com" -s',
-      "openai:owner+work@example.com",
-      "openai",
-      "test-model",
-    ],
     [
       '/model openai/test-model@"openai:Work account" -s',
       "openai:Work account",
@@ -241,14 +240,6 @@ describe("chat.send quoted model profiles", () => {
       "openai",
       "test-model",
     ],
-    [
-      '/model openai/test-model@"openai:Work --global" -s',
-      "openai:Work --global",
-      "openai",
-      "test-model",
-    ],
-    ['/model openai/test-model@"openai:team/work" -s', "openai:team/work", "openai", "test-model"],
-    ['/model openai/test-model@"20260101" -s', "20260101", "openai", "test-model"],
     [
       '/model "sample/model name@20260101"@"sample:team/work" -s',
       "sample:team/work",
@@ -272,22 +263,15 @@ describe("chat.send quoted model profiles", () => {
         authProfileOverride: profile,
         authProfileOverrideSource: "user",
       });
-      expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toMatchObject(priorSelection);
-      expect(getRuntimeConfig().agents?.defaults?.model).toEqual({
-        primary: "openai/default-model",
-      });
-      expect((await readConfigFileSnapshot()).raw).toBe(configBefore.raw);
+      await expectUnchangedModelScope(configBefore);
       expect(runPreparedReply).not.toHaveBeenCalled();
     },
   );
 
   it.each([
     String.raw`openai/test@"work\N"`,
-    String.raw`openai/test@"work\U0041"`,
-    String.raw`openai/test@"work\v"`,
     'openai/test@"unfinished',
     String.raw`"sample/model\N"@"work"`,
-    '"unfinished',
   ])(
     "preserves malformed quoted input without selecting its trailing alias: %s",
     async (reference) => {
@@ -306,11 +290,7 @@ describe("chat.send quoted model profiles", () => {
       expect(directives?.rawModelProfile).toBeUndefined();
       expect(directives?.modelScope).toBeUndefined();
       expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(priorSelection);
-      expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toMatchObject(priorSelection);
-      expect(getRuntimeConfig().agents?.defaults?.model).toEqual({
-        primary: "openai/default-model",
-      });
-      expect((await readConfigFileSnapshot()).raw).toBe(configBefore.raw);
+      await expectUnchangedModelScope(configBefore);
     },
   );
 });

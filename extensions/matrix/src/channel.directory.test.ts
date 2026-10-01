@@ -494,6 +494,7 @@ describe("matrix directory", () => {
               accounts: {
                 ops: {
                   homeserver: "https://ops.inline.example.org",
+                  proxy: "http://127.0.0.1:7890",
                   userId: "@ops:inline.example.org",
                   accessToken: "ops-inline-token",
                   password: "ops-inline-password", // pragma: allowlist secret
@@ -520,6 +521,7 @@ describe("matrix directory", () => {
         expect(opsAccount?.enabled).toBe(true);
         expect(opsAccount?.encryption).toBe(true);
         expect(opsAccount?.homeserver).toBeUndefined();
+        expect(opsAccount?.proxy).toBeUndefined();
         expect(opsAccount?.userId).toBeUndefined();
         expect(opsAccount?.accessToken).toBeUndefined();
         expect(opsAccount?.password).toBeUndefined();

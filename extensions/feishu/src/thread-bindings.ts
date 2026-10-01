@@ -76,14 +76,6 @@ function resolveBindingKey(params: { accountId: string; conversationId: string }
   return `${params.accountId}:${params.conversationId}`;
 }
 
-function toSessionBindingTargetKind(raw: FeishuBindingTargetKind): BindingTargetKind {
-  return raw === "subagent" ? "subagent" : "session";
-}
-
-function toFeishuTargetKind(raw: BindingTargetKind): FeishuBindingTargetKind {
-  return raw === "subagent" ? "subagent" : "acp";
-}
-
 function toSessionBindingRecord(
   record: FeishuThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
@@ -96,12 +88,9 @@ function toSessionBindingRecord(
       ? Math.min(idleExpiresAt, maxAgeExpiresAt)
       : (idleExpiresAt ?? maxAgeExpiresAt);
   return {
-    bindingId: resolveBindingKey({
-      accountId: record.accountId,
-      conversationId: record.conversationId,
-    }),
+    bindingId: resolveBindingKey(record),
     targetSessionKey: record.targetSessionKey,
-    targetKind: toSessionBindingTargetKind(record.targetKind),
+    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
     conversation: {
       channel: "feishu",
       accountId: record.accountId,
@@ -130,7 +119,8 @@ export function createFeishuThreadBindingManager(params: {
   cfg: OpenClawConfig;
 }): FeishuThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
-  const existing = getState().managersByAccountId.get(accountId);
+  const { managersByAccountId, bindingsByAccountConversation } = getState();
+  const existing = managersByAccountId.get(accountId);
   if (existing) {
     return existing;
   }
@@ -160,7 +150,7 @@ export function createFeishuThreadBindingManager(params: {
     }
 
     // Expire at the manager boundary so direct subagent reads and SDK adapters agree.
-    getState().bindingsByAccountConversation.delete(
+    bindingsByAccountConversation.delete(
       resolveBindingKey({ accountId, conversationId: record.conversationId }),
     );
     return undefined;
@@ -170,13 +160,11 @@ export function createFeishuThreadBindingManager(params: {
     accountId,
     getByConversationId: (conversationId) =>
       resolveActiveBinding(
-        getState().bindingsByAccountConversation.get(
-          resolveBindingKey({ accountId, conversationId }),
-        ),
+        bindingsByAccountConversation.get(resolveBindingKey({ accountId, conversationId })),
       ),
     listBySessionKey: (targetSessionKey) => {
       const now = Date.now();
-      return [...getState().bindingsByAccountConversation.values()].filter(
+      return [...bindingsByAccountConversation.values()].filter(
         (record) =>
           record.accountId === accountId &&
           record.targetSessionKey === targetSessionKey &&
@@ -196,7 +184,7 @@ export function createFeishuThreadBindingManager(params: {
         return null;
       }
       const existingLocal = manager.getByConversationId(normalizedConversationId);
-      const storedTargetKind = toFeishuTargetKind(targetKind);
+      const storedTargetKind = targetKind === "subagent" ? "subagent" : "acp";
       const previous =
         existingLocal?.targetSessionKey === normalizedTargetSessionKey &&
         existingLocal.targetKind === storedTargetKind
@@ -230,10 +218,7 @@ export function createFeishuThreadBindingManager(params: {
         lastActivityAt: now,
         metadata: targetMetadata,
       };
-      getState().bindingsByAccountConversation.set(
-        resolveBindingKey({ accountId, conversationId: normalizedConversationId }),
-        record,
-      );
+      bindingsByAccountConversation.set(resolveBindingKey(record), record);
       return record;
     },
     touchConversation: (conversationId, at = Date.now()) => {
@@ -243,40 +228,38 @@ export function createFeishuThreadBindingManager(params: {
         return null;
       }
       const updated = { ...existingRecord, lastActivityAt: at };
-      getState().bindingsByAccountConversation.set(key, updated);
+      bindingsByAccountConversation.set(key, updated);
       return updated;
     },
     unbindConversation: (conversationId) => {
       const key = resolveBindingKey({ accountId, conversationId });
-      const existingRecord = getState().bindingsByAccountConversation.get(key);
+      const existingRecord = bindingsByAccountConversation.get(key);
       if (!existingRecord) {
         return null;
       }
-      getState().bindingsByAccountConversation.delete(key);
+      bindingsByAccountConversation.delete(key);
       return existingRecord;
     },
     unbindBySessionKey: (targetSessionKey) => {
       const removed: FeishuThreadBindingRecord[] = [];
-      for (const record of getState().bindingsByAccountConversation.values()) {
+      for (const record of bindingsByAccountConversation.values()) {
         if (record.accountId !== accountId || record.targetSessionKey !== targetSessionKey) {
           continue;
         }
-        getState().bindingsByAccountConversation.delete(
-          resolveBindingKey({ accountId, conversationId: record.conversationId }),
-        );
+        bindingsByAccountConversation.delete(resolveBindingKey(record));
         removed.push(record);
       }
       return removed;
     },
     stop: () => {
       // A repeated shutdown must not remove a replacement manager's live bindings.
-      if (getState().managersByAccountId.get(accountId) === manager) {
-        for (const key of getState().bindingsByAccountConversation.keys()) {
+      if (managersByAccountId.get(accountId) === manager) {
+        for (const key of bindingsByAccountConversation.keys()) {
           if (key.startsWith(`${accountId}:`)) {
-            getState().bindingsByAccountConversation.delete(key);
+            bindingsByAccountConversation.delete(key);
           }
         }
-        getState().managersByAccountId.delete(accountId);
+        managersByAccountId.delete(accountId);
       }
       unregisterSessionBindingAdapter({
         channel: "feishu",
@@ -345,7 +328,7 @@ export function createFeishuThreadBindingManager(params: {
 
   registerSessionBindingAdapter(sessionBindingAdapter);
 
-  getState().managersByAccountId.set(accountId, manager);
+  managersByAccountId.set(accountId, manager);
   return manager;
 }
 

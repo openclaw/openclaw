@@ -471,7 +471,9 @@ function runPreparedAuthProfileWriteTransaction<T>(
     }
   };
   if (databaseTarget.kind === "agent") {
-    return runOpenClawAgentWriteTransaction(run, databaseTarget);
+    return runOpenClawAgentWriteTransaction(run, databaseTarget, {
+      operationLabel: "auth-profiles.write",
+    });
   }
   const { env } = databaseTarget;
   const database = openOpenClawStateDatabase({ env, path: databaseTarget.path });

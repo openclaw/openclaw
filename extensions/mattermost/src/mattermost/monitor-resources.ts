@@ -1,4 +1,3 @@
-// Mattermost plugin module implements monitor resources behavior.
 import {
   buildChannelInboundMediaPayload,
   formatInboundMediaUnavailableText,
@@ -239,26 +238,18 @@ export function createMattermostMonitorResources(params: {
     return info;
   });
 
-  const buildModelPickerProps = (
-    channelId: string,
-    buttons: Array<unknown>,
-  ): Record<string, unknown> | undefined =>
-    buildButtonProps({
-      callbackUrl,
-      accountId,
-      channelId,
-      buttons,
-    });
-
   const updateModelPickerPost = async (paramsLocal: {
     channelId: string;
     postId: string;
     message: string;
     buttons?: Array<unknown>;
   }): Promise<MattermostInteractionResponse> => {
-    const props = buildModelPickerProps(paramsLocal.channelId, paramsLocal.buttons ?? []) ?? {
-      attachments: [],
-    };
+    const props = buildButtonProps({
+      callbackUrl,
+      accountId,
+      channelId: paramsLocal.channelId,
+      buttons: paramsLocal.buttons ?? [],
+    }) ?? { attachments: [] };
     await updateMattermostPost(client, paramsLocal.postId, {
       message: paramsLocal.message,
       props,

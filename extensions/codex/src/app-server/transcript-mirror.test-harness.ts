@@ -28,7 +28,6 @@ export function createTranscriptMirrorTestHarness() {
       sessionKey,
       storePath,
       entry: {
-        sessionFile: `sqlite:${agentId}:${sessionId}:${storePath}`,
         sessionId,
         updatedAt: 1,
       },

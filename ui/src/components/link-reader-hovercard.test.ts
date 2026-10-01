@@ -242,7 +242,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(card()?.textContent).toContain("Could not load preview");
     expect(card()?.textContent).toContain(message);
     const externalLink = card()?.querySelector<HTMLAnchorElement>("a");
-    expect(externalLink?.textContent).toBe("Open on GitHub");
+    expect(externalLink?.textContent?.trim()).toBe("Open on GitHub");
     expect(externalLink?.href).toBe(href);
     leave(anchor);
     await vi.advanceTimersByTimeAsync(120);
@@ -254,6 +254,39 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { url: href + "#issuecomment-123", label: "PR #99816", reader: github, branded: true },
+    {
+      url: "https://github.com/openclaw/openclaw/issues/99815",
+      label: "Issue #99815",
+      reader: github,
+      branded: true,
+    },
+    {
+      url: "https://forge.example/changes/C42",
+      label: "Changes",
+      reader: forge,
+      branded: false,
+    },
+  ])("keeps the failed preview's identity and source link for $label", async (scenario) => {
+    const { anchor, provider } = createLink(scenario.url, [scenario.reader]);
+    const message = "Try again or open the original.";
+    connect(
+      provider,
+      vi.fn().mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message })),
+    );
+    await hover(anchor);
+    const source = card()?.querySelector(".link-reader-hovercard__error-source");
+    expect(source?.textContent?.trim()).toBe(scenario.label);
+    expect(Boolean(source?.querySelector("svg.icon--filled"))).toBe(scenario.branded);
+    expect(card()?.querySelector('[role="status"]')?.textContent).toBe(message);
+    const externalLink = card()?.querySelector<HTMLAnchorElement>("a");
+    expect(externalLink?.textContent?.trim()).toBe("Open on " + scenario.reader.label);
+    expect(externalLink?.href).toBe(scenario.url);
+    expect(externalLink?.target).toBe("_blank");
+    expect(card()?.querySelector("button")).toBeNull();
   });
 
   it.each([

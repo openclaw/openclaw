@@ -6,6 +6,7 @@ vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
 }));
 
 import { renderMessagePresentationFallbackText } from "../../interactive/payload.js";
+import type { ReplyPayload } from "../types.js";
 import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 
 const view = { viewId: "view-latest" };
@@ -31,18 +32,20 @@ beforeEach(() => {
   materialize.mockReturnValue(presentation);
 });
 
+function attachApp(payloads: ReplyPayload[], channel: string | undefined) {
+  return attachMcpAppChannelAction({ payloads, channel, sessionKey: "agent:main:main", view });
+}
+
 describe("attachMcpAppChannelAction", () => {
   it("attaches one action to the latest visible reply and preserves original text", () => {
-    const payloads = attachMcpAppChannelAction({
-      payloads: [
+    const payloads = attachApp(
+      [
         { text: "progress", isStatusNotice: true },
         { text: "First answer" },
         { text: "Final answer" },
       ],
-      channel: "telegram",
-      sessionKey: "agent:main:main",
-      view,
-    });
+      "telegram",
+    );
 
     expect(payloads[1]).toEqual({ text: "First answer" });
     const finalPayload = payloads[2];
@@ -58,27 +61,14 @@ describe("attachMcpAppChannelAction", () => {
   it("keeps Control UI inline-only without minting a duplicate action", () => {
     const payloads = [{ text: "Final answer" }];
 
-    expect(
-      attachMcpAppChannelAction({
-        payloads,
-        channel: "webchat",
-        sessionKey: "agent:main:main",
-        view,
-      }),
-    ).toBe(payloads);
+    expect(attachApp(payloads, "webchat")).toBe(payloads);
     expect(materialize).not.toHaveBeenCalled();
   });
 
   it("does not mint without a resolved channel transport", () => {
     const payloads = [{ text: "Final answer" }];
 
-    expect(
-      attachMcpAppChannelAction({
-        payloads,
-        sessionKey: "agent:main:main",
-        view,
-      }),
-    ).toBe(payloads);
+    expect(attachApp(payloads, undefined)).toBe(payloads);
     expect(materialize).not.toHaveBeenCalled();
   });
 
@@ -86,14 +76,7 @@ describe("attachMcpAppChannelAction", () => {
     materialize.mockReturnValue(undefined);
     const payloads = [{ text: "Final answer" }];
 
-    expect(
-      attachMcpAppChannelAction({
-        payloads,
-        channel: "telegram",
-        sessionKey: "agent:main:main",
-        view,
-      }),
-    ).toBe(payloads);
+    expect(attachApp(payloads, "telegram")).toBe(payloads);
   });
 
   it("does not mint for status, error, or non-text terminal payloads", () => {
@@ -103,14 +86,7 @@ describe("attachMcpAppChannelAction", () => {
       { mediaUrl: "https://example.test/image.png" },
     ];
 
-    expect(
-      attachMcpAppChannelAction({
-        payloads,
-        channel: "telegram",
-        sessionKey: "agent:main:main",
-        view,
-      }),
-    ).toBe(payloads);
+    expect(attachApp(payloads, "telegram")).toBe(payloads);
     expect(materialize).not.toHaveBeenCalled();
   });
 });

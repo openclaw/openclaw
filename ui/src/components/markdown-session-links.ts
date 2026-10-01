@@ -9,6 +9,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
+import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
 
 const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
 
@@ -117,33 +118,25 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
             token.attrSet("data-session-href", token.content);
           }
         } else if (linkDepth === 0 && token.type === "text") {
-          const replacements: Token[] = [];
-          let cursor = 0;
-          const text = (content: string) => {
-            const label = new state.Token("text", "", 0);
-            label.content = content;
-            replacements.push(label);
-          };
-          for (const match of token.content.matchAll(SESSION_LINK_SCAN_RE)) {
-            const end = match.index + match[0].length;
-            const open = new state.Token("link_open", "a", 1);
-            if (
-              !hasMarkdownLinkBoundaries(token.content, match.index, end) ||
-              !decorate(open, match[0])
-            ) {
-              continue;
-            }
-            text(token.content.slice(cursor, match.index));
-            replacements.push(open);
-            text(match[0]);
-            replacements.push(new state.Token("link_close", "a", -1));
-            cursor = end;
-          }
-          if (cursor) {
-            text(token.content.slice(cursor));
-            children.splice(index, 1, ...replacements);
-            index += replacements.length - 1;
-          }
+          index = replaceMarkdownTextMatches(
+            state,
+            children,
+            index,
+            SESSION_LINK_SCAN_RE,
+            (match) => {
+              const end = match.index + match[0].length;
+              const open = new state.Token("link_open", "a", 1);
+              if (
+                !hasMarkdownLinkBoundaries(token.content, match.index, end) ||
+                !decorate(open, match[0])
+              ) {
+                return null;
+              }
+              const label = new state.Token("text", "", 0);
+              label.content = match[0];
+              return [open, label, new state.Token("link_close", "a", -1)];
+            },
+          );
         }
       }
     }

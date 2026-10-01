@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/gateway-protocol",
-  "version": "2026.9.6",
+  "version": "2026.9.7",
   "description": "Typed schemas and runtime validators for the OpenClaw Gateway WebSocket protocol",
   "keywords": [
     "gateway",
@@ -93,10 +93,11 @@
     "prepack": "pnpm run build && node --import tsx ../../scripts/protocol-gen.ts --out ./protocol.schema.json"
   },
   "dependencies": {
-    "typebox": "1.3.33"
+    "typebox": "1.3.34"
   },
   "devDependencies": {
-    "@openclaw/normalization-core": "workspace:*"
+    "@openclaw/normalization-core": "workspace:*",
+    "esbuild": "0.28.2"
   },
   "engines": {
     "node": ">=22.19.0"

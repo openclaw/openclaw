@@ -249,6 +249,14 @@ async function loginAnthropic(options: {
 
   let code: string | undefined;
   let state: string | undefined;
+  const applyAuthorizationInput = (input: string) => {
+    const parsed = parseOAuthAuthorizationInput(input);
+    if (parsed.state && parsed.state !== expectedState) {
+      throw new Error("OAuth state mismatch");
+    }
+    code = parsed.code;
+    state = parsed.state ?? expectedState;
+  };
 
   try {
     throwIfOAuthLoginAborted(options.signal);
@@ -298,12 +306,7 @@ async function loginAnthropic(options: {
         code = result.code;
         state = result.state;
       } else if (manualInput) {
-        const parsed = parseOAuthAuthorizationInput(manualInput);
-        if (parsed.state && parsed.state !== expectedState) {
-          throw new Error("OAuth state mismatch");
-        }
-        code = parsed.code;
-        state = parsed.state ?? expectedState;
+        applyAuthorizationInput(manualInput);
       }
 
       if (!code) {
@@ -312,12 +315,7 @@ async function loginAnthropic(options: {
           throw toErrorObject(manualError, "Non-Error thrown");
         }
         if (manualInput) {
-          const parsed = parseOAuthAuthorizationInput(manualInput);
-          if (parsed.state && parsed.state !== expectedState) {
-            throw new Error("OAuth state mismatch");
-          }
-          code = parsed.code;
-          state = parsed.state ?? expectedState;
+          applyAuthorizationInput(manualInput);
         }
       }
     } else {
@@ -341,12 +339,7 @@ async function loginAnthropic(options: {
         options.signal,
         server.cancelWait,
       );
-      const parsed = parseOAuthAuthorizationInput(input);
-      if (parsed.state && parsed.state !== expectedState) {
-        throw new Error("OAuth state mismatch");
-      }
-      code = parsed.code;
-      state = parsed.state ?? expectedState;
+      applyAuthorizationInput(input);
     }
 
     if (!code) {

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { NodeWorkerPreparedWorkspaceStore } from "../node-host/node-worker-prepared-workspace-store.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
 import { readConfigMachineState } from "./config-machine-state.js";
@@ -15,6 +16,7 @@ import {
   getExistingOpenClawStateSchemaPath,
   withExistingOpenClawStateSchema,
 } from "./openclaw-state-db-schema-policy.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -83,6 +85,46 @@ function createExistingState(mutate?: (db: DatabaseSync) => void) {
 }
 
 describe("existing shared-state schema admission", () => {
+  it("observes peer content-marker updates after its pinned read transaction ends", () => {
+    const { options } = createExistingState((db) => {
+      db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
+        "state.schema.contentVersion",
+        String(OPENCLAW_STATE_SCHEMA_VERSION),
+        1,
+      );
+    });
+    withExistingOpenClawStateSchema(options, () => {
+      const { db } = openOpenClawStateDatabase(options);
+      const peer = new DatabaseSync(options.path);
+      try {
+        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        db.exec("BEGIN");
+        expect(
+          db
+            .prepare(
+              "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+            )
+            .get(),
+        ).toEqual({
+          value_json: String(OPENCLAW_STATE_SCHEMA_VERSION),
+        });
+        peer
+          .prepare(
+            "UPDATE config_machine_state SET value_json = ? WHERE state_key = 'state.schema.contentVersion'",
+          )
+          .run(String(OPENCLAW_STATE_SCHEMA_VERSION + 1));
+        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        db.exec("COMMIT");
+        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION + 1);
+      } finally {
+        if (db.isTransaction) {
+          db.exec("ROLLBACK");
+        }
+        peer.close();
+      }
+    });
+  });
+
   it("writes node state and initializes its lazy store without taking over release repair", async () => {
     const { options, before } = createExistingState((db) => {
       db.exec(`
@@ -198,6 +240,11 @@ describe("existing shared-state schema admission", () => {
       sql: "UPDATE schema_meta SET role = 'agent', agent_id = 'main' WHERE meta_key = 'primary';",
     },
     {
+      name: "missing metadata role column",
+      sql: "ALTER TABLE schema_meta RENAME COLUMN role TO retired_role;",
+      expectedError: SqliteSchemaMismatchError,
+    },
+    {
       name: "missing startup column",
       sql: "ALTER TABLE worker_environments DROP COLUMN preparation_purpose;",
     },
@@ -230,14 +277,17 @@ describe("existing shared-state schema admission", () => {
               (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
               VALUES ('missing-session', 1, 10, 'session', NULL, '{}', 0);`,
     },
-  ])("refuses $name without migrating or repairing the file", ({ sql }) => {
-    const { options } = createExistingState((db) => db.exec(sql));
-    const before = readPersistedSchema(options.path);
-    expect(() =>
-      withExistingOpenClawStateSchema(options, () => openOpenClawStateDatabase(options)),
-    ).toThrow(/schema|foreign_key_check/i);
-    expect(readPersistedSchema(options.path)).toEqual(before);
-  });
+  ])(
+    "refuses $name without migrating or repairing the file",
+    ({ sql, expectedError = /schema|foreign_key_check/i }) => {
+      const { options } = createExistingState((db) => db.exec(sql));
+      const before = readPersistedSchema(options.path);
+      expect(() =>
+        withExistingOpenClawStateSchema(options, () => openOpenClawStateDatabase(options)),
+      ).toThrow(expectedError);
+      expect(readPersistedSchema(options.path)).toEqual(before);
+    },
+  );
 
   it("refuses global repair and startup-checkpoint entry points inside the node scope", async () => {
     const { options, before } = createExistingState();

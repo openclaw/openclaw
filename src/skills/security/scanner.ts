@@ -127,14 +127,7 @@ type LineRule = {
   requiresContext?: RegExp;
 };
 
-type SourceRule = {
-  ruleId: string;
-  severity: SkillScanSeverity;
-  message: string;
-  /** Primary pattern tested against the full source. */
-  pattern: RegExp;
-  /** Secondary context pattern; both must match for the rule to fire. */
-  requiresContext?: RegExp;
+type SourceRule = LineRule & {
   /** If set, secondary context must be within this many lines of the primary match. */
   requiresContextWindowLines?: number;
 };
@@ -266,16 +259,11 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
   const collectSpecifiers = (specText: string): void => {
     for (const rawSpec of specText.split(",")) {
       const spec = rawSpec.trim();
-      if (!spec) {
-        continue;
-      }
       // Renamed binding: `spawn as launch` (ESM) or `exec: run` (CJS)
       const asMatch = spec.match(/^(\w+)\s+(?:as)\s+(\w+)$/) ?? spec.match(/^(\w+)\s*:\s*(\w+)$/);
       if (asMatch?.[1] && asMatch[2]) {
-        const original = asMatch[1];
-        const alias = asMatch[2];
-        if (CHILD_PROCESS_EXEC_METHODS.has(original)) {
-          methodAliases.add(alias);
+        if (CHILD_PROCESS_EXEC_METHODS.has(asMatch[1])) {
+          methodAliases.add(asMatch[2]);
         }
       }
       // Bare imported method name (`execFile`) is already matched by the
@@ -283,21 +271,15 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
     }
   };
 
-  let match: RegExpExecArray | null;
-  while ((match = esmNamed.exec(source))) {
-    collectSpecifiers(expectDefined(match[1], "child_process esm named import specifiers"));
+  for (const pattern of [esmNamed, cjsDestructured]) {
+    for (const match of source.matchAll(pattern)) {
+      collectSpecifiers(expectDefined(match[1], "child_process import specifiers"));
+    }
   }
-  while ((match = cjsDestructured.exec(source))) {
-    collectSpecifiers(expectDefined(match[1], "child_process cjs destructured specifiers"));
-  }
-  while ((match = esmDefault.exec(source))) {
-    namespaceAliases.add(expectDefined(match[1], "child_process esm default namespace"));
-  }
-  while ((match = esmNamespace.exec(source))) {
-    namespaceAliases.add(expectDefined(match[1], "child_process esm namespace import"));
-  }
-  while ((match = cjsNamespace.exec(source))) {
-    namespaceAliases.add(expectDefined(match[1], "child_process cjs namespace"));
+  for (const pattern of [esmDefault, esmNamespace, cjsNamespace]) {
+    for (const match of source.matchAll(pattern)) {
+      namespaceAliases.add(expectDefined(match[1], "child_process namespace"));
+    }
   }
 
   return { methodAliases, namespaceAliases };
@@ -331,25 +313,19 @@ function isBenignMemberExecMatch(
 
   const matchIndex = match.index;
   const charAtMatch = line[matchIndex];
-  // Computed calls require a known receiver for every watched method.
+  let receiver: string | undefined;
+  // Computed calls require a known receiver for every watched method;
+  // direct calls require it only for .exec, excluding RegExp.exec.
   if (charAtMatch === '"' || charAtMatch === "'") {
-    const receiverMatch = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/);
-    const receiver = receiverMatch?.[1];
-    return (
-      !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
-    );
+    receiver = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/)?.[1];
+  } else if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
+    receiver = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/)?.[1];
+  } else {
+    return false;
   }
-
-  // Only .exec requires a known receiver; this excludes RegExp.exec.
-  if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
-    const receiverMatch = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/);
-    const receiver = receiverMatch?.[1];
-    return (
-      !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
-    );
-  }
-
-  return false;
+  return (
+    !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
+  );
 }
 
 function stripCommentsForHeuristics(source: string): string {
@@ -463,7 +439,6 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const findings: SkillScanFinding[] = [];
   const lines = source.split("\n");
   const heuristicSource = stripCommentsForHeuristics(source);
-  const heuristicLines = heuristicSource.split("\n");
 
   const { methodAliases, namespaceAliases } = collectChildProcessBindings(heuristicSource);
 
@@ -475,11 +450,11 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let acceptedMatches = 0;
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
-    const addFinding = (line: string, lineNumber: number): boolean => {
+    const addFinding = (line: string, lineNumber: number): void => {
       if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
         omittedMatches += 1;
         lastOmittedLine = lineNumber;
-        return false;
+        return;
       }
       findings.push({
         ruleId: rule.ruleId,
@@ -490,7 +465,6 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
         evidence: formatScanEvidence(line),
       });
       acceptedMatches += 1;
-      return true;
     };
     for (const [i, line] of lines.entries()) {
       const matches = line.matchAll(
@@ -515,7 +489,8 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           }
         }
 
-        if (addFinding(line, i + 1) && rule.ruleId === "dangerous-exec") {
+        addFinding(line, i + 1);
+        if (rule.ruleId === "dangerous-exec") {
           literalDangerousExecIndexes.add(match.index);
         }
       }
@@ -542,39 +517,25 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     }
   }
 
-  for (const rule of SOURCE_RULES) {
-    const match = findSourceRuleMatch({
-      rule,
-      source: heuristicSource,
-      lines: heuristicLines,
-    });
-    if (!match) {
-      continue;
-    }
-
-    findings.push({
-      ruleId: rule.ruleId,
-      severity: rule.severity,
-      file: filePath,
-      line: match.line,
-      message: rule.message,
-      evidence: formatScanEvidence(lines[match.line - 1] ?? match.evidence),
-    });
-  }
-
+  findings.push(...scanSourceRules(SOURCE_RULES, heuristicSource, filePath, lines));
   return findings;
 }
 
 export function scanSkillContent(content: string, filePath: string): SkillScanFinding[] {
-  const findings: SkillScanFinding[] = [];
-  const lines = content.split("\n");
+  return scanSourceRules(SKILL_CONTENT_RULES, content, filePath);
+}
 
-  for (const rule of SKILL_CONTENT_RULES) {
-    const match = findSourceRuleMatch({
-      rule,
-      source: content,
-      lines,
-    });
+function scanSourceRules(
+  rules: readonly SourceRule[],
+  source: string,
+  filePath: string,
+  evidenceLines?: string[],
+): SkillScanFinding[] {
+  const findings: SkillScanFinding[] = [];
+  const lines = source.split("\n");
+
+  for (const rule of rules) {
+    const match = findSourceRuleMatch({ rule, source, lines });
     if (!match) {
       continue;
     }
@@ -588,7 +549,7 @@ export function scanSkillContent(content: string, filePath: string): SkillScanFi
       evidence:
         rule.ruleId === "literal-secret"
           ? "[REDACTED CREDENTIAL]"
-          : formatScanEvidence(lines[match.line - 1] ?? match.evidence),
+          : formatScanEvidence((evidenceLines ?? lines)[match.line - 1] ?? match.evidence),
     });
   }
 
@@ -777,9 +738,7 @@ export async function scanDirectoryWithSummary(
   const { files, truncated } = await collectScannableFiles(dirPath, scanOptions);
   const allFindings: SkillScanFinding[] = [];
   let scannedFiles = 0;
-  let critical = 0;
-  let warn = 0;
-  let info = 0;
+  const counts = { critical: 0, warn: 0, info: 0 };
 
   for (const file of files) {
     const scanResult = await scanFileWithCache({
@@ -792,23 +751,14 @@ export async function scanDirectoryWithSummary(
     scannedFiles += 1;
     for (const finding of scanResult.findings) {
       allFindings.push(finding);
-      if (finding.severity === "critical") {
-        critical += 1;
-      } else if (finding.severity === "warn") {
-        warn += 1;
-      } else {
-        info += 1;
-      }
+      counts[finding.severity] += 1;
     }
   }
 
   return {
     scannedFiles,
-    critical,
-    warn,
-    info,
+    ...counts,
     truncated,
     findings: allFindings,
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

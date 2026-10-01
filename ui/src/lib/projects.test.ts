@@ -46,6 +46,7 @@ function harness() {
     connection: { gatewayUrl: "ws://example.test", token: "", password: "", bootstrapToken: "" },
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: vi.fn(),
     setSessionKey: vi.fn(),
     start: vi.fn(),

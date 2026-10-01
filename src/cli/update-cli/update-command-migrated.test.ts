@@ -43,6 +43,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   MIGRATED_FIXTURE_NO_SERVICE,
@@ -176,6 +177,7 @@ it.each<{
   backup?: boolean;
   windows?: boolean;
   handback?: boolean;
+  recovered?: boolean;
 }>([
   { pending: true, status: "skipped", windows: true },
   { pending: false, status: "error", windows: true },
@@ -185,8 +187,16 @@ it.each<{
   { pending: false, status: "error", backup: true },
   { pending: false, status: "error", candidateStartAttempted: false },
   { pending: false, status: "error", candidateStartAttempted: false, backup: true, windows: true },
+  {
+    pending: false,
+    status: "error",
+    candidateStartAttempted: true,
+    backup: true,
+    windows: true,
+    recovered: true,
+  },
 ])(
-  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows)",
+  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows, recovered=$recovered)",
   async ({
     pending,
     status,
@@ -194,6 +204,7 @@ it.each<{
     backup,
     windows = false,
     handback = false,
+    recovered = false,
   }) => {
     const exitCode = status === "skipped" ? 0 : 1;
     const reason = status === "skipped" ? "gateway-readiness-unverified" : "doctor-failed";
@@ -224,6 +235,9 @@ it.each<{
           status,
           reason,
           runId: run.runId,
+          ...(recovered
+            ? { recovery: { serviceRestartSafe: true, version: "2.0.0", service: "healthy" } }
+            : {}),
           steps: pending
             ? [
                 {
@@ -328,8 +342,8 @@ it.each<{
     }
     expect(rollback).not.toHaveBeenCalled();
     if (windows) {
-      expect(windowsRecovery.complete).toHaveBeenCalledWith(pending);
-      expect(windowsRecovery.complete).not.toHaveBeenCalledWith(!pending);
+      expect(windowsRecovery.complete).toHaveBeenCalledWith(pending || recovered);
+      expect(windowsRecovery.complete).not.toHaveBeenCalledWith(!(pending || recovered));
     } else {
       expect(windowsRecovery.complete).not.toHaveBeenCalled();
     }
@@ -482,11 +496,12 @@ it.each([
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.useFakeTimers();
     presentation = createUpdateProgress(!json, run);
-    const progress = createUpdateRunProgress(run, presentation.progress);
+    const guards = createUpdateCommandExecutionGuards({ run }, root);
+    const progress = createUpdateRunProgress(run, presentation.progress, guards.recordStep);
     presentation.suspend();
     progress.deferLedgerWrites();
     const migrationStep = { name: "core migrations", command: "doctor --fix", index: 0, total: 1 };
-    progress.onStepStart?.(migrationStep);
+    await progress.onStepStart?.(migrationStep);
     const database = openOpenClawStateDatabase({ env });
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -515,9 +530,9 @@ it.each([
       reason: "state-migrated-no-rollback",
     };
     expect(() => progress.onRollbackOutcome?.(rollbackOutcome)).not.toThrow();
-    expect(() =>
+    await expect(
       progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     expect(() => vi.advanceTimersByTime(500)).not.toThrow();
     expect(() => presentation?.dispose()).not.toThrow();
     presentation = undefined;

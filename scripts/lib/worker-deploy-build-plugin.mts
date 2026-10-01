@@ -37,17 +37,10 @@ const WS_DIRECT_RUNTIME_FRAGMENTS = [
   '"lib/websocket-server.js"',
   '"lib/stream.js"',
 ] as const;
-const WS_DYNAMIC_IMPORT =
-  'pathToFileURL(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")).href';
 const TREE_SITTER_INIT = "TreeSitter.Parser.init()";
 const TREE_SITTER_BASH_WASM = 'require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")';
 const PHOTON_WASM_INIT = `const path = require('path').join(__dirname, 'photon_rs_bg.wasm');
 const bytes = require('fs').readFileSync(path);`;
-
-function resolveOptionalBuildSource(source: string): string {
-  const resolved = path.resolve(source);
-  return fs.existsSync(resolved) ? fs.realpathSync(resolved) : resolved;
-}
 
 export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
@@ -97,12 +90,6 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   );
   const websocketRuntimePath = fs.realpathSync(
     path.resolve("packages/gateway-client/src/websocket.ts"),
-  );
-  const dynamicWebsocketRuntimePaths = new Set(
-    [
-      "src/node-host/node-stream-transport.ts",
-      "src/realtime-transcription/websocket-session.ts",
-    ].map(resolveOptionalBuildSource),
   );
   const [packageJsonPath, browsersJsonPath, treeSitterWasmPath, bashWasmPath, photonWasmPath] =
     resolveWorkerDeployGeneratorInputs(rootDir);
@@ -200,12 +187,6 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         const wsWrapperUrl = resolveWsWrapperUrl();
         return `import * as bundledWebSocket from ${JSON.stringify(wsWrapperUrl)};
 export const { WebSocket, WebSocketServer, createWebSocketStream } = bundledWebSocket;`;
-      }
-      if (dynamicWebsocketRuntimePaths.has(resolvedId)) {
-        if (!code.includes(WS_DYNAMIC_IMPORT)) {
-          this.error("ws dynamic bootstrap changed; update the worker deploy transform");
-        }
-        return code.replace(WS_DYNAMIC_IMPORT, JSON.stringify(resolveWsWrapperUrl()));
       }
       if (resolvedId === undiciDispatcherOptionsPath) {
         if (UNDICI_REQUIRE_BOOTSTRAP.some((fragment) => !code.includes(fragment))) {

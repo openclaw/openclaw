@@ -21,13 +21,13 @@ import {
 } from "../state/secret-state-tables.js";
 import { hashSnapshotArtifact } from "./manifest.js";
 import { buildSnapshotValidator } from "./openclaw-snapshot-copy.js";
+import { assertFreshRestoreTarget, assertNoSqliteSidecarsSync } from "./restore-paths.js";
 import { SNAPSHOT_SQLITE_FILENAME } from "./snapshot-provider.js";
 
 export const GIT_BACKUP_MANIFEST = "manifest.json";
 export const GIT_BACKUP_SCHEMA = "schema.sql";
 export const GIT_BACKUP_TABLES = "tables";
 
-const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 const SAFE_TABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // Transcript FTS identities and watermarks rebuild together on Gateway startup;
 // retaining identities without the omitted FTS content would leave dangling rows.
@@ -400,7 +400,7 @@ function splitSchemaStatements(schema: string): string[] {
       continue;
     }
     if (quote) {
-      if ((quote === "]" && character === "]") || (quote !== "]" && character === quote)) {
+      if (character === quote) {
         if (quote !== "]" && next === quote) {
           index += 1;
         } else {
@@ -443,16 +443,11 @@ function splitSchemaStatements(schema: string): string[] {
 }
 
 function unquoteSqlIdentifier(value: string): string {
-  if (value.startsWith("'")) {
-    return value.slice(1, -1).replaceAll("''", "'");
+  const quote = value[0];
+  if (quote === "'" || quote === '"' || quote === "`") {
+    return value.slice(1, -1).replaceAll(quote + quote, quote);
   }
-  if (value.startsWith('"')) {
-    return value.slice(1, -1).replaceAll('""', '"');
-  }
-  if (value.startsWith("`")) {
-    return value.slice(1, -1).replaceAll("``", "`");
-  }
-  if (value.startsWith("[")) {
+  if (quote === "[") {
     return value.slice(1, -1);
   }
   return value;
@@ -486,38 +481,6 @@ function decodeSqliteValue(value: unknown): null | string | number | bigint | Bu
     return Buffer.from(record.$hex, "hex");
   }
   throw new Error("Git backup row contains an invalid encoded object.");
-}
-
-async function assertFreshRestoreTarget(targetPath: string): Promise<void> {
-  for (const candidate of [
-    targetPath,
-    ...SQLITE_SIDECAR_SUFFIXES.map((suffix) => `${targetPath}${suffix}`),
-  ]) {
-    try {
-      await fs.lstat(candidate);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-    throw new Error(`Fresh SQLite restore path already exists: ${candidate}`);
-  }
-}
-
-function assertNoSqliteSidecarsSync(targetPath: string): void {
-  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-    const sidecarPath = `${targetPath}${suffix}`;
-    try {
-      fsSync.lstatSync(sidecarPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-    throw new Error(`Fresh SQLite restore path already exists: ${sidecarPath}`);
-  }
 }
 
 function convergeRestoredSchema(database: DatabaseSync, identity: GitBackupIdentity): void {
@@ -723,7 +686,9 @@ export async function restoreGitBackupDirectory(params: {
         }
       },
       afterPublish: (guard) => {
-        guard.assertTargetMatchesExpectedContent(() => assertNoSqliteSidecarsSync(targetPath));
+        guard.assertTargetMatchesExpectedContent(() =>
+          assertNoSqliteSidecarsSync(targetPath, "Fresh SQLite restore path already exists"),
+        );
       },
     });
     return {
@@ -731,8 +696,7 @@ export async function restoreGitBackupDirectory(params: {
       targetPath,
       tables,
       excludedTables: manifest.excludedTables,
-      // Older backups predate prefix redaction; absent means nothing was omitted.
-      excludedConfigStateKeyPrefixes: manifest.excludedConfigStateKeyPrefixes ?? [],
+      excludedConfigStateKeyPrefixes: manifest.excludedConfigStateKeyPrefixes,
     };
   } catch (error) {
     if (database.isOpen) {

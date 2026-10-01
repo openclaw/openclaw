@@ -134,16 +134,6 @@ class OpenClawMascot extends LitElement {
     this.syncPlayback();
   }
 
-  catchOnce(): void {
-    if (!this.isConnected || this.reducedMotion || currentThemeBranding().mascot === "none") {
-      return;
-    }
-    const time = currentSeconds();
-    this.animator.playCatch(time);
-    this.drawCurrentFrame(time);
-    this.syncPlayback();
-  }
-
   override render() {
     return currentThemeBranding().mascot === "none"
       ? html`<span class="openclaw-mascot--neutral">${neutralMark}</span>`

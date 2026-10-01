@@ -75,6 +75,7 @@ export function createCollectorLaunchCallbacks(params: {
     release?.();
   };
   let launchTerminationConfirmed = false;
+  let pendingLaunchTermination: string | undefined;
   let dispatchAttempted = false;
   const startOnce = async () => {
     await runWithGatewayIndependentRootWorkContinuation(async () => {
@@ -118,14 +119,9 @@ export function createCollectorLaunchCallbacks(params: {
           throw new Error("collector registry row could not transition from queued to running");
         }
       } catch (error) {
-        await terminateAcceptedCollectorRun({
-          childSessionKey,
-          gatewayRunId,
-          ...provisionalSessionIdentity,
-          isCurrent: canCleanupCreatedSession,
-          ...(callCleanupGateway ? { callGateway: callCleanupGateway } : {}),
-        });
-        launchTerminationConfirmed = true;
+        // Publication temporarily blocks cleanup authority. Settle rollback after
+        // that barrier so a paused owner cannot count as confirmed termination.
+        pendingLaunchTermination = gatewayRunId;
         throw error;
       }
       await params.emitSpawnLifecycleHooks(gatewayRunId);
@@ -188,6 +184,16 @@ export function createCollectorLaunchCallbacks(params: {
         publication = registrationScope?.waitForRetirementPublication()
       ) {
         await publication;
+      }
+      if (pendingLaunchTermination && !launchTerminationConfirmed) {
+        await terminateAcceptedCollectorRun({
+          childSessionKey,
+          gatewayRunId: pendingLaunchTermination,
+          ...provisionalSessionIdentity,
+          isCurrent: canCleanupCreatedSession,
+          ...(callCleanupGateway ? { callGateway: callCleanupGateway } : {}),
+        });
+        launchTerminationConfirmed = true;
       }
       const launchError = summarizeSpawnError(error);
       const settleFailure = async () => {

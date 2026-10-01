@@ -68,14 +68,14 @@ export type RedactionMessage = {
   }[];
 };
 
-function stringBoundaries(text: string, token: ScalarToken): Map<number, number> {
+function stringBoundaries(text: string, start: number, end: number): Map<number, number> {
   const boundaries = new Map<number, number>();
   let decoded = 0;
-  for (let offset = token.start + 1; offset < token.end - 1; decoded += 1) {
+  for (let offset = start; offset < end; decoded += 1) {
     boundaries.set(offset, decoded);
     offset += text[offset] === "\\" ? (text[offset + 1] === "u" ? 6 : 2) : 1;
   }
-  boundaries.set(token.end - 1, decoded);
+  boundaries.set(end, decoded);
   return boundaries;
 }
 
@@ -83,7 +83,7 @@ function decodedBoundary(text: string, token: ScalarToken, offset: number): numb
   if (!token.escaped) {
     return offset - token.start - 1;
   }
-  token.boundaries ??= stringBoundaries(text, token);
+  token.boundaries ??= stringBoundaries(text, token.start + 1, token.end - 1);
   return token.boundaries.get(offset);
 }
 
@@ -92,7 +92,7 @@ function encodedBoundary(text: string, token: ScalarToken, offset: number): numb
     return token.start + 1 + offset;
   }
   if (!token.encodedBoundaries) {
-    token.boundaries ??= stringBoundaries(text, token);
+    token.boundaries ??= stringBoundaries(text, token.start + 1, token.end - 1);
     token.encodedBoundaries = [];
     for (const [encoded, decoded] of token.boundaries) {
       token.encodedBoundaries[decoded] = encoded;
@@ -241,14 +241,7 @@ function currentDecodedBoundary(
     }
     let boundaries = replacements.get(edit.replacement);
     if (!boundaries) {
-      boundaries = new Map();
-      let decoded = 0;
-      for (let encoded = 0; encoded < edit.replacement.length; decoded += 1) {
-        boundaries.set(encoded, decoded);
-        encoded +=
-          edit.replacement[encoded] === "\\" ? (edit.replacement[encoded + 1] === "u" ? 6 : 2) : 1;
-      }
-      boundaries.set(edit.replacement.length, decoded);
+      boundaries = stringBoundaries(edit.replacement, 0, edit.replacement.length);
       replacements.set(edit.replacement, boundaries);
     }
     const decoded = boundaries.get(within);

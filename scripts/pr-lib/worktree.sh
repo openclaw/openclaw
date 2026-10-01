@@ -285,9 +285,26 @@ fetch_pr_head() {
   before_identity=$(printf '%s\n' "$before" | jq -cS '{number,url,baseRepository,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
   refspec="$expected_sha"
   [ -z "$destination" ] || refspec="+$expected_sha:$destination"
-  # GitHub's pull/head projection can lag live PR metadata and the branch.
-  # Fetch immutable source bytes without overwriting the operation's main checkpoint.
-  fetch_canonical_ref "$refspec" --no-write-fetch-head || return 1
+  local reused=false local_ref="" visibility_status=0
+  if [ -n "$destination" ]; then
+    pr_git config --get-regexp '^(fetch|transfer)\.hiderefs$' >/dev/null 2>&1 || visibility_status=$?
+    if [ "$visibility_status" -eq 1 ]; then
+      local_ref=$(GIT_NO_LAZY_FETCH=1 pr_git --no-lazy-fetch for-each-ref \
+        --format='%(refname) %(objectname) %(objecttype) %(symref)' "$destination" 2>/dev/null) || local_ref=""
+      if [ "$local_ref" = "$destination $expected_sha commit " ]; then
+        # A dangling commit can need objects that fetch repairs. Reuse only the
+        # already-bound ref, retaining Git's checked-out/rebasing branch refusal.
+        GIT_NO_LAZY_FETCH=1 pr_git branch --force --no-track \
+          "${destination#refs/heads/}" "$expected_sha" || return 1
+        reused=true
+      fi
+    fi
+  fi
+  if [ "$reused" = false ]; then
+    # GitHub's pull/head projection can lag live PR metadata and the branch.
+    # Preserve canonical filtering and errors when source acquisition is needed.
+    fetch_canonical_ref "$refspec" --no-write-fetch-head || return 1
+  fi
   fetched_sha=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "${destination:-$expected_sha}^{commit}") || return 1
   if [ "$fetched_sha" != "$expected_sha" ]; then
     echo "PR head changed while fetching it (expected $expected_sha, fetched $fetched_sha)." >&2
@@ -331,7 +348,7 @@ provision_pr_worktree() {
 enter_worktree() {
   # OR-list callers disable errexit throughout this function; guard required steps explicitly.
   local pr="$1"
-  local reset_to_main="${2:-false}"
+  local reset_to_main="${2:-false}" existing_only="${3:-false}"
   local invoke_cwd
   invoke_cwd="$PWD"
   local root
@@ -343,8 +360,11 @@ enter_worktree() {
 
   cd "$root" || return 1
   ensure_gh_api_auth || { PR_MAIN_SHA=""; return 1; }
-  # Fetch can launch helpers and mutate Git state even when it fails; leave validation first.
-  mark_pr_operation_side_effects_started || return 1
+  # Existing-only entry is validation. Fetch/transition-capable entry retains
+  # the normal sticky ownership contract before any possible mutation.
+  if [ "$existing_only" != true ]; then
+    mark_pr_operation_side_effects_started || return 1
+  fi
 
   local dir="$root/.worktrees/pr-$pr"
   local resolved_parent resolved_dir state registration initialized_sha=""
@@ -354,6 +374,10 @@ enter_worktree() {
 
   if [ "$registration" != registered ] ||
     ! printf '%s\n' "$state" | jq -e '.present' >/dev/null; then
+    if [ "$existing_only" = true ]; then
+      echo "Publisher resume requires the retained registered PR worktree; no checkout was created." >&2
+      return 1
+    fi
     if [ "$registration" = registered ] ||
       printf '%s\n' "$state" | jq -e '.present or .admin != ""' >/dev/null; then
       echo "Removing exact stale PR worktree .worktrees/pr-$pr"
@@ -389,6 +413,10 @@ enter_worktree() {
     echo "Refusing scripts/pr operation for PR #$pr: expected worktree $resolved_dir, Git resolved ${actual_toplevel:-no repository}; scripts/pr refuses to mutate the shared canonical checkout." >&2
     return 1
   fi
+
+  # Resume consumes retained publication authority only. It must not provision,
+  # refresh main, complete a review transition, or change the prepared checkout.
+  [ "$existing_only" != true ] || return 0
 
   [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
   recover_review_transition "$pr" || return 1

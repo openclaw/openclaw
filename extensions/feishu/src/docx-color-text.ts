@@ -1,5 +1,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { assertFeishuApiSuccess } from "./api-response.js";
 
 // Feishu uses the same values for these foreground and background colors.
 const COLORS: Record<string, number> = {
@@ -97,9 +98,7 @@ export async function updateColorText(
     data: { update_text_elements: { elements } },
   });
 
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
 
   return {
     success: true,

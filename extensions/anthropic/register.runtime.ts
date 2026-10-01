@@ -14,7 +14,6 @@ import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-ent
 import {
   buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
-  type ModelCompatConfig,
   modelCostsEqual,
   type ProviderPlugin,
   requiresClaudeMandatoryAdaptiveThinking,
@@ -22,12 +21,14 @@ import {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { isAnthropicOAuthApiKey } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
@@ -55,7 +56,6 @@ import {
 } from "./session-catalog-registration.js";
 import {
   createAnthropicClaudeCodeIdentityWrapper,
-  isAnthropicOAuthApiKey,
   wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
@@ -261,7 +261,7 @@ function isAnthropicUnreleasedGenerationModel(modelId: string): boolean {
  * shaping follows without teaching the shared contracts about unknown ids.
  */
 function resolveAnthropicUnreleasedCanonicalModelId(modelId: string): string {
-  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5-5";
+  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5-5" : "claude-opus-5-5";
 }
 
 // Dynamic rows use the manifest as the provider-owned offline contract when a lifecycle registry
@@ -291,15 +291,6 @@ function resolveAnthropicManifestModel(modelId: string): ProviderRuntimeModel | 
   return anthropicManifestModelIndex.get(modelId);
 }
 
-function resolveAnthropicManifestCompat(
-  provider: string,
-  modelId: string,
-): ModelCompatConfig | undefined {
-  return normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID
-    ? resolveAnthropicManifestModel(modelId)?.compat
-    : undefined;
-}
-
 function buildAnthropicForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
@@ -324,7 +315,9 @@ function buildAnthropicForwardCompatModel(
     | Pick<ProviderRuntimeModel, "compat">
     | null
     | undefined;
-  const compat = catalogModel?.compat ?? resolveAnthropicManifestCompat(provider, trimmedModelId);
+  const compat =
+    catalogModel?.compat ??
+    (provider === PROVIDER_ID ? resolveAnthropicManifestModel(trimmedModelId)?.compat : undefined);
   return {
     id: trimmedModelId,
     name: trimmedModelId,
@@ -411,31 +404,19 @@ function hasConfiguredModelOverride(
   }
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
-    if (normalizeLowercaseStringOrEmpty(providerId) !== normalizedProvider) {
-      continue;
-    }
-    if (!Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const model of providerConfig.models) {
-      if (
-        normalizeLowercaseStringOrEmpty(typeof model?.id === "string" ? model.id : "") !==
-        normalizedModelId
-      ) {
-        continue;
-      }
-      if (
-        override === "cost"
-          ? model?.cost !== undefined
-          : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
-            (typeof model?.contextWindow === "number" && model.contextWindow > 0)
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return Object.entries(providers).some(
+    ([providerId, providerConfig]) =>
+      normalizeLowercaseStringOrEmpty(providerId) === normalizedProvider &&
+      Array.isArray(providerConfig?.models) &&
+      providerConfig.models.some(
+        (model) =>
+          normalizeLowercaseStringOrEmpty(model?.id) === normalizedModelId &&
+          (override === "cost"
+            ? model?.cost !== undefined
+            : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
+              (typeof model?.contextWindow === "number" && model.contextWindow > 0)),
+      ),
+  );
 }
 
 function matchesAnthropicModernModel(modelId: string): boolean {
@@ -464,17 +445,14 @@ function normalizeAnthropicResolvedModel(
       patch.input = ["text", "image"];
     }
     const sidePx = imageRefs.some((id) => supportsClaudeNativeXhighEffort({ id })) ? 2576 : 1568;
-    const mediaInput = {
+    patch.mediaInput = {
+      ...model.mediaInput,
       image: {
         maxSidePx: sidePx,
         preferredSidePx: sidePx,
         tokenMode: "provider" as const,
+        ...model.mediaInput?.image,
       },
-    };
-    patch.mediaInput = {
-      ...mediaInput,
-      ...model.mediaInput,
-      image: { ...mediaInput.image, ...model.mediaInput?.image },
     };
   }
   // Catalog defaults must not raise an operator-configured output cap.
@@ -489,15 +467,18 @@ function normalizeAnthropicResolvedModel(
     const current = model.thinkingLevelMap;
     const preview = isAnthropicMythosPreviewModel(contractModelId);
     const mandatory = requiresClaudeMandatoryAdaptiveThinking({ id: contractModelId });
+    const remapsMinimal =
+      mandatory || resolveClaudeSonnet55ModelIdentity({ id: contractModelId }) !== undefined;
     if (
       current?.max === undefined ||
-      (!preview && (current?.xhigh === undefined || (mandatory && current?.minimal === undefined)))
+      (!preview &&
+        (current?.xhigh === undefined || (remapsMinimal && current?.minimal === undefined)))
     ) {
       patch.thinkingLevelMap = {
         ...(preview
           ? { max: "max" as const }
           : {
-              ...(mandatory ? { minimal: "low" as const } : {}),
+              ...(remapsMinimal ? { minimal: "low" as const } : {}),
               xhigh:
                 mandatory || supportsClaudeNativeXhighEffort({ id: contractModelId })
                   ? ("xhigh" as const)

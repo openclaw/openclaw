@@ -69,7 +69,7 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
       }
       let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
       try {
-        const personalSelection = preparePersonalModelSelection(
+        const personalSelection = await preparePersonalModelSelection(
           { client, context, signal },
           request.model,
         );

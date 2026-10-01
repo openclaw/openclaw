@@ -19,12 +19,10 @@ import type { registerQueuedRegistrationClaimCases } from "./subagent-registry-q
 export function registerQueuedRegistrationAdmissionCases(
   params: Parameters<typeof registerQueuedRegistrationClaimCases>[0],
 ) {
-  const { fixture, createTask, makeTask } = params;
+  const { fixture } = params;
   it("closes the composed queued collector under suspension after its parent releases", async () => {
     const { createCollectorLaunchCallbacks } = await import("../spawn/subagent-spawn-collector.js");
     const f = fixture();
-    const task = makeTask();
-    createTask.mockReturnValue(task);
     const groupId = "composed-suspended-collector";
     const lifecycleOwner = {};
     expect(
@@ -37,7 +35,6 @@ export function registerQueuedRegistrationAdmissionCases(
     await registration;
     const entry = f.runs.get(f.registration.runId)!;
     const registeredSnapshot = structuredClone(entry);
-    const taskSnapshot = structuredClone(task);
     const settle = vi.spyOn(f.manager, "settleFailedQueuedSubagentLaunch");
     const launch = vi.fn(async () => {
       throw new Error("removed collector dispatched");
@@ -100,9 +97,6 @@ export function registerQueuedRegistrationAdmissionCases(
       expect(closed).toBe(true);
       expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
       expect(entry).toEqual(registeredSnapshot);
-      expect(task).toEqual(taskSnapshot);
-      expect(createTask).toHaveBeenCalledOnce();
-      expect(vi.mocked(params.finalizer())).not.toHaveBeenCalled();
       expect(settle).not.toHaveBeenCalled();
       expect(cleanup).not.toHaveBeenCalled();
       expect(rollback).not.toHaveBeenCalled();

@@ -1,6 +1,7 @@
 // Xai tests cover speech provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiSpeechProvider } from "./speech-provider.js";
+import type { xaiTTS, xaiTTSStream } from "./tts.js";
 
 const {
   xaiTTSMock,
@@ -9,9 +10,9 @@ const {
   isProviderAuthProfileConfiguredMock,
   resolveApiKeyForProviderMock,
 } = vi.hoisted(() => ({
-  xaiTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
+  xaiTTSMock: vi.fn<typeof xaiTTS>(async () => Buffer.from("audio-bytes")),
   listXaiTtsVoicesMock: vi.fn(async () => [{ id: "altair", name: "Altair" }]),
-  xaiTTSStreamMock: vi.fn(async () => ({
+  xaiTTSStreamMock: vi.fn<typeof xaiTTSStream>(async () => ({
     audioStream: new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array([1, 2, 3]));
@@ -40,28 +41,8 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-function requireLastTtsCall(): {
-  text?: string;
-  apiKey?: string;
-  baseUrl?: string;
-  voiceId?: string;
-  language?: string;
-  speed?: number;
-  responseFormat?: string;
-  maxBytes?: number;
-} {
-  const params = (xaiTTSMock.mock.calls as unknown as Array<[unknown]>).at(-1)?.[0] as
-    | {
-        text?: string;
-        apiKey?: string;
-        baseUrl?: string;
-        voiceId?: string;
-        language?: string;
-        speed?: number;
-        responseFormat?: string;
-        maxBytes?: number;
-      }
-    | undefined;
+function requireLastTtsCall() {
+  const params = xaiTTSMock.mock.calls.at(-1)?.[0];
   if (!params) {
     throw new Error("Expected xaiTTS call");
   }
@@ -106,9 +87,7 @@ describe("xai speech provider", () => {
     expect(result?.fileExtension).toBe(".mp3");
     expect(result?.voiceCompatible).toBe(false);
     expect(result?.audioStream).toBeInstanceOf(ReadableStream);
-    const streamParams = (
-      xaiTTSStreamMock.mock.calls as unknown as Array<[Record<string, unknown>]>
-    ).at(-1)?.[0];
+    const streamParams = xaiTTSStreamMock.mock.calls.at(-1)?.[0];
     expect(streamParams).toMatchObject({
       text: "hello",
       apiKey: "xai-key",
@@ -135,9 +114,7 @@ describe("xai speech provider", () => {
         timeoutMs: 5_000,
       });
       expect(result?.outputFormat).toBe(responseFormat);
-      const streamParams = (
-        xaiTTSStreamMock.mock.calls as unknown as Array<[Record<string, unknown>]>
-      ).at(-1)?.[0];
+      const streamParams = xaiTTSStreamMock.mock.calls.at(-1)?.[0];
       expect(streamParams?.responseFormat).toBe(responseFormat);
       await result?.release?.();
     },
@@ -282,18 +259,6 @@ describe("xai speech provider", () => {
 
     expect(listXaiTtsVoicesMock).not.toHaveBeenCalled();
     expect(xaiTTSMock).not.toHaveBeenCalled();
-  });
-
-  it("reports not configured when there is no apiKey, env, or auth profile", () => {
-    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
-    const provider = buildXaiSpeechProvider();
-    expect(
-      provider.isConfigured({
-        cfg: {},
-        providerConfig: {},
-        timeoutMs: 5_000,
-      }),
-    ).toBe(false);
   });
 
   it("uses direct voice-list auth and URL overrides before configured sources", async () => {

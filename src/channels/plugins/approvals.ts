@@ -1,8 +1,3 @@
-/**
- * Channel approval capability adapters.
- *
- * Projects plugin approval metadata into runtime approval delivery adapters.
- */
 import type { ChannelApprovalAdapter, ChannelApprovalCapability } from "./types.adapters.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 

@@ -10,24 +10,11 @@ import {
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
-import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import { resolveControlUiAuthCandidates, type ControlUiAuthSource } from "./control-ui-auth.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
-type ApplicationConfigAuthSource = {
-  hello?: { auth?: { deviceToken?: string | null } | null } | null;
-  settings?: { token?: string | null } | null;
-  password?: string | null;
-};
-
 type ApplicationConfig = {
-  assistantIdentity: {
-    agentId: string | null;
-    name: string;
-    avatar: string | null;
-    avatarSource: string | null;
-    avatarStatus: "none" | "local" | "remote" | "data" | null;
-    avatarReason: string | null;
-  };
+  assistantIdentity: ReturnType<typeof normalizeAssistantIdentity>;
   serverVersion: string | null;
   serverBuildId?: string | null;
   devGitBranch: string | null;
@@ -39,6 +26,7 @@ type ApplicationConfig = {
   /** Null until the serving Gateway publishes its bootstrap policy. */
   newSessionModelDefaults?: "last-used" | "configured" | null;
   terminalEnabled: boolean;
+  uploadsEnabled: boolean;
   cliAgentsEnabled?: boolean;
   pluginAssetsRequireAuth: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
@@ -73,6 +61,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   communityInvite: false,
   newSessionModelDefaults: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
+  uploadsEnabled: true,
   cliAgentsEnabled: false,
   pluginAssetsRequireAuth: true,
   pluginFrameGrants: [],
@@ -120,6 +109,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     communityInvite: parsed.communityInvite === true,
     newSessionModelDefaults: parsed.newSessionModelDefaults ?? "last-used",
     terminalEnabled: Boolean(parsed.terminalEnabled),
+    uploadsEnabled: parsed.uploadsEnabled !== false,
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
     pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,
     pluginFrameGrants: (parsed.pluginFrameGrants ?? [])
@@ -178,7 +168,7 @@ async function loadApplicationConfig(params: {
 
 export function createApplicationConfigCapability(params: {
   resourceBasePath: string;
-  getAuth?: () => ApplicationConfigAuthSource;
+  getAuth?: () => ControlUiAuthSource;
 }): ApplicationConfigCapability {
   let current = DEFAULT_APPLICATION_CONFIG;
   let authVersion = 0;

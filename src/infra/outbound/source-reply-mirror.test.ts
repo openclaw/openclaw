@@ -134,6 +134,32 @@ describe("reconcileTerminalSourceReplyDelivery", () => {
 });
 
 describe("isDeliveredCurrentSourceReply", () => {
+  it("counts a reply that starts a thread on the current inbound message", () => {
+    expect(
+      isDeliveredCurrentSourceReply({
+        action: "reply",
+        channel: "slack",
+        actionParams: { target: "C123", messageId: "1" },
+        cfg: {},
+        sessionKey: "agent:main:slack:channel:C123",
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "C123",
+          currentMessageId: "1",
+        },
+        deliveredPayload: {
+          ok: true,
+          messageId: "2",
+          channelId: "C123",
+          receipt: {
+            threadId: "1",
+            parts: [{ platformMessageId: "2", threadId: "1", kind: "text", index: 0 }],
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("matches a canonical Google Chat thread receipt to its inbound source thread", () => {
     const params = {
       action: "send",
@@ -187,67 +213,45 @@ describe("isDeliveredCurrentSourceReply", () => {
     {
       name: "current thread root",
       receipt: { replyToId: "om_root" },
-      toolContext: {
-        currentChannelProvider: "testchat" as const,
-        currentChannelId: "oc_group",
-        currentThreadTs: "om_root",
-        currentMessageId: "om_inbound",
-      },
       expected: true,
     },
     {
       name: "current inbound message",
       receipt: { replyToId: "om_inbound" },
-      toolContext: {
-        currentChannelProvider: "testchat" as const,
-        currentChannelId: "oc_group",
-        currentThreadTs: "om_root",
-        currentMessageId: "om_inbound",
-      },
       expected: true,
     },
     {
       name: "another message",
       receipt: { replyToId: "om_other" },
-      toolContext: {
-        currentChannelProvider: "testchat" as const,
-        currentChannelId: "oc_group",
-        currentThreadTs: "om_root",
-        currentMessageId: "om_inbound",
-      },
       expected: false,
     },
     {
       name: "conflicting native thread",
       receipt: { threadId: "other-thread", replyToId: "om_inbound" },
-      toolContext: {
-        currentChannelProvider: "testchat" as const,
-        currentChannelId: "oc_group",
-        currentThreadTs: "om_root",
-        currentMessageId: "om_inbound",
-      },
       expected: false,
     },
-  ])(
-    "uses a canonical thread-reply receipt for the $name",
-    ({ receipt, toolContext, expected }) => {
-      expect(
-        isDeliveredCurrentSourceReply({
-          action: "thread-reply",
-          channel: "testchat",
-          actionParams: {
-            to: "oc_group",
-            messageId: "om_inbound",
-            message: "visible thread reply",
-          },
-          cfg: {},
-          sessionKey: "agent:main:testchat:group:oc_group",
-          toolContext,
-          deliveredPayload: { receipt },
-        }),
-      ).toBe(expected);
-    },
-  );
+  ])("uses a canonical thread-reply receipt for the $name", ({ receipt, expected }) => {
+    expect(
+      isDeliveredCurrentSourceReply({
+        action: "thread-reply",
+        channel: "testchat",
+        actionParams: {
+          to: "oc_group",
+          messageId: "om_inbound",
+          message: "visible thread reply",
+        },
+        cfg: {},
+        sessionKey: "agent:main:testchat:group:oc_group",
+        toolContext: {
+          currentChannelProvider: "testchat",
+          currentChannelId: "oc_group",
+          currentThreadTs: "om_root",
+          currentMessageId: "om_inbound",
+        },
+        deliveredPayload: { receipt },
+      }),
+    ).toBe(expected);
+  });
 
   it("fails closed when a thread-reply has neither owner proof nor a canonical receipt", () => {
     expect(
@@ -295,6 +299,193 @@ describe("mirrorDeliveredSourceReplyToTranscript", () => {
       expect(transcriptMocks.append).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("telegram topic source replies (regression for #157277)", () => {
+  const telegramTopicToolContext = {
+    currentChannelProvider: "telegram",
+    currentChannelId: "telegram:-100123:topic:77",
+    currentThreadTs: "77",
+    currentSourceTurnId: "source-turn-1",
+  };
+  const telegramTopicParams = {
+    action: "send",
+    channel: "telegram",
+    actionParams: { target: "telegram:-100123:topic:77", message: "topic reply" },
+    cfg: {},
+    sessionKey: "agent:main:telegram:group:-100123:topic:77",
+    toolContext: telegramTopicToolContext,
+  };
+  const telegramTopicDelivery = {
+    messageId: "1",
+    chatId: "-100123",
+    receipt: { platformMessageIds: ["1"], parts: [], threadId: "77", sentAt: 1 },
+  };
+
+  function installTelegramTopicPlugin() {
+    const parseTargetIdentity = (raw: string) => {
+      const body = raw.replace(/^telegram:/i, "");
+      const separator = ":topic:";
+      const index = body.indexOf(separator);
+      return {
+        chatId: index === -1 ? body : body.slice(0, index),
+        threadId: index === -1 ? undefined : body.slice(index + separator.length),
+      };
+    };
+    const identitiesMatch = (target: string, current: unknown) => {
+      if (typeof current !== "string") {
+        return false;
+      }
+      const delivered = parseTargetIdentity(target);
+      const source = parseTargetIdentity(current);
+      return delivered.chatId === source.chatId && delivered.threadId === source.threadId;
+    };
+    channelPluginMocks.getChannelPlugin.mockReturnValue({
+      threading: {
+        matchesToolContextTarget: ({
+          target,
+          toolContext,
+        }: {
+          target: string;
+          toolContext: { currentMessagingTarget?: string; currentChannelId?: string };
+        }) =>
+          [toolContext.currentMessagingTarget, toolContext.currentChannelId].some((current) =>
+            identitiesMatch(target, current),
+          ),
+        resolveCurrentChannelId: ({ to, threadId }: { to: string; threadId?: string }) => {
+          if (threadId == null) {
+            return to;
+          }
+          return parseTargetIdentity(to).threadId != null ? to : `${to}:topic:${threadId}`;
+        },
+      },
+    });
+  }
+
+  beforeEach(() => {
+    installTelegramTopicPlugin();
+    receiptMocks.cancel.mockClear();
+    receiptMocks.complete.mockClear();
+    transcriptMocks.append.mockClear();
+  });
+
+  it("recognizes a topic send reported with a bare chat id as delivered to the current source", () => {
+    expect(
+      isDeliveredCurrentSourceReply({
+        ...telegramTopicParams,
+        deliveredPayload: telegramTopicDelivery,
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "another chat",
+      deliveredPayload: {
+        messageId: "2",
+        chatId: "-100999",
+        receipt: { platformMessageIds: ["2"], parts: [], threadId: "77", sentAt: 1 },
+      },
+    },
+    {
+      name: "another topic",
+      deliveredPayload: {
+        messageId: "3",
+        chatId: "-100123",
+        receipt: { platformMessageIds: ["3"], parts: [], threadId: "78", sentAt: 1 },
+      },
+    },
+    {
+      name: "a contradictory multipart receipt",
+      deliveredPayload: {
+        messageId: "4",
+        chatId: "-100123",
+        receipt: {
+          platformMessageIds: ["4", "5"],
+          threadId: "77",
+          parts: [
+            { platformMessageId: "4", threadId: "77", kind: "text", index: 0 },
+            { platformMessageId: "5", threadId: "78", kind: "text", index: 1 },
+          ],
+          sentAt: 1,
+        },
+      },
+    },
+  ])("still fails closed for $name", ({ deliveredPayload }) => {
+    expect(isDeliveredCurrentSourceReply({ ...telegramTopicParams, deliveredPayload })).toBe(false);
+  });
+
+  it("mirrors the delivered topic reply into the transcript", async () => {
+    transcriptMocks.append.mockClear();
+    const mirrored = await mirrorDeliveredSourceReplyToTranscript({
+      ...telegramTopicParams,
+      deliveredPayload: telegramTopicDelivery,
+    });
+
+    expect(mirrored).toBe(true);
+    expect(transcriptMocks.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:group:-100123:topic:77",
+        text: "topic reply",
+      }),
+    );
+  });
+
+  it("settles the terminal receipt for a delivered topic reply", async () => {
+    const receipt = {
+      sessionId: "session-1",
+      sessionKey: "agent:main:telegram:group:-100123:topic:77",
+      sourceTurnId: "source-turn-1",
+      storePath: "/tmp/sessions.json",
+      toolCallId: "message-call-1",
+    };
+    const mirror = {
+      ...telegramTopicParams,
+      sessionId: "session-1",
+      sourceReplyFinal: true,
+      toolCallId: "message-call-1",
+    };
+
+    await expect(
+      reconcileTerminalSourceReplyDelivery({
+        deliveredPayload: telegramTopicDelivery,
+        mirror,
+        receipt,
+      }),
+    ).resolves.toBe("delivered");
+    expect(receiptMocks.complete).toHaveBeenCalledWith(receipt);
+    expect(receiptMocks.cancel).not.toHaveBeenCalled();
+  });
+
+  it("keeps the terminal receipt open when the topic send landed in another topic", async () => {
+    const receipt = {
+      sessionId: "session-1",
+      sessionKey: "agent:main:telegram:group:-100123:topic:77",
+      sourceTurnId: "source-turn-1",
+      storePath: "/tmp/sessions.json",
+      toolCallId: "message-call-1",
+    };
+    const mirror = {
+      ...telegramTopicParams,
+      sessionId: "session-1",
+      sourceReplyFinal: true,
+      toolCallId: "message-call-1",
+    };
+
+    await expect(
+      reconcileTerminalSourceReplyDelivery({
+        deliveredPayload: {
+          messageId: "6",
+          chatId: "-100123",
+          receipt: { platformMessageIds: ["6"], parts: [], threadId: "78", sentAt: 1 },
+        },
+        mirror,
+        receipt,
+      }),
+    ).resolves.toBe("not-source");
+    expect(receiptMocks.complete).not.toHaveBeenCalled();
+    expect(receiptMocks.cancel).not.toHaveBeenCalled();
+  });
 });
 
 describe("beginTerminalSourceReplyDelivery", () => {

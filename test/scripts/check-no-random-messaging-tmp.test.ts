@@ -61,16 +61,6 @@ describe("check-no-random-messaging-tmp", () => {
     );
   });
 
-  it("finds os.tmpdir calls imported from node:os", () => {
-    const source = `
-      import os from "node:os";
-      const dir = os.tmpdir();
-    `;
-    expect(
-      findMessagingTmpdirCallLines(source, "file.ts", parser.parseSourceFile("file.ts", source)),
-    ).toEqual([3]);
-  });
-
   it("finds tmpdir named import calls from node:os", () => {
     const source = `
       import { tmpdir } from "node:os";

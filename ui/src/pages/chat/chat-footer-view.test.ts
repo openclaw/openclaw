@@ -67,8 +67,10 @@ describe("chat Swarm progress", () => {
       const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
       const footer = requireElement(container, ".chat-footer", "footer");
       const scrollAnchor = footer.previousElementSibling;
+      const viewport = requireElement(container, ".chat-thread-viewport", "transcript viewport");
       expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
-      expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+      expect(scrollAnchor?.previousElementSibling).toBe(viewport);
+      expect(viewport.querySelector(':scope > .chat-thread[role="log"]')).not.toBeNull();
       expect(widget.closest(".chat-footer")).toBe(footer);
       expect(shell.closest(".chat-footer")).toBe(footer);
       const input = requireElement(shell, ".agent-chat__input", "composer input");
@@ -109,8 +111,10 @@ describe("inline approval card", () => {
     expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
     const footer = requireElement(container, ".chat-footer", "footer");
     const scrollAnchor = footer.previousElementSibling;
+    const viewport = requireElement(container, ".chat-thread-viewport", "transcript viewport");
     expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
-    expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(scrollAnchor?.previousElementSibling).toBe(viewport);
+    expect(viewport.querySelector(':scope > .chat-thread[role="log"]')).not.toBeNull();
     expect(inlineSurface.closest(".chat-footer")).toBe(footer);
     expect(shell.closest(".chat-footer")).toBe(footer);
     const input = requireElement(shell, ".agent-chat__input", "composer input");

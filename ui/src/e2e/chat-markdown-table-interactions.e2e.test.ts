@@ -12,7 +12,12 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
-import { readResponsiveTableGeometry } from "./chat-markdown-table-layout.test-support.ts";
+import {
+  auditMarkdownTable,
+  expectReadableAuditTable,
+  expectResponsiveTableGeometry,
+  readResponsiveTableGeometry,
+} from "./chat-markdown-table-layout.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
@@ -50,6 +55,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
 
   it("sizes desktop tables to content while preserving mobile layout and expanded headers", async () => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(server.baseUrl).origin,
+    });
     const page = await context.newPage();
     const rows = Array.from(
       { length: 24 },
@@ -75,7 +83,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
 
 | Service | Owner | Region | Status | Version | Deployment | Incidents | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Gateway | Platform operations | eu-west-1 | Healthy | 2026.9.5 | Complete | 0 | Configuration validated and all connected clients recovered successfully after the restart. |`,
+| Gateway | Platform operations | eu-west-1 | Healthy | 2026.9.5 | Complete | 0 | Configuration validated and all connected clients recovered successfully after the restart. |
+
+${auditMarkdownTable}`,
             },
           ],
           timestamp: Date.now(),
@@ -91,7 +101,6 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       const expand = shell.getByRole("button", { name: "Expand table" });
       await shell.waitFor({ state: "visible" });
       for (const width of [1920, 1440, 1280, 760, 390, 932]) {
-        const desktop = width > 932;
         await page.setViewportSize({ width, height: width === 932 ? 430 : 1000 });
         await page.locator(".chat-thread").evaluate((element) => {
           element.scrollTop = 0;
@@ -116,34 +125,13 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
           ),
         ).toBe(true);
         const geometry = await shell.evaluate(readResponsiveTableGeometry);
-        expect(geometry.withinPane).toBe(true);
-        expect(geometry.verticalOverflow).toBeLessThanOrEqual(1);
-        expect(geometry.topAligned).toBe(true);
-        expect(geometry.headerPainted).toBe(true);
-        expect(geometry.actionAboveTable).toBe(true);
-        expect(geometry.columnWidths[0]).toBeGreaterThan(geometry.columnWidths[1]!);
-        if (desktop) {
-          expect(geometry.width).toBeCloseTo(geometry.prose, 0);
-          expect(
-            geometry.compactWidths.every((value) => Math.abs(value - geometry.prose) <= 1),
-          ).toBe(true);
-          expect(geometry.denseWidth).toBeGreaterThan(geometry.prose);
-          expect(geometry.denseOverflow).toBeLessThanOrEqual(1);
-          expect(geometry.controlHeight).toBe(32);
-          expect(geometry.visibleExpandLabel).toBe(false);
-          expect(geometry.controlsGap).toBe(0);
-          expect(geometry.bottomGap).toBeGreaterThanOrEqual(20);
-          expect(geometry.prose).toBeLessThanOrEqual(768);
-        } else {
-          expect(geometry.controlHeight).toBe(40);
-          expect(geometry.visibleExpandLabel).toBe(true);
-          expect(geometry.controlsGap).toBe(4);
-          expect(geometry.denseOverflow).toBeGreaterThan(0);
-          if (width === 932) {
-            expect(geometry.width).toBeCloseTo(900, 0);
-          } else {
-            expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
-          }
+        expectResponsiveTableGeometry(geometry, width);
+        if (width === 390) {
+          await expectReadableAuditTable(
+            page,
+            message.locator(".markdown-table").nth(4),
+            captureProof ? artifactDir : undefined,
+          );
         }
         if (captureProof) {
           await page.screenshot({ path: path.join(artifactDir, `wrap-${width}.png`) });

@@ -5,12 +5,12 @@ import type { SkillCommandSpec } from "../skills/types.js";
 import { getChatCommands } from "./commands-registry.data.js";
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
 
-/** Builds dynamic command definitions exported by installed skills. */
-function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatCommandDefinition[] {
-  if (!skillCommands || skillCommands.length === 0) {
-    return [];
-  }
-  return skillCommands.map((spec) => {
+/** Lists built-in commands plus optional skill-provided commands. */
+export function listChatCommands(params?: {
+  skillCommands?: SkillCommandSpec[];
+}): ChatCommandDefinition[] {
+  const commands = [...getChatCommands()];
+  for (const spec of params?.skillCommands ?? []) {
     const command: ChatCommandDefinition = {
       key: `skill:${spec.skillName}`,
       nativeName: spec.name,
@@ -24,19 +24,9 @@ function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatC
     if (spec.descriptionLocalizations) {
       command.descriptionLocalizations = spec.descriptionLocalizations;
     }
-    return command;
-  });
-}
-
-/** Lists built-in commands plus optional skill-provided commands. */
-export function listChatCommands(params?: {
-  skillCommands?: SkillCommandSpec[];
-}): ChatCommandDefinition[] {
-  const commands = getChatCommands();
-  if (!params?.skillCommands?.length) {
-    return [...commands];
+    commands.push(command);
   }
-  return [...commands, ...buildSkillCommandDefinitions(params.skillCommands)];
+  return commands;
 }
 
 /** Applies config feature flags to command keys that can be operator-disabled. */

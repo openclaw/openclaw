@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ARTIFACT_CACHE_VERSION } from "../../scripts/lib/build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -480,8 +480,12 @@ it("invalidates an indirect dependency symlink when its final target changes", a
   }
 });
 
-it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async () => {
-  const f = fixture();
+it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async ({
+  signal,
+  onTestFinished,
+}) => {
+  const testRoots = useAutoCleanupTempDirTracker(onTestFinished);
+  const f = fixture(testRoots.make("compiler-input-snapshot-preparation-"));
   f.write("fanout/a/deeper/input.ts", "export {};\n");
   f.write("fanout/b/deeper/input.ts", "export {};\n");
   f.write(".artifacts/ignored/input.ts", "export {};\n");
@@ -513,20 +517,30 @@ it("preloads sibling subtrees while the ordered visitor waits on a deeper direct
   });
   const snapshot = f.snapshot();
   const preparation = snapshot.prepare();
+  let cleanup: Promise<void> | undefined;
+  const finishPreparation = () =>
+    (cleanup ??= (async () => {
+      release.resolve();
+      try {
+        await preparation;
+      } finally {
+        reader.mockRestore();
+      }
+    })());
+  // Vitest runs these hooks in reverse order, after afterEach: join before removing inputs.
+  onTestFinished(finishPreparation);
   try {
-    await withTestTimeout(
-      Promise.all([heldStarted.promise, siblingStarted.promise]),
-      5_000,
-      "preparation serialized the independent directory subtrees",
+    await withinTest(
+      awaitGateBeforeSettlement(
+        Promise.all([heldStarted.promise, siblingStarted.promise]),
+        preparation,
+        "preparation serialized the independent directory subtrees",
+      ),
+      signal,
     );
     expect(peak).toBeLessThanOrEqual(16);
   } finally {
-    release.resolve();
-    try {
-      await preparation;
-    } finally {
-      reader.mockRestore();
-    }
+    await finishPreparation();
   }
   expect(active).toBe(0);
   expect(observed.has(path.join(f.root, ".artifacts"))).toBe(false);

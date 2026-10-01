@@ -191,8 +191,8 @@ async function runShortTermDreamingPromotion(params: {
         detachNarratives,
         nowMs: sweepNowMs,
       });
-      degradedNarratives += phaseResult?.degradedPhases ?? 0;
-      pendingNarratives += phaseResult?.pendingNarratives ?? 0;
+      degradedNarratives += phaseResult.degradedPhases;
+      pendingNarratives += phaseResult.pendingNarratives;
     } catch (err) {
       failedWorkspaces += 1;
       params.logger.error(
@@ -301,12 +301,14 @@ async function runShortTermDreamingPromotion(params: {
         timezone: params.config.timezone,
         storage: params.config.storage ?? { mode: "separate", separateReports: false },
       });
-      // Generate dream diary narrative from promoted memories.
       if (applied.applied > 0) {
+        const promotions = applied.appliedCandidates
+          .map((candidate) => candidate.snippet)
+          .filter(Boolean);
         const data: NarrativePhaseData = {
           phase: "deep",
-          snippets: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
-          promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
+          snippets: promotions,
+          promotions,
           sourceEntryKeys: [...new Set(applied.appliedCandidates.map((c) => c.key))],
         };
         if (!params.subagent) {

@@ -574,7 +574,6 @@ export function readPersistedVapidKeyPairInDatabase(
 /** First committed keypair wins so concurrent gateway bootstraps share one signing identity. */
 export function insertVapidKeyPairIfAbsentInDatabase(params: {
   candidate: VapidKeyPair;
-  nowMs: number;
   database: OpenClawStateDatabase;
 }): VapidKeyPair {
   return updateConfigMachineState<VapidKeyPair>(

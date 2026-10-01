@@ -475,7 +475,6 @@ describe("Codex app-server dynamic tool build", () => {
       "tool_call",
       "tool_describe",
       "tool_search",
-      "tool_search_code",
       "web_search",
       "message",
       "heartbeat_respond",

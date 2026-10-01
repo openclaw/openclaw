@@ -90,22 +90,13 @@ export function resolveThinkingProfileForSession(
   };
 }
 
-function resolveThinkingLevelOptionsForSession(
-  session: ChatThinkingTarget | undefined,
-  defaults: ThinkingSessionDefaults,
-  catalog: readonly ModelCatalogEntry[] = [],
-): GatewayThinkingLevelOption[] {
-  return resolveThinkingProfileForSession(session, defaults, catalog)?.thinkingLevels ?? [];
-}
-
 export function resolveThinkingCommandArgOptionsForSession(
   session: ChatThinkingTarget | undefined,
   defaults?: SessionsListResult["defaults"],
   catalog: readonly ModelCatalogEntry[] = [],
 ): string[] {
-  const options = resolveThinkingLevelOptionsForSession(session, defaults, catalog).map((level) =>
-    normalizeThinkingOptionValue(level.id),
-  );
+  const levels = resolveThinkingProfileForSession(session, defaults, catalog)?.thinkingLevels ?? [];
+  const options = levels.map((level) => normalizeThinkingOptionValue(level.id));
   return options.length > 0
     ? ["default", ...new Set(options.filter((option) => option && option !== "default"))]
     : [];
@@ -137,7 +128,7 @@ export function resolveThinkingLevelInput(
     return normalized;
   }
   const rawKey = normalizeLowercaseStringOrEmpty(rawLevel);
-  return resolveThinkingLevelOptionsForSession(session, defaults, catalog)
+  return (resolveThinkingProfileForSession(session, defaults, catalog)?.thinkingLevels ?? [])
     .map((option) => ({
       id: normalizeThinkingOptionValue(option.id),
       label: normalizeLowercaseStringOrEmpty(option.label),

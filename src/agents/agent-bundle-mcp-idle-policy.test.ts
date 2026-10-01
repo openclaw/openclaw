@@ -1,5 +1,9 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 
 type RuntimeParams = Parameters<
@@ -16,13 +20,24 @@ function idleConfig(sessionIdleTtlMs?: number): OpenClawConfig {
   };
 }
 
-afterEach(() => vi.useRealTimers());
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+beforeEach(() => {
+  clock = createGatewaySchedulerClock(100_000);
+  scheduler = createTestGatewayScheduler(clock.clock);
+  vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+});
+afterEach(async () => {
+  await scheduler.stop();
+  vi.restoreAllMocks();
+});
 
 it.each([undefined, 0] as const)(
   "keeps session runtimes alive with TTL %s without scheduling idle maintenance",
   async (sessionIdleTtlMs) => {
-    vi.useFakeTimers();
-    const manager = createSessionMcpRuntimeManager();
+    const manager = createSessionMcpRuntimeManager({
+      scheduler,
+    });
     const params: RuntimeParams = {
       sessionId: "session-keep-alive",
       workspaceDir: "/workspace",
@@ -30,9 +45,9 @@ it.each([undefined, 0] as const)(
     };
     try {
       const runtime = await manager.getOrCreate(params);
-      await vi.advanceTimersByTimeAsync(86_400_000);
+      await clock.advanceBy(86_400_000);
       expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(scheduler.nextWakeAtMs).toBeNull();
     } finally {
       await manager.disposeAll();
     }
@@ -40,8 +55,9 @@ it.each([undefined, 0] as const)(
 );
 
 it("changes idle policy on reuse and reload without replacing the runtime", async () => {
-  vi.useFakeTimers();
-  const manager = createSessionMcpRuntimeManager();
+  const manager = createSessionMcpRuntimeManager({
+    scheduler,
+  });
   const params: RuntimeParams = {
     sessionId: "session-policy",
     workspaceDir: "/workspace",
@@ -51,28 +67,25 @@ it("changes idle policy on reuse and reload without replacing the runtime", asyn
     const runtime = await manager.getOrCreate(params);
     params.cfg = idleConfig(120_000);
     expect(await manager.getOrCreate(params)).toBe(runtime);
-    await vi.advanceTimersByTimeAsync(60_000);
+    await clock.advanceBy(60_000);
     expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
     await manager.reloadConfig({ cfg: idleConfig() });
     // A turn prepared before publication must not restore its former idle policy.
     expect(await manager.getOrCreate(params)).toBe(runtime);
-    expect(vi.getTimerCount()).toBe(0);
-    await vi.advanceTimersByTimeAsync(86_400_000);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+    await clock.advanceBy(86_400_000);
     expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
     await manager.reloadConfig({ cfg: idleConfig(1_000) });
-    await vi.advanceTimersByTimeAsync(60_000);
+    await clock.advanceBy(60_000);
     expect(manager.listRuntimeKeys()).toEqual([]);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(scheduler.nextWakeAtMs).toBeNull();
   } finally {
     await manager.disposeAll();
   }
 });
 
 it("sweeps admitted runtimes only with an opt-in idle timer and stops maintenance after disposal", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(100_000);
-  const now = vi.fn(() => Date.now());
-  const manager = createSessionMcpRuntimeManager({ now });
+  const manager = createSessionMcpRuntimeManager({ scheduler });
   const params: RuntimeParams = {
     sessionId: "session-idle-timer",
     workspaceDir: "/workspace",
@@ -81,18 +94,17 @@ it("sweeps admitted runtimes only with an opt-in idle timer and stops maintenanc
   try {
     await manager.getOrCreate(params);
     await manager.getOrCreate(params);
-    now.mockClear();
-    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 - 1);
+    expect(scheduler.nextWakeAtMs).toBe(160_000);
+    await clock.advanceBy(60_000);
     expect(manager.listSessionIds()).toEqual([params.sessionId]);
-    expect(now).toHaveBeenCalledTimes(9);
-    await vi.advanceTimersByTimeAsync(1);
+    await clock.advanceBy(540_000);
     expect(manager.listSessionIds()).toEqual([]);
-    expect(now).toHaveBeenCalledTimes(10);
+    expect(scheduler.nextWakeAtMs).toBeNull();
 
+    await manager.getOrCreate(params);
+    expect(scheduler.nextWakeAtMs).toBe(760_000);
     await manager.disposeAll();
-    now.mockClear();
-    await vi.advanceTimersByTimeAsync(60 * 1000);
-    expect(now).not.toHaveBeenCalled();
+    expect(scheduler.nextWakeAtMs).toBeNull();
   } finally {
     await manager.disposeAll();
   }

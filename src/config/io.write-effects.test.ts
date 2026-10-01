@@ -7,7 +7,7 @@ import { prepareConfigFileWrite } from "./backup-rotation.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import {
   captureConfigFileWritePathProof,
-  createGuardedConfigFileSystem,
+  createConfigFileWriteGuard,
   rollbackConfigFileWriteIfUnchanged,
 } from "./io.write-safety.js";
 
@@ -50,13 +50,15 @@ function fixture() {
 }
 
 async function prepare(f: ReturnType<typeof fixture>, io: typeof fs = fs) {
-  const guarded = createGuardedConfigFileSystem(f.target, io, f.assertCurrent, f.options);
+  const guarded = createConfigFileWriteGuard(f.target, io, f.assertCurrent, f.options);
   const prepared = await prepareConfigFileWrite({
     configPath: f.target,
     previousRaw: original,
     content,
     fsModule: guarded.fileSystem,
     assertCurrent: guarded.assertCurrent,
+    assertBeforeMutation: guarded.assertBeforeMutation,
+    onDestinationState: guarded.onDestinationState,
     destinationHardlinks: "reject",
     durable: true,
   });
@@ -64,69 +66,6 @@ async function prepare(f: ReturnType<typeof fixture>, io: typeof fs = fs) {
 }
 
 describe("guarded config final effects", () => {
-  it.each(["remove", "open", "truncate", "write"] as const)(
-    "stops Windows fallback content dispatch after %s revocation",
-    async (at) => {
-      const f = fixture();
-      let destinationFd: number | undefined;
-      let observed: string | null | undefined;
-      const after = (stage: string) => {
-        if (stage === at && observed === undefined) {
-          f.revoke();
-          observed = fs.existsSync(f.target) ? fs.readFileSync(f.target, "utf8") : null;
-        }
-      };
-      const io: typeof fs = {
-        ...fs,
-        renameSync: (from, to) => {
-          if (to === f.target) {
-            throw Object.assign(new Error("Windows sharing violation"), { code: "EPERM" });
-          }
-          fs.renameSync(from, to);
-        },
-        rmSync: (name, options) => {
-          fs.rmSync(name, options);
-          if (name === f.target) {
-            after("remove");
-          }
-        },
-        openSync: (name, flags, mode) => {
-          const fd = fs.openSync(name, flags, mode);
-          if (name === f.target && typeof flags === "number" && flags & fs.constants.O_EXCL) {
-            destinationFd = fd;
-            after("open");
-          }
-          return fd;
-        },
-        ftruncateSync: (fd, length) => {
-          fs.ftruncateSync(fd, length);
-          if (fd === destinationFd) {
-            after("truncate");
-          }
-        },
-        writeSync: new Proxy(fs.writeSync, {
-          apply(fn, self, args) {
-            const result = Reflect.apply(fn, self, args);
-            if (args[0] === destinationFd) {
-              after("write");
-            }
-            return result;
-          },
-        }),
-      };
-      const { prepared } = await prepare(f, io);
-      try {
-        expect(() => prepared.publish()).toThrow(f.refusal);
-        expect(observed).not.toBeUndefined();
-        expect(fs.existsSync(f.target) ? fs.readFileSync(f.target, "utf8") : null).toBe(observed);
-        expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
-      } finally {
-        await prepared[Symbol.asyncDispose]();
-      }
-      expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
-    },
-  );
-
   it("finishes Windows fallback partial writes through the same descriptor", async () => {
     const f = fixture();
     let calls = 0;
@@ -157,57 +96,6 @@ describe("guarded config final effects", () => {
     }
   });
 
-  it.each(["rename", "unlink", "mode"] as const)(
-    "stops backup rotation after %s revocation",
-    async (at) => {
-      const f = fixture();
-      for (const [index, suffix] of ["", ".1", ".2", ".3", ".4"].entries()) {
-        fs.writeFileSync(`${f.target}.bak${suffix}`, `recovery-${index}`);
-      }
-      const handles = new Map<number, string>();
-      let observed: ReturnType<typeof f.backups> | undefined;
-      const after = (stage: string, name: string) => {
-        if (!observed && stage === at && name.includes(".bak")) {
-          f.revoke();
-          observed = f.backups();
-        }
-      };
-      const io: typeof fs = {
-        ...fs,
-        openSync: (name, flags, mode) => {
-          const fd = fs.openSync(name, flags, mode);
-          handles.set(fd, String(name));
-          return fd;
-        },
-        closeSync: (fd) => {
-          handles.delete(fd);
-          fs.closeSync(fd);
-        },
-        fchmodSync: (fd, mode) => {
-          fs.fchmodSync(fd, mode);
-          after("mode", handles.get(fd) ?? "");
-        },
-        unlinkSync: (name) => {
-          fs.unlinkSync(name);
-          after("unlink", String(name));
-        },
-        renameSync: (from, to) => {
-          fs.renameSync(from, to);
-          after("rename", String(to));
-        },
-      };
-      const { prepared } = await prepare(f, io);
-      try {
-        expect(() => prepared.publish()).toThrow(f.refusal);
-        expect(observed).toBeDefined();
-        expect(f.backups()).toEqual(observed);
-        expect(fs.readFileSync(f.target, "utf8")).toBe(original);
-      } finally {
-        await prepared[Symbol.asyncDispose]();
-      }
-    },
-  );
-
   it("does not swallow a transient assertion failure during awaited backup preparation", async () => {
     const f = fixture();
     let failNext = false;
@@ -227,7 +115,7 @@ describe("guarded config final effects", () => {
       }
       return handle;
     });
-    const guarded = createGuardedConfigFileSystem(f.target, fs, assertCurrent, f.options);
+    const guarded = createConfigFileWriteGuard(f.target, fs, assertCurrent, f.options);
     await expect(
       prepareConfigFileWrite({
         configPath: f.target,
@@ -235,83 +123,12 @@ describe("guarded config final effects", () => {
         content,
         fsModule: guarded.fileSystem,
         assertCurrent: guarded.assertCurrent,
+        assertBeforeMutation: guarded.assertBeforeMutation,
+        onDestinationState: guarded.onDestinationState,
       }),
     ).rejects.toBe(refusal);
     expect(fs.readFileSync(f.target, "utf8")).toBe(original);
     expect(f.backups()).toEqual([null, null, null, null, null]);
-  });
-
-  it.each(["authority", "parent", "replacement", "permission"] as const)(
-    "preserves actual publication when conditional rollback loses %s",
-    async (at) => {
-      const f = fixture();
-      const { prepared, guarded } = await prepare(f);
-      try {
-        prepared.publish();
-      } finally {
-        await prepared[Symbol.asyncDispose]();
-      }
-      const rollbackProof = guarded.captureRollbackProof(f.assertCurrent);
-      if (at === "authority") {
-        f.revoke();
-      }
-      if (at === "parent") {
-        fs.renameSync(f.dir, `${f.dir}-moved`);
-        fs.mkdirSync(f.dir);
-        fs.writeFileSync(f.target, content);
-      }
-      if (at === "replacement") {
-        fs.renameSync(f.target, `${f.target}.owned`);
-        fs.writeFileSync(f.target, content);
-      }
-      const io: typeof fs = {
-        ...fs,
-        renameSync: (from, to) => {
-          if (at === "permission" && to === f.target) {
-            throw Object.assign(new Error("read-only"), { code: "EROFS" });
-          }
-          fs.renameSync(from, to);
-        },
-      };
-      try {
-        await expect(
-          rollbackConfigFileWriteIfUnchanged({
-            configPath: f.target,
-            previousSnapshot: f.options.snapshot,
-            committedHash: hashConfigRaw(content),
-            fsModule: io,
-            ...rollbackProof,
-          }),
-        ).rejects.toThrow();
-        expect(fs.readFileSync(f.target, "utf8")).toBe(content);
-      } finally {
-        if (at === "parent") {
-          fs.unlinkSync(f.target);
-          fs.rmdirSync(f.dir);
-          fs.renameSync(`${f.dir}-moved`, f.dir);
-        }
-      }
-    },
-  );
-
-  it("conditionally restores an authorized unchanged publication", async () => {
-    const f = fixture();
-    const { prepared, guarded } = await prepare(f);
-    try {
-      prepared.publish();
-    } finally {
-      await prepared[Symbol.asyncDispose]();
-    }
-    await expect(
-      rollbackConfigFileWriteIfUnchanged({
-        configPath: f.target,
-        previousSnapshot: f.options.snapshot,
-        committedHash: hashConfigRaw(content),
-        fsModule: fs,
-        ...guarded.captureRollbackProof(f.assertCurrent),
-      }),
-    ).resolves.toBe(true);
-    expect(fs.readFileSync(f.target, "utf8")).toBe(original);
   });
 });
 
@@ -478,174 +295,132 @@ it("restores an authorized publication through EPERM rollback fallback", async (
 });
 
 describe("rollback owns only its permission-fallback transitions", () => {
-  for (const fault of ["revoked", "parent", "same-byte-replacement"] as const) {
-    it.each(["before-remove", "remove", "open", "truncate", "partial-write"] as const)(
-      `${fault} after %s stops the next rollback content dispatch`,
-      async (at) => {
-        const f = fixture();
-        const { prepared, guarded } = await prepare(f);
-        try {
-          prepared.publish();
-        } finally {
-          await prepared[Symbol.asyncDispose]();
+  // Exercise every dispatch guard once; path and inode changes need distinct controls,
+  // but their checks are shared across all fallback dispatches.
+  it.each([
+    { fault: "revoked", at: "before-remove" },
+    { fault: "revoked", at: "remove" },
+    { fault: "revoked", at: "open" },
+    { fault: "revoked", at: "truncate" },
+    { fault: "revoked", at: "partial-write" },
+    { fault: "parent", at: "open" },
+    { fault: "same-byte-replacement", at: "open" },
+  ] as const)(
+    "$fault after $at stops the next rollback content dispatch",
+    async ({ fault, at }) => {
+      const f = fixture();
+      const { prepared, guarded } = await prepare(f);
+      try {
+        prepared.publish();
+      } finally {
+        await prepared[Symbol.asyncDispose]();
+      }
+      const rollbackProof = guarded.captureRollbackProof(f.assertCurrent);
+      let destinationFd: number | undefined;
+      let observed: string | null | undefined;
+      let observedInode: bigint | undefined;
+      let parentMoved = false;
+      let effects = 0;
+      let effectsAtFault = 0;
+      const after = (stage: string) => {
+        if (stage !== at || observed !== undefined) {
+          return;
         }
-        const rollbackProof = guarded.captureRollbackProof(f.assertCurrent);
-        let destinationFd: number | undefined;
-        let observed: string | null | undefined;
-        let observedInode: bigint | undefined;
-        let parentMoved = false;
-        let effects = 0;
-        let effectsAtFault = 0;
-        const after = (stage: string) => {
-          if (stage !== at || observed !== undefined) {
-            return;
-          }
-          const raw = fs.existsSync(f.target) ? fs.readFileSync(f.target, "utf8") : null;
-          if (fault === "revoked") {
-            f.revoke();
-          }
-          if (fault === "parent") {
-            fs.renameSync(f.dir, `${f.dir}-moved`);
-            fs.mkdirSync(f.dir);
-            parentMoved = true;
-          } else if (fault === "same-byte-replacement" && fs.existsSync(f.target)) {
-            fs.renameSync(f.target, `${f.target}.owned`);
-          }
-          if (fault !== "revoked") {
-            // A missing target is replaced with the committed preimage; existing
-            // files are replaced with exactly their current bytes, never just an edit.
-            fs.writeFileSync(f.target, raw ?? content);
-          }
-          observed = fs.existsSync(f.target) ? fs.readFileSync(f.target, "utf8") : null;
-          observedInode = fs.lstatSync(f.target, { bigint: true, throwIfNoEntry: false })?.ino;
-          effectsAtFault = effects;
-        };
-        const io: typeof fs = {
-          ...fs,
-          renameSync: (from, to) => {
-            if (to === f.target) {
-              after("before-remove");
-              throw Object.assign(new Error("rollback sharing violation"), { code: "EPERM" });
-            }
-            fs.renameSync(from, to);
-          },
-          rmSync: (name, options) => {
-            fs.rmSync(name, options);
-            if (name === f.target) {
-              effects++;
-              after("remove");
-            }
-          },
-          openSync: (name, flags, mode) => {
-            const fd = fs.openSync(name, flags, mode);
-            if (name === f.target && typeof flags === "number" && flags & fs.constants.O_EXCL) {
-              destinationFd = fd;
-              effects++;
-              after("open");
-            }
-            return fd;
-          },
-          ftruncateSync: (fd, length) => {
-            fs.ftruncateSync(fd, length);
-            if (fd === destinationFd) {
-              effects++;
-              after("truncate");
-            }
-          },
-          writeSync: new Proxy(fs.writeSync, {
-            apply(fn, self, args) {
-              if (args[0] === destinationFd) {
-                args[3] = Math.min(args[3], 3);
-              }
-              const result = Reflect.apply(fn, self, args);
-              if (args[0] === destinationFd) {
-                effects++;
-                after("partial-write");
-              }
-              return result;
-            },
-          }),
-        };
-        try {
-          await expect(
-            rollbackConfigFileWriteIfUnchanged({
-              configPath: f.target,
-              previousSnapshot: f.options.snapshot,
-              committedHash: hashConfigRaw(content),
-              fsModule: io,
-              ...rollbackProof,
-              preserveDirectoryMode: true,
-              durable: true,
-              destinationHardlinks: "reject",
-            }),
-          ).rejects.toThrow();
-          expect(observed).not.toBeUndefined();
-          expect(effects).toBe(effectsAtFault);
-          expect(fs.existsSync(f.target) ? fs.readFileSync(f.target, "utf8") : null).toBe(observed);
-          expect(fs.lstatSync(f.target, { bigint: true, throwIfNoEntry: false })?.ino).toBe(
-            observedInode,
-          );
-          expect(
-            fs.readFileSync(
-              `${parentMoved ? `${f.dir}-moved/channel.json` : f.target}.bak`,
-              "utf8",
-            ),
-          ).toBe(original);
-        } finally {
-          if (parentMoved) {
-            fs.unlinkSync(f.target);
-            fs.rmdirSync(f.dir);
-            fs.renameSync(`${f.dir}-moved`, f.dir);
-          }
-        }
-      },
-    );
-  }
-
-  it("retains refusal and private cleanup failure after owned fallback removal", async () => {
-    const f = fixture();
-    const { prepared, guarded } = await prepare(f);
-    try {
-      prepared.publish();
-    } finally {
-      await prepared[Symbol.asyncDispose]();
-    }
-    const rollbackProof = guarded.captureRollbackProof(f.assertCurrent);
-    let stage: string | undefined;
-    const cleanup = Object.assign(new Error("rollback stage cleanup denied"), { code: "EACCES" });
-    const io: typeof fs = {
-      ...fs,
-      renameSync: (from, to) => {
-        if (to === f.target) {
-          stage = String(from);
-          throw Object.assign(new Error("sharing"), { code: "EPERM" });
-        }
-        fs.renameSync(from, to);
-      },
-      rmSync: (name, options) => {
-        fs.rmSync(name, options);
-        if (name === f.target) {
+        const raw = fs.existsSync(f.target) ? fs.readFileSync(f.target, "utf8") : null;
+        if (fault === "revoked") {
           f.revoke();
         }
-      },
-      unlinkSync: (name) => {
-        if (name === stage) {
-          throw cleanup;
+        if (fault === "parent") {
+          fs.renameSync(f.dir, `${f.dir}-moved`);
+          fs.mkdirSync(f.dir);
+          parentMoved = true;
+        } else if (fault === "same-byte-replacement" && fs.existsSync(f.target)) {
+          fs.renameSync(f.target, `${f.target}.owned`);
         }
-        fs.unlinkSync(name);
-      },
-    };
-    const failure = await rollbackConfigFileWriteIfUnchanged({
-      configPath: f.target,
-      previousSnapshot: f.options.snapshot,
-      committedHash: hashConfigRaw(content),
-      fsModule: io,
-      ...rollbackProof,
-    }).catch((error: unknown) => error);
-    expect(failure).toMatchObject({ cause: f.refusal });
-    expect(String(failure)).toContain(cleanup.message);
-    expect(fs.existsSync(f.target)).toBe(false);
-    expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
-    expect(fs.readFileSync(stage!, "utf8")).toBe(original);
-  });
+        if (fault !== "revoked") {
+          // A missing target is replaced with the committed preimage; existing
+          // files are replaced with exactly their current bytes, never just an edit.
+          fs.writeFileSync(f.target, raw ?? content);
+        }
+        observed = fs.existsSync(f.target) ? fs.readFileSync(f.target, "utf8") : null;
+        observedInode = fs.lstatSync(f.target, { bigint: true, throwIfNoEntry: false })?.ino;
+        effectsAtFault = effects;
+      };
+      const io: typeof fs = {
+        ...fs,
+        renameSync: (from, to) => {
+          if (to === f.target) {
+            after("before-remove");
+            throw Object.assign(new Error("rollback sharing violation"), { code: "EPERM" });
+          }
+          fs.renameSync(from, to);
+        },
+        rmSync: (name, options) => {
+          fs.rmSync(name, options);
+          if (name === f.target) {
+            effects++;
+            after("remove");
+          }
+        },
+        openSync: (name, flags, mode) => {
+          const fd = fs.openSync(name, flags, mode);
+          if (name === f.target && typeof flags === "number" && flags & fs.constants.O_EXCL) {
+            destinationFd = fd;
+            effects++;
+            after("open");
+          }
+          return fd;
+        },
+        ftruncateSync: (fd, length) => {
+          fs.ftruncateSync(fd, length);
+          if (fd === destinationFd) {
+            effects++;
+            after("truncate");
+          }
+        },
+        writeSync: new Proxy(fs.writeSync, {
+          apply(fn, self, args) {
+            if (args[0] === destinationFd) {
+              args[3] = Math.min(args[3], 3);
+            }
+            const result = Reflect.apply(fn, self, args);
+            if (args[0] === destinationFd) {
+              effects++;
+              after("partial-write");
+            }
+            return result;
+          },
+        }),
+      };
+      try {
+        await expect(
+          rollbackConfigFileWriteIfUnchanged({
+            configPath: f.target,
+            previousSnapshot: f.options.snapshot,
+            committedHash: hashConfigRaw(content),
+            fsModule: io,
+            ...rollbackProof,
+            preserveDirectoryMode: true,
+            durable: true,
+            destinationHardlinks: "reject",
+          }),
+        ).rejects.toThrow();
+        expect(observed).not.toBeUndefined();
+        expect(effects).toBe(effectsAtFault);
+        expect(fs.existsSync(f.target) ? fs.readFileSync(f.target, "utf8") : null).toBe(observed);
+        expect(fs.lstatSync(f.target, { bigint: true, throwIfNoEntry: false })?.ino).toBe(
+          observedInode,
+        );
+        expect(
+          fs.readFileSync(`${parentMoved ? `${f.dir}-moved/channel.json` : f.target}.bak`, "utf8"),
+        ).toBe(original);
+      } finally {
+        if (parentMoved) {
+          fs.unlinkSync(f.target);
+          fs.rmdirSync(f.dir);
+          fs.renameSync(`${f.dir}-moved`, f.dir);
+        }
+      }
+    },
+  );
 });

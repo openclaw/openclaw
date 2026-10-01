@@ -21,6 +21,7 @@ import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find as findPlacement } from "./placement-row-codec.js";
 import { parseWorkerEnvironmentState } from "./state.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
+import type { WorkerEnvironmentMutationMethods } from "./store-worker-contract.js";
 
 type PreparationRow = Pick<
   Selectable<WorkerEnvironments>,
@@ -190,13 +191,6 @@ export function preparedCapacityFromReservations(
     ),
   );
 }
-function preparedCapacity(
-  db: DatabaseSync,
-  input: Parameters<typeof preparedCapacityFromReservations>[1],
-): number {
-  return preparedCapacityFromReservations(readPreparedReservations(db), input);
-}
-
 export function isPreparedReservationWithinCapacity(
   reservations: Reservations,
   input: { environmentId: string; target: number; maxTotal: number },
@@ -233,13 +227,7 @@ export function createPreparedEnvironmentStoreOps(options: {
   return {
     ensurePreparedIntent(
       this: void,
-      input: {
-        intent: WorkerEnvironmentIntentInput & { preparation: WorkerEnvironmentPreparationIntent };
-        projectKey: string;
-        target: number;
-        maxTotal: number;
-        assertCurrent: () => void;
-      },
+      input: Parameters<WorkerEnvironmentMutationMethods["ensurePreparedIntent"]>[0],
     ): WorkerEnvironmentRecord | undefined {
       if (
         !Number.isSafeInteger(input.target) ||
@@ -321,7 +309,10 @@ export function createPreparedEnvironmentStoreOps(options: {
         if (
           build
             ? readPreparedReservations(db).length >= input.maxTotal
-            : preparedCapacity(db, { ...input, profileId: input.intent.profileId }) === 0
+            : preparedCapacityFromReservations(readPreparedReservations(db), {
+                ...input,
+                profileId: input.intent.profileId,
+              }) === 0
         ) {
           return undefined;
         }
@@ -335,13 +326,7 @@ export function createPreparedEnvironmentStoreOps(options: {
 
     requestPreparedDestroy(
       this: void,
-      input: {
-        environmentId: string;
-        ownerEpoch: number;
-        preparationKey: string;
-        reason: "expired" | "invalidated";
-        assertCurrent: () => void;
-      },
+      input: Parameters<WorkerEnvironmentMutationMethods["requestPreparedDestroy"]>[0],
     ): WorkerEnvironmentRecord | undefined {
       return options.write((db) => {
         input.assertCurrent();

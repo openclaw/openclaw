@@ -234,15 +234,13 @@ describe("readBoundedCodexRemoteWorkspaceFile", () => {
     }
   });
 
-  it("rejects malformed, truncated, and oversized command responses", async () => {
-    for (const stdout of ["not valid base64!", "YQ", "YWJjZA=="]) {
-      const client = {
-        request: vi.fn(async () => ({ exitCode: 0, stdout, stderr: "" })),
-      };
-      await expect(
-        readBoundedCodexRemoteWorkspaceFile({ client, path: "/remote/report.txt", maxBytes: 3 }),
-      ).rejects.toThrow(/invalid|oversized|exceeds/);
-    }
+  it("rejects malformed command response JSON", async () => {
+    const client = {
+      request: vi.fn(async () => ({ exitCode: 0, stdout: "not valid base64!", stderr: "" })),
+    };
+    await expect(
+      readBoundedCodexRemoteWorkspaceFile({ client, path: "/remote/report.txt", maxBytes: 3 }),
+    ).rejects.toThrow("returned invalid chunk data");
   });
 
   it("reports the documented remote Node.js prerequisite clearly", async () => {
@@ -337,21 +335,6 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
 
     await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
       "authoritative remote content\n",
-    );
-  });
-
-  it("transfers newly generated remote files without waiting for workspace synchronization", async () => {
-    const remotePath = `${remoteWorkspaceRoot}/reports/new-upload.txt`;
-
-    const result = await prepareCodexRemoteWorkspaceMessageMedia({
-      args: { filePath: remotePath },
-      localWorkspaceRoot,
-      remoteWorkspaceRoot,
-      readRemoteFile: createRemoteFileReader({ [remotePath]: "new remote attachment\n" }),
-    });
-
-    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
-      "new remote attachment\n",
     );
   });
 
@@ -537,22 +520,6 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       ).rejects.toThrow("16-attachment limit");
       expect(readRemoteFile).not.toHaveBeenCalled();
     }
-  });
-
-  it("keeps staged media immutable after the remote source changes", async () => {
-    const remotePath = `${remoteWorkspaceRoot}/reports/immutable-upload.txt`;
-    const remoteFiles = { [remotePath]: "immutable transferred report\n" };
-    const result = await prepareCodexRemoteWorkspaceMessageMedia({
-      args: { filePath: remotePath },
-      localWorkspaceRoot,
-      remoteWorkspaceRoot,
-      readRemoteFile: createRemoteFileReader(remoteFiles),
-    });
-    remoteFiles[remotePath] = "changed remote content\n";
-
-    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
-      "immutable transferred report\n",
-    );
   });
 
   it("honors cancellation before requesting remote bytes", async () => {

@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { fetchPluginIconBlobUrl } from "../plugins/icon-loader.ts";
+import { pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
 import { resolveChannelIconOwner } from "./plugin-presentation.ts";
 
 const CHANNEL_PLUGIN_ICON_TIMEOUT_MS = 10_000;
@@ -105,16 +106,9 @@ export class ChannelPluginPresentationController {
     }
     const iconEntries = await Promise.all(
       [...iconTargets].map(async (pluginId) => {
-        const context = this.hooks.getContext();
         const url = await fetchPluginIconBlobUrl({
           pluginId,
-          resourceBasePath: context.resourceBasePath,
-          gatewayUrl: context.gateway.connection.gatewayUrl,
-          auth: {
-            hello: context.gateway.snapshot.hello,
-            settings: { token: context.gateway.connection.token },
-            password: context.gateway.connection.password,
-          },
+          ...pluginIconFetchContext(this.hooks.getContext()),
           signal: request.controller.signal,
         }).catch(() => null);
         return [pluginId, url] as const;

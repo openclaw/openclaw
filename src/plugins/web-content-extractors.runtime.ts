@@ -1,4 +1,3 @@
-// Runtime bridge for web content extractors supplied by plugins.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";

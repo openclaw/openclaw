@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { snapshotPreflightSourceManifest } from "../state/openclaw-database-preflight.test-support.js";
@@ -9,20 +9,26 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { assertNodeRuntimeUpdateCompatible } from "./auto-update-compatibility.js";
 
-const mocks = vi.hoisted(() => ({ command: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  command: vi.fn(),
+  nodeRuntime: vi.fn<() => Promise<{ stderrTail: string } | null>>(async () => null),
+}));
 
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: mocks.command,
 }));
 vi.mock("../infra/update-runner-git-node-preflight.js", () => ({
-  checkGitCandidateNodeRuntime: async () => null,
+  checkGitCandidateNodeRuntime: mocks.nodeRuntime,
 }));
 vi.mock("../state/openclaw-database-preflight.js", () => ({
   preflightOpenClawDatabaseSchemas: async () => ({ incompatible: [], indeterminate: [] }),
 }));
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.nodeRuntime.mockResolvedValue(null);
+});
 
 async function createCompatibilityFixture(directory: string) {
   const stateDir = path.join(directory, "node-state");
@@ -63,6 +69,43 @@ async function createCompatibilityFixture(directory: string) {
   }
   return { stateDir, packageRoot, statePath };
 }
+
+describe("candidate node runtime compatibility", () => {
+  const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+
+  afterEach(() => {
+    if (bunVersion) {
+      Object.defineProperty(process.versions, "bun", bunVersion);
+    } else {
+      Reflect.deleteProperty(process.versions, "bun");
+    }
+  });
+
+  it.each([
+    { runtime: "node", accepted: false },
+    { runtime: "bun", accepted: true },
+  ])("applies Node engines only on a Node host ($runtime)", async ({ runtime, accepted }) => {
+    if (runtime === "bun") {
+      Object.defineProperty(process.versions, "bun", { value: "1.4.3", configurable: true });
+    } else {
+      Reflect.deleteProperty(process.versions, "bun");
+    }
+    mocks.nodeRuntime.mockResolvedValue({ stderrTail: "No system Node was found." });
+    mocks.command.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ schema: "openclaw.state-schema-preflight.v1", status: "exact" }),
+      stderr: "",
+    });
+    await withTestDir({ prefix: "openclaw-node-compat-runtime-" }, async (directory) => {
+      const compatible = assertNodeRuntimeUpdateCompatible(
+        await createCompatibilityFixture(directory),
+      );
+      await (accepted
+        ? expect(compatible).resolves.toBeUndefined()
+        : expect(compatible).rejects.toThrow("No system Node was found."));
+    });
+  });
+});
 
 describe("candidate node database compatibility", () => {
   it("accepts an exact match from the candidate using a disposable copy", async () => {

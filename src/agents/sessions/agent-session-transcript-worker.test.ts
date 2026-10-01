@@ -1,4 +1,5 @@
 import path from "node:path";
+import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
 import {
   loadTranscriptEventsSync,
@@ -43,6 +44,23 @@ it("commits streamed messages off the host thread before adopting guard state an
     ) => Promise<void>;
     const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
     const hostExec = vi.spyOn(database.db, "exec");
+    const withWorker = metadataRuntime.withSessionMetadataWorker;
+    const commandBytes: number[] = [];
+    const workerSpy = vi
+      .spyOn(metadataRuntime, "withSessionMetadataWorker")
+      .mockImplementation((options, db, assertCurrent, operation) =>
+        withWorker(options, db, assertCurrent, (worker) =>
+          operation({
+            execute: (command, commandOptions) => {
+              if (command.type === "session.metadata.append") {
+                commandBytes.push(serialize(command).byteLength);
+              }
+              return worker.execute(command, commandOptions);
+            },
+          }),
+        ),
+      );
+    const payload = "const value = 42;\n".repeat(1280);
     const assertWorkerCommit = async (
       message: Extract<AgentEvent, { type: "message_end" }>["message"],
     ) => {
@@ -54,7 +72,7 @@ it("commits streamed messages off the host thread before adopting guard state an
       await assertWorkerCommit(
         createAssistant(
           testModel,
-          [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
+          [{ type: "toolCall", id: "read-1", name: "read", arguments: { code: payload } }],
           "toolUse",
         ),
       );
@@ -64,10 +82,13 @@ it("commits streamed messages off the host thread before adopting guard state an
         toolCallId: "read-1",
         toolName: "read",
         isError: false,
-        content: [{ type: "text", text: "read complete" }],
+        content: [{ type: "text", text: payload }],
         timestamp: 2,
       });
       expect(guard.getPendingIds()).toEqual([]);
+      // The wire needs canonical JSON and one parsed message, plus a small control envelope.
+      expect(commandBytes).toHaveLength(2);
+      expect(Math.max(...commandBytes)).toBeLessThan(2 * Buffer.byteLength(payload) + 4096);
 
       const concurrent = SessionManager.open(target);
       const descendantId = concurrent.appendMessage(
@@ -94,6 +115,7 @@ it("commits streamed messages off the host thread before adopting guard state an
       expect(loadTranscriptEventsSync(target)).toEqual(before);
       expect(committed).toEqual(["assistant", "toolResult", "assistant"]);
     } finally {
+      workerSpy.mockRestore();
       hostExec.mockRestore();
       session.dispose();
     }

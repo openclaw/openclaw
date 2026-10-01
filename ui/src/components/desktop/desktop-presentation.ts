@@ -1,11 +1,12 @@
 import type { EnvironmentSummary, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
 import { html, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { DockLayoutController } from "../dock-layout-controller.ts";
+import type { FullscreenController } from "../fullscreen-controller.ts";
 import { renderDesktopDocumentView } from "./desktop-document-view.ts";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
 import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
-import type { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
 import { renderDesktopPanelRecovery, type DesktopPanelState } from "./desktop-panel-state.ts";
 import {
   renderDesktopCredentials,
@@ -15,6 +16,17 @@ import {
   type DesktopSizingOptions,
 } from "./desktop-panel-view.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
+
+export const desktopFullscreenOptions = {
+  buttonClass: "bp-icon desktop-fullscreen-button",
+  buttonSelector: ".desktop-fullscreen-button",
+  iconClass: "desktop-fullscreen-icon",
+  enterLabel: () => t("desktop.enterFullscreen"),
+  exitLabel: () => t("desktop.exitFullscreen"),
+  unavailableLabel: () => t("desktop.fullscreenUnavailable"),
+  errorMessage: (error: unknown) =>
+    t("desktop.errors.fullscreenFailed", { error: formatUiError(error) }),
+};
 
 type DesktopPresentation = {
   documentMode: boolean;
@@ -39,7 +51,7 @@ type DesktopPresentation = {
   pictureInPictureControl: TemplateResult;
   audioControl?: TemplateResult;
   dockLayout: DockLayoutController<"bottom" | "right">;
-  fullscreenMode: DesktopPanelFullscreenController;
+  fullscreenMode: FullscreenController;
   onControlToggle: () => void;
   onTakeControl: () => void;
   onLaunch: (app: WorkerDesktopAppId) => void;

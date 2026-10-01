@@ -1,5 +1,8 @@
 import path from "node:path";
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentMessage,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -29,6 +32,46 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
 
 const { createSqliteMirrorTarget } = createTranscriptMirrorTestHarness();
 
+async function createDelivery(
+  itemId: string,
+  text: string,
+  onBlockReply = vi.fn(),
+  message?: AgentMessage,
+) {
+  const target = await createSqliteMirrorTarget(`openclaw-codex-mirror-${itemId}-`);
+  const cwd = path.dirname(target.storePath);
+  const params = {
+    agentId: target.agentId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+    workspaceDir: cwd,
+    runId: `run-${itemId}`,
+    onBlockReply,
+  } as unknown as EmbeddedRunAttemptParams;
+  return {
+    target,
+    onBlockReply,
+    delivery: {
+      cwd,
+      params,
+      itemId,
+      text,
+      message:
+        message ??
+        castAgentMessage({
+          ...makeAgentAssistantMessage({
+            content: [{ type: "text", text }],
+            timestamp: Date.now(),
+          }),
+          openclawAsyncDelivery: { itemId },
+        }),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    },
+  };
+}
+
 afterEach(() => {
   resetGlobalHookRunner();
   publishSessionTranscriptUpdateByIdentityMock.mockReset();
@@ -36,7 +79,6 @@ afterEach(() => {
 
 describe("deliverAsyncMessageBestEffort", () => {
   it("delivers the persisted async rewrite once across reconnect replay", async () => {
-    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-reconnect-");
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -72,31 +114,18 @@ describe("deliverAsyncMessageBestEffort", () => {
         questions: [{ title: "Sensitive question?", options: ["Sensitive choice"] }],
       },
     });
-    const onBlockReply = vi.fn();
-    const runParams = {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      workspaceDir: path.dirname(target.storePath),
-      runId: "run-async",
-      onBlockReply,
-    } as unknown as EmbeddedRunAttemptParams;
-    const delivery = {
-      cwd: path.dirname(target.storePath),
-      params: runParams,
-      itemId: "async-update",
+    const { target, delivery, onBlockReply } = await createDelivery(
+      "async-update",
+      "Sensitive background update.",
+      vi.fn(),
       message,
-      text: "Sensitive background update.",
-      threadId: "thread-1",
-      turnId: "turn-1",
-    };
+    );
 
     await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("settled");
     await expect(
       deliverAsyncMessageBestEffort({
         ...delivery,
-        params: { ...runParams, runId: "run-async-reconnect" },
+        params: { ...delivery.params, runId: "run-async-reconnect" },
       }),
     ).resolves.toBe("settled");
 
@@ -125,45 +154,25 @@ describe("deliverAsyncMessageBestEffort", () => {
       phase: "final_answer",
       idempotencyKey: "codex-app-server:thread-1:turn-1:async:async-update",
       openclawAsyncDelivery: { itemId: "async-update" },
-      __openclaw: { runId: "run-async" },
+      __openclaw: { runId: "run-async-update" },
     });
     expect(updates[0]?.update?.message).not.toHaveProperty("openclawAsyncDelivery.questions");
     expect(updates[0]?.update?.message).not.toHaveProperty("__openclaw.runTerminal");
     const persisted = await readMirrorRaw(target);
-    expect(persisted).toContain('"runId":"run-async"');
+    expect(persisted).toContain('"runId":"run-async-update"');
     expect(persisted).not.toContain('"runId":"run-async-reconnect"');
   });
 
   it("retries a durable async callback from the persisted row", async () => {
-    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-callback-fail-");
     const onBlockReply = vi
       .fn()
       .mockRejectedValueOnce(new Error("channel unavailable"))
       .mockResolvedValue(undefined);
-    const runParams = {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      workspaceDir: path.dirname(target.storePath),
-      runId: "run-async-callback-fail",
+    const { target, delivery } = await createDelivery(
+      "async-callback-fail",
+      "Persisted background update.",
       onBlockReply,
-    } as unknown as EmbeddedRunAttemptParams;
-    const delivery = {
-      cwd: path.dirname(target.storePath),
-      params: runParams,
-      itemId: "async-callback-fail",
-      message: castAgentMessage({
-        ...makeAgentAssistantMessage({
-          content: [{ type: "text", text: "Persisted background update." }],
-          timestamp: Date.now(),
-        }),
-        openclawAsyncDelivery: { itemId: "async-callback-fail" },
-      }),
-      text: "Persisted background update.",
-      threadId: "thread-1",
-      turnId: "turn-1",
-    };
+    );
 
     await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("retry");
     await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("settled");
@@ -183,40 +192,16 @@ describe("deliverAsyncMessageBestEffort", () => {
   });
 
   it("does not deliver async messages blocked by before_message_write", async () => {
-    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-blocked-");
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         { hookName: "before_message_write", handler: () => ({ block: true }) },
       ]),
     );
-    const onBlockReply = vi.fn();
-    const runParams = {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      workspaceDir: path.dirname(target.storePath),
-      runId: "run-async-blocked",
-      onBlockReply,
-    } as unknown as EmbeddedRunAttemptParams;
-
-    await expect(
-      deliverAsyncMessageBestEffort({
-        cwd: path.dirname(target.storePath),
-        params: runParams,
-        itemId: "async-blocked",
-        message: castAgentMessage({
-          ...makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Blocked update." }],
-            timestamp: Date.now(),
-          }),
-          openclawAsyncDelivery: { itemId: "async-blocked" },
-        }),
-        text: "Blocked update.",
-        threadId: "thread-1",
-        turnId: "turn-1",
-      }),
-    ).resolves.toBe("settled");
+    const { target, delivery, onBlockReply } = await createDelivery(
+      "async-blocked",
+      "Blocked update.",
+    );
+    await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("settled");
 
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(await readMirrorMessages(target)).toEqual([]);

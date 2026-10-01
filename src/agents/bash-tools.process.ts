@@ -24,6 +24,7 @@ import {
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
+  EXEC_MANUAL_COLLECTION_FOLLOW_UP,
   EXEC_RETENTION_CAP_NOTE,
   appendExecTimeoutRetryGuidance,
   renderExecExitLabel,
@@ -34,7 +35,6 @@ import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
   deriveSessionName,
-  padProcessStatus,
   readEnvInt,
   sliceLogLines,
   truncateMiddle,
@@ -106,6 +106,7 @@ function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "ag
 const MAX_POLL_WAIT_MS = 30_000;
 
 type RunningSessionRuntime = {
+  followUp?: string;
   stdinWritable: boolean;
   waitingForInput: boolean;
   idleMs: number;
@@ -280,6 +281,7 @@ export function createProcessTool(
     const idleMs = Math.max(0, Date.now() - lastOutputAt);
     const stdinWritable = isWritableStdin(session.stdin);
     return {
+      ...(session.notifyOnExit === false ? { followUp: EXEC_MANUAL_COLLECTION_FOLLOW_UP } : {}),
       stdinWritable,
       waitingForInput: stdinWritable && idleMs >= inputWaitIdleMs,
       idleMs,
@@ -364,11 +366,15 @@ export function createProcessTool(
               : undefined;
           const timeoutMarker = timeoutReason ? ` [${timeoutReason}]` : "";
           const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
-          return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
+          const wakeMarker = "followUp" in s ? " [no exit wake]" : "";
+          return `${s.sessionId} ${s.status.padEnd(9)} ${
             formatDurationCompact(s.runtimeMs) ?? "n/a"
-          }${timeoutMarker}${marker} :: ${label}`;
+          }${timeoutMarker}${marker}${wakeMarker} :: ${label}`;
         });
-        return textResult(lines.join("\n") || "No running or recent sessions.", {
+        const followUp = sessions.some((s) => "followUp" in s)
+          ? `\n\n${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`
+          : "";
+        return textResult((lines.join("\n") || "No running or recent sessions.") + followUp, {
           status: "completed",
           sessions,
         });
@@ -475,7 +481,8 @@ export function createProcessTool(
             aggregateOutputNote +
             retainedOutputNote +
             (output || "(no new output)") +
-            (buildInputWaitHint(runtime) || "\n\nProcess still running.");
+            (buildInputWaitHint(runtime) || "\n\nProcess still running.") +
+            (runtime.followUp ? `\n\n${runtime.followUp}` : "");
           return attachInternalToolResultAcknowledgement(
             textResult(text, {
               status: "running",
@@ -512,7 +519,9 @@ export function createProcessTool(
               ? `\n\nProcess stopped by request (${renderExecExitLabel(record)}).`
               : "");
           const output = runtime
-            ? text + buildInputWaitHint(runtime)
+            ? text +
+              buildInputWaitHint(runtime) +
+              (runtime.followUp ? `\n\n${runtime.followUp}` : "")
             : appendExecTimeoutRetryGuidance(text, record.exitReason);
           return textResult(output, {
             ...(runtime
@@ -532,65 +541,48 @@ export function createProcessTool(
           });
         }
 
-        case "write": {
-          const resolved = resolveBackgroundedWritableStdin();
-          if (!resolved.ok) {
-            return resolved.result;
-          }
-          await writeProcessStdin(resolved.stdin, params.data ?? "");
-          if (params.eof) {
-            assertCurrent();
-            resolved.stdin.end();
-          }
-          return runningSessionResult(
-            resolved.session,
-            `Wrote ${Buffer.byteLength(params.data ?? "", "utf8")} bytes to session ${params.sessionId}${
-              params.eof ? " (stdin closed)" : ""
-            }.`,
-          );
-        }
-
-        case "send-keys": {
-          const resolved = resolveBackgroundedWritableStdin();
-          if (!resolved.ok) {
-            return resolved.result;
-          }
-          return await handleProcessSendKeys({
-            sessionId: params.sessionId,
-            session: resolved.session,
-            stdin: resolved.stdin,
-            keys: params.keys,
-            hex: params.hex,
-            literal: params.literal,
-          });
-        }
-
-        case "submit": {
-          const resolved = resolveBackgroundedWritableStdin();
-          if (!resolved.ok) {
-            return resolved.result;
-          }
-          await writeProcessStdin(resolved.stdin, "\r");
-          return runningSessionResult(
-            resolved.session,
-            `Submitted session ${params.sessionId} (sent CR).`,
-          );
-        }
-
+        case "write":
+        case "send-keys":
+        case "submit":
         case "paste": {
+          const inputAction = params.action;
           const resolved = resolveBackgroundedWritableStdin();
           if (!resolved.ok) {
             return resolved.result;
           }
-          const payload = encodePaste(params.text ?? "", params.bracketed !== false);
-          if (!payload) {
+          if (inputAction === "send-keys") {
+            return await handleProcessSendKeys({
+              sessionId: params.sessionId,
+              session: resolved.session,
+              stdin: resolved.stdin,
+              keys: params.keys,
+              hex: params.hex,
+              literal: params.literal,
+            });
+          }
+          const payload =
+            inputAction === "paste"
+              ? encodePaste(params.text ?? "", params.bracketed !== false)
+              : inputAction === "submit"
+                ? "\r"
+                : (params.data ?? "");
+          if (inputAction === "paste" && !payload) {
             return failText("No paste text provided.");
           }
           await writeProcessStdin(resolved.stdin, payload);
-          return runningSessionResult(
-            resolved.session,
-            `Pasted ${params.text?.length ?? 0} chars to session ${params.sessionId}.`,
-          );
+          if (inputAction === "write" && params.eof) {
+            assertCurrent();
+            resolved.stdin.end();
+          }
+          const text =
+            inputAction === "paste"
+              ? `Pasted ${params.text?.length ?? 0} chars to session ${params.sessionId}.`
+              : inputAction === "submit"
+                ? `Submitted session ${params.sessionId} (sent CR).`
+                : `Wrote ${Buffer.byteLength(params.data ?? "", "utf8")} bytes to session ${params.sessionId}${
+                    params.eof ? " (stdin closed)" : ""
+                  }.`;
+          return runningSessionResult(resolved.session, text);
         }
 
         case "kill": {

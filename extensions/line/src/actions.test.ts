@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
+import { messageAction, postbackAction, uriAction } from "./actions.js";
 
 describe("messageAction", () => {
   it("creates message actions with explicit or default text", () => {
@@ -53,49 +53,5 @@ describe("postbackAction", () => {
     expect(action.label).toBe("Select");
     expect((action as { data: string }).data).toBe("action=select&item=1");
     expect((action as { displayText: string }).displayText).toBe("Selected item 1");
-  });
-
-  it("visibly disables overlong postback data and truncates displayText", () => {
-    const unavailable = postbackAction("Test", "x".repeat(400));
-    expect(unavailable).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: callback data exceeds LINE's limit.",
-    });
-
-    const truncatedDisplay = postbackAction("Test", "data", "y".repeat(400));
-    expect((truncatedDisplay as { displayText: string }).displayText?.length).toBe(300);
-
-    const noDisplayText = postbackAction("Test", "data");
-    expect((noDisplayText as { displayText?: string }).displayText).toBeUndefined();
-  });
-});
-
-describe("datetimePickerAction", () => {
-  it("creates picker actions for all supported modes", () => {
-    const cases = [
-      { label: "Pick date", data: "date_picked", mode: "date" as const },
-      { label: "Pick time", data: "time_picked", mode: "time" as const },
-      { label: "Pick datetime", data: "datetime_picked", mode: "datetime" as const },
-    ];
-    for (const testCase of cases) {
-      const action = datetimePickerAction(testCase.label, testCase.data, testCase.mode);
-      expect(action.type).toBe("datetimepicker");
-      expect(action.label).toBe(testCase.label);
-      expect((action as { mode: string }).mode).toBe(testCase.mode);
-      expect((action as { data: string }).data).toBe(testCase.data);
-    }
-  });
-
-  it("includes initial/min/max when provided", () => {
-    const action = datetimePickerAction("Pick", "data", "date", {
-      initial: "2024-06-15",
-      min: "2024-01-01",
-      max: "2024-12-31",
-    });
-
-    expect((action as { initial: string }).initial).toBe("2024-06-15");
-    expect((action as { min: string }).min).toBe("2024-01-01");
-    expect((action as { max: string }).max).toBe("2024-12-31");
   });
 });

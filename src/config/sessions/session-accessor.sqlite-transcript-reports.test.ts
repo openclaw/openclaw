@@ -1,13 +1,20 @@
+import { copyFileSync, readFileSync, renameSync } from "node:fs";
+import { symlink } from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -98,6 +105,176 @@ function transcriptSnapshot(db: DatabaseSync) {
 }
 
 describe("SQLite report payload selection", () => {
+  it("reserves a report before a later write while its target discovery is pending", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seedReports();
+      const options = { agentId: scope.agentId };
+      const release = createDeferredCore();
+      const admitted = createDeferredCore();
+      const blocker = runOpenClawAgentWriteAdmission(options, async () => {
+        admitted.resolve();
+        await release.promise;
+      });
+      await admitted.promise;
+      const order: string[] = [];
+      const report = appendSessionTranscriptReport(scope, {
+        kind: "custom",
+        customTypes: ["status"],
+        selectReport: () => {
+          order.push("report");
+          return { customType: "status", content: "queued report", display: true };
+        },
+      });
+      const later = runOpenClawAgentWriteAdmission(options, () => {
+        order.push("later write");
+      });
+      release.resolve();
+      await Promise.all([blocker, report, later]);
+      expect(order).toEqual(["report", "later write"]);
+    });
+  });
+
+  it("rejects a queued report after the original file is replaced with identical bytes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const db = await seedReports();
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      const { path: databasePath } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      const replacement = state.path("same-report.sqlite");
+      const retired = state.path("retired-report.sqlite");
+      copyFileSync(databasePath, replacement);
+      expect(readFileSync(replacement)).toEqual(readFileSync(databasePath));
+      const release = createDeferredCore();
+      const admitted = createDeferredCore();
+      const blocker = runOpenClawAgentWriteAdmission({ agentId: scope.agentId }, async () => {
+        admitted.resolve();
+        await release.promise;
+      });
+      await admitted.promise;
+      const selectReport = vi.fn(() => ({ customType: "status", content: "stale", display: true }));
+      const report = appendSessionTranscriptReport(scope, {
+        kind: "custom",
+        customTypes: ["status"],
+        selectReport,
+      });
+      const rejected = expect(report).rejects.toThrow(/target changed|identity|physical file/i);
+      renameSync(databasePath, retired);
+      renameSync(replacement, databasePath);
+      release.resolve();
+      try {
+        await Promise.all([blocker, rejected]);
+        expect(selectReport).not.toHaveBeenCalled();
+        expect(readFileSync(databasePath)).toEqual(readFileSync(retired));
+      } finally {
+        release.resolve();
+        await Promise.allSettled([blocker, report]);
+      }
+    });
+  });
+
+  it("keeps the original report identity and storage environment across preparation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await seedReports();
+      const target = { ...scope, env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR } };
+      const report = appendSessionTranscriptReport(target, {
+        kind: "custom",
+        customTypes: ["status"],
+        selectReport: () => ({ customType: "status", content: "original target", display: true }),
+      });
+      target.sessionId = "successor";
+      target.env.OPENCLAW_STATE_DIR = state.path("successor-state");
+
+      await expect(report).resolves.toEqual({ ok: true, value: undefined });
+      expect((await loadTranscriptEvents(scope)).at(-1)).toMatchObject({
+        type: "custom_message",
+        content: "original target",
+      });
+    });
+  });
+
+  it("cannot redirect a report to another store containing the same session key", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const requested = { ...scope, storePath: state.path("requested.sqlite") };
+      const other = { ...scope, storePath: state.path("other.sqlite") };
+      for (const target of [requested, other]) {
+        await upsertSessionEntryCore(target, { sessionId: scope.sessionId, updatedAt: 1 });
+        await replaceTranscriptEvents(target, [
+          { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
+        ]);
+      }
+      const before = await Promise.all([requested, other].map(loadTranscriptEvents));
+      const identity = readDatabasePathIdentitySync(other.storePath);
+      if (!identity.key.startsWith("file:")) {
+        throw new Error("The second session store must exist");
+      }
+      await expect(
+        appendSessionTranscriptReport(
+          requested,
+          {
+            kind: "custom",
+            customTypes: ["status"],
+            selectReport: () => ({
+              customType: "status",
+              content: "must stay in requested store",
+              display: true,
+            }),
+          },
+          {
+            sessionEntryCurrent: {
+              source: {
+                agentId: scope.agentId,
+                path: other.storePath,
+                databaseIdentity: identity.key.slice("file:".length),
+                databaseBirthtime: identity.birthtime,
+                sessionKey: scope.sessionKey,
+              },
+              assertCurrent: (entry) => {
+                if (entry?.sessionId !== scope.sessionId) {
+                  throw new Error("Session changed");
+                }
+              },
+            },
+          },
+        ),
+      ).rejects.toThrow("Transcript report target differs from its session source restriction");
+      expect(await Promise.all([requested, other].map(loadTranscriptEvents))).toEqual(before);
+    });
+  });
+
+  it("preserves native incognito reports and refuses an unrelated file-source restriction", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const native = { ...scope, sessionKey: "agent:main:dashboard:incognito-reports" };
+      await upsertSessionEntryCore(native, { sessionId: native.sessionId, updatedAt: 1 });
+      await replaceTranscriptEvents(native, [
+        { type: "session", id: native.sessionId, version: CURRENT_SESSION_VERSION },
+      ]);
+      const report = {
+        kind: "custom" as const,
+        customTypes: ["status"],
+        selectReport: () => ({ customType: "status", content: "native report", display: true }),
+      };
+      await expect(appendSessionTranscriptReport(native, report)).resolves.toEqual({
+        ok: true,
+        value: undefined,
+      });
+      const before = await loadTranscriptEvents(native);
+      await expect(
+        appendSessionTranscriptReport(native, report, {
+          sessionEntryCurrent: {
+            source: {
+              agentId: scope.agentId,
+              path: state.path("foreign.sqlite"),
+              databaseIdentity: "foreign",
+              sessionKey: native.sessionKey,
+            },
+            assertCurrent: () => {},
+          },
+        }),
+      ).rejects.toThrow("A file session source cannot authorize a process-held transcript report");
+      expect(await loadTranscriptEvents(native)).toEqual(before);
+    });
+  });
+
   it("fences worker abort fallbacks and preserves each run's authoritative answer", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const db = await seedReports();
@@ -322,12 +499,15 @@ describe("SQLite report payload selection", () => {
     },
   );
 
-  it("reselects after another connection changes the report branch before commit", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("reselects through an alias after another connection changes the report branch before commit", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const db = await seedReports();
       const hostTransactions = vi.spyOn(db, "exec");
-      const { path } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-      const other = new DatabaseSync(path);
+      const { path: databasePath } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const alias = state.path("report-alias");
+      await symlink(path.dirname(databasePath), alias, "junction");
+      const aliasedScope = { ...scope, storePath: path.join(alias, path.basename(databasePath)) };
+      const other = new DatabaseSync(databasePath);
       const competitor = {
         customType: "status",
         content: "concurrent report",
@@ -355,7 +535,7 @@ describe("SQLite report payload selection", () => {
       });
       try {
         await expect(
-          appendSessionTranscriptReport(scope, {
+          appendSessionTranscriptReport(aliasedScope, {
             kind: "custom",
             customTypes: ["status"],
             selectReport,

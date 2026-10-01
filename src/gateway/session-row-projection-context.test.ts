@@ -20,7 +20,11 @@ import {
 } from "../infra/agent-run-registry.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
 
+const contexts: ReturnType<typeof createSessionRowProjectionContext>[] = [];
 afterEach(() => {
+  for (const context of contexts.splice(0)) {
+    context.dispose?.();
+  }
   resetAgentRunRegistryForTest();
   subagentRuns.clear();
   vi.restoreAllMocks();
@@ -39,6 +43,7 @@ function fixture() {
   const context = createSessionRowProjectionContext(
     createSubagentSessionListReadView({ env: process.env }),
   );
+  contexts.push(context);
   const prepare = (epoch: number) =>
     context.prepare(
       epoch,
@@ -192,4 +197,49 @@ it("refreshes time-sensitive subagent reads while retaining unchanged ancestor m
   prepare(1);
   expect(context.current.subagentRuns.countActiveDescendantRuns(parent)).toBe(0);
   expect(context.current.projectedSubagentActivity).toBe(initial.projectedSubagentActivity);
+});
+
+it("patches list facts after keyed publications without rebuilding for progress-only updates", () => {
+  const run = createSubagentRunRecord({
+    runId: "changed",
+    childSessionKey: child,
+    requesterSessionKey: parent,
+  });
+  subagentRuns.set(run.runId, run);
+  const builds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
+  const { context, prepare } = fixture();
+  const initialRevision = context.materializedRevisions.subagentRevision;
+  for (let update = 0; update < 100; update++) {
+    run.requesterSettleWake = {
+      status: "pending",
+      attemptCount: 0,
+      progressOperationId: `progress-${update}`,
+    };
+    subagentRuns.commitOwnership(run);
+    prepare(update + 1);
+  }
+  expect(context.materializedRevisions.subagentRevision).toBe(initialRevision);
+  expect(builds).toHaveBeenCalledTimes(1);
+  expect(context.current.subagentRuns.countActiveDescendantRuns(parent)).toBe(1);
+
+  run.execution = { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } };
+  subagentRuns.commitOwnership(run);
+  prepare(101);
+  expect(context.current.subagentRuns.getDisplaySubagentRun(child)?.execution.status).toBe(
+    "terminal",
+  );
+  expect(context.current.subagentRuns.countActiveDescendantRuns(parent)).toBe(0);
+  expect(context.materializedRevisions.subagentRevision).toBe(initialRevision + 1);
+  expect(builds).toHaveBeenCalledTimes(1);
+
+  subagentRuns.delete(run.runId);
+  subagentRuns.confirmRetirement(run);
+  prepare(102);
+  expect(context.current.subagentRuns.getDisplaySubagentRun(child)).toBeNull();
+  expect(context.current.subagentRuns.runsByControllerSessionKey.has(parent)).toBe(false);
+  expect(builds).toHaveBeenCalledTimes(1);
+
+  subagentRuns.clear();
+  prepare(103);
+  expect(builds).toHaveBeenCalledTimes(2);
 });

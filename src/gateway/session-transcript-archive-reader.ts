@@ -16,10 +16,7 @@ import {
 } from "../sessions/transcript-anchor-page.js";
 import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
-import {
-  resolveSessionTranscriptCandidates,
-  resolveSessionTranscriptResetArchiveCandidatesAsync,
-} from "./session-transcript-files.fs.js";
+import { resolveSessionTranscriptResetArchiveCandidatesAsync } from "./session-transcript-files.fs.js";
 import {
   assertArchiveTranscriptSource,
   readIndexedTranscriptEntries,
@@ -74,6 +71,7 @@ const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
 type ArchivedTranscriptReadScope = {
   agentId?: string | undefined;
+  exactArchivePath?: string | undefined;
   sessionFile?: string | undefined;
   sessionId: string;
   storePath?: string | undefined;
@@ -155,24 +153,18 @@ function parseRecentTranscriptTailSnapshot(
   };
 }
 
-export function findExistingTranscriptPath(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-): string | null {
-  return (
-    resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId).find((value) =>
-      fs.existsSync(value),
-    ) ?? null
-  );
-}
-
 /** Reads retained reset archives after the caller has selected its SQLite fallback. */
 export class ArchivedTranscriptReader {
   constructor(private readonly scope: ArchivedTranscriptReadScope) {}
 
   private async resolvePath(): Promise<string | null> {
+    if (this.scope.exactArchivePath) {
+      const exactPath = this.scope.exactArchivePath;
+      if ((await fs.promises.stat(exactPath).catch(() => null))?.isFile()) {
+        return materializeSessionArchiveForRead(exactPath);
+      }
+      return null;
+    }
     const archives = await resolveSessionTranscriptResetArchiveCandidatesAsync(
       this.scope.sessionId,
       this.scope.storePath,

@@ -364,8 +364,9 @@ enum SessionMenuPreviewLoader {
         maxItems: Int) -> [SessionPreviewItem]
     {
         let boundedItems = self.normalizeMaxItems(maxItems)
-        let raw: [OpenClawKit.AnyCodable] = payload.messages ?? []
-        let messages = self.decodeMessages(raw)
+        let messages = (payload.messages ?? []).compactMap {
+            try? GatewayPayloadDecoding.decode($0, as: OpenClawChatMessage.self)
+        }
         let built = messages.compactMap { message -> SessionPreviewItem? in
             guard let text = self.previewText(for: message) else { return nil }
             let isTool = self.isToolCall(message)
@@ -376,13 +377,6 @@ enum SessionMenuPreviewLoader {
 
         let trimmed = built.suffix(boundedItems)
         return Array(trimmed.reversed())
-    }
-
-    private static func decodeMessages(_ raw: [OpenClawKit.AnyCodable]) -> [OpenClawChatMessage] {
-        raw.compactMap { item in
-            guard let data = try? JSONEncoder().encode(item) else { return nil }
-            return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
-        }
     }
 
     private static func previewRoleFromRaw(_ raw: String) -> PreviewRole {
@@ -403,11 +397,7 @@ enum SessionMenuPreviewLoader {
             return label
         }
 
-        if let media = self.mediaSummary(for: message) {
-            return media
-        }
-
-        return nil
+        return self.mediaSummary(for: message)
     }
 
     private static func isToolCall(_ message: OpenClawChatMessage) -> Bool {
@@ -416,12 +406,7 @@ enum SessionMenuPreviewLoader {
     }
 
     private static func toolNames(for message: OpenClawChatMessage) -> [String] {
-        var names: [String] = []
-        for content in message.content {
-            if let name = content.name?.nonEmpty {
-                names.append(name)
-            }
-        }
+        var names = message.content.compactMap { $0.name?.nonEmpty }
         if let toolName = message.toolName?.nonEmpty {
             names.append(toolName)
         }

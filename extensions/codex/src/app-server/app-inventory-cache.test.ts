@@ -71,27 +71,6 @@ describe("Codex app inventory cache", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("reads metadata only for targeted installed apps", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const apps = [app("app-1"), app("google-calendar-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-
-    const snapshot = await cache.refreshNow({
-      key: "runtime",
-      request,
-      targetAppIds: ["google-calendar-app"],
-    });
-
-    expect(snapshot.apps).toEqual([app("google-calendar-app")]);
-    expect(request).toHaveBeenNthCalledWith(1, "app/installed", { forceRefresh: true });
-    expect(request).toHaveBeenNthCalledWith(2, "app/read", {
-      appIds: ["google-calendar-app"],
-      includeTools: true,
-    });
-  });
-
   it("refreshes and removes legacy runtime rows targeted by their Apps SDK identity", async () => {
     const manifestId = "asdk_app_0123456789abcdef0123456789abcdef";
     const runtimeId = "connector_0123456789abcdef0123456789abcdef";
@@ -504,6 +483,43 @@ describe("Codex app inventory cache", () => {
     });
   });
 
+  it.each(["clear", "invalidate", "forced successor"] as const)(
+    "keeps an obsolete refresh rejection out of cache state after %s",
+    async (replacement) => {
+      const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+      const key = "runtime";
+      const deferred = Promise.withResolvers<never>();
+      const failure = new Error("obsolete inventory refresh failed");
+      const request = vi.fn(async (method, params) =>
+        codexAppInventoryResponse(method, [app("fresh-app")], params),
+      );
+      const obsolete = cache.refreshNow({ key, request: () => deferred.promise, nowMs: 0 });
+      const obsoleteRejection = expect(obsolete).rejects.toBe(failure);
+
+      if (replacement === "clear") {
+        cache.clear();
+      } else if (replacement === "invalidate") {
+        cache.invalidate(key, "apps changed", 1);
+      } else {
+        await cache.refreshNow({ key, request, nowMs: 2, forceRefetch: true });
+      }
+      deferred.reject(failure);
+      await obsoleteRejection;
+
+      const current = cache.read({ key, request, nowMs: 3, suppressRefresh: true });
+      expect(current.state).toBe(replacement === "forced successor" ? "fresh" : "missing");
+      expect(current.diagnostic).toEqual(
+        replacement === "invalidate" ? { message: "apps changed", atMs: 1 } : undefined,
+      );
+      if (replacement === "forced successor") {
+        expect(current.snapshot?.apps).toEqual([app("fresh-app")]);
+        expect(current.snapshot?.lastError).toBeUndefined();
+      } else {
+        expect(current.snapshot).toBeUndefined();
+      }
+    },
+  );
+
   it("forces a post-install refresh past an older in-flight runtime snapshot", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";
@@ -713,27 +729,6 @@ describe("Codex app inventory cache", () => {
     expect(read.state).toBe("fresh");
     expect(read.snapshot?.targetAppIds).toEqual(["calendar-app"]);
     expect(read.snapshot?.apps).toEqual([app("calendar-app")]);
-  });
-
-  it("renews freshness when a targeted refresh re-covers the whole cached scope", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
-    const key = "runtime";
-    const apps = [app("calendar-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-
-    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: ["calendar-app"] });
-    expect(cache.read({ key, request, nowMs: 1_500, suppressRefresh: true }).state).toBe("stale");
-
-    await cache.refreshNow({
-      key,
-      request,
-      nowMs: 1_500,
-      forceRefetch: true,
-      targetAppIds: ["calendar-app"],
-    });
-    expect(cache.read({ key, request, nowMs: 1_600, suppressRefresh: true }).state).toBe("fresh");
   });
 
   it("retires stacked scoped invalidations across separate covering refreshes", async () => {

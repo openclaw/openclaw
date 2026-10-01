@@ -1,4 +1,3 @@
-// Mattermost plugin module implements target resolution behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -94,15 +93,8 @@ export function parseMattermostTarget(raw: string): MattermostTarget {
     }
     return { kind: "channel", id };
   }
-  if (lower.startsWith("user:")) {
-    const id = trimmed.slice("user:".length).trim();
-    if (!id) {
-      throw new Error("User id is required for Mattermost sends");
-    }
-    return { kind: "user", id };
-  }
-  if (lower.startsWith("mattermost:")) {
-    const id = trimmed.slice("mattermost:".length).trim();
+  if (lower.startsWith("user:") || lower.startsWith("mattermost:")) {
+    const id = trimmed.slice(trimmed.indexOf(":") + 1).trim();
     if (!id) {
       throw new Error("User id is required for Mattermost sends");
     }
@@ -128,18 +120,6 @@ export function parseMattermostTarget(raw: string): MattermostTarget {
   return { kind: "channel", id: trimmed };
 }
 
-function isExplicitMattermostTarget(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return (
-    /^(channel|user|mattermost):/i.test(trimmed) ||
-    trimmed.startsWith("@") ||
-    trimmed.startsWith("#")
-  );
-}
-
 export async function resolveMattermostOpaqueTarget(
   params: { input: string } & (
     | { cfg: OpenClawConfig; accountId?: string | null }
@@ -147,7 +127,7 @@ export async function resolveMattermostOpaqueTarget(
   ),
 ): Promise<MattermostOpaqueTargetResolution | null> {
   const input = params.input.trim();
-  if (!input || isExplicitMattermostTarget(input) || !isMattermostId(input)) {
+  if (!isMattermostId(input)) {
     return null;
   }
 

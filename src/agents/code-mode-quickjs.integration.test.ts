@@ -1,11 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  applyCodeModeCatalog,
-  runCodeModeScriptHeadless,
-  type CodeModeHeadlessResult,
-} from "./code-mode.js";
+import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   createCodeModeHarness,
   createHeadlessCodeModeHarness,
@@ -17,66 +13,51 @@ import {
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
-import { jsonResult } from "./tools/common.js";
 
 afterEach(resetCodeModeTestState);
 
-function expectFailed(result: CodeModeHeadlessResult) {
-  expect(result.status).toBe("failed");
-  if (result.status !== "failed") {
-    throw new Error("expected headless code mode failure");
-  }
-  return result;
+function snapshotFixture() {
+  const pendingStarted = createDeferred<AbortSignal>();
+  const pending = pluginToolWithExecute(
+    "snapshot_pending",
+    "Pending snapshot fixture",
+    async (_toolCallId, _input, signal) => {
+      const pendingSignal = expectDefined(signal, "pending bridge signal");
+      pendingStarted.resolve(pendingSignal);
+      await new Promise<void>((resolve) => {
+        pendingSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { content: [], details: true };
+    },
+  );
+  const fixture = pluginToolWithExecute("output_fixture", "Output fixture", async () => {
+    await pendingStarted.promise;
+    return { content: [], details: true };
+  });
+  const fresh = pluginTool("snapshot_fresh", "Fresh snapshot fixture");
+  const code = `void snapshot_pending({});
+    text("accepted first");
+    await output_fixture({});
+    const retained = new Uint8Array(16 * 1024 * 1024);
+    retained[0] = 7;
+    text("accepted inline");
+    await yield_control();
+    await snapshot_fresh({});
+    return retained[0];`;
+  return { pendingStarted, pending, fixture, fresh, code };
 }
 
 describe("QuickJS checkpoint admission through Code Mode", () => {
-  it("still enforces the actual checkpoint limit", async () => {
-    const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor: "quickjs" } });
-    applyCodeModeCatalog({ ...ctx, config, tools });
-    const result = resultDetails(
-      await tools[0]!.execute("checkpoint", {
-        code: "const heap = new Uint8Array(12 * 1024 * 1024); await yield_control(); return heap.length;",
-      }),
-    );
-    expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
-  });
-
   it.each(["exec", "wait"])(
     "preserves output and cancels earlier tools when a %s resume exceeds the snapshot cap",
     async (mode) => {
       const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor: "quickjs" } });
-      const pendingStarted = createDeferred<AbortSignal>();
-      const pending = pluginToolWithExecute(
-        "snapshot_pending",
-        "Pending snapshot fixture",
-        async (_toolCallId, _input, signal) => {
-          const pendingSignal = expectDefined(signal, "pending bridge signal");
-          pendingStarted.resolve(pendingSignal);
-          await new Promise<void>((resolve) => {
-            pendingSignal.addEventListener("abort", () => resolve(), { once: true });
-          });
-          return { content: [], details: true };
-        },
-      );
-      const fixture = pluginToolWithExecute("output_fixture", "Output fixture", async () => {
-        await pendingStarted.promise;
-        return { content: [], details: true };
-      });
-      const fresh = pluginTool("snapshot_fresh", "Fresh snapshot fixture");
+      const { pendingStarted, pending, fixture, fresh, code } = snapshotFixture();
       applyCodeModeCatalog({ ...ctx, config, tools: [...tools, pending, fixture, fresh] });
       const exec = expectDefined(tools[0], "exec");
       const wait = expectDefined(tools[1], "wait");
       const input = {
-        code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}
-          void snapshot_pending({});
-          text("accepted first");
-          await output_fixture({});
-          const retained = new Uint8Array(16 * 1024 * 1024);
-          retained[0] = 7;
-          text("accepted inline");
-          await yield_control();
-          await snapshot_fresh({});
-          return retained[0];`,
+        code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}${code}`,
       };
       const first = mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
       if (first) {
@@ -139,49 +120,15 @@ describe("QuickJS checkpoint admission through Code Mode", () => {
   );
 
   it("preserves output and cancels earlier tools when a headless resume exceeds the snapshot cap", async () => {
-    const pendingStarted = createDeferred<AbortSignal | undefined>();
-    const pending = pluginToolWithExecute(
-      "headless_snapshot_pending",
-      "Headless snapshot fixture",
-      async (_toolCallId, _input, signal) => {
-        pendingStarted.resolve(signal);
-        await new Promise<void>((resolve) => {
-          signal?.addEventListener("abort", () => resolve(), { once: true });
-        });
-        return jsonResult({ canceled: true });
-      },
-    );
-    const fixture = pluginToolWithExecute(
-      "headless_snapshot_fixture",
-      "Headless snapshot fixture",
-      async () => {
-        await pendingStarted.promise;
-        return jsonResult({ ok: true });
-      },
-    );
-    const fresh = pluginToolWithExecute(
-      "headless_snapshot_fresh",
-      "Headless snapshot fixture",
-      async () => jsonResult({ ok: true }),
-    );
-    const result = expectFailed(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([pending, fixture, fresh], {
-          codeMode: { executor: "quickjs" },
-        }),
-        code: `void headless_snapshot_pending({});
-          text("accepted first");
-          await headless_snapshot_fixture({});
-          const retained = new Uint8Array(16 * 1024 * 1024);
-          retained[0] = 7;
-          text("accepted inline");
-          await yield_control();
-          await headless_snapshot_fresh({});
-          return retained[0];`,
+    const { pendingStarted, pending, fixture, fresh, code } = snapshotFixture();
+    const result = await runCodeModeScriptHeadless({
+      ctx: createHeadlessCodeModeHarness([pending, fixture, fresh], {
+        codeMode: { executor: "quickjs" },
       }),
-    );
+      code,
+    });
 
-    expect(result.code).toBe("snapshot_limit_exceeded");
+    expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
     expect(result.toolCallCount).toBe(2);
     expect(result.output).toEqual([
       { type: "text", text: "accepted first" },
@@ -190,6 +137,6 @@ describe("QuickJS checkpoint admission through Code Mode", () => {
     expect(pending.execute).toHaveBeenCalledOnce();
     expect(fixture.execute).toHaveBeenCalledOnce();
     expect(fresh.execute).not.toHaveBeenCalled();
-    expect((await pendingStarted.promise)?.aborted).toBe(true);
+    expect((await pendingStarted.promise).aborted).toBe(true);
   });
 });

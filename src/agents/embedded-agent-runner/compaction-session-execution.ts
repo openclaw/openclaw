@@ -1,7 +1,3 @@
-/**
- * Executes compaction while owning the transcript lock, session lifecycle,
- * hooks and optional successor transcript rotation.
- */
 import {
   preserveCompactionReplayWindow,
   resolveCompactionReplayEligibility,
@@ -31,7 +27,9 @@ import {
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
+import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
+import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
@@ -48,15 +46,13 @@ import { resolveCompactionFailure } from "./compact-reasons.js";
 import {
   containsRealConversationMessages,
   normalizeObservedTokenCount,
-  resolveCompactionProviderStream,
   summarizeCompactionMessages,
 } from "./compaction-diagnostics.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
   buildBeforeCompactionHookMetrics,
   estimateTokensAfterCompaction,
-  runAfterCompactionHooks,
-  runBeforeCompactionHooks,
+  runCompactionHooks,
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
 import {
@@ -76,7 +72,6 @@ import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
-import { splitSdkTools } from "./tool-split.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
@@ -138,25 +133,25 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
-    const sessionManager = guardSessionManager(
-      memoryTranscript?.sessionManager ?? SessionManager.open(sessionTarget),
-      {
-        agentId: sessionAgentId,
-        runId: params.runId,
-        sessionKey: params.sessionKey,
-        config: params.config,
-        contextWindowTokens: contextTokenBudget,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        missingToolResultText:
-          effectiveModel.api === "openai-responses" ||
-          effectiveModel.api === "azure-openai-responses" ||
-          effectiveModel.api === "openai-chatgpt-responses"
-            ? "aborted"
-            : undefined,
-        allowedToolNames,
-        withCompactionPersistence: params.transcriptByteCompactionPersistence,
-      },
-    );
+    const preparedSessionManager =
+      memoryTranscript?.sessionManager ??
+      (await SessionManager.openAsync(sessionTarget, undefined, undefined, params.abortSignal));
+    assertActive();
+    const responsesApi =
+      effectiveModel.api === "openai-responses" ||
+      effectiveModel.api === "azure-openai-responses" ||
+      effectiveModel.api === "openai-chatgpt-responses";
+    const sessionManager = guardSessionManager(preparedSessionManager, {
+      agentId: sessionAgentId,
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      config: params.config,
+      contextWindowTokens: contextTokenBudget,
+      allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+      missingToolResultText: responsesApi ? "aborted" : undefined,
+      allowedToolNames,
+      withCompactionPersistence: params.transcriptByteCompactionPersistence,
+    });
     compactionSessionManager = sessionManager;
     const recordUsage = accountingRecorder?.recordUsage
       ? (usage: UsageLike) => {
@@ -220,10 +215,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       }),
     });
 
-    const { customTools } = splitSdkTools({
-      tools: effectiveTools,
-      sandboxEnabled: Boolean(sandbox?.enabled),
-      toolHookContext: {
+    const customTools = toToolDefinitions(
+      effectiveTools,
+      {
         agentId: sessionAgentId,
         config: params.config,
         cwd: effectiveCwd,
@@ -232,16 +226,17 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         runId: params.runId,
         channelId: params.currentChannelId,
       },
-    });
+      undefined,
+    );
     // The session runtime treats `tools` as a name allowlist during session creation. Pass the
     // exact OpenClaw-managed registrations so custom tools survive startup.
     const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
-    const providerStreamFn = resolveCompactionProviderStream({
-      effectiveModel,
-      config: params.config,
+    const providerStreamFn = registerProviderStreamForModel({
+      model: effectiveModel,
+      cfg: params.config,
       agentDir,
-      effectiveWorkspace,
+      workspaceDir: effectiveWorkspace,
       apiRegistry: getModelRegistryRuntime(modelRegistry).apiRegistry,
     });
     while (true) {
@@ -328,13 +323,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           runId: diagnosticCompactionRunId,
           workKey: diagnosticCompactionRunId,
         });
-        markDiagnosticEmbeddedRunStarted({
-          sessionId: params.sessionId,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          runId: diagnosticCompactionRunId,
-          workKey: diagnosticCompactionRunId,
-          owner: diagnosticOwner,
-        });
+        markDiagnosticEmbeddedRunStarted({ ...diagnosticOwner, owner: diagnosticOwner });
         session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
           config: params.config,
           runId: diagnosticCompactionRunId,
@@ -413,12 +402,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         // limitHistoryTurns can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairingForModel(
-              truncated,
-              effectiveModel.api === "openai-responses" ||
-                effectiveModel.api === "azure-openai-responses" ||
-                effectiveModel.api === "openai-chatgpt-responses",
-            )
+          ? sanitizeToolUseResultPairingForModel(truncated, responsesApi)
           : truncated;
         if (limited.length > 0) {
           session.agent.state.messages = limited;
@@ -431,10 +415,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           observedTokenCount,
           estimateTokensFn: estimateTokens,
         });
-        const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
+        const hookSessionKey = sessionTarget.sessionKey;
+        await runCompactionHooks({
+          phase: "before",
           hookRunner,
           sessionId: params.sessionId,
-          sessionKey: sessionTarget.sessionKey,
+          sessionKey: hookSessionKey,
           sessionAgentId,
           workspaceDir: effectiveWorkspace,
           messageProvider: resolvedMessageProvider,
@@ -606,12 +592,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
           );
         }
-        await runAfterCompactionHooks({
+        await runCompactionHooks({
+          phase: "after",
           hookRunner,
           sessionId: params.sessionId,
           sessionAgentId,
-          hookSessionKey,
-          missingSessionKey,
+          sessionKey: hookSessionKey,
           workspaceDir: effectiveWorkspace,
           messageProvider: resolvedMessageProvider,
           messageCountAfter,

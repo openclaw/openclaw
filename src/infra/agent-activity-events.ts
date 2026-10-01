@@ -96,12 +96,18 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
   const status =
     tool.phase !== "result"
       ? "running"
-      : approval || skipped
-        ? "blocked"
-        : tool.status === "unknown"
-          ? undefined
-          : (tool.status ??
-            (tool.isError === true ? "failed" : tool.isError === false ? "completed" : undefined));
+      : skipped && details.deniedReason === "steering"
+        ? "skipped"
+        : approval || skipped
+          ? "blocked"
+          : tool.status === "unknown"
+            ? undefined
+            : (tool.status ??
+              (tool.isError === true
+                ? "failed"
+                : tool.isError === false
+                  ? "completed"
+                  : undefined));
   return projectAgentActivityItem(
     {
       itemId: `tool:${tool.toolCallId}`,
@@ -137,10 +143,7 @@ export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem
 export function projectAgentHistoryActivity(
   messages: ReadonlyArray<{ messageId: string; message: unknown }>,
 ): AgentHistoryActivity[] {
-  const facts = new Map<
-    string,
-    Parameters<typeof projectAgentToolActivity>[0] & ToolCallIdentity
-  >();
+  const facts = new Map<string, ToolActivityInput & ToolCallIdentity>();
   let turn = 0;
   const entries = messages.map(({ messageId, message }) => {
     const record = asOptionalRecord(message);

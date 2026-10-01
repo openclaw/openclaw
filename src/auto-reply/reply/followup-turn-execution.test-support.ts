@@ -14,8 +14,12 @@ vi.mock("./agent-runner-execution.js", () => ({
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const { bindSessionPendingInputSources } =
     await import("../../config/sessions/session-accessor.pending-inputs.js");
+  const { loadSessionEntry, replaceSessionEntry } =
+    await import("../../config/sessions/session-accessor.sqlite-entry.js");
   return {
     bindSessionPendingInputSources,
+    loadSessionEntry,
+    replaceSessionEntry,
     loadSessionEntryReadOnly: (...args: unknown[]) =>
       followupTurnTestState.loadEntryReadOnly(...args),
   };

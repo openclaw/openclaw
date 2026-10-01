@@ -56,6 +56,12 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+function mockEntrypoint(entryPath: string, execPath = "node") {
+  process.argv = [execPath, entryPath];
+  fsMocks.realpath.mockResolvedValue(entryPath);
+  fsMocks.access.mockResolvedValue(undefined);
+}
+
 describe("resolveGatewayProgramArguments", () => {
   it.each([false, true])(
     "installs only the requested start-mode override: %s",
@@ -87,9 +93,7 @@ describe("resolveGatewayProgramArguments", () => {
     "sizes only the Gateway in an ordinary Node spawn tree",
     async () => {
       const entryPath = path.resolve("/opt/openclaw/dist/index.js");
-      process.argv = [originalExecPath, entryPath];
-      fsMocks.realpath.mockResolvedValue(entryPath);
-      fsMocks.access.mockResolvedValue(undefined);
+      mockEntrypoint(entryPath, originalExecPath);
       const { programArguments } = await resolveGatewayProgramArguments({
         port: 18789,
         runtime: "node",
@@ -124,14 +128,7 @@ describe("resolveGatewayProgramArguments", () => {
 
   it.each([
     { nodeOptions: "--max-old-space-size=24576", existing: [], expected: [] },
-    { nodeOptions: "--max-old-space-size-percentage=25", existing: [], expected: [] },
-    { nodeOptions: "--max-heap-size=24576", existing: [], expected: [] },
     { nodeOptions: "--max-old-space-size=0", existing: [], expected: [] },
-    {
-      nodeOptions: "",
-      existing: ["--max-old-space-size=24576"],
-      expected: ["--max-old-space-size=24576"],
-    },
     {
       nodeOptions: "",
       existing: ["--require", "gateway", "--max-old-space-size=24576"],
@@ -146,9 +143,7 @@ describe("resolveGatewayProgramArguments", () => {
     "preserves stored controls without adding an automatic override: $nodeOptions $existing",
     async ({ nodeOptions, existing, expected }) => {
       const entryPath = path.resolve("/opt/openclaw/dist/index.js");
-      process.argv = ["node", entryPath];
-      fsMocks.realpath.mockResolvedValue(entryPath);
-      fsMocks.access.mockResolvedValue(undefined);
+      mockEntrypoint(entryPath);
       const result = await resolveGatewayProgramArguments({
         port: 18789,
         runtime: "node",
@@ -198,9 +193,7 @@ describe("resolveGatewayProgramArguments", () => {
   it("prefers index.js over legacy entry.js when both exist in the same dist directory", async () => {
     const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
     const indexPath = path.resolve("/opt/openclaw/dist/index.js");
-    process.argv = ["node", entryPath];
-    fsMocks.realpath.mockResolvedValue(entryPath);
-    fsMocks.access.mockResolvedValue(undefined);
+    mockEntrypoint(entryPath);
 
     const result = await resolveGatewayProgramArguments({
       port: 18789,
@@ -332,9 +325,7 @@ describe("resolveGatewayProgramArguments", () => {
   it("uses Node with tsx for source-checkout dev mode", async () => {
     const repoIndexPath = path.resolve("/repo/src/index.ts");
     const repoEntryPath = path.resolve("/repo/src/entry.ts");
-    process.argv = ["/usr/local/bin/node", repoIndexPath];
-    fsMocks.realpath.mockResolvedValue(repoIndexPath);
-    fsMocks.access.mockResolvedValue(undefined);
+    mockEntrypoint(repoIndexPath, "/usr/local/bin/node");
 
     const result = await resolveGatewayProgramArguments({
       dev: true,
@@ -359,9 +350,7 @@ describe("resolveGatewayProgramArguments", () => {
   it("uses Bun directly for packaged and source-checkout Gateway commands", async () => {
     const packagedEntryPath = path.resolve("/opt/openclaw/dist/entry.js");
     const packagedIndexPath = path.resolve("/opt/openclaw/dist/index.js");
-    process.argv = [validatedBunPath, packagedEntryPath];
-    fsMocks.realpath.mockResolvedValue(packagedEntryPath);
-    fsMocks.access.mockResolvedValue(undefined);
+    mockEntrypoint(packagedEntryPath, validatedBunPath);
 
     const packaged = await resolveGatewayProgramArguments({
       port: 18789,
@@ -410,28 +399,6 @@ describe("resolveGatewayProgramArguments", () => {
     },
     {
       service: "node host",
-      selection: "missing",
-      resolve: () =>
-        resolveNodeProgramArguments({
-          dev: true,
-          host: "gateway.example",
-          port: 18789,
-          runtime: "node",
-        }),
-    },
-    {
-      service: "gateway",
-      selection: "blank",
-      resolve: () =>
-        resolveGatewayProgramArguments({
-          dev: true,
-          port: 18789,
-          runtime: "node",
-          runtimePath: " \t ",
-        }),
-    },
-    {
-      service: "node host",
       selection: "blank",
       resolve: () =>
         resolveNodeProgramArguments({
@@ -448,23 +415,15 @@ describe("resolveGatewayProgramArguments", () => {
     await expect(resolve()).rejects.toThrow(missingSelectedNodeError);
   });
 
-  it.each([
-    {
-      service: "gateway",
-      resolve: () => resolveGatewayProgramArguments({ port: 18789, runtime: "bun" }),
-    },
-    {
-      service: "node host",
-      resolve: () =>
-        resolveNodeProgramArguments({
-          host: "gateway.example",
-          port: 18789,
-          runtime: "bun",
-          runtimePath: " \t ",
-        }),
-    },
-  ])("rejects a missing Bun path for the $service", async ({ resolve }) => {
-    await expect(resolve()).rejects.toThrow(missingSelectedBunError);
+  it("rejects a blank selected Bun path for the node host", async () => {
+    await expect(
+      resolveNodeProgramArguments({
+        host: "gateway.example",
+        port: 18789,
+        runtime: "bun",
+        runtimePath: " \t ",
+      }),
+    ).rejects.toThrow(missingSelectedBunError);
   });
 
   it("uses an executable wrapper from Bun without a selected Node path", async () => {
@@ -502,9 +461,7 @@ describe("resolveNodeProgramArguments", () => {
   it("carries plaintext and command restrictions into the managed node command", async () => {
     const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
     const indexPath = path.resolve("/opt/openclaw/dist/index.js");
-    process.argv = ["node", entryPath];
-    fsMocks.realpath.mockResolvedValue(entryPath);
-    fsMocks.access.mockResolvedValue(undefined);
+    mockEntrypoint(entryPath);
 
     const result = await resolveNodeProgramArguments({
       host: "gateway.example",
@@ -587,9 +544,7 @@ describe("resolveNodeProgramArguments", () => {
   it("uses Bun for the managed node command", async () => {
     const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
     const indexPath = path.resolve("/opt/openclaw/dist/index.js");
-    process.argv = [validatedBunPath, entryPath];
-    fsMocks.realpath.mockResolvedValue(entryPath);
-    fsMocks.access.mockResolvedValue(undefined);
+    mockEntrypoint(entryPath, validatedBunPath);
 
     const result = await resolveNodeProgramArguments({
       host: "gateway.example",

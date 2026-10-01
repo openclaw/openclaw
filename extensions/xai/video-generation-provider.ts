@@ -1,4 +1,3 @@
-// Xai provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -40,26 +39,10 @@ const XAI_VIDEO_DEFAULT_DURATION_SECONDS = 8;
 const XAI_VIDEO_DEFAULT_ASPECT_RATIO = "16:9";
 const XAI_VIDEO_DEFAULT_RESOLUTION = "480p";
 
-type XaiVideoCreateResponse = {
-  request_id?: string;
-  error?: {
-    code?: string;
-    message?: string;
-  } | null;
-};
-
 type XaiVideoStatusResponse = {
-  request_id?: string;
-  // Free-form: xAI returns whatever string it wants here. The caller decides
-  // which strings are terminal vs continue-polling.
   status: string;
-  video?: {
-    url?: string;
-  } | null;
-  error?: {
-    code?: string;
-    message?: string;
-  } | null;
+  videoUrl?: string;
+  errorMessage?: string;
 };
 
 async function readXaiVideoJson(response: Response): Promise<Record<string, unknown>> {
@@ -89,23 +72,15 @@ function xaiErrorMessage(payload: Record<string, unknown>): string | undefined {
   return normalizeOptionalString(error.message);
 }
 
-function readXaiCreateResponse(payload: Record<string, unknown>): XaiVideoCreateResponse {
-  return {
-    request_id: normalizeOptionalString(payload.request_id),
-    error: xaiErrorMessage(payload) ? { message: xaiErrorMessage(payload) } : null,
-  };
-}
-
 function readXaiStatusResponse(payload: Record<string, unknown>): XaiVideoStatusResponse {
   const video = payload.video;
   if (video !== undefined && video !== null && !isRecord(video)) {
     throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
   }
   return {
-    request_id: normalizeOptionalString(payload.request_id),
     status: normalizeOptionalString(payload.status) ?? "",
-    video: isRecord(video) ? { url: normalizeOptionalString(video.url) } : null,
-    error: xaiErrorMessage(payload) ? { message: xaiErrorMessage(payload) } : null,
+    videoUrl: isRecord(video) ? normalizeOptionalString(video.url) : undefined,
+    errorMessage: xaiErrorMessage(payload),
   };
 }
 
@@ -219,7 +194,7 @@ function resolveXaiVideoMode(
     : "edit";
 }
 
-function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
+function prepareCreateRequest(req: VideoGenerationRequest) {
   validateXaiVideo15Request(req);
   const inputImages = req.inputImages ?? [];
   const hasReferenceImages = inputImages.some(isReferenceImage);
@@ -272,7 +247,7 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
     }
     body.resolution =
       resolveResolution(req.resolution, { allow1080p: isVideo15 }) ?? XAI_VIDEO_DEFAULT_RESOLUTION;
-    return body;
+    return { body, mode, endpoint: "/videos/generations" };
   }
 
   body.video = { url: resolveInputVideoUrl(req.inputVideos?.[0]) };
@@ -286,18 +261,7 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
       body.duration = duration;
     }
   }
-  return body;
-}
-
-function resolveCreateEndpoint(req: VideoGenerationRequest): string {
-  switch (resolveXaiVideoMode(req)) {
-    case "edit":
-      return "/videos/edits";
-    case "extend":
-      return "/videos/extensions";
-    default:
-      return "/videos/generations";
-  }
+  return { body, mode, endpoint: mode === "edit" ? "/videos/edits" : "/videos/extensions" };
 }
 
 export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
@@ -306,8 +270,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
     async generateVideo(req) {
       // Validate provider/model mode constraints before auth or HTTP setup so
       // unsupported 1.5 requests cannot be submitted and billed accidentally.
-      const createBody = buildCreateBody(req);
-      const createEndpoint = resolveCreateEndpoint(req);
+      const { body, endpoint, mode } = prepareCreateRequest(req);
       const auth = await resolveApiKeyForProvider({
         provider: "xai",
         cfg: req.cfg,
@@ -343,9 +306,9 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       const submitHeaders = new Headers(headers);
       submitHeaders.set("x-idempotency-key", crypto.randomUUID());
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}${createEndpoint}`,
+        url: `${baseUrl}${endpoint}`,
         headers: submitHeaders,
-        body: createBody,
+        body,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
@@ -356,13 +319,11 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       });
       try {
         await assertOkOrThrowHttpError(response, "xAI video generation failed");
-        const submitted = readXaiCreateResponse(await readXaiVideoJson(response));
+        const submitted = await readXaiVideoJson(response);
+        const submitError = xaiErrorMessage(submitted);
         const requestId = normalizeOptionalString(submitted.request_id);
         if (!requestId) {
-          throw new Error(
-            normalizeOptionalString(submitted.error?.message) ??
-              "xAI video generation response missing request_id",
-          );
+          throw new Error(submitError ?? "xAI video generation response missing request_id");
         }
         const pollDeadline = createProviderOperationDeadline({
           timeoutMs: resolveProviderOperationTimeoutMs({
@@ -408,12 +369,11 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
           getFailureMessage: (payload) => {
             const status = payload.status.toLowerCase();
             return XAI_VIDEO_TERMINAL_FAILURE_STATUSES.has(status)
-              ? (normalizeOptionalString(payload.error?.message) ??
-                  `xAI video generation ${status}`)
+              ? (payload.errorMessage ?? `xAI video generation ${status}`)
               : undefined;
           },
         });
-        const videoUrl = normalizeOptionalString(completed.video?.url);
+        const videoUrl = completed.videoUrl;
         if (!videoUrl) {
           throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
         }
@@ -436,7 +396,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
             requestId,
             status: completed.status,
             videoUrl,
-            mode: resolveXaiVideoMode(req),
+            mode,
           },
         };
       } finally {

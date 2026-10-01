@@ -1,4 +1,4 @@
-import { type Relay, finalizeEvent, type Event } from "nostr-tools";
+import { type Relay, finalizeEvent, verifyEvent, type Event } from "nostr-tools";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   queryBuzzDirectoryProfiles,
@@ -9,6 +9,7 @@ import { BuzzDirectoryState } from "./directory-state.js";
 import { inspectBuzzMentionSyntax, resolveBuzzMessageMentions } from "./mentions.js";
 import {
   BUZZ_NORMAL_MESSAGE_KIND,
+  BUZZ_INBOUND_MESSAGE_KINDS,
   BUZZ_TYPING_INDICATOR_KIND,
   buildBuzzMessageTags,
   parseBuzzMessageEvent,
@@ -20,6 +21,7 @@ import {
   connectAuthenticatedBuzzRelaySession,
   parseBuzzAuthTag,
 } from "./relay-auth.js";
+import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 import {
   BUZZ_REPLAY_DISPATCH_MAX_PENDING,
   createBuzzReplayDispatchQueue,
@@ -37,11 +39,13 @@ const REPLAY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const REPLAY_MAX_ENTRIES = 10_000;
 const REPLAY_STATE_MAX_ENTRIES = 50_000;
 const REPLAY_NAMESPACE_PREFIX = "buzz.inbound-dedupe";
+const THREAD_ROOT_CACHE_MAX_ENTRIES = 1_024;
 
 export interface BuzzBus {
   publicKey: string;
   directory: BuzzDirectoryState;
   refreshDirectory: () => Promise<void>;
+  isBotOwnedThread: (params: { channelId: string; threadId: string }) => Promise<boolean>;
   sendText: (params: {
     channelId: string;
     text: string;
@@ -297,10 +301,63 @@ export async function startBuzzBus(options: {
   let stopPresenceHeartbeat = () => {};
   let profileTask: Promise<void> | undefined;
   let membershipTracker: Awaited<ReturnType<typeof createBuzzRoomMembershipTracker>> | undefined;
+  const threadRoots = new Map<string, { channelId: string; isBotOwned: boolean }>();
+  const rememberThreadRoot = (event: Event) => {
+    const root = parseBuzzMessageEvent(event);
+    if (!root || root.threadId || !verifyEvent(event)) {
+      return;
+    }
+    threadRoots.set(event.id, {
+      channelId: root.channelId.toLowerCase(),
+      isBotOwned: event.pubkey === publicKey,
+    });
+    if (threadRoots.size > THREAD_ROOT_CACHE_MAX_ENTRIES) {
+      const oldest = threadRoots.keys().next().value;
+      if (oldest) {
+        threadRoots.delete(oldest);
+      }
+    }
+  };
   const bus: BuzzBus = {
     publicKey,
     directory,
     refreshDirectory: async () => await directoryRelay?.refreshRooms(options.channelIds),
+    isBotOwnedThread: async ({ channelId, threadId }) => {
+      signal.throwIfAborted();
+      if (!threadRoots.has(threadId)) {
+        try {
+          await queryBuzzRelaySnapshot({
+            relay,
+            filters: [{ ids: [threadId], kinds: [...BUZZ_INBOUND_MESSAGE_KINDS], limit: 1 }],
+            signal,
+            timeoutMessage: "Timed out loading Buzz thread root",
+            abortMessage: "Buzz thread root query aborted",
+            failureMessage: "Buzz thread root query failed",
+            closeReason: "thread root loaded",
+            closeMessage: (reason) => `Buzz thread root query closed: ${reason}`,
+            onEvent: (event) => {
+              if (event.id === threadId) {
+                rememberThreadRoot(event);
+              }
+            },
+            result: () => {},
+            onTimeout: reportFatalError,
+            checkAbortAfterSubscribe: true,
+          });
+        } catch (error) {
+          signal.throwIfAborted();
+          options.onMessageError?.(
+            error instanceof Error
+              ? error
+              : new Error("Buzz thread root query failed", { cause: error }),
+          );
+          return false;
+        }
+      }
+      signal.throwIfAborted();
+      const root = threadRoots.get(threadId);
+      return root?.channelId === channelId && root.isBotOwned;
+    },
     sendText: async ({ channelId, text, threadId, replyToId }) => {
       signal.throwIfAborted();
       const mentionSyntax = inspectBuzzMentionSyntax(text);
@@ -321,6 +378,7 @@ export async function startBuzzBus(options: {
         mentionedPubkeys,
       });
       await relay.publish(event);
+      rememberThreadRoot(event);
       return event.id;
     },
     sendTyping: async ({ channelId, threadId, replyToId }) => {
@@ -342,6 +400,7 @@ export async function startBuzzBus(options: {
       stopPresenceHeartbeat();
       directoryRelay?.close();
       replayGuard.clearMemory();
+      threadRoots.clear();
       relay.close();
       await membershipTracker?.close();
       // Relay close rejects pending publishes; join their profile continuation afterward.
@@ -393,7 +452,11 @@ export async function startBuzzBus(options: {
             onHistoryError: options.onHistoryError,
             onRoomUnavailable: options.onRoomUnavailable,
             onMessageEvent: (event, isMember, reservation) => {
-              if (signal.aborted || event.pubkey === publicKey) {
+              if (signal.aborted) {
+                return;
+              }
+              if (event.pubkey === publicKey) {
+                rememberThreadRoot(event);
                 return;
               }
               const message = parseBuzzMessageEvent(event);

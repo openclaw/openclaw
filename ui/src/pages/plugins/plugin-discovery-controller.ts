@@ -1,5 +1,6 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
+import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type {
@@ -31,14 +32,6 @@ type PluginDiscoveryGateway = {
   getClient: () => GatewayBrowserClient | null;
   isConnected: () => boolean;
 };
-
-function compareOfficialDownloads(left: PluginDiscoveryEntry, right: PluginDiscoveryEntry): number {
-  if (left.catalog.official !== right.catalog.official) {
-    return left.catalog.official ? -1 : 1;
-  }
-  const downloadOrder = (right.catalog.downloads ?? 0) - (left.catalog.downloads ?? 0);
-  return downloadOrder || left.catalog.name.localeCompare(right.catalog.name);
-}
 
 function rankedOverviewShelf(
   items: readonly PluginDiscoveryEntry[],
@@ -180,7 +173,9 @@ export class PluginDiscoveryController {
         this.result = {
           items:
             this.intent === "all" && !this.committedQuery
-              ? items.toSorted(compareOfficialDownloads)
+              ? items.toSorted((left, right) =>
+                  comparePluginCatalogEntries(left, right, this.category),
+                )
               : items,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
@@ -266,7 +261,9 @@ export class PluginDiscoveryController {
     );
     const items =
       params.intent === "all" && !params.query
-        ? page.items.toSorted(compareOfficialDownloads)
+        ? page.items.toSorted((left, right) =>
+            comparePluginCatalogEntries(left, right, params.category),
+          )
         : page.items;
     return {
       items,

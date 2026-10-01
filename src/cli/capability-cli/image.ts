@@ -40,25 +40,17 @@ async function runImageGenerate(params: {
   timeoutMs?: number;
   agent?: string;
 }) {
-  const {
-    requireProviderModelOverride,
-    resolveCapabilityProviderAgentId,
-    resolveLocalCapabilityRuntimeConfig,
-  } = await import("./shared.js");
+  const { requireProviderModelOverride, resolveLocalCapabilityAgent } = await import("./shared.js");
   const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
   const { generateImage } = await import("../../image-generation/runtime.js");
   const { getImageMetadata } = await import("../../media/media-services.js");
   const { readInputFiles, writeOutputAsset } = await import("../media-output.js");
   requireProviderModelOverride(params.model);
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  const { cfg, agentDir } = await resolveLocalCapabilityAgent({
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),
+    agent: params.agent,
   });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, `infer ${params.capability}`);
-  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
-  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
-  const agentDir = resolveAgentDir(cfg, agentId);
   const inputImages =
     params.file && params.file.length > 0
       ? await Promise.all(
@@ -134,24 +126,16 @@ async function runImageDescribe(params: {
   timeoutMs?: number;
   agent?: string;
 }) {
-  const {
-    requireProviderModelOverride,
-    resolveCapabilityProviderAgentId,
-    resolveLocalCapabilityRuntimeConfig,
-  } = await import("./shared.js");
+  const { requireProviderModelOverride, resolveLocalCapabilityAgent } = await import("./shared.js");
   const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
   const { runWithImageModelFallback } = await import("../../agents/model-fallback-image.js");
   const { describeImageFile, describePreparedImageWithModel, prepareImageDescriptionInput } =
     await import("../../media-understanding/runtime.js");
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),
+    agent: params.agent,
   });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, `infer ${params.capability}`);
-  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
-  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
-  const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
   const prompt = normalizeOptionalString(params.prompt);
   const outputs = await Promise.all(

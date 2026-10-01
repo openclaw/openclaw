@@ -1,10 +1,6 @@
 // Feishu tests cover tool result plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  feishuExternalToolResult,
-  toolExecutionErrorResult,
-  unknownToolActionResult,
-} from "./tool-result.js";
+import { feishuExternalToolResult, toolExecutionErrorResult } from "./tool-result.js";
 
 describe("tool result errors", () => {
   it("fences remote model text without changing the structured payload", () => {
@@ -21,15 +17,6 @@ describe("tool result errors", () => {
     expect(text).toContain("Source: API");
     expect(text).not.toContain("<|im_start|>");
     expect(text).not.toContain("deadbeef");
-  });
-
-  it("formats unknown action errors", () => {
-    expect(unknownToolActionResult("create")).toEqual({
-      content: [
-        { type: "text", text: JSON.stringify({ error: "Unknown action: create" }, null, 2) },
-      ],
-      details: { error: "Unknown action: create" },
-    });
   });
 
   it("fences upstream execution errors without changing their structured details", () => {

@@ -61,6 +61,10 @@ struct DashboardLinkRequest: Equatable {
 
 enum DashboardWindowAuth: Equatable {
     case sharedCredentials(gatewayUrl: String?, token: String?, password: String?)
+    // Token/password track config changes for document replacement. Only the
+    // separate accepted legacyCredentials map may reach a released UI; current
+    // UI uses native signing and never browser fallback. nil means not ready.
+    case nativeDevice(gatewayUrl: String, token: String?, password: String?, legacyCredentials: [String: String]? = nil)
     case browserIdentity(gatewayUrl: String)
 
     init(gatewayUrl: String?, token: String?, password: String?) {
@@ -71,21 +75,41 @@ enum DashboardWindowAuth: Equatable {
         switch self {
         case let .sharedCredentials(gatewayUrl, _, _): gatewayUrl
         case let .browserIdentity(gatewayUrl): gatewayUrl
+        case let .nativeDevice(gatewayUrl, _, _, _): gatewayUrl
         }
     }
 
     var token: String? {
-        guard case let .sharedCredentials(_, token, _) = self else { return nil }
-        return token
+        switch self {
+        case let .sharedCredentials(_, token, _), let .nativeDevice(_, token, _, _): token
+        case .browserIdentity: nil
+        }
     }
 
     var password: String? {
-        guard case let .sharedCredentials(_, _, password) = self else { return nil }
-        return password
+        switch self {
+        case let .sharedCredentials(_, _, password), let .nativeDevice(_, _, password, _): password
+        case .browserIdentity: nil
+        }
+    }
+
+    var legacyCredentials: [String: String] {
+        if case let .nativeDevice(_, _, _, credentials) = self { return credentials ?? [:] }
+        return [:]
+    }
+
+    var hasAcceptedNativeBinding: Bool {
+        if case let .nativeDevice(_, _, _, credentials) = self { return credentials != nil }
+        return false
     }
 
     var usesBrowserIdentity: Bool {
         if case .browserIdentity = self { return true }
+        return false
+    }
+
+    var usesNativeDevice: Bool {
+        if case .nativeDevice = self { return true }
         return false
     }
 

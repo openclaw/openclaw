@@ -15,12 +15,57 @@ export function renderCaptureWorkspace(model: CaptureViewModel): string {
     filteredEvents,
     analysisEnabled,
     selectedEvent,
+    selectedEventKey,
     pairedEventKey,
     groupedEvents,
     clusterEventBursts,
     availableDetailViews,
     effectiveDetailView,
   } = model;
+  const renderEventCard = (
+    event: CaptureEventView,
+    cluster?: ReturnType<CaptureViewModel["clusterEventBursts"]>[number],
+  ): string => {
+    const key = cluster?.key ?? captureEventKey(event);
+    const selected = selectedEventKey != null && key === selectedEventKey;
+    const paired = pairedEventKey != null && key === pairedEventKey;
+    const glyph = captureEventGlyph(event);
+    const providerMetadata = cluster
+      ? [event.provider, event.model]
+      : [event.provider, event.api, event.captureOrigin];
+    const providerRow = providerMetadata.some(Boolean)
+      ? `<div class="text-dimmed text-sm">${esc(providerMetadata.filter(Boolean).join(" · "))}</div>`
+      : "";
+    const pairedBadge = paired ? '<div class="capture-pair-badge">paired counterpart</div>' : "";
+    return `
+      <button class="capture-event-card capture-event-card-compact${selected ? " selected" : ""}${paired ? " paired" : ""}" data-capture-event="${esc(key)}" type="button">
+        <div class="capture-event-card-rail">
+          <span class="capture-glyph capture-glyph-${glyph.cls}">${esc(glyph.label)}</span>
+        </div>
+        <div class="capture-event-card-body">
+          <div class="capture-event-card-header">
+            <div class="capture-event-card-title-row">
+              <strong>${esc(event.host || event.provider || event.kind)}</strong>
+              <span class="text-dimmed text-sm">${esc([event.method, event.path].filter(Boolean).join(" ") || event.kind)}</span>
+            </div>
+            <div class="capture-event-card-meta-row">
+              ${
+                cluster
+                  ? `<span class="text-dimmed text-sm">${cluster.count} events</span>
+                   <span class="text-dimmed text-sm">${esc(formatTime(cluster.startTs))} → ${esc(formatTime(cluster.endTs))}</span>`
+                  : `<span class="text-dimmed text-sm">${esc(new Date(event.ts).toLocaleTimeString())}</span>`
+              }
+              ${event.status ? `<span class="text-dimmed text-sm">status ${event.status}</span>` : ""}
+              ${!cluster && event.closeCode ? `<span class="text-dimmed text-sm">close ${event.closeCode}</span>` : ""}
+              ${!cluster ? `<span class="text-dimmed text-sm">${esc(event.direction)} · ${esc(event.protocol)}</span>` : ""}
+            </div>
+          </div>
+          ${cluster ? providerRow + pairedBadge : pairedBadge + providerRow}
+          ${event.payloadPreview ? `<div class="capture-event-card-preview">${esc(redactCapturePayloadPreview(event.payloadPreview))}</div>` : ""}
+          ${!cluster && event.errorText ? `<div class="capture-error" style="margin-top:8px">${esc(event.errorText)}</div>` : ""}
+        </div>
+      </button>`;
+  };
   return `  <div class="results-view"${analysisEnabled ? ' style="grid-template-columns: minmax(420px, 1.7fr) minmax(280px, 0.9fr);"' : ""}>
     <div class="results-inspector">
       <div
@@ -46,110 +91,15 @@ export function renderCaptureWorkspace(model: CaptureViewModel): string {
                           ]
                             .filter(Boolean)
                             .join(" · ");
-                          const rowsLocal =
+                          const rowsLocal = (
                             state.captureGroupMode === "burst"
-                              ? clusterEventBursts(group.events)
-                                  .map((cluster) => {
-                                    const event = cluster.representative;
-                                    const key = cluster.key;
-                                    const selected =
-                                      selectedEvent != null &&
-                                      key === captureEventKey(selectedEvent);
-                                    const paired = pairedEventKey != null && key === pairedEventKey;
-                                    const glyph = captureEventGlyph(event);
-                                    return `
-                                    <button class="capture-event-card capture-event-card-compact${selected ? " selected" : ""}${paired ? " paired" : ""}" data-capture-event="${esc(key)}" type="button">
-                                      <div class="capture-event-card-rail">
-                                        <span class="capture-glyph capture-glyph-${glyph.cls}">${esc(glyph.label)}</span>
-                                      </div>
-                                      <div class="capture-event-card-body">
-                                        <div class="capture-event-card-header">
-                                          <div class="capture-event-card-title-row">
-                                            <strong>${esc(event.host || event.provider || event.kind)}</strong>
-                                            <span class="text-dimmed text-sm">${esc(
-                                              [event.method, event.path]
-                                                .filter(Boolean)
-                                                .join(" ") || event.kind,
-                                            )}</span>
-                                          </div>
-                                          <div class="capture-event-card-meta-row">
-                                            <span class="text-dimmed text-sm">${cluster.count} events</span>
-                                            <span class="text-dimmed text-sm">${esc(formatTime(cluster.startTs))} → ${esc(formatTime(cluster.endTs))}</span>
-                                            ${event.status ? `<span class="text-dimmed text-sm">status ${event.status}</span>` : ""}
-                                          </div>
-                                        </div>
-                                        ${
-                                          event.provider || event.model
-                                            ? `<div class="text-dimmed text-sm">${esc(
-                                                [event.provider, event.model]
-                                                  .filter(Boolean)
-                                                  .join(" · "),
-                                              )}</div>`
-                                            : ""
-                                        }
-                                        ${paired ? '<div class="capture-pair-badge">paired counterpart</div>' : ""}
-                                        ${
-                                          event.payloadPreview
-                                            ? `<div class="capture-event-card-preview">${esc(
-                                                redactCapturePayloadPreview(event.payloadPreview),
-                                              )}</div>`
-                                            : ""
-                                        }
-                                      </div>
-                                    </button>`;
-                                  })
-                                  .join("")
-                              : group.events
-                                  .map((event: CaptureEventView) => {
-                                    const key = captureEventKey(event);
-                                    const selected =
-                                      selectedEvent != null &&
-                                      key === captureEventKey(selectedEvent);
-                                    const paired = pairedEventKey != null && key === pairedEventKey;
-                                    const glyph = captureEventGlyph(event);
-                                    return `
-                              <button class="capture-event-card capture-event-card-compact${selected ? " selected" : ""}${paired ? " paired" : ""}" data-capture-event="${esc(key)}" type="button">
-                                <div class="capture-event-card-rail">
-                                  <span class="capture-glyph capture-glyph-${glyph.cls}">${esc(glyph.label)}</span>
-                                </div>
-                                <div class="capture-event-card-body">
-                                  <div class="capture-event-card-header">
-                                    <div class="capture-event-card-title-row">
-                                      <strong>${esc(event.host || event.provider || event.kind)}</strong>
-                                      <span class="text-dimmed text-sm">${esc(
-                                        [event.method, event.path].filter(Boolean).join(" ") ||
-                                          event.kind,
-                                      )}</span>
-                                    </div>
-                                    <div class="capture-event-card-meta-row">
-                                      <span class="text-dimmed text-sm">${esc(new Date(event.ts).toLocaleTimeString())}</span>
-                                      ${event.status ? `<span class="text-dimmed text-sm">status ${event.status}</span>` : ""}
-                                      ${event.closeCode ? `<span class="text-dimmed text-sm">close ${event.closeCode}</span>` : ""}
-                                      <span class="text-dimmed text-sm">${esc(event.direction)} · ${esc(event.protocol)}</span>
-                                    </div>
-                                  </div>
-                                ${paired ? '<div class="capture-pair-badge">paired counterpart</div>' : ""}
-                                ${
-                                  event.provider || event.api || event.captureOrigin
-                                    ? `<div class="text-dimmed text-sm">${esc(
-                                        [event.provider, event.api, event.captureOrigin]
-                                          .filter(Boolean)
-                                          .join(" · "),
-                                      )}</div>`
-                                    : ""
-                                }
-                                ${
-                                  event.payloadPreview
-                                    ? `<div class="capture-event-card-preview">${esc(
-                                        redactCapturePayloadPreview(event.payloadPreview),
-                                      )}</div>`
-                                    : ""
-                                }
-                                ${event.errorText ? `<div class="capture-error" style="margin-top:8px">${esc(event.errorText)}</div>` : ""}
-                                </div>
-                              </button>`;
-                                  })
-                                  .join("");
+                              ? clusterEventBursts(group.events).map((cluster) =>
+                                  renderEventCard(cluster.representative, cluster),
+                                )
+                              : group.events.map((event: CaptureEventView) =>
+                                  renderEventCard(event),
+                                )
+                          ).join("");
                           return state.captureGroupMode === "none"
                             ? rowsLocal
                             : `<section class="capture-group">

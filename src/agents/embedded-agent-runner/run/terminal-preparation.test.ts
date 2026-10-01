@@ -550,7 +550,7 @@ describe("prepareEmbeddedRunTerminal", () => {
     expect(prepared.hasSuccessfulFinalAssistantAfterPromptTimeout).toBe(false);
   });
 
-  it("uses the yielded assistant for paused-turn payload classification", async () => {
+  it("excludes cleanup and earlier completed assistants from clean-yield payloads", async () => {
     const completedAssistant = assistantMessage("stop");
     const yieldedAssistant = {
       ...assistantMessage("aborted"),
@@ -576,7 +576,7 @@ describe("prepareEmbeddedRunTerminal", () => {
     });
 
     expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({ lastAssistant: yieldedAssistant, currentAssistant: null }),
+      expect.objectContaining({ lastAssistant: undefined, currentAssistant: null }),
     );
   });
 

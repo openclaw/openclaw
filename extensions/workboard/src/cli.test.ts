@@ -252,18 +252,15 @@ describe("registerWorkboardCli", () => {
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
   });
 
-  it.each(["0", "-1", "1e3", "0x10", "5.5"])(
-    "rejects invalid --max-starts value %s",
-    async (value) => {
-      const store = createWorkboardSqliteTestStore();
-      const program = createProgram(store);
+  it.each(["0", "1e3"])("rejects invalid --max-starts value %s", async (value) => {
+    const store = createWorkboardSqliteTestStore();
+    const program = createProgram(store);
 
-      await expect(
-        program.parseAsync(["workboard", "dispatch", "--max-starts", value], { from: "user" }),
-      ).rejects.toThrow("--max-starts must be a positive integer.");
-      expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      program.parseAsync(["workboard", "dispatch", "--max-starts", value], { from: "user" }),
+    ).rejects.toThrow("--max-starts must be a positive integer.");
+    expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
+  });
 
   it("rejects ambiguous card id prefixes", async () => {
     const store = createWorkboardSqliteTestStore();

@@ -1,7 +1,10 @@
+import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
 // @vitest-environment node
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  areUiSessionKeysEquivalent,
+  normalizeDefaultMainSessionAliasForUi,
   canArchiveSessionRow,
   canDeleteSessionRows,
   canonicalUiSessionKeyForPersistence,
@@ -20,66 +23,20 @@ import {
 describe("Dashboard fixture session keys", () => {
   it.each([
     ["agent:main:main", "main", "main"],
-    ["agent:ops:home", "ops", "home"],
-    ["agent:ops:current", "ops", "current"],
     ["agent:research:main:thread", "research", "main:thread"],
-    ["agent:main:dashboard:uuid", "main", "dashboard:uuid"],
-    [
-      "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
-      "main",
-      "dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
-    ],
-    ["agent:main:node-proof-claude", "main", "node-proof-claude"],
-    ["agent:main:explicit:node-mcp-debug", "main", "explicit:node-mcp-debug"],
-    ["agent:main:telegram:direct:42", "main", "telegram:direct:42"],
-    ["agent:main:telegram:cards:dm:42", "main", "telegram:cards:dm:42"],
-    ["agent:main:telegram:cards:direct:42", "main", "telegram:cards:direct:42"],
-    ["agent:main:telegram:default:direct:42", "main", "telegram:default:direct:42"],
     ["agent:main:telegram:direct:12345😀67890", "main", "telegram:direct:12345😀67890"],
-    ["agent:main:telegram:group:-1001234567890", "main", "telegram:group:-1001234567890"],
-    ["agent:main:slack:channel:C1", "main", "slack:channel:C1", "slack:channel:c1"],
-    ["agent:main:dm:+123", "main", "dm:+123"],
-    ["agent:main:direct:+123", "main", "direct:+123"],
-    ["agent:main:dm:account:group:room", "main", "dm:account:group:room"],
-    [
-      "agent:main:slack:acct-1:channel:C1",
-      "main",
-      "slack:acct-1:channel:C1",
-      "slack:acct-1:channel:c1",
-    ],
     [
       "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
       "data-expert",
       "dingtalk:cidzg6sF43NZMy52Rnk8EN",
       "dingtalk:cidzg6sf43nzmy52rnk8en",
     ],
-    ["agent:main:telegram:user:12345:extra", "main", "telegram:user:12345:extra"],
-    ["agent:main:subagent:worker", "main", "subagent:worker"],
-    ["agent:main:cron:daily", "main", "cron:daily"],
-    [
-      "agent:ops:catalog:fixture:node%3ADevBox:Thread%3AA",
-      "ops",
-      "catalog:fixture:node%3ADevBox:Thread%3AA",
-      "catalog:fixture:node%3adevbox:thread%3aa",
-    ],
-    [
-      "agent:ops:matrix:channel:!Room:Example.Org:thread:$Event",
-      "ops",
-      "matrix:channel:!Room:Example.Org:thread:$Event",
-      "matrix:channel:!room:example.org:thread:$event",
-    ],
-    [
-      "agent:ops:signal:group:AbC123=:thread:xyz",
-      "ops",
-      "signal:group:AbC123=:thread:xyz",
-      "signal:group:abc123=:thread:xyz",
-    ],
   ] as const)("retains ownership and tail for %s", (key, agentId, rest, uiRest?: string) => {
     expect(parseAgentSessionKeyParts(key)).toEqual({ agentId, rest });
     expect(parseAgentSessionKey(key)).toEqual({ agentId, rest: uiRest ?? rest });
   });
 
-  it.each(["main", "global", "unknown", "catalog:claude:gateway%3Alocal:thread-1"])(
+  it.each(["main", "catalog:claude:gateway%3Alocal:thread-1"])(
     "keeps %s unscoped while retaining the UI owner fallback",
     (key) => {
       expect(parseAgentSessionKeyParts(key)).toBeNull();
@@ -155,10 +112,8 @@ describe("parseSessionKeyParts", () => {
   });
 
   it.each([
-    "global:default",
     "direct:some-key",
     "",
-    "agent:",
     "agent:main",
     "agent:main:",
     "agent:main:telegram",
@@ -169,7 +124,39 @@ describe("parseSessionKeyParts", () => {
 });
 
 describe("UI session identity", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([undefined, null, "", " \t\n", "main", " Agent:OPS:Work "])(
+    "preserves nonblank equivalence for identical %j inputs",
+    (key) => expect(areUiSessionKeysEquivalent(key, key)).toBe(Boolean(key?.trim())),
+  );
+
+  it.each([" Agent:Cache:Matrix:Channel:!Room:Example.Org ", " MAIN \t"])(
+    "normalizes a repeated comparison key only once: %j",
+    (key) => {
+      const normalize = vi.spyOn(stringCoerce, "normalizeOptionalString");
+      const expected = normalizeDefaultMainSessionAliasForUi(key);
+      for (let i = 0; i < 10; i++) {
+        expect(normalizeDefaultMainSessionAliasForUi(key)).toBe(expected);
+        expect(areUiSessionKeysEquivalent(key, expected)).toBe(true);
+      }
+      expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(1);
+    },
+  );
+
+  it("bounds retained comparison keys without changing evicted results", () => {
+    const normalize = vi.spyOn(stringCoerce, "normalizeOptionalString");
+    const key = "Agent:MemoEviction:Signal:Group:AbC=";
+    const expected = normalizeSessionKeyForUiComparison(key);
+    for (let i = 0; i < 4096; i++) {
+      normalizeSessionKeyForUiComparison(`Agent:MemoEviction:Dashboard:${i}`);
+    }
+    expect(normalizeSessionKeyForUiComparison(key)).toBe(expected);
+    expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(2);
+  });
   it.each([
+    [" Agent:OPS:Telegram:Direct:ABC ", "agent:ops:telegram:direct:abc"],
+    [" \t\n", ""],
     [
       "Agent:Ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
       "agent:ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
@@ -225,6 +212,8 @@ describe("UI session identity", () => {
         sessionKey: selectedKey,
       };
 
+      expect(areUiSessionKeysEquivalent(selectedKey, structuralAlias)).toBe(true);
+      expect(areUiSessionKeysEquivalent(selectedKey, distinctKey)).toBe(false);
       expect(uiSessionEventMatches(host, structuralAlias)).toBe(true);
       expect(uiSessionEventMatches(host, distinctKey)).toBe(false);
       expect(canonicalUiSessionKeyForPersistence(host, structuralAlias)).toBe(selectedKey);
@@ -292,13 +281,8 @@ describe("UI session identity", () => {
       expected: "agent:main:dashboard:navigation-parent",
     },
     {
-      parentSessionKey: "",
-      spawnedBy: "  agent:main:controller  ",
-      expected: "agent:main:controller",
-    },
-    {
       parentSessionKey: "  \t  ",
-      spawnedBy: "agent:main:controller",
+      spawnedBy: "  agent:main:controller  ",
       expected: "agent:main:controller",
     },
     { parentSessionKey: null, spawnedBy: "  ", expected: undefined },

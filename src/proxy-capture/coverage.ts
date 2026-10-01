@@ -1,4 +1,3 @@
-// Proxy capture coverage helpers summarize which network calls were captured.
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import type { CaptureProtocol } from "./types.js";
 
@@ -124,45 +123,21 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
 
 let warnedCoverageSessionKey: string | null = null;
 
-function listDebugProxyCoverageEntries(): DebugProxyCoverageEntry[] {
-  // Return copies because callers may render/sort/filter entries for CLI output.
-  return DEBUG_PROXY_COVERAGE_ENTRIES.map((entry) => ({
-    ...entry,
-    protocols: [...entry.protocols],
-  }));
-}
-
-function summarizeDebugProxyCoverage(
-  entries: readonly DebugProxyCoverageEntry[] = DEBUG_PROXY_COVERAGE_ENTRIES,
-): DebugProxyCoverageSummary {
-  let captured = 0;
-  let proxyOnly = 0;
-  let uncovered = 0;
-  for (const entry of entries) {
-    if (entry.status === "captured") {
-      captured += 1;
-      continue;
-    }
-    if (entry.status === "proxy-only") {
-      proxyOnly += 1;
-      continue;
-    }
-    uncovered += 1;
-  }
-  return {
-    total: entries.length,
-    captured,
-    proxyOnly,
-    uncovered,
-  };
-}
-
 export function buildDebugProxyCoverageReport() {
-  const entries = listDebugProxyCoverageEntries();
-  return {
-    summary: summarizeDebugProxyCoverage(entries),
-    entries,
+  // Return copies because callers may render/sort/filter entries for CLI output.
+  const entries: DebugProxyCoverageEntry[] = [];
+  const counts = { captured: 0, "proxy-only": 0, uncovered: 0 };
+  for (const entry of DEBUG_PROXY_COVERAGE_ENTRIES) {
+    entries.push({ ...entry, protocols: [...entry.protocols] });
+    counts[entry.status] += 1;
+  }
+  const summary: DebugProxyCoverageSummary = {
+    total: entries.length,
+    captured: counts.captured,
+    proxyOnly: counts["proxy-only"],
+    uncovered: counts.uncovered,
   };
+  return { summary, entries };
 }
 
 export function maybeWarnAboutDebugProxyCoverage(

@@ -9,27 +9,32 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "./doctor-auth-oauth-sidecar.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const states: OpenClawTestState[] = [];
 
-function makePrompter(shouldRepair: boolean): DoctorPrompter {
+function makePrompter(shouldRepair: boolean) {
+  return { confirmAutoFix: vi.fn(async () => shouldRepair) };
+}
+
+function profileStore(profileId: string, fields: Record<string, unknown>) {
   return {
-    confirm: vi.fn(async () => shouldRepair),
-    confirmAutoFix: vi.fn(async () => shouldRepair),
-    confirmAggressiveAutoFix: vi.fn(async () => shouldRepair),
-    confirmRuntimeRepair: vi.fn(async () => shouldRepair),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    },
+    version: 1,
+    profiles: { [profileId]: { type: "oauth", provider: "openai-codex", ...fields } },
   };
+}
+
+function writeSidecar(
+  state: OpenClawTestState,
+  ref: { id: string },
+  profileId: string,
+  material: Record<string, unknown>,
+) {
+  return state.writeJson(path.join("credentials", "auth-profiles", `${ref.id}.json`), {
+    version: 1,
+    profileId,
+    provider: "openai-codex",
+    ...material,
+  });
 }
 
 async function makeTestState(seed = "legacy-oauth-seed"): Promise<OpenClawTestState> {
@@ -96,19 +101,14 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
       provider: "openai-codex" as const,
       id: "0123456789abcdef0123456789abcdef",
     };
+    const profile = {
+      expires: 1777777777000,
+      email: "codex@example.com",
+      accountId: "acct_123",
+      chatgptPlanType: "pro",
+    };
     const auth = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "openai-codex",
-          expires: 1777777777000,
-          email: "codex@example.com",
-          accountId: "acct_123",
-          chatgptPlanType: "pro",
-          oauthRef: ref,
-        },
-      },
+      ...profileStore(profileId, { ...profile, oauthRef: ref }),
       order: {
         "openai-codex": [profileId],
       },
@@ -117,21 +117,15 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
       },
     };
     const authPath = await writeLegacyAuthProfiles(state, auth);
-    const sidecarPath = await state.writeJson(
-      path.join("credentials", "auth-profiles", `${ref.id}.json`),
-      {
-        version: 1,
-        profileId,
-        provider: "openai-codex",
-        encrypted: {
-          algorithm: "aes-256-gcm",
-          iv: "BwcHBwcHBwcHBwcH",
-          tag: "gSm_Lg58EVO-5wZGQlWHEA",
-          ciphertext:
-            "4qrZ4-zdgUdttB3gTUNORWdtO4gqLiFgTsilUX3-9RZiN2MLkCDdxQXQ2GfeqN1zi1qb9iURwK0sO0TJZfxO3zULMKNlRgUT",
-        },
+    const sidecarPath = await writeSidecar(state, ref, profileId, {
+      encrypted: {
+        algorithm: "aes-256-gcm",
+        iv: "BwcHBwcHBwcHBwcH",
+        tag: "gSm_Lg58EVO-5wZGQlWHEA",
+        ciphertext:
+          "4qrZ4-zdgUdttB3gTUNORWdtO4gqLiFgTsilUX3-9RZiN2MLkCDdxQXQ2GfeqN1zi1qb9iURwK0sO0TJZfxO3zULMKNlRgUT",
       },
-    );
+    });
 
     const result = await maybeRepairLegacyOAuthSidecarProfiles({
       cfg: {},
@@ -147,45 +141,25 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     expect(fs.existsSync(sidecarPath)).toBe(false);
     expect(JSON.parse(fs.readFileSync(`${authPath}.oauth-ref.123.bak`, "utf8"))).toEqual(auth);
     expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "openai-codex",
-          expires: 1777777777000,
-          email: "codex@example.com",
-          accountId: "acct_123",
-          chatgptPlanType: "pro",
-          access: "access-token",
-          refresh: "refresh-token",
-          idToken: "id-token",
-        },
-      },
-      order: {
-        "openai-codex": [profileId],
-      },
-      lastGood: {
-        "openai-codex": profileId,
-      },
+      ...auth,
+      ...profileStore(profileId, {
+        ...profile,
+        access: "access-token",
+        refresh: "refresh-token",
+        idToken: "id-token",
+      }),
     });
   });
 
   it("reports legacy sidecar stores without rewriting when repair is declined", async () => {
     const state = await makeTestState();
-    const auth = {
-      version: 1,
-      profiles: {
-        "openai-codex:default": {
-          type: "oauth",
-          provider: "openai-codex",
-          oauthRef: {
-            source: "openclaw-credentials",
-            provider: "openai-codex",
-            id: "fedcba9876543210fedcba9876543210",
-          },
-        },
+    const auth = profileStore("openai-codex:default", {
+      oauthRef: {
+        source: "openclaw-credentials",
+        provider: "openai-codex",
+        id: "fedcba9876543210fedcba9876543210",
       },
-    };
+    });
     const authPath = await writeLegacyAuthProfiles(state, auth);
 
     const result = await maybeRepairLegacyOAuthSidecarProfiles({
@@ -210,36 +184,23 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     };
     const authPath = await writeLegacyAuthProfiles(
       state,
-      {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "openai-codex",
-            oauthRef: ref,
-          },
-        },
-      },
+      profileStore(profileId, {
+        oauthRef: ref,
+      }),
       "retired-ops",
     );
-    const sidecarPath = await state.writeJson(
-      path.join("credentials", "auth-profiles", `${ref.id}.json`),
-      {
-        version: 1,
+    const sidecarPath = await writeSidecar(state, ref, profileId, {
+      encrypted: encryptLegacySidecarMaterial({
+        ref,
         profileId,
         provider: "openai-codex",
-        encrypted: encryptLegacySidecarMaterial({
-          ref,
-          profileId,
-          provider: "openai-codex",
-          seed,
-          material: {
-            access: "retired-owner-access",
-            refresh: "retired-owner-refresh",
-          },
-        }),
-      },
-    );
+        seed,
+        material: {
+          access: "retired-owner-access",
+          refresh: "retired-owner-refresh",
+        },
+      }),
+    });
 
     const result = await maybeRepairLegacyOAuthSidecarProfiles({
       cfg: {
@@ -259,17 +220,12 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     expect(result.changes).toEqual([
       `Migrated 1 legacy Codex OAuth profile in ${authPath} to inline credentials (backup: ${authPath}.oauth-ref.234.bak).`,
     ]);
-    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "openai-codex",
-          access: "retired-owner-access",
-          refresh: "retired-owner-refresh",
-        },
-      },
-    });
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(
+      profileStore(profileId, {
+        access: "retired-owner-access",
+        refresh: "retired-owner-refresh",
+      }),
+    );
     expect(fs.existsSync(sidecarPath)).toBe(false);
   });
 
@@ -281,31 +237,18 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
       provider: "openai-codex" as const,
       id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     };
-    const auth = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "openai-codex",
-          oauthRef: ref,
-        },
-      },
-    };
+    const auth = profileStore(profileId, {
+      oauthRef: ref,
+    });
     const authPath = await writeLegacyAuthProfiles(state, auth);
-    const sidecarPath = await state.writeJson(
-      path.join("credentials", "auth-profiles", `${ref.id}.json`),
-      {
-        version: 1,
-        profileId,
-        provider: "openai-codex",
-        encrypted: {
-          algorithm: "aes-256-gcm",
-          iv: "BwcHBwcHBwcHBwcH",
-          tag: "ZHGhT2cekYFZCOxu8pP0KA",
-          ciphertext: "OQPDJez2jSRH4FPxFNNkwEw7PDbClF6Ty6T2l4TLGvr6bdJfhK6VA6ccWwC1xlrR4ENA",
-        },
+    const sidecarPath = await writeSidecar(state, ref, profileId, {
+      encrypted: {
+        algorithm: "aes-256-gcm",
+        iv: "BwcHBwcHBwcHBwcH",
+        tag: "ZHGhT2cekYFZCOxu8pP0KA",
+        ciphertext: "OQPDJez2jSRH4FPxFNNkwEw7PDbClF6Ty6T2l4TLGvr6bdJfhK6VA6ccWwC1xlrR4ENA",
       },
-    );
+    });
 
     const result = await maybeRepairLegacyOAuthSidecarProfiles({
       cfg: {},
@@ -334,9 +277,10 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
       },
     );
 
+    const prompter = makePrompter(true);
     const result = await maybeRepairLegacyOAuthSidecarProfiles({
       cfg: {},
-      prompter: makePrompter(true),
+      prompter,
     });
 
     expect(result.detected).toEqual([sidecarPath]);
@@ -345,24 +289,6 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
       "Found 1 unreferenced legacy Codex OAuth sidecar credential file; left in place because external agent directories outside this scan may still reference it.",
     ]);
     expect(fs.existsSync(sidecarPath)).toBe(true);
-  });
-
-  it("does not prompt when only unreferenced sidecars remain (guaranteed no-op)", async () => {
-    const state = await makeTestState();
-    await state.writeJson(
-      path.join("credentials", "auth-profiles", "cccccccccccccccccccccccccccccccc.json"),
-      {
-        version: 1,
-        profileId: "openai-codex:orphan",
-        provider: "openai-codex",
-        access: "orphaned-access-token",
-        refresh: "orphaned-refresh-token",
-      },
-    );
-
-    const prompter = makePrompter(true);
-    await maybeRepairLegacyOAuthSidecarProfiles({ cfg: {}, prompter });
-
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
   });
 
@@ -386,31 +312,18 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
       fs.writeFileSync(
         path.join(realAgentDir, "auth-profiles.json"),
         `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              [profileId]: {
-                type: "oauth",
-                provider: "openai-codex",
-                oauthRef: ref,
-              },
-            },
-          },
+          profileStore(profileId, {
+            oauthRef: ref,
+          }),
           null,
           2,
         )}\n`,
         "utf8",
       );
-      const sidecarPath = await state.writeJson(
-        path.join("credentials", "auth-profiles", `${ref.id}.json`),
-        {
-          version: 1,
-          profileId,
-          provider: "openai-codex",
-          access: "linked-access-token",
-          refresh: "linked-refresh-token",
-        },
-      );
+      const sidecarPath = await writeSidecar(state, ref, profileId, {
+        access: "linked-access-token",
+        refresh: "linked-refresh-token",
+      });
 
       const result = await maybeRepairLegacyOAuthSidecarProfiles({
         cfg: {},
@@ -422,146 +335,64 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
       expect(result.changes).toHaveLength(1);
       expect(
         JSON.parse(fs.readFileSync(path.join(realAgentDir, "auth-profiles.json"), "utf8")),
-      ).toEqual({
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "linked-access-token",
-            refresh: "linked-refresh-token",
-          },
-        },
-      });
+      ).toEqual(
+        profileStore(profileId, {
+          access: "linked-access-token",
+          refresh: "linked-refresh-token",
+        }),
+      );
       expect(fs.existsSync(sidecarPath)).toBe(false);
     },
   );
 
-  it("scans OPENCLAW_AGENT_DIR before treating sidecars as unreferenced", async () => {
-    const state = await makeTestState();
-    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-    const agentDir = state.path("external-agent");
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    const profileId = "openai-codex:external";
-    const ref = {
-      source: "openclaw-credentials" as const,
-      provider: "openai-codex" as const,
-      id: "dddddddddddddddddddddddddddddddd",
-    };
-    const auth = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "openai-codex",
-          oauthRef: ref,
-        },
-      },
-    };
-    try {
-      fs.mkdirSync(agentDir, { recursive: true });
-      fs.writeFileSync(authPath, `${JSON.stringify(auth, null, 2)}\n`, "utf8");
-      process.env.OPENCLAW_AGENT_DIR = agentDir;
-      const sidecarPath = await state.writeJson(
-        path.join("credentials", "auth-profiles", `${ref.id}.json`),
-        {
-          version: 1,
-          profileId,
-          provider: "openai-codex",
-          access: "external-access-token",
-          refresh: "external-refresh-token",
-        },
-      );
+  it.each(["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"] as const)(
+    "scans %s before treating sidecars as unreferenced",
+    async (envName) => {
+      const state = await makeTestState();
+      const previousAgentDir = process.env[envName];
+      const agentDir = state.path("external-agent");
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const profileId = "openai-codex:external";
+      const ref = {
+        source: "openclaw-credentials",
+        provider: "openai-codex",
+        id: "dddddddddddddddddddddddddddddddd",
+      };
+      try {
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(
+          authPath,
+          JSON.stringify(profileStore(profileId, { oauthRef: ref })),
+          "utf8",
+        );
+        process.env[envName] = agentDir;
+        const material = { access: "external-access-token", refresh: "external-refresh-token" };
+        const sidecarPath = await writeSidecar(state, ref, profileId, material);
 
-      const result = await maybeRepairLegacyOAuthSidecarProfiles({
-        cfg: {},
-        prompter: makePrompter(true),
-        now: () => 789,
-      });
+        const result = await maybeRepairLegacyOAuthSidecarProfiles({
+          cfg: {},
+          prompter: makePrompter(true),
+          now: () => 789,
+        });
 
-      expect(result.detected).toEqual([authPath]);
-      expect(result.warnings).toStrictEqual([]);
-      expect(result.changes).toStrictEqual([
-        `Migrated 1 legacy Codex OAuth profile in ${authPath} to inline credentials (backup: ${authPath}.oauth-ref.789.bak).`,
-      ]);
-      expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "external-access-token",
-            refresh: "external-refresh-token",
-          },
-        },
-      });
-      expect(fs.existsSync(sidecarPath)).toBe(false);
-    } finally {
-      if (previousAgentDir === undefined) {
-        delete process.env.OPENCLAW_AGENT_DIR;
-      } else {
-        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+        expect(result.detected).toEqual([authPath]);
+        expect(result.warnings).toStrictEqual([]);
+        expect(result.changes).toStrictEqual([
+          `Migrated 1 legacy Codex OAuth profile in ${authPath} to inline credentials (backup: ${authPath}.oauth-ref.789.bak).`,
+        ]);
+        expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(
+          profileStore(profileId, material),
+        );
+        expect(fs.existsSync(sidecarPath)).toBe(false);
+      } finally {
+        if (previousAgentDir === undefined) {
+          delete process.env[envName];
+        } else {
+          process.env[envName] = previousAgentDir;
+        }
       }
-    }
-  });
-
-  it("scans PI_CODING_AGENT_DIR like the flat-store migration so sidecar secrets inline first", async () => {
-    const state = await makeTestState();
-    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    const agentDir = state.path("pi-agent");
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    const profileId = "openai-codex:pi";
-    const ref = {
-      source: "openclaw-credentials" as const,
-      provider: "openai-codex" as const,
-      id: "ffffffffffffffffffffffffffffffff",
-    };
-    try {
-      fs.mkdirSync(agentDir, { recursive: true });
-      fs.writeFileSync(
-        authPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              [profileId]: { type: "oauth", provider: "openai-codex", oauthRef: ref },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-      process.env.PI_CODING_AGENT_DIR = agentDir;
-      const sidecarPath = await state.writeJson(
-        path.join("credentials", "auth-profiles", `${ref.id}.json`),
-        {
-          version: 1,
-          profileId,
-          provider: "openai-codex",
-          access: "pi-access-token",
-          refresh: "pi-refresh-token",
-        },
-      );
-
-      const result = await maybeRepairLegacyOAuthSidecarProfiles({
-        cfg: {},
-        prompter: makePrompter(true),
-        now: () => 987,
-      });
-
-      expect(result.detected).toEqual([authPath]);
-      expect(result.warnings).toStrictEqual([]);
-      expect(result.changes).toHaveLength(1);
-      expect(fs.existsSync(sidecarPath)).toBe(false);
-    } finally {
-      if (previousAgentDir === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-      }
-    }
-  });
+    },
+  );
 
   it("migrates every store before removing a shared legacy sidecar", async () => {
     const seed = "shared-sidecar-seed";
@@ -572,33 +403,20 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
       provider: "openai-codex" as const,
       id: "cccccccccccccccccccccccccccccccc",
     };
-    const auth = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "openai-codex",
-          oauthRef: ref,
-        },
-      },
-    };
+    const auth = profileStore(profileId, {
+      oauthRef: ref,
+    });
     const mainAuthPath = await writeLegacyAuthProfiles(state, auth, "main");
     const workerAuthPath = await writeLegacyAuthProfiles(state, auth, "worker");
-    const sidecarPath = await state.writeJson(
-      path.join("credentials", "auth-profiles", `${ref.id}.json`),
-      {
-        version: 1,
-        profileId,
-        provider: "openai-codex",
-        encrypted: {
-          algorithm: "aes-256-gcm",
-          iv: "BwcHBwcHBwcHBwcH",
-          tag: "91XpNgcMQ-AVeo7NDnv11Q",
-          ciphertext:
-            "fVMsIFtJ0LX1ayciusBnyS7KulJU2dCAdkKU4yMLGYTVB-Gq0X_SvUqPTkAX_a1ZBIjGIC6nFH_3HvhWHMIX7Cs",
-        },
+    const sidecarPath = await writeSidecar(state, ref, profileId, {
+      encrypted: {
+        algorithm: "aes-256-gcm",
+        iv: "BwcHBwcHBwcHBwcH",
+        tag: "91XpNgcMQ-AVeo7NDnv11Q",
+        ciphertext:
+          "fVMsIFtJ0LX1ayciusBnyS7KulJU2dCAdkKU4yMLGYTVB-Gq0X_SvUqPTkAX_a1ZBIjGIC6nFH_3HvhWHMIX7Cs",
       },
-    );
+    });
 
     const result = await maybeRepairLegacyOAuthSidecarProfiles({
       cfg: {},
@@ -613,17 +431,12 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
       `Migrated 1 legacy Codex OAuth profile in ${workerAuthPath} to inline credentials (backup: ${workerAuthPath}.oauth-ref.456.bak).`,
     ]);
     for (const authPath of [mainAuthPath, workerAuthPath]) {
-      expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "shared-access-token",
-            refresh: "shared-refresh-token",
-          },
-        },
-      });
+      expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(
+        profileStore(profileId, {
+          access: "shared-access-token",
+          refresh: "shared-refresh-token",
+        }),
+      );
     }
     expect(fs.existsSync(sidecarPath)).toBe(false);
   });

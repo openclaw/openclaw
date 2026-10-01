@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 
 // Install the shared module mocks before any source imports can load the runtime.
@@ -16,14 +16,40 @@ import {
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import * as workspaceRetention from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
+
+function placementStoreDefaults(
+  readPlacements: () => ReadonlyArray<{ sessionId: string }> = () => [],
+) {
+  return {
+    readChangeSnapshot: async () => readPlacements(),
+    readProjection: async () => ({
+      placements: new Map(readPlacements().map((placement) => [placement.sessionId, placement])),
+    }),
+    workspaceResultInstanceId: () => "gateway-test",
+    retireSessionPlacement: vi.fn(),
+    pruneOrphanedWorkspaceReconciliations: async () => [],
+    listWorkspaceReconciliationOwners: async () => [],
+    listPendingWorkspaceResults: () => [],
+  };
+}
+
+beforeEach(() => {
+  runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+    read: vi.fn(),
+    version: vi.fn(() => 0),
+    sweep: vi.fn().mockResolvedValue(undefined),
+  });
+});
 
 describe("worker placement startup health lifetime", () => {
   it("samples disk on schedule while reconciliation is stuck and drains both on stop", async () => {
@@ -31,9 +57,24 @@ describe("worker placement startup health lifetime", () => {
     const scheduler = createTestGatewayScheduler(time.clock);
     const releaseReconcile = createDeferredCore();
     const releaseScheduledHealth = createDeferredCore();
+    const releaseScheduledCleanup = createDeferredCore();
+    const retentionStopped = createDeferredCore();
     const reconcileStarted = createDeferredCore();
     const scheduledHealthStarted = createDeferredCore();
     const healthError = new Error("probe transport failed");
+    const createRetention = workspaceRetention.createNodeWorkspaceRetainCoordinator;
+    const retentionFactory = vi
+      .spyOn(workspaceRetention, "createNodeWorkspaceRetainCoordinator")
+      .mockImplementationOnce((options) => {
+        const retention = createRetention(options);
+        return {
+          ...retention,
+          async stop() {
+            await retention.stop();
+            retentionStopped.resolve();
+          },
+        };
+      });
     let holdScheduledWork = false;
     const diskSpace = {
       read: vi.fn(),
@@ -48,6 +89,7 @@ describe("worker placement startup health lifetime", () => {
     const reconcile = vi.fn().mockResolvedValue(undefined);
     const reconcileActive = vi.fn(async () => {
       if (holdScheduledWork) {
+        void trackAsyncWork(() => releaseScheduledCleanup.promise);
         reconcileStarted.resolve();
         await releaseReconcile.promise;
       }
@@ -72,13 +114,9 @@ describe("worker placement startup health lifetime", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
-        workspaceResultInstanceId: () => "gateway-test",
+        ...placementStoreDefaults(),
         get: () => undefined,
         list: () => [],
-        retireSessionPlacement: vi.fn(),
-        pruneOrphanedWorkspaceReconciliations: () => [],
-        listWorkspaceReconciliationOwners: () => [],
-        listPendingWorkspaceResults: () => [],
       } as never,
       environments: environments as never,
       gatewayNamespace: "gateway-test",
@@ -118,6 +156,10 @@ describe("worker placement startup health lifetime", () => {
       expect(environments.stop).not.toHaveBeenCalled();
 
       releaseReconcile.resolve();
+      await retentionStopped.promise;
+      await Promise.resolve();
+      expect(environments.stop).not.toHaveBeenCalled();
+      releaseScheduledCleanup.resolve();
       await stopping;
 
       expect(warn).toHaveBeenCalledWith("Worker disk-space sweep failed: probe transport failed");
@@ -125,8 +167,10 @@ describe("worker placement startup health lifetime", () => {
     } finally {
       releaseReconcile.resolve();
       releaseScheduledHealth.resolve();
+      releaseScheduledCleanup.resolve();
       await sidecar?.stop();
       await scheduledWake;
+      retentionFactory.mockRestore();
     }
   });
 
@@ -135,11 +179,6 @@ describe("worker placement startup health lifetime", () => {
     async (state) => {
       const releaseRecovery = createDeferredCore();
       const reconcile = vi.fn(async () => await releaseRecovery.promise);
-      runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-        read: vi.fn(),
-        version: vi.fn(() => 0),
-        sweep: vi.fn().mockResolvedValue(undefined),
-      });
       runtimeFactoryMocks.createDispatch.mockReturnValue({
         dispatch: vi.fn(),
         forceDestroyEnvironment: vi.fn(),
@@ -169,13 +208,9 @@ describe("worker placement startup health lifetime", () => {
         getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
         placements: {
-          workspaceResultInstanceId: () => "gateway-test",
+          ...placementStoreDefaults(),
           get: () => placement,
           list: () => [placement],
-          retireSessionPlacement: vi.fn(),
-          pruneOrphanedWorkspaceReconciliations: () => [],
-          listWorkspaceReconciliationOwners: () => [],
-          listPendingWorkspaceResults: () => [],
         } as never,
         environments: environments as never,
         gatewayNamespace: "gateway-test",
@@ -189,7 +224,9 @@ describe("worker placement startup health lifetime", () => {
       });
 
       try {
-        await vi.waitFor(() => expect(reconcile).toHaveBeenCalledWith("startup"));
+        await vi.waitFor(() =>
+          expect(reconcile).toHaveBeenCalledWith("startup", expect.any(Function)),
+        );
         expect(environments.start).not.toHaveBeenCalled();
 
         let ready = false;
@@ -219,11 +256,6 @@ describe("worker placement startup health lifetime", () => {
     runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValueOnce(
       runtimeFactoryMocks.resolveSessionEvidence,
     );
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
     runtimeFactoryMocks.createDispatch.mockReturnValue({
       dispatch: vi.fn(),
       forceDestroyEnvironment: vi.fn(),
@@ -264,13 +296,10 @@ describe("worker placement startup health lifetime", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
-        workspaceResultInstanceId: () => "gateway-test",
+        ...placementStoreDefaults(),
         get: () => placement,
         list: () => [placement],
         retireSessionPlacement,
-        pruneOrphanedWorkspaceReconciliations: () => [],
-        listWorkspaceReconciliationOwners: () => [],
-        listPendingWorkspaceResults: () => [],
       } as never,
       environments: environments as never,
       gatewayNamespace: "gateway-test",
@@ -315,11 +344,6 @@ describe("worker placement startup health lifetime", () => {
 
   it("retries worker environment cleanup after a failed stop attempt", async () => {
     const stopError = new Error("tunnel cleanup failed");
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
     runtimeFactoryMocks.createDispatch.mockReturnValue({
       dispatch: vi.fn(),
       forceDestroyEnvironment: vi.fn(),
@@ -338,13 +362,9 @@ describe("worker placement startup health lifetime", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
-        workspaceResultInstanceId: () => "gateway-test",
+        ...placementStoreDefaults(),
         get: () => undefined,
         list: () => [],
-        retireSessionPlacement: vi.fn(),
-        pruneOrphanedWorkspaceReconciliations: () => [],
-        listWorkspaceReconciliationOwners: () => [],
-        listPendingWorkspaceResults: () => [],
       } as never,
       environments: environments as never,
       gatewayNamespace: "gateway-test",
@@ -394,11 +414,6 @@ describe("worker placement startup health lifetime", () => {
     const reconcile = vi.fn(async () => {
       expect(installedGuard).toBeDefined();
     });
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
     runtimeFactoryMocks.createDispatch.mockReturnValue({
       dispatch: vi.fn(),
       forceDestroyEnvironment: vi.fn(),
@@ -422,13 +437,9 @@ describe("worker placement startup health lifetime", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
-        workspaceResultInstanceId: () => "gateway-test",
+        ...placementStoreDefaults(() => placementRows),
         get: () => undefined,
         list: () => placementRows,
-        retireSessionPlacement: vi.fn(),
-        pruneOrphanedWorkspaceReconciliations: () => [],
-        listWorkspaceReconciliationOwners: () => [],
-        listPendingWorkspaceResults: () => [],
       } as never,
       environments: environments as never,
       gatewayNamespace: "gateway-test",
@@ -511,11 +522,6 @@ describe("worker placement startup health lifetime", () => {
       state: "provisioning" as const,
       environmentId: "worker-close-guard",
     };
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
     runtimeFactoryMocks.createDispatch.mockReturnValue({
       dispatch: vi.fn(),
       forceDestroyEnvironment: vi.fn(),
@@ -560,13 +566,9 @@ describe("worker placement startup health lifetime", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
-        workspaceResultInstanceId: () => "gateway-test",
+        ...placementStoreDefaults(() => [placement]),
         get: () => placement,
         list: () => [placement],
-        retireSessionPlacement: vi.fn(),
-        pruneOrphanedWorkspaceReconciliations: () => [],
-        listWorkspaceReconciliationOwners: () => [],
-        listPendingWorkspaceResults: () => [],
       } as never,
       environments: environments as never,
       gatewayNamespace: "gateway-test",
@@ -630,11 +632,6 @@ describe("worker placement startup health lifetime", () => {
 
 describe("worker placement startup recovery authority", () => {
   it("holds exact session authority through async recovery work after cancellation", async () => {
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
     runtimeFactoryMocks.createDispatch.mockReturnValue({
       dispatch: vi.fn(),
       forceDestroyEnvironment: vi.fn(),
@@ -756,12 +753,19 @@ describe("worker placement startup recovery authority", () => {
       }),
     ).rejects.toThrow("placement changed");
 
-    moveDestinationMocks.resolveCanonicalSession.mockReturnValueOnce({
-      sessionId: "session-replaced",
-      worktree: { id: "worktree-recovery" },
-    });
-    await expect(
-      dispatchOptions.runRecoveryBarrier({ ...request, run: async () => {} }),
-    ).rejects.toThrow("changed before cloud worker recovery");
+    const recoverReplacedSession = vi.fn(async () => {});
+    // Keep the replacement installed through preparation and the final authority check.
+    await moveDestinationMocks.resolveCanonicalSession.withImplementation(
+      () => ({
+        sessionId: "session-replaced",
+        worktree: { id: "worktree-recovery" },
+      }),
+      async () => {
+        await expect(
+          dispatchOptions.runRecoveryBarrier({ ...request, run: recoverReplacedSession }),
+        ).rejects.toThrow("changed before cloud worker recovery");
+      },
+    );
+    expect(recoverReplacedSession).not.toHaveBeenCalled();
   });
 });

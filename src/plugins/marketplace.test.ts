@@ -1,4 +1,5 @@
 // Covers plugin marketplace catalog loading and validation.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -59,6 +60,16 @@ beforeAll(async () => {
   ({ installPluginFromMarketplace, listMarketplacePlugins, resolveMarketplaceInstallShortcut } =
     await import("./marketplace.js"));
 });
+
+function mockSuccessfulMarketplaceInstall() {
+  installPluginFromPathMock.mockResolvedValue({
+    ok: true,
+    pluginId: "frontend-design",
+    targetDir: "/tmp/frontend-design",
+    version: "0.1.0",
+    extensions: ["index.ts"],
+  });
+}
 
 async function writeRemoteMarketplaceFixture(params: {
   repoDir: string;
@@ -428,13 +439,7 @@ describe("marketplace plugins", () => {
           ],
         },
       });
-      installPluginFromPathMock.mockResolvedValue({
-        ok: true,
-        pluginId: "frontend-design",
-        targetDir: "/tmp/frontend-design",
-        version: "0.1.0",
-        extensions: ["index.ts"],
-      });
+      mockSuccessfulMarketplaceInstall();
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -476,13 +481,7 @@ describe("marketplace plugins", () => {
           ],
         },
       });
-      installPluginFromPathMock.mockResolvedValue({
-        ok: true,
-        pluginId: "frontend-design",
-        targetDir: "/tmp/frontend-design",
-        version: "0.1.0",
-        extensions: ["index.ts"],
-      });
+      mockSuccessfulMarketplaceInstall();
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -524,13 +523,7 @@ describe("marketplace plugins", () => {
           plugins: [{ name: "frontend-design", source: "./plugins/frontend-design" }],
         },
       });
-      installPluginFromPathMock.mockResolvedValue({
-        ok: true,
-        pluginId: "frontend-design",
-        targetDir: "/tmp/frontend-design",
-        version: "0.1.0",
-        extensions: ["index.ts"],
-      });
+      mockSuccessfulMarketplaceInstall();
       const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
 
       await installPluginFromMarketplace({
@@ -715,13 +708,7 @@ describe("marketplace plugins", () => {
           },
         }),
       );
-      installPluginFromPathMock.mockResolvedValue({
-        ok: true,
-        pluginId: "frontend-design",
-        targetDir: "/tmp/frontend-design",
-        version: "0.1.0",
-        extensions: ["index.ts"],
-      });
+      mockSuccessfulMarketplaceInstall();
       const registryRead = vi.spyOn(jsonFiles, "tryReadJson");
 
       try {
@@ -771,13 +758,7 @@ describe("marketplace plugins", () => {
         ],
       },
     });
-    installPluginFromPathMock.mockResolvedValue({
-      ok: true,
-      pluginId: "frontend-design",
-      targetDir: "/tmp/frontend-design",
-      version: "0.1.0",
-      extensions: ["index.ts"],
-    });
+    mockSuccessfulMarketplaceInstall();
 
     const result = await installPluginFromMarketplace({
       marketplace: "owner/repo",
@@ -809,13 +790,7 @@ describe("marketplace plugins", () => {
         ],
       },
     });
-    installPluginFromPathMock.mockResolvedValue({
-      ok: true,
-      pluginId: "frontend-design",
-      targetDir: "/tmp/frontend-design",
-      version: "0.1.0",
-      extensions: ["index.ts"],
-    });
+    mockSuccessfulMarketplaceInstall();
 
     const result = await installPluginFromMarketplace({
       marketplace: "owner/repo",
@@ -861,13 +836,7 @@ describe("marketplace plugins", () => {
       stderr: "",
       killed: false,
     });
-    installPluginFromPathMock.mockResolvedValue({
-      ok: true,
-      pluginId: "frontend-design",
-      targetDir: "/tmp/frontend-design",
-      version: "0.1.0",
-      extensions: ["index.ts"],
-    });
+    mockSuccessfulMarketplaceInstall();
 
     const result = await installPluginFromMarketplace({
       marketplace: `owner/repo#${commit}`,

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
@@ -9,6 +10,7 @@ import {
   hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import {
   withCodexAppServerSessionDeletion,
@@ -85,7 +87,7 @@ describe("Codex session deletion subscriptions", () => {
         }
       });
     };
-    return { bindingStore, binding, client, remove, request, resume, seed };
+    return { bindingStore, binding, client, remove, request, resume, seed, releaseClientLease };
   }
 
   it.each(["deletion", "context reset"] as const)(
@@ -104,6 +106,51 @@ describe("Codex session deletion subscriptions", () => {
         true,
       );
       expect(fixture.request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["deletion", "context reset"] as const)(
+    "%s joins native child settlement before releasing its subscription and client lease",
+    async (operation) => {
+      const fixture = createFixture(operation);
+      await fixture.seed();
+      await retainCodexAppServerBindingSubscription(fixture.client, fixture.binding.threadId);
+      const retiring = createDeferred<void>();
+      const childSettlement = createDeferred<void>();
+      const retire = vi
+        .spyOn(codexNativeSubagentMonitorRuntime, "retireParent")
+        .mockImplementation(async () => {
+          retiring.resolve();
+          await childSettlement.promise;
+        });
+      const deletion = fixture.remove();
+      const settled = Promise.allSettled([deletion]);
+      try {
+        await withTimeout(
+          retiring.promise,
+          5_000,
+          "session cleanup did not retire native children",
+        );
+        await nextTurn();
+        expect(retire).toHaveBeenCalledExactlyOnceWith(fixture.client, fixture.binding.threadId);
+        expect(fixture.bindingStore.read(session)).toBeUndefined();
+        expect(hasCodexAppServerLiveThread(fixture.client, fixture.binding.threadId)).toBe(true);
+        expect(fixture.request).not.toHaveBeenCalled();
+        expect(fixture.releaseClientLease).not.toHaveBeenCalled();
+
+        childSettlement.resolve();
+        await withTimeout(deletion, 5_000, "session cleanup did not join native child settlement");
+        expect(fixture.request).toHaveBeenCalledExactlyOnceWith(
+          "thread/unsubscribe",
+          { threadId: fixture.binding.threadId },
+          { timeoutMs: 5_000, assertCurrent: expect.any(Function) },
+        );
+        expect(hasCodexAppServerLiveThread(fixture.client, fixture.binding.threadId)).toBe(false);
+        expect(fixture.releaseClientLease).toHaveBeenCalledOnce();
+      } finally {
+        childSettlement.resolve();
+        await withTimeout(settled, 5_000, "native retirement test cleanup did not settle");
+      }
     },
   );
 

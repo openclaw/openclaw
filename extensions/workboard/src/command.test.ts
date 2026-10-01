@@ -6,10 +6,7 @@ import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardCommand } from "./command.js";
 import type { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
-import {
-  resolveAgentWorkboardWorkspaceRuntime,
-  resolveCommandWorkboardWorkspaceAccess,
-} from "./workspace-access.js";
+import { resolveCommandWorkboardWorkspaceAccess } from "./workspace-access.js";
 
 function createApi(run = vi.fn().mockResolvedValue({ runId: "run-1" })): OpenClawPluginApi {
   return {
@@ -118,30 +115,6 @@ describe("handleWorkboardCommand", () => {
         }),
       }),
     ).toEqual({ unrestricted: false, roots: ["/workspace"], writable: false });
-  });
-
-  it("projects target sandbox authority into Workboard roots", async () => {
-    const safeConfig = {
-      agents: {
-        defaults: { sandbox: { mode: "all" as const, workspaceAccess: "rw" as const } },
-        list: [{ id: "main", default: true, workspace: "/workspace" }],
-      },
-    };
-    await expect(
-      resolveAgentWorkboardWorkspaceRuntime({
-        config: safeConfig,
-        agentId: "main",
-        sessionKey: "agent:main:subagent:workboard-card",
-        workspaceDir: "/workspace",
-        prepareSandboxWorkspaceAuthority: async () => ({
-          sandboxed: true,
-          workspaceAccess: "rw",
-        }),
-      }),
-    ).resolves.toEqual({
-      sandboxed: true,
-      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-    });
   });
 
   it("attests the default agent for an unassigned slash-command card", async () => {

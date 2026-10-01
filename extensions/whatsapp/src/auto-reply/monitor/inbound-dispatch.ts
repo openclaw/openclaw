@@ -12,9 +12,10 @@ import {
   listMessageReceiptPlatformIds,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext, ReplyDispatchKind } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   requireWhatsAppInboundAdmission,
   resolveWhatsAppAdmissionChannelIngress,
@@ -27,6 +28,7 @@ import {
 } from "../../outbound-media-contract.js";
 import { newConnectionId } from "../../reconnect.js";
 import type {
+  deliverWebReply,
   WhatsAppReplyDeliveryResult,
   WhatsAppReplyTransportContext,
 } from "../deliver-reply.js";
@@ -34,6 +36,7 @@ import { createWhatsAppReplyTransportContext } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
+import type { updateLastRouteInBackground } from "./last-route.js";
 import {
   projectPreparedChannelInbound,
   resolveWhatsAppInboundReplyPolicy,
@@ -133,16 +136,9 @@ function createWhatsAppChannelDeliveryResult(params: {
 
 function isWhatsAppVisibleDeliveryError(error: unknown): boolean {
   return (
-    (typeof error === "object" &&
-      error !== null &&
-      !Array.isArray(error) &&
-      (error as { visibleReplySent?: unknown }).visibleReplySent === true) ||
+    (isRecord(error) && error.visibleReplySent === true) ||
     (isChannelPartialDeliveryError(error) && error.deliveryResult.visibleReplySent)
   );
-}
-
-function readTrimmedString(value: unknown): string {
-  return normalizeOptionalString(value) ?? "";
 }
 
 function markWhatsAppReplyDeliveryErrorVisibleAfterFlush(
@@ -193,14 +189,14 @@ function resolveWhatsAppDurableReplyToId(params: {
   if (params.payload.replyToId === null) {
     return null;
   }
-  const explicitPayloadReplyToId = readTrimmedString(params.payload.replyToId);
+  const explicitPayloadReplyToId = normalizeOptionalString(params.payload.replyToId);
   if (explicitPayloadReplyToId) {
     return explicitPayloadReplyToId;
   }
   const hasVisibleInboundReplyTarget =
-    Boolean(readTrimmedString(params.context.ReplyToId)) ||
-    Boolean(readTrimmedString(params.context.ReplyToIdFull));
-  const currentInboundMessageId = readTrimmedString(params.currentMessageId);
+    Boolean(normalizeOptionalString(params.context.ReplyToId)) ||
+    Boolean(normalizeOptionalString(params.context.ReplyToIdFull));
+  const currentInboundMessageId = normalizeOptionalString(params.currentMessageId);
   if (params.info.kind === "final" && hasVisibleInboundReplyTarget && currentInboundMessageId) {
     return currentInboundMessageId;
   }
@@ -299,14 +295,13 @@ function createWhatsAppMediaOnlyReplyCoalescer(params: {
     defer(
       pending: Omit<PendingWhatsAppMediaOnlyPayload, "resolveFinalization" | "rejectFinalization">,
     ) {
-      let resolveFinalization!: (result: WhatsAppReplyDeliveryVisibility) => void;
-      let rejectFinalization!: (error: unknown) => void;
-      const finalization = new Promise<WhatsAppReplyDeliveryVisibility>((resolve, reject) => {
-        resolveFinalization = resolve;
-        rejectFinalization = reject;
+      const finalization = createDeferred<WhatsAppReplyDeliveryVisibility>();
+      pendingMediaOnlyPayloads.push({
+        ...pending,
+        resolveFinalization: finalization.resolve,
+        rejectFinalization: finalization.reject,
       });
-      pendingMediaOnlyPayloads.push({ ...pending, resolveFinalization, rejectFinalization });
-      return finalization;
+      return finalization.promise;
     },
     flushNonDuplicateMedia: (mediaUrls: Set<string>) =>
       flushWhere((pending) => !hasWhatsAppMediaUrlOverlap(pending.mediaUrls, mediaUrls)),
@@ -556,17 +551,7 @@ export function updateWhatsAppMainLastRoute(params: {
   dmRouteTarget?: string;
   pinnedMainDmRecipient: string | null;
   route: ReturnType<typeof resolveAgentRoute>;
-  updateLastRoute: (params: {
-    cfg: ReturnType<LoadConfigFn>;
-    backgroundTasks: Set<Promise<unknown>>;
-    storeAgentId: string;
-    sessionKey: string;
-    channel: "whatsapp";
-    to: string;
-    accountId?: string;
-    ctx: Record<string, unknown>;
-    warn: ReturnType<typeof getChildLogger>["warn"];
-  }) => void;
+  updateLastRoute: typeof updateLastRouteInBackground;
   warn: ReturnType<typeof getChildLogger>["warn"];
 }) {
   const shouldUpdateMainLastRoute =
@@ -610,20 +595,7 @@ export function createWhatsAppReplyPlan(params: {
   cfg: ReturnType<LoadConfigFn>;
   connectionId: string;
   context: FinalizedMsgContext;
-  deliverReply: (params: {
-    replyResult: ReplyPayload;
-    normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
-    transport: WhatsAppReplyTransportContext;
-    mediaLocalRoots: readonly string[];
-    maxMediaBytes: number;
-    textLimit: number;
-    chunkMode?: ReturnType<typeof resolveChunkMode>;
-    replyLogger: ReturnType<typeof getChildLogger>;
-    connectionId?: string;
-    skipLog?: boolean;
-    tableMode?: ReturnType<typeof resolveMarkdownTableMode>;
-    onMediaAccepted?: (mediaUrl: string) => void;
-  }) => Promise<WhatsAppReplyDeliveryResult>;
+  deliverReply: typeof deliverWebReply;
   maxMediaBytes: number;
   maxMediaTextChunkLimit?: number;
   inbound: PreparedChannelInbound;

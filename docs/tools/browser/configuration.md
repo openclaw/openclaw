@@ -76,12 +76,17 @@ an unmarked baseline. Existing-session snapshots omit deltas.
 
 ### Tab cleanup ownership
 
-Session tab cleanup applies only to tabs created by the OpenClaw browser tool
-with `action: "open"`. OpenClaw does not adopt tabs that were already open,
-opened by the user, or otherwise have unknown ownership. The
+Session tab cleanup applies only to tabs a session owns: tabs created by the
+OpenClaw browser tool with `action: "open"` and tabs opened from that session's
+Browser panel in the Control UI. OpenClaw does not adopt tabs that were already
+open, opened outside OpenClaw, or otherwise have unknown ownership. The
 `browser.tabCleanup` block controls periodic idle and cap sweeps for primary
 sessions. Changes apply on the next sweep without restarting the browser;
 disabling it does not disable explicit session lifecycle cleanup.
+
+Periodic cleanup belongs to the Browser plugin service and continues after the
+request that first started browser control ends. Stopping or reloading that
+service cancels future sweeps and waits for active cleanup to finish.
 
 OpenClaw-managed Chrome also applies a separate, best-effort cap of eight page
 tabs when opening a tab. This cap is independent of `browser.tabCleanup`;

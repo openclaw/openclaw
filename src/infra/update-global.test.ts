@@ -26,7 +26,6 @@ import {
   detectGlobalInstallManagerForRoot,
   createGlobalInstallEnv,
   globalInstallArgs,
-  globalInstallFallbackArgs,
   isPackageTargetAlreadyCurrent,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
@@ -147,16 +146,9 @@ describe("update global helpers", () => {
       expected: "2026.7.30-beta.1",
     },
     { packageName: "openclaw", spec: "openclaw@^1.2.3", expected: null },
-    { packageName: "openclaw", spec: "openclaw@~1.2.3", expected: null },
-    { packageName: "openclaw", spec: "openclaw@>=1.2.3", expected: null },
     { packageName: "openclaw", spec: "openclaw@1.2.x", expected: null },
     { packageName: "openclaw", spec: "openclaw@1.2", expected: null },
-    { packageName: "openclaw", spec: "openclaw@*", expected: null },
     { packageName: "openclaw", spec: "openclaw@latest", expected: null },
-    { packageName: "openclaw", spec: "openclaw@beta", expected: null },
-    { packageName: "openclaw", spec: "openclaw@next", expected: null },
-    { packageName: "openclaw", spec: "openclaw@main", expected: null },
-    { packageName: "openclaw", spec: "openclaw@nightly", expected: null },
     { packageName: "openclaw", spec: "openclaw@V1.2.3", expected: null },
     { packageName: "openclaw", spec: "openclaw@npm:@vendor/openclaw@1.2.3", expected: null },
     { packageName: "openclaw", spec: "openclaw@file:../candidate", expected: null },
@@ -249,9 +241,6 @@ describe("update global helpers", () => {
   });
 
   it.each([
-    ["11.12.0", "unflagged"],
-    ["11.13.0", "unflagged"],
-    ["11.14.0", "unflagged"],
     ["11.15.9", "unflagged"],
     ["11.16.0", "allow-scripts-advisory"],
     ["12.0.0", "allow-scripts"],
@@ -309,6 +298,20 @@ describe("update global helpers", () => {
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
     });
     expect(explicitEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
+  });
+
+  it.each([undefined, "1.4.3"])("sets the package launcher only under Bun (%s)", async (bun) => {
+    vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun } });
+    try {
+      const env = await createGlobalInstallEnv({});
+      if (bun) {
+        expect(env?.OPENCLAW_PACKAGE_BUN_LAUNCHER).toBe(process.execPath);
+      } else {
+        expect(env).not.toHaveProperty("OPENCLAW_PACKAGE_BUN_LAUNCHER");
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
@@ -648,7 +651,7 @@ describe("update global helpers", () => {
         }),
       ).resolves.toEqual({
         manager: "bun",
-        command: "bun",
+        command: process.versions.bun ? process.execPath : "bun",
         globalRoot: bunRoot,
         packageRoot: pkgRoot,
       });
@@ -786,46 +789,33 @@ describe("update global helpers", () => {
       "github:openclaw/openclaw#release/2026.5.12",
     ]);
     expect(globalInstallArgs("bun", "openclaw@latest")).toEqual([
-      "bun",
+      process.versions.bun ? process.execPath : "bun",
       "add",
       "-g",
       "--trust",
       "openclaw@latest",
     ]);
     expect(globalInstallArgs("bun", "/tmp/openclaw-current.tgz")).toEqual([
-      "bun",
+      process.versions.bun ? process.execPath : "bun",
       "add",
       "-g",
       "--trust",
       "openclaw@file:/tmp/openclaw-current.tgz",
     ]);
     expect(globalInstallArgs("bun", "https://example.test/openclaw.tgz")).toEqual([
-      "bun",
+      process.versions.bun ? process.execPath : "bun",
       "add",
       "-g",
       "--trust",
       "openclaw@https://example.test/openclaw.tgz",
     ]);
     expect(globalInstallArgs("bun", "github:openclaw/openclaw#main")).toEqual([
-      "bun",
+      process.versions.bun ? process.execPath : "bun",
       "add",
       "-g",
       "--trust",
       "openclaw@github:openclaw/openclaw#main",
     ]);
-    expect(globalInstallFallbackArgs("npm", "openclaw@latest")).toEqual([
-      "npm",
-      "i",
-      "-g",
-      "--allow-scripts=openclaw",
-      "openclaw@latest",
-      "--omit=optional",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
-      "--min-release-age=0",
-    ]);
-    expect(globalInstallFallbackArgs("pnpm", "openclaw@latest")).toBeNull();
   });
 
   it("resolves npm prefix layouts for normal global roots", () => {

@@ -50,7 +50,7 @@ import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 it("does not probe archive recovery during ordinary replacements", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const maintenance = createOpenClawDatabaseMaintenanceScope(() => undefined);
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
     try {
       // The native maintenance path exposes SQL from the same replacement kernel.
       await maintenance.run(async () => {
@@ -519,7 +519,6 @@ it.each([
           stateContext?: Parameters<typeof original>[2],
           assertCurrent?: Parameters<typeof original>[3],
           createAdmission?: Parameters<typeof original>[4],
-          requireStateLifecycle?: Parameters<typeof original>[5],
         ) => {
           let replacing = false;
           let injected = false;
@@ -596,7 +595,6 @@ it.each([
                 nativeAdmission = owned.admission;
                 return owned;
               }),
-            requireStateLifecycle,
           );
         },
       );

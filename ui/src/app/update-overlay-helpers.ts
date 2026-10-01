@@ -10,6 +10,7 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
+import { resolveHeldUpdateCampaignId } from "./update-schedule-projection.ts";
 
 export type ApplicationStatusBanner = {
   source?: "read";
@@ -335,10 +336,10 @@ export function projectUpdateCheckoutResponse(
     ...(updateSchedule !== undefined
       ? {
           updateSchedule,
-          heldUpdateCampaignId:
-            updateSchedule?.campaign?.holdUntilMs !== undefined
-              ? updateSchedule.campaign.id
-              : current.heldUpdateCampaignId,
+          heldUpdateCampaignId: resolveHeldUpdateCampaignId(
+            updateSchedule,
+            current.heldUpdateCampaignId,
+          ),
         }
       : {}),
   };

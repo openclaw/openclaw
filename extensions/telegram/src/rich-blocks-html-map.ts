@@ -98,6 +98,13 @@ function countChildren(nodes: readonly HtmlNode[], name: string): number {
   return nodes.filter((node) => node.kind === "element" && node.name === name).length;
 }
 
+function findClosedChild(nodes: readonly HtmlNode[], name: string) {
+  return nodes.find(
+    (node): node is Extract<HtmlNode, { kind: "element" }> =>
+      node.kind === "element" && node.closed && node.name === name,
+  );
+}
+
 function captionFromFigcaption(nodes: readonly HtmlNode[]): RichBlockCaption | undefined {
   const figcaption = nodes.find(
     (node): node is Extract<HtmlNode, { kind: "element" }> =>
@@ -106,10 +113,7 @@ function captionFromFigcaption(nodes: readonly HtmlNode[]): RichBlockCaption | u
   if (!figcaption) {
     return undefined;
   }
-  const cite = figcaption.children.find(
-    (node): node is Extract<HtmlNode, { kind: "element" }> =>
-      node.kind === "element" && node.closed && node.name === "cite",
-  );
+  const cite = findClosedChild(figcaption.children, "cite");
   const textNodes = figcaption.children.filter((node) => node !== cite);
   const text = htmlNodesToRichText(textNodes);
   if (text === "" && !cite) {
@@ -130,22 +134,13 @@ function figureToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichB
   // A figure carries exactly one media element and at most one caption;
   // multiples would silently drop authored content.
   const mediaChildren = node.children.filter(
-    (child) => child.kind === "element" && child.name !== "figcaption",
-  );
-  if (mediaChildren.length > 1 || countChildren(node.children, "figcaption") > 1) {
-    return undefined;
-  }
-  const media = node.children.find(
     (child): child is Extract<HtmlNode, { kind: "element" }> =>
-      child.kind === "element" &&
-      (child.name === "img" ||
-        child.name === "video" ||
-        child.name === "audio" ||
-        child.name === "tg-map"),
+      child.kind === "element" && child.name !== "figcaption",
   );
-  if (!media) {
+  if (mediaChildren.length !== 1 || countChildren(node.children, "figcaption") > 1) {
     return undefined;
   }
+  const media = mediaChildren[0]!;
   const caption = captionFromFigcaption(node.children);
   if (media.name === "tg-map") {
     const map = mapToBlock(media);
@@ -168,7 +163,7 @@ function listToBlock(
   }
   const items: InputRichBlockListItem[] = [];
   for (const child of node.children) {
-    if (child.kind !== "element" || child.name !== "li") {
+    if (child.kind !== "element") {
       continue;
     }
     const checkbox = child.children.find(
@@ -199,14 +194,6 @@ function listToBlock(
   };
 }
 
-function resolveTableCellAlign(value: string | undefined): RichBlockTableCell["align"] {
-  return value === "center" || value === "right" ? value : "left";
-}
-
-function resolveTableCellValign(value: string | undefined): RichBlockTableCell["valign"] {
-  return value === "top" || value === "bottom" ? value : "middle";
-}
-
 function tableCellFromElement(
   node: Extract<HtmlNode, { kind: "element" }>,
   inHeader: boolean,
@@ -218,8 +205,8 @@ function tableCellFromElement(
   const align = attrs.get("align")?.toLowerCase();
   const valign = attrs.get("valign")?.toLowerCase();
   return {
-    align: resolveTableCellAlign(align),
-    valign: resolveTableCellValign(valign),
+    align: align === "center" || align === "right" ? align : "left",
+    valign: valign === "top" || valign === "bottom" ? valign : "middle",
     ...(text !== "" ? { text } : {}),
     ...(node.name === "th" || inHeader ? { is_header: true as const } : {}),
     ...(Number.isSafeInteger(colspan) && colspan > 1 ? { colspan } : {}),
@@ -292,10 +279,7 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
           continue;
         }
         const row = child.children
-          .filter(
-            (cell): cell is Extract<HtmlNode, { kind: "element" }> =>
-              cell.kind === "element" && (cell.name === "td" || cell.name === "th"),
-          )
+          .filter((cell) => cell.kind === "element")
           .map((cell) => tableCellFromElement(cell, inHeader));
         if (row.length > 0) {
           cells.push(row);
@@ -414,10 +398,7 @@ function preToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBloc
     (child): child is Extract<HtmlNode, { kind: "element" }> => child.kind === "element",
   );
   const [code] = elements;
-  if (
-    code &&
-    (elements.length > 1 || !code.closed || hasStrayContent(node.children, PRE_CHILDREN))
-  ) {
+  if (code && (elements.length > 1 || hasStrayContent(node.children, PRE_CHILDREN))) {
     return undefined;
   }
   const text = nodeText(node.children);
@@ -443,10 +424,7 @@ function elementToBlock(
     case "pre":
       return preToBlock(node);
     case "details": {
-      const summary = node.children.find(
-        (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.closed && child.name === "summary",
-      );
+      const summary = findClosedChild(node.children, "summary");
       const bodyNodes = node.children.filter((child) => child !== summary);
       const blocks = renderContent(bodyNodes);
       return {
@@ -468,10 +446,7 @@ function elementToBlock(
     case "audio":
       return mediaBlockFromElement(node);
     case "blockquote": {
-      const cite = node.children.find(
-        (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.closed && child.name === "cite",
-      );
+      const cite = findClosedChild(node.children, "cite");
       const blocks = renderContent(node.children.filter((child) => child !== cite));
       if (blocks.length === 0) {
         return undefined;
@@ -482,10 +457,7 @@ function elementToBlock(
         : { type: "blockquote", blocks };
     }
     case "aside": {
-      const cite = node.children.find(
-        (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.closed && child.name === "cite",
-      );
+      const cite = findClosedChild(node.children, "cite");
       const text = htmlNodesToRichText(node.children.filter((child) => child !== cite));
       if (text === "") {
         return undefined;

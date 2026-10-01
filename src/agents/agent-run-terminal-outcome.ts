@@ -359,9 +359,7 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
       terminal.settlementWarning && { settlementWarning: terminal.settlementWarning }),
     aborted:
       (terminal.kind === "aborted" && terminal.source !== "yield_cleanup") ||
-      (terminal.kind === "timeout" &&
-        terminal.source !== "observation" &&
-        terminal.aborted === true),
+      hasAgentRunAttemptTimeoutAbort(terminal),
     cleanupYieldAborted: terminal.kind === "aborted" && terminal.source === "yield_cleanup",
     externalAbort,
     failed: failure !== undefined,
@@ -401,10 +399,9 @@ type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
   status?: unknown;
 };
 
-type AgentRunLifecycleTerminalData = Omit<AgentRunTerminalWaitInput, "status"> & {
+type AgentRunLifecycleTerminalData = AgentRunTerminalWaitInput & {
   aborted?: unknown;
   fallbackExhaustedFailure?: unknown;
-  status?: unknown;
 };
 
 /** Shared grace window for terminal observations that may still be followed by a retry. */

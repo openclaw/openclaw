@@ -31,6 +31,12 @@ final class ScreenRecordService: @unchecked Sendable {
             defer { lock.unlock() }
             return body(self)
         }
+
+        func recordError(_ error: Error) {
+            self.withLock { state in
+                if state.handlerError == nil { state.handlerError = error }
+            }
+        }
     }
 
     /// Owns cancellation only until ReplayKit resolves startup. A cancelled
@@ -40,7 +46,6 @@ final class ScreenRecordService: @unchecked Sendable {
         private enum Phase {
             case idle
             case starting
-            case startRequested
             case cancelling
             case cancelled
             case finished
@@ -84,7 +89,7 @@ final class ScreenRecordService: @unchecked Sendable {
                 switch state.phase {
                 case .idle:
                     state.phase = .cancelled
-                case .starting, .startRequested:
+                case .starting:
                     state.phase = .cancelling
                 case .cancelling, .cancelled, .finished:
                     break
@@ -103,7 +108,7 @@ final class ScreenRecordService: @unchecked Sendable {
                 case .cancelled:
                     state.phase = .finished
                     return false
-                case .starting, .startRequested, .cancelling, .finished:
+                case .starting, .cancelling, .finished:
                     preconditionFailure("ReplayKit capture start operation can only run once")
                 }
             }
@@ -115,17 +120,6 @@ final class ScreenRecordService: @unchecked Sendable {
             self.startAction { [weak self] error in
                 self?.captureDidStart(error: error)
             }
-
-            self.withLock { state in
-                switch state.phase {
-                case .starting:
-                    state.phase = .startRequested
-                case .cancelling, .finished:
-                    break
-                case .idle, .startRequested, .cancelled:
-                    break
-                }
-            }
         }
 
         private func captureDidStart(error: Error?) {
@@ -133,7 +127,7 @@ final class ScreenRecordService: @unchecked Sendable {
             var shouldStop = false
             let completion = self.withLock { state -> (CheckedContinuation<Void, Error>, Result<Void, Error>)? in
                 switch state.phase {
-                case .starting, .startRequested:
+                case .starting:
                     state.phase = .finished
                     guard let continuation = state.continuation else { return nil }
                     state.continuation = nil
@@ -213,13 +207,12 @@ final class ScreenRecordService: @unchecked Sendable {
     init(
         recordQueue: DispatchQueue = DispatchQueue(label: "ai.openclawfoundation.app.screenrecord"),
         startReplayKitCaptureAction: @escaping StartCaptureAction = { includeAudio, handler, completion in
-            startReplayKitCapture(
-                includeAudio: includeAudio,
-                handler: handler,
-                completion: completion)
+            let recorder = RPScreenRecorder.shared()
+            recorder.isMicrophoneEnabled = includeAudio
+            recorder.startCapture(handler: handler, completionHandler: completion)
         },
         stopReplayKitCaptureAction: @escaping StopCaptureAction = { completion in
-            stopReplayKitCapture(completion)
+            RPScreenRecorder.shared().stopCapture { error in completion(error) }
         })
     {
         self.recordQueue = recordQueue
@@ -236,9 +229,7 @@ final class ScreenRecordService: @unchecked Sendable {
             switch self {
             case let .invalidScreenIndex(idx):
                 "Invalid screen index \(idx)"
-            case let .captureFailed(msg):
-                msg
-            case let .writeFailed(msg):
+            case let .captureFailed(msg), let .writeFailed(msg):
                 msg
             }
         }
@@ -351,11 +342,7 @@ final class ScreenRecordService: @unchecked Sendable {
                 self.recordQueue.async {
                     let sample = sampleBox.value
                     if let error {
-                        state.withLock { state in
-                            if state.handlerError == nil {
-                                state.handlerError = error
-                            }
-                        }
+                        state.recordError(error)
                         return
                     }
                     guard CMSampleBufferDataIsReady(sample) else { return }
@@ -404,11 +391,7 @@ final class ScreenRecordService: @unchecked Sendable {
             } else {
                 let err = state.withLock { $0.writer?.error }
                 if let err {
-                    state.withLock { state in
-                        if state.handlerError == nil {
-                            state.handlerError = ScreenRecordError.writeFailed(err.localizedDescription)
-                        }
-                    }
+                    state.recordError(ScreenRecordError.writeFailed(err.localizedDescription))
                 }
             }
         }
@@ -421,11 +404,7 @@ final class ScreenRecordService: @unchecked Sendable {
         pts: CMTime)
     {
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sample) else {
-            state.withLock { state in
-                if state.handlerError == nil {
-                    state.handlerError = ScreenRecordError.captureFailed("Missing image buffer")
-                }
-            }
+            state.recordError(ScreenRecordError.captureFailed("Missing image buffer"))
             return
         }
         let width = CVPixelBufferGetWidth(imageBuffer)
@@ -465,11 +444,7 @@ final class ScreenRecordService: @unchecked Sendable {
                 state.videoInput = vInput
             }
         } catch {
-            state.withLock { state in
-                if state.handlerError == nil {
-                    state.handlerError = error
-                }
-            }
+            state.recordError(error)
         }
     }
 
@@ -557,31 +532,3 @@ final class ScreenRecordService: @unchecked Sendable {
         }
     }
 }
-
-@MainActor
-private func startReplayKitCapture(
-    includeAudio: Bool,
-    handler: @escaping @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void,
-    completion: @escaping @Sendable (Error?) -> Void)
-{
-    let recorder = RPScreenRecorder.shared()
-    recorder.isMicrophoneEnabled = includeAudio
-    recorder.startCapture(handler: handler, completionHandler: completion)
-}
-
-@MainActor
-private func stopReplayKitCapture(_ completion: @escaping @Sendable (Error?) -> Void) {
-    RPScreenRecorder.shared().stopCapture { error in completion(error) }
-}
-
-#if DEBUG
-extension ScreenRecordService {
-    nonisolated static func _test_clampDurationMs(_ ms: Int?) -> Int {
-        CaptureRateLimits.clampDurationMs(ms)
-    }
-
-    nonisolated static func _test_clampFps(_ fps: Double?) -> Double {
-        CaptureRateLimits.clampFps(fps, maxFps: 30)
-    }
-}
-#endif

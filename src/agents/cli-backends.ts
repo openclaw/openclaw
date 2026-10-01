@@ -3,11 +3,6 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ContextEngineHostCapability } from "../context-engine/types.js";
-import type {
-  CliBackendConfig,
-  CliBackendRuntimeArtifactPolicy,
-} from "../plugins/cli-backend.types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import {
   resolvePluginSetupCliBackend,
@@ -15,58 +10,51 @@ import {
 } from "../plugins/setup-registry.js";
 import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
 import type {
-  CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
   CliBundleMcpMode,
   CliBackendPlugin,
-  CliBackendNativeToolMode,
-  CliBackendSideQuestionToolMode,
-  CliBackendToolAvailabilityEnforcement,
-  PluginTextTransforms,
 } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
 
-type CliBackendsDeps = {
-  resolvePluginSetupCliBackend: typeof resolvePluginSetupCliBackend;
-  resolvePluginSetupRegistry: typeof resolvePluginSetupRegistry;
-  resolveRuntimeCliBackends: typeof resolveRuntimeCliBackends;
-};
-
-const defaultCliBackendsDeps: CliBackendsDeps = {
+const defaultCliBackendsDeps = {
   resolvePluginSetupCliBackend,
   resolvePluginSetupRegistry,
   resolveRuntimeCliBackends,
 };
 
+type CliBackendsDeps = typeof defaultCliBackendsDeps;
+
 let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
 
 /** Fully merged CLI backend definition used by agent runner execution. */
-export type ResolvedCliBackend = {
-  id: string;
-  modelProvider?: string;
-  config: CliBackendConfig;
+export type ResolvedCliBackend = Pick<
+  CliBackendPlugin,
+  | "id"
+  | "modelProvider"
+  | "config"
+  | "bundleMcpMode"
+  | "transformSystemPrompt"
+  | "textTransforms"
+  | "defaultAuthProfileId"
+  | "authEpochMode"
+  | "autoSelectAuthProfile"
+  | "contextEngineHostCapabilities"
+  | "ownsNativeCompaction"
+  | "manualCompaction"
+  | "prepareExecution"
+  | "resolveExecutionArgs"
+  | "resolveModelId"
+  | "parseJsonlEvent"
+  | "parseJsonlLifecycleEvent"
+  | "toolAvailabilityEnforcement"
+  | "isolatesInstructionsWithExactTools"
+  | "projectNativeToolAuthority"
+  | "nativeToolMode"
+  | "sideQuestionToolMode"
+  | "runtimeArtifact"
+> & {
   bundleMcp: boolean;
-  bundleMcpMode?: CliBundleMcpMode;
   pluginId?: string;
-  transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
-  textTransforms?: PluginTextTransforms;
-  defaultAuthProfileId?: string;
-  authEpochMode?: CliBackendAuthEpochMode;
-  autoSelectAuthProfile?: boolean;
-  contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
-  ownsNativeCompaction?: boolean;
-  manualCompaction?: CliBackendPlugin["manualCompaction"];
-  prepareExecution?: CliBackendPlugin["prepareExecution"];
-  resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
-  resolveModelId?: CliBackendPlugin["resolveModelId"];
-  parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
-  parseJsonlLifecycleEvent?: CliBackendPlugin["parseJsonlLifecycleEvent"];
-  toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
-  isolatesInstructionsWithExactTools?: true;
-  projectNativeToolAuthority?: CliBackendPlugin["projectNativeToolAuthority"];
-  nativeToolMode?: CliBackendNativeToolMode;
-  sideQuestionToolMode?: CliBackendSideQuestionToolMode;
-  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
 };
 
 type ResolvedCliBackendLiveTest = {
@@ -169,11 +157,7 @@ export function listCliRuntimeProviderIds(
   // should be hidden from model-provider pickers. Standalone CLI backends own
   // direct refs such as acme-cli/model and must remain selectable.
   return [
-    ...new Set(
-      listCliRuntimeModelBackendBindings(params)
-        .map((binding) => normalizeProviderId(binding.runtime))
-        .filter(Boolean),
-    ),
+    ...new Set(listCliRuntimeModelBackendBindings(params).map((binding) => binding.runtime)),
   ].toSorted();
 }
 

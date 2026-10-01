@@ -1,10 +1,5 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
-/**
- * Transcript repair helpers for tool-call replay.
- *
- * Normalizes raw tool-call blocks and synthesizes missing tool results without rewriting trusted local payloads.
- */
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -33,18 +28,10 @@ type RawToolCallBlock = ToolCallBlock & {
   partialJson?: unknown;
 };
 
-function hasToolCallId(block: RawToolCallBlock): boolean {
-  return collectToolCallIds(block).length > 0;
-}
-
 function hasPartialJson(
   block: RawToolCallBlock,
 ): block is RawToolCallBlock & { partialJson: string } {
   return typeof block.partialJson === "string";
-}
-
-function isCompleteJsonObject(value: string): boolean {
-  return safeParseJsonRecord(value) !== undefined;
 }
 
 function isFinalizedOpenAIResponsesToolCall(
@@ -61,7 +48,7 @@ function isFinalizedOpenAIResponsesToolCall(
     !block.arguments ||
     typeof block.arguments !== "object" ||
     Array.isArray(block.arguments) ||
-    (!isCompleteJsonObject(block.partialJson) &&
+    (safeParseJsonRecord(block.partialJson) === undefined &&
       (block.partialJson.trim() !== "" || Object.keys(block.arguments).length > 0))
   ) {
     return false;
@@ -241,23 +228,21 @@ export function sanitizeToolCallInputs(
     let messageChanged = false;
 
     for (const block of msg.content) {
-      if (isContractToolCallBlock(block)) {
-        const rawBlock = block as RawToolCallBlock;
-        // Drop genuinely incomplete streaming artifacts (missing required fields).
-        if (
-          !hasToolCallInput(block) ||
-          !hasToolCallId(block) ||
-          !isAllowedToolCallName(rawBlock.name, isCompleted(rawBlock) ? null : allowedToolNames)
-        ) {
-          changed = true;
-          messageChanged = true;
-          continue;
-        }
+      if (!isContractToolCallBlock(block)) {
+        nextContent.push(block);
+        continue;
       }
-      let workBlock = block;
-      if (isContractToolCallBlock(block) && hasPartialJson(block)) {
+      if (
+        !hasToolCallInput(block) ||
+        collectToolCallIds(block).length === 0 ||
+        !isAllowedToolCallName(block.name, isCompleted(block) ? null : allowedToolNames)
+      ) {
+        messageChanged = true;
+        continue;
+      }
+      let workBlock: RawToolCallBlock = block;
+      if (hasPartialJson(block)) {
         if (!isFinalizedOpenAIResponsesToolCall(msg, block)) {
-          changed = true;
           messageChanged = true;
           continue;
         }
@@ -265,24 +250,17 @@ export function sanitizeToolCallInputs(
         // Legacy generic Responses transport persisted successful toolUse turns
         // with the scratch buffer intact. Strip it only when terminal state and
         // the provider-specific finalized shape both prove completion.
-        const stripped = { ...block };
-        delete (stripped as RawToolCallBlock & { partialJson?: unknown }).partialJson;
+        const stripped: RawToolCallBlock = { ...block };
+        delete stripped.partialJson;
         workBlock = stripped;
-        changed = true;
         messageChanged = true;
       }
-      if (isContractToolCallBlock(workBlock)) {
-        const sanitized = sanitizeToolCallBlock(workBlock);
-        if (sanitized !== workBlock) {
-          changed = true;
-          messageChanged = true;
-        }
-        nextContent.push(sanitized as typeof block);
-        continue;
-      }
-      nextContent.push(workBlock);
+      const sanitized = sanitizeToolCallBlock(workBlock);
+      messageChanged ||= sanitized !== workBlock;
+      nextContent.push(sanitized as typeof block);
     }
 
+    changed ||= messageChanged;
     if (messageChanged && nextContent.length === 0) {
       continue;
     }

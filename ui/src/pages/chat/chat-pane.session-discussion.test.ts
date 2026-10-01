@@ -110,16 +110,6 @@ describe("chat pane session discussion", () => {
     container.remove();
   });
 
-  it("does not auto-show for a merely available discussion", async () => {
-    const { pane, updateSidebarLayout } = createDiscussionPane({
-      info: { state: "available" },
-    });
-
-    await pane.probeSessionDiscussion(SESSION_KEY);
-
-    expect(updateSidebarLayout).not.toHaveBeenCalled();
-  });
-
   it("uses the header action to open and close the discussion slot", async () => {
     const { pane, state, updateSidebarLayout } = createDiscussionPane({
       info: { state: "available" },

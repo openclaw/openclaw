@@ -1,4 +1,3 @@
-// Mattermost plugin module implements monitor auth behavior.
 import type {
   ChannelIngressDecision,
   ChannelIngressEventInput,
@@ -75,16 +74,17 @@ export function resolveMattermostTrustedChatKind(params: {
     : (params.fallback ?? "direct");
 }
 
-type MattermostCommandAuthDecision =
+type MattermostCommandAuthDecision = {
+  kind: "direct" | "group" | "channel";
+  chatType: "direct" | "group" | "channel";
+  channelName: string;
+  channelDisplay: string;
+  roomLabel: string;
+} & (
   | {
       ok: true;
       commandAuthorized: boolean;
       channelInfo: MattermostChannel;
-      kind: "direct" | "group" | "channel";
-      chatType: "direct" | "group" | "channel";
-      channelName: string;
-      channelDisplay: string;
-      roomLabel: string;
     }
   | {
       ok: false;
@@ -97,12 +97,8 @@ type MattermostCommandAuthDecision =
         | "channel-no-allowlist";
       commandAuthorized: false;
       channelInfo: MattermostChannel | null;
-      kind: "direct" | "group" | "channel";
-      chatType: "direct" | "group" | "channel";
-      channelName: string;
-      channelDisplay: string;
-      roomLabel: string;
-    };
+    }
+);
 
 type MattermostCommandDenyReason = Extract<
   MattermostCommandAuthDecision,
@@ -302,28 +298,15 @@ export async function authorizeMattermostCommandInvocation(params: {
     dmPolicy: account.config.dmPolicy ?? "pairing",
   });
 
-  if (denyReason) {
-    return {
-      ok: false,
-      denyReason,
-      commandAuthorized: false,
-      channelInfo,
-      kind,
-      chatType,
-      channelName,
-      channelDisplay,
-      roomLabel,
-    };
-  }
-
   return {
-    ok: true,
-    commandAuthorized: ingress.commandAccess.authorized,
     channelInfo,
     kind,
     chatType,
     channelName,
     channelDisplay,
     roomLabel,
+    ...(denyReason
+      ? { ok: false as const, denyReason, commandAuthorized: false as const }
+      : { ok: true as const, commandAuthorized: ingress.commandAccess.authorized }),
   };
 }

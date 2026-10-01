@@ -33,16 +33,23 @@ import {
   buildTelegramGroupPeerId,
   getTelegramTextParts,
   joinTelegramTextParts,
+  resolveTelegramPrimaryMedia,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 
 type TelegramDebounceLane = "default" | "forward";
 
+export type TelegramInboundMediaHydration =
+  | { kind: "ready"; allMedia: TelegramMediaRef[] }
+  | { kind: "retry"; error: unknown };
+
 export type TelegramDebounceEntry = {
   ctx: TelegramContext;
   msg: Message;
   allMedia: TelegramMediaRef[];
+  /** Deferred attachment download for a buffered forward; replaces `allMedia` at flush. */
+  hydrateMedia?: (abortSignals: readonly AbortSignal[]) => Promise<TelegramInboundMediaHydration>;
   storeAllowFrom: string[];
   receivedAtMs: number;
   debounceKey: string | null;
@@ -58,15 +65,14 @@ export type TelegramDebounceEntry = {
 
 interface TelegramInboundBuffers {
   cancelPending: (target: TelegramPendingInboundTarget) => void;
-  inboundDebouncer: {
-    enqueue: (entry: TelegramDebounceEntry) => Promise<void>;
-    shouldBuffer: (entry: TelegramDebounceEntry) => boolean;
-    flushKey: (key: string) => Promise<void>;
-    cancelKey: (key: string) => boolean;
-    drain: () => Promise<void>;
-  };
+  inboundDebouncer: ReturnType<typeof createInboundDebouncer<TelegramDebounceEntry>>;
   resolveTelegramDebounceLane: (msg: Message) => TelegramDebounceLane;
 }
+
+const spooledReplayParticipants = (entries: readonly TelegramDebounceEntry[]) =>
+  entries.flatMap((entry) =>
+    entry.spooledReplayParticipant ? [entry.spooledReplayParticipant] : [],
+  );
 
 export function createTelegramInboundBuffers({
   params: { cfg, accountId, bot, runtime, opts },
@@ -121,7 +127,7 @@ export function createTelegramInboundBuffers({
       commandOptions: { botUsername: entry.botUsername },
     });
     if (entry.debounceLane === "forward") {
-      return hasDebounceableText || entry.allMedia.length > 0;
+      return hasDebounceableText || resolveTelegramPrimaryMedia(entry.msg) !== undefined;
     }
     return typeof entry.msg.text === "string" && hasDebounceableText && entry.allMedia.length === 0;
   };
@@ -141,6 +147,27 @@ export function createTelegramInboundBuffers({
       ? "forward"
       : "default";
   };
+  // Buffered forwards download after their quiet window, like album members, so a slow
+  // attachment cannot split the burst. A retryable member failure retries the whole batch.
+  const hydrateBufferedMedia = async (
+    entries: readonly TelegramDebounceEntry[],
+    participants: readonly TelegramSpooledReplayDeferredParticipant[],
+  ): Promise<TelegramDebounceEntry[]> => {
+    const abortSignals = participants.map((participant) => participant.abortSignal);
+    const hydrated: TelegramDebounceEntry[] = [];
+    for (const entry of entries) {
+      const media = await entry.hydrateMedia?.(abortSignals);
+      if (media?.kind === "retry") {
+        releaseDispatchDedupeClaims(
+          mergeDispatchDedupeClaims(...entries.map((item) => item.dispatchDedupeClaims)),
+          media.error,
+        );
+        throw media.error;
+      }
+      hydrated.push(media ? { ...entry, allMedia: media.allMedia } : entry);
+    }
+    return hydrated;
+  };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs: resolveDebounceMs(),
     maxWaitMs: (entry) => (entry.debounceLane === "forward" ? undefined : fragmentGapMs * 5),
@@ -155,19 +182,15 @@ export function createTelegramInboundBuffers({
           pending.reduce((total, item) => total + getTelegramTextParts(item.msg).text.length, 0) +
             getTelegramTextParts(entry.msg).text.length <=
             50_000)),
-    onFlush: (entries) => {
+    onFlush: (bufferedEntries) => {
       const completion = (async () => {
-        const participants = entries
-          .map((entry) => entry.spooledReplayParticipant)
-          .filter(
-            (participant): participant is TelegramSpooledReplayDeferredParticipant =>
-              participant !== undefined,
-          );
-        const last = entries.at(-1);
-        if (!last) {
-          return;
-        }
+        const participants = spooledReplayParticipants(bufferedEntries);
         try {
+          const entries = await hydrateBufferedMedia(bufferedEntries, participants);
+          const last = entries.at(-1);
+          if (!last) {
+            return;
+          }
           if (entries.length === 1) {
             const result = await processMessageWithReplyChain({
               ctx: last.ctx,
@@ -257,12 +280,7 @@ export function createTelegramInboundBuffers({
       return { admission: completion, completion };
     },
     onError: (error, items) => {
-      const participants = items
-        .map((item) => item.spooledReplayParticipant)
-        .filter(
-          (participant): participant is TelegramSpooledReplayDeferredParticipant =>
-            participant !== undefined,
-        );
+      const participants = spooledReplayParticipants(items);
       settleSpooledReplayParticipants(participants, buildFailedProcessingResult(error));
       runtime.error?.(danger(`telegram debounce flush failed: ${String(error)}`));
       if (participants.length > 0) {
@@ -286,15 +304,7 @@ export function createTelegramInboundBuffers({
       releaseDispatchDedupeClaims(
         mergeDispatchDedupeClaims(...items.map((item) => item.dispatchDedupeClaims)),
       );
-      settleSpooledReplayParticipants(
-        items
-          .map((item) => item.spooledReplayParticipant)
-          .filter(
-            (participant): participant is TelegramSpooledReplayDeferredParticipant =>
-              participant !== undefined,
-          ),
-        { kind: "skipped" },
-      );
+      settleSpooledReplayParticipants(spooledReplayParticipants(items), { kind: "skipped" });
     },
   });
 

@@ -3,14 +3,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import memoryCore from "../../extensions/memory-core/index.js";
+import {
+  inspectCronJobsForDoctor,
+  repairCronJobsForDoctor,
+} from "../../src/commands/doctor/cron/store-repair.js";
 import type { OpenClawConfig } from "../../src/config/types.js";
 import { CronService, type CronEvent } from "../../src/cron/service.js";
 import { createNoopLogger } from "../../src/cron/service.test-harness.js";
-import {
-  getCronJobsStoreRevision,
-  saveCronJobsStoreWithRevisionNative,
-} from "../../src/cron/store.js";
-import { inspectCronJobsForDoctor, repairCronJobsForDoctor } from "../../src/cron/store/doctor.js";
+import { getCronJobsStoreRevision } from "../../src/cron/store.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import * as sqliteSnapshot from "../../src/infra/sqlite-snapshot.js";
 import { createPluginDoctorStateMigrationContext } from "../../src/infra/state-migrations.plugin-doctor-context.js";
@@ -30,10 +30,12 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../../src/test-utils/gateway-scheduler-clock.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../src/test-utils/openclaw-test-state.js";
+import { seedCronStoreInCurrentDatabase } from "../helpers/cron/store.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -109,7 +111,7 @@ async function withCronFixture(
       [retiredStore, [makeJob("retired", legacyFields), makeJob("malformed")]],
       [untouchedStore, [makeJob("survivor")]],
     ] as const) {
-      saveCronJobsStoreWithRevisionNative(storePath, { version: 1, jobs: [...jobs] });
+      seedCronStoreInCurrentDatabase(storePath, { version: 1, jobs: [...jobs] });
     }
     runOpenClawStateWriteTransaction(({ db }) => {
       db.prepare("UPDATE cron_jobs SET sort_order = 17 WHERE store_key = ? AND job_id = ?").run(
@@ -196,7 +198,9 @@ function migrationInput({ state, scope }: Fixture) {
 function createPausedCronService(fixture: Fixture) {
   const logger = createNoopLogger();
   const mutations: Array<Pick<CronEvent, "jobId" | "action">> = [];
+  const scheduler = createTestGatewayScheduler();
   const cron = new CronService({
+    scheduler,
     storePath: fixture.activeStore,
     cronEnabled: true,
     defaultAgentId: "main",
@@ -213,7 +217,7 @@ function createPausedCronService(fixture: Fixture) {
   });
   // CRUD can arm an unstarted service; suspend automatic ticks during convergence proof.
   cron.pauseScheduling();
-  return { cron, logger, mutations };
+  return { cron, logger, mutations, scheduler };
 }
 
 async function runRegisteredDreamingService(
@@ -335,7 +339,7 @@ describe("host Cron Doctor repair", () => {
     await withCronFixture(async (fixture) => {
       const { state, activeStore, retiredStore, databasePath } = fixture;
       const migration = getDreamingMigration(fixture);
-      saveCronJobsStoreWithRevisionNative(fixture.untouchedStore, {
+      seedCronStoreInCurrentDatabase(fixture.untouchedStore, {
         version: 1,
         jobs: [
           makeJob("survivor"),
@@ -649,7 +653,7 @@ describe("host Cron Doctor repair", () => {
           const authoredBefore = beforeRuntime.jobs.find(
             (row) => row.store_key === activeStore && row.job_id === "operator",
           );
-          const { cron, logger, mutations } = createPausedCronService(fixture);
+          const { cron, logger, mutations, scheduler } = createPausedCronService(fixture);
           try {
             const config: OpenClawConfig = {
               plugins: {
@@ -724,6 +728,7 @@ describe("host Cron Doctor repair", () => {
             expect(readRows(fixture.db())).toEqual(afterRuntime);
           } finally {
             cron.stop();
+            await scheduler.stop();
           }
         },
         {
@@ -755,7 +760,7 @@ describe("host Cron Doctor repair", () => {
           fixture.activeStore,
         );
       });
-      const { cron, logger, mutations } = createPausedCronService(fixture);
+      const { cron, logger, mutations, scheduler } = createPausedCronService(fixture);
       try {
         // Admit existing schedules before isolating the dreaming reconciliation's mutations.
         await cron.list({ includeDisabled: true });
@@ -808,6 +813,7 @@ describe("host Cron Doctor repair", () => {
         ]);
       } finally {
         cron.stop();
+        await scheduler.stop();
       }
     });
   });

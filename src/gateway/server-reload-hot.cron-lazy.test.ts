@@ -1,6 +1,8 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron.js";
 import type {
   GatewayHotReloadPublication,
@@ -62,6 +64,7 @@ async function createFixture() {
   });
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
   const params: GatewayReloadHandlerParams = {
+    scheduler: createTestGatewayScheduler(),
     deps: {} as GatewayReloadHandlerParams["deps"],
     broadcast: vi.fn(),
     getState: () => state,

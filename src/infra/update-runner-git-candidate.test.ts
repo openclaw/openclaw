@@ -9,8 +9,10 @@ import * as processExec from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import {
+  advanceFixtureRemote,
+  expectNoGitRuntimeStagingPaths,
   expectRuntime,
-  registerGitActivationDoctorOutcomeTests,
+  prepareDeletedTrackedRuntimeAsset,
   registerGitRuntimeStagingTests,
   registerGitRuntimeRestorationTests,
   runFixtureGit as git,
@@ -19,6 +21,7 @@ import {
   writeRuntime,
   type VirtualStoreLayout,
 } from "./update-runner-git-candidate.test-support.js";
+import { registerGitActivationDoctorOutcomeTests } from "./update-runner-git-transactions.test-support.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
 
@@ -118,12 +121,7 @@ describe("Git candidate activation", () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
 
-  async function advanceRemote() {
-    await fs.writeFile(path.join(remote, "candidate.txt"), "candidate\n");
-    await git(remote, "add", ".");
-    await git(remote, "commit", "-m", "candidate");
-    return git(remote, "rev-parse", "HEAD");
-  }
+  const advanceRemote = () => advanceFixtureRemote(remote);
 
   function update(opts: Partial<UpdateRunnerOptions> = {}) {
     const { prepareGitExposure, runGitDoctor, ...overrides } = opts;
@@ -186,17 +184,7 @@ describe("Git candidate activation", () => {
     });
   }
 
-  async function expectNoRuntimeStagingPaths() {
-    for (const inspectionRoot of inspectionRoots) {
-      await expect(fs.stat(inspectionRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    const entries = await fs.readdir(root, { recursive: true });
-    expect(
-      entries.filter((entry) =>
-        /\.openclaw-update-[0-9a-f]{8}-[0-9a-f-]{27}\.tmp(?:\/|$)/u.test(entry),
-      ),
-    ).toEqual([]);
-  }
+  const expectNoRuntimeStagingPaths = () => expectNoGitRuntimeStagingPaths(root, inspectionRoots);
 
   it.each([undefined, 5_000])(
     "separates work deadlines from observation budgets: %s",
@@ -238,6 +226,10 @@ describe("Git candidate activation", () => {
     beforeSha,
     events,
     isStopped: () => stopped,
+    runCommand,
+    setRunCommand: (runner) => {
+      runCommand = runner;
+    },
     advanceRemote,
     git,
     update,
@@ -248,11 +240,59 @@ describe("Git candidate activation", () => {
     "does not stop or build an already-current %s checkout",
     async (channel) => {
       await git(remote, "tag", "v2026.9.1");
-      const result = await update({ channel });
-      expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
+      const result = await update({ channel, sourceRuntimePrepared: true });
+      expect(result).toMatchObject({
+        status: "skipped",
+        reason: "already-current",
+        sourceRuntimePrepared: true,
+      });
       expect(stopped).toBe(false);
       expect(events).toEqual([]);
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    },
+  );
+
+  it("carries admitted runtime repair through an already-current result", async () => {
+    const result = await update({ sourceRuntimePrepared: false });
+    expect(result).toMatchObject({
+      status: "skipped",
+      reason: "already-current",
+      sourceRuntimePrepared: false,
+    });
+    expect(events).toEqual([]);
+    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    await expectRuntime(root, beforeSha);
+  });
+
+  it.each([false, true])(
+    "does not skip an incomplete installed runtime (buildFails=%s)",
+    async (buildFails) => {
+      await fs.rm(path.join(root, "dist", ".runtime-postbuildstamp"));
+      if (buildFails) {
+        await advanceRemote();
+        const execute = runCommand;
+        runCommand = (argv, options) =>
+          argv[0] === "pnpm" && argv[1] === "build"
+            ? Promise.resolve({ code: 1, stdout: "", stderr: "synthetic build failure" })
+            : execute(argv, options);
+      }
+
+      const result = await update();
+
+      if (buildFails) {
+        expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
+        expect(stopped).toBe(false);
+        expect(events).toEqual([]);
+        await expect(
+          fs.stat(path.join(root, "dist", ".runtime-postbuildstamp")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(result).toMatchObject({ status: "ok", after: { sha: beforeSha } });
+        expect(events).toEqual(["build", "validate", "stop", "migrate"]);
+        await expectRuntime(root, beforeSha);
+      }
+      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      await expectNoRuntimeStagingPaths();
     },
   );
 
@@ -808,9 +848,10 @@ describe("Git candidate activation", () => {
         "throw new Error('broken launcher');\n",
       );
       const target = await advanceRemote();
-      let validated = false;
+      const onStepComplete = vi.fn();
       const result = await update({
         devTarget: { mode: "detached", ref: target },
+        progress: { onStepComplete },
         validateCandidate: async (candidateRoot) => {
           const launcher = path.join(candidateRoot, "openclaw.mjs");
           await fs.writeFile(launcher, "export {};\n");
@@ -824,10 +865,13 @@ describe("Git candidate activation", () => {
             timeoutMs: 5000,
           });
           expect(probe.code).toBe(0);
-          validated = true;
         },
       });
-      expect(validated).toBe(true);
+      expect(
+        onStepComplete.mock.calls
+          .filter(([step]) => step.name === "preflight-update-clean-check")
+          .map(([step]) => step.exitCode),
+      ).toEqual([repairState === "committed" ? 0 : 1]);
       expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
       expect(stopped).toBe(false);
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
@@ -842,6 +886,7 @@ describe("Git candidate activation", () => {
       restoreSource: true,
       restoreRuntime: true,
       timeoutMs: undefined,
+      trackedRuntime: true,
     },
     { layout: "node_modules/.pnpm", restoreSource: false, restoreRuntime: true, timeoutMs: 5_000 },
     {
@@ -859,7 +904,15 @@ describe("Git candidate activation", () => {
     },
   ] as const)(
     "verifies $layout runtime recovery after activation failure (source restored: $restoreSource, runtime restored: $restoreRuntime)",
-    async ({ layout, restoreSource, restoreRuntime, timeoutMs }) => {
+    async (scenario) => {
+      const { layout, restoreSource, restoreRuntime, timeoutMs } = scenario;
+      let trackedAsset: string | undefined;
+      if ("trackedRuntime" in scenario) {
+        ({ beforeSha, asset: trackedAsset } = await prepareDeletedTrackedRuntimeAsset(
+          remote,
+          root,
+        ));
+      }
       virtualStoreLayout = layout;
       await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), layout);
       const originalCache = path.join(root, "node_modules", ".cache", "jiti", "original.cjs");
@@ -975,7 +1028,7 @@ describe("Git candidate activation", () => {
         );
         return;
       }
-      await expectRuntime(root, beforeSha);
+      await expectRuntime(root, beforeSha, trackedAsset);
       expect(await fs.readFile(originalCache, "utf8")).toBe("original runtime cache");
     },
   );

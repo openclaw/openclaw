@@ -68,6 +68,21 @@ export function readOptionalCursor(value: unknown, label: string): string | unde
   return readRequiredCursor(value, `${label} cursor is invalid`);
 }
 
+function readParams(
+  value: unknown,
+  scope: "catalog" | "read",
+  allowed: readonly string[],
+): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new ClaudeCatalogParamsError(`Claude session ${scope} parameters must be an object`);
+  }
+  const unknown = Object.keys(value).find((key) => !allowed.includes(key));
+  if (unknown) {
+    throw new ClaudeCatalogParamsError(`unknown Claude session ${scope} parameter: ${unknown}`);
+  }
+  return value;
+}
+
 export function readListParams(value: unknown): {
   cursor?: string;
   limit: number;
@@ -76,18 +91,11 @@ export function readListParams(value: unknown): {
   if (value === undefined || value === null) {
     return { limit: DEFAULT_PAGE_LIMIT };
   }
-  if (!isRecord(value)) {
-    throw new ClaudeCatalogParamsError("Claude session catalog parameters must be an object");
-  }
-  const allowed = new Set(["cursor", "limit", "searchTerm"]);
-  const unknown = Object.keys(value).find((key) => !allowed.has(key));
-  if (unknown) {
-    throw new ClaudeCatalogParamsError(`unknown Claude session catalog parameter: ${unknown}`);
-  }
-  const cursor = readOptionalCursor(value.cursor, "catalog");
-  const searchTerm = readBoundedString(value.searchTerm, MAX_SEARCH_LENGTH);
+  const params = readParams(value, "catalog", ["cursor", "limit", "searchTerm"]);
+  const cursor = readOptionalCursor(params.cursor, "catalog");
+  const searchTerm = readBoundedString(params.searchTerm, MAX_SEARCH_LENGTH);
   return {
-    limit: readLimit(value.limit, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
+    limit: readLimit(params.limit, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
     ...(cursor ? { cursor } : {}),
     ...(searchTerm ? { searchTerm } : {}),
   };
@@ -98,22 +106,15 @@ export function readTranscriptParams(value: unknown): {
   cursor?: string;
   limit: number;
 } {
-  if (!isRecord(value)) {
-    throw new ClaudeCatalogParamsError("Claude session read parameters must be an object");
-  }
-  const allowed = new Set(["threadId", "cursor", "limit"]);
-  const unknown = Object.keys(value).find((key) => !allowed.has(key));
-  if (unknown) {
-    throw new ClaudeCatalogParamsError(`unknown Claude session read parameter: ${unknown}`);
-  }
-  const threadId = readBoundedString(value.threadId, 256);
+  const params = readParams(value, "read", ["threadId", "cursor", "limit"]);
+  const threadId = readBoundedString(params.threadId, 256);
   if (!threadId || !/^[A-Za-z0-9._:-]+$/.test(threadId)) {
     throw new ClaudeCatalogParamsError("threadId is invalid");
   }
-  const cursor = readOptionalCursor(value.cursor, "transcript");
+  const cursor = readOptionalCursor(params.cursor, "transcript");
   return {
     threadId,
-    limit: readLimit(value.limit, DEFAULT_TRANSCRIPT_LIMIT, MAX_TRANSCRIPT_LIMIT),
+    limit: readLimit(params.limit, DEFAULT_TRANSCRIPT_LIMIT, MAX_TRANSCRIPT_LIMIT),
     ...(cursor ? { cursor } : {}),
   };
 }
@@ -154,59 +155,52 @@ export function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
     ) {
       throw new Error("Claude node returned an invalid session");
     }
-    const parseStringField = (key: string, maxLength = MAX_STRING_LENGTH): string | undefined => {
-      if (!(key in candidate)) {
-        return undefined;
-      }
-      const parsed = readBoundedString(candidate[key], maxLength);
-      if (!parsed) {
-        throw new Error("Claude node returned an invalid session");
-      }
-      return parsed;
-    };
-    const parseNumberField = (key: string, nullable = false): number | null | undefined => {
-      if (!(key in candidate)) {
-        return undefined;
-      }
-      if (nullable && candidate[key] === null) {
-        return null;
-      }
-      const parsed = candidate[key];
-      if (typeof parsed !== "number" || !Number.isFinite(parsed)) {
-        throw new Error("Claude node returned an invalid session");
-      }
-      return parsed;
-    };
-    let name: string | null | undefined;
-    if (candidate.name === null) {
-      name = null;
-    } else {
-      name = parseStringField("name", 500);
-    }
-    const cwd = parseStringField("cwd");
-    const color = parseStringField("color");
-    const createdAt = parseNumberField("createdAt") as number | undefined;
-    const updatedAt = parseNumberField("updatedAt") as number | undefined;
-    const recencyAt = parseNumberField("recencyAt", true);
-    const cliVersion = parseStringField("cliVersion", 256);
-    const gitBranch = parseStringField("gitBranch", 500);
-    const pullRequest = parsePullRequestSummary(candidate.pullRequest);
-    return {
+    const session: ClaudeSessionCatalogSession = {
       threadId,
       status: "stored",
       source,
       modelProvider: "anthropic",
       archived: false,
-      ...(name !== undefined ? { name } : {}),
-      ...(color ? { color } : {}),
-      ...(cwd ? { cwd } : {}),
-      ...(createdAt !== undefined ? { createdAt } : {}),
-      ...(updatedAt !== undefined ? { updatedAt } : {}),
-      ...(recencyAt !== undefined ? { recencyAt } : {}),
-      ...(cliVersion ? { cliVersion } : {}),
-      ...(gitBranch ? { gitBranch } : {}),
-      ...(pullRequest ? { pullRequest } : {}),
     };
+    for (const [key, maxLength] of [
+      ["name", 500],
+      ["cwd", MAX_STRING_LENGTH],
+      ["color", MAX_STRING_LENGTH],
+      ["cliVersion", 256],
+      ["gitBranch", 500],
+    ] as const) {
+      if (key === "name" && candidate[key] === null) {
+        session.name = null;
+        continue;
+      }
+      if (!(key in candidate)) {
+        continue;
+      }
+      const parsed = readBoundedString(candidate[key], maxLength);
+      if (!parsed) {
+        throw new Error("Claude node returned an invalid session");
+      }
+      session[key] = parsed;
+    }
+    for (const key of ["createdAt", "updatedAt", "recencyAt"] as const) {
+      if (!(key in candidate)) {
+        continue;
+      }
+      if (key === "recencyAt" && candidate[key] === null) {
+        session.recencyAt = null;
+        continue;
+      }
+      const parsed = candidate[key];
+      if (typeof parsed !== "number" || !Number.isFinite(parsed)) {
+        throw new Error("Claude node returned an invalid session");
+      }
+      session[key] = parsed;
+    }
+    const pullRequest = parsePullRequestSummary(candidate.pullRequest);
+    if (pullRequest) {
+      session.pullRequest = pullRequest;
+    }
+    return session;
   });
   const nextCursor = readNodePageCursor(value, "Claude node returned an invalid session page");
   return { sessions, ...(nextCursor ? { nextCursor } : {}) };
@@ -228,23 +222,16 @@ export function parseGatewayQuery(value: unknown): {
   if (value === undefined || value === null) {
     return { limitPerHost: DEFAULT_PAGE_LIMIT };
   }
-  if (!isRecord(value)) {
-    throw new ClaudeCatalogParamsError("Claude session catalog parameters must be an object");
-  }
-  const allowed = new Set(["search", "limitPerHost", "hostIds", "cursors"]);
-  const unknown = Object.keys(value).find((key) => !allowed.has(key));
-  if (unknown) {
-    throw new ClaudeCatalogParamsError(`unknown Claude session catalog parameter: ${unknown}`);
-  }
-  const search = readBoundedString(value.search, MAX_SEARCH_LENGTH);
+  const params = readParams(value, "catalog", ["search", "limitPerHost", "hostIds", "cursors"]);
+  const search = readBoundedString(params.search, MAX_SEARCH_LENGTH);
   let hostIds: string[] | undefined;
-  if (value.hostIds !== undefined) {
-    if (!Array.isArray(value.hostIds) || value.hostIds.length > MAX_HOSTS) {
+  if (params.hostIds !== undefined) {
+    if (!Array.isArray(params.hostIds) || params.hostIds.length > MAX_HOSTS) {
       throw new ClaudeCatalogParamsError("hostIds must be a bounded array");
     }
     hostIds = [
       ...new Set(
-        value.hostIds.map((hostId) => {
+        params.hostIds.map((hostId) => {
           const normalized = readBoundedString(hostId, 256);
           if (
             !normalized ||
@@ -258,18 +245,18 @@ export function parseGatewayQuery(value: unknown): {
     ];
   }
   let cursors: Record<string, string> | undefined;
-  if (value.cursors !== undefined) {
-    if (!isRecord(value.cursors) || Object.keys(value.cursors).length > MAX_HOSTS) {
+  if (params.cursors !== undefined) {
+    if (!isRecord(params.cursors) || Object.keys(params.cursors).length > MAX_HOSTS) {
       throw new ClaudeCatalogParamsError("cursors must be a bounded object");
     }
     cursors = Object.fromEntries(
-      Object.entries(value.cursors).map(([hostId, cursor]) => {
+      Object.entries(params.cursors).map(([hostId, cursor]) => {
         return [hostId, readRequiredCursor(cursor, `cursor for ${hostId} is invalid`)];
       }),
     );
   }
   return {
-    limitPerHost: readLimit(value.limitPerHost, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
+    limitPerHost: readLimit(params.limitPerHost, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
     ...(search ? { search } : {}),
     ...(hostIds ? { hostIds } : {}),
     ...(cursors ? { cursors } : {}),

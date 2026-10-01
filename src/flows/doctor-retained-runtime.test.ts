@@ -1,12 +1,12 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
-import { acquireGatewayMaintenanceCoordinator } from "../infra/state-database-coordinator.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
@@ -89,16 +89,18 @@ async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
   ctx.prompter.shouldRepair = repair;
   const run = () => runDoctorHealthContributionList(ctx, contributions);
   if (maintenance) {
-    const lease = acquireGatewayMaintenanceCoordinator({
-      databasePath: path.join(parent, "state/openclaw.sqlite"),
-      runtimeDirectory: path.join(parent, "locks"),
+    const lock = await acquireGatewayLock({
+      env: ctx.env,
+      role: "sqlite-maintenance",
+      allowInTests: true,
     });
-    const scope = createOpenClawDatabaseMaintenanceScope(lease.createSchemaFenceDelegate);
+    if (!lock) {
+      throw new Error("Expected Gateway maintenance ownership");
+    }
     try {
-      await scope.run(run);
+      await lock.run(run);
     } finally {
-      await scope.close();
-      lease.release();
+      await lock.release();
     }
   } else {
     await run();
@@ -126,20 +128,23 @@ it("Doctor removes an abandoned marked projection and releases checkout hardlink
   expect(output).toContain(`Removed abandoned updater runtime: ${abandoned}`);
 });
 
-it.each(["command", "managed definition"])(
-  "Doctor reports and cleans retained runtimes in the %s TMPDIR from another shell",
-  async (definition) => {
+it.each([
+  { definition: "command", key: "TMPDIR" },
+  { definition: "managed definition", key: "TEMP" },
+])(
+  "Doctor reports and cleans retained runtimes in the $definition $key from another shell",
+  async ({ definition, key }) => {
     const serviceTmp = path.join(parent, "service-tmp");
     const directory = projection("Svc001", serviceTmp);
     mocks.serviceCommand.mockResolvedValue(
       definition === "command"
-        ? { programArguments: [], environment: { TMPDIR: serviceTmp } }
+        ? { programArguments: [], environment: { [key]: serviceTmp } }
         : {
             programArguments: [],
             managedDefinition: {
               programArguments: [],
               workingDirectory: parent,
-              environment: { TMPDIR: "service-tmp" },
+              environment: { [key]: "service-tmp" },
             },
           },
     );
@@ -175,21 +180,13 @@ it("Doctor does not search unrelated checkout ancestors", async () => {
   expect(output).not.toContain(directory);
 });
 
-it.each(["changed", "missing"])(
-  "Doctor reclaims its marked projection when source bytes are %s",
-  async (source) => {
-    const directory = projection("Edit01");
-    const manifest = path.join(packageRoot, "package.json");
-    if (source === "missing") {
-      fs.unlinkSync(manifest);
-    } else {
-      fs.writeFileSync(manifest, JSON.stringify({ name: "openclaw", changed: true }));
-    }
-    const output = await runDoctor(true);
-    expect(fs.existsSync(directory)).toBe(false);
-    expect(output).toContain(`Removed abandoned updater runtime: ${directory}`);
-  },
-);
+it("Doctor reclaims its marked projection when the source manifest is missing", async () => {
+  const directory = projection("Edit01");
+  fs.unlinkSync(path.join(packageRoot, "package.json"));
+  const output = await runDoctor(true);
+  expect(fs.existsSync(directory)).toBe(false);
+  expect(output).toContain(`Removed abandoned updater runtime: ${directory}`);
+});
 
 it("Doctor preserves a runtime still registered by its creator", async () => {
   const { registerRetainedUpdateRuntime } = await import("../infra/temp-artifact-cleanup.js");
@@ -236,3 +233,105 @@ it("Doctor preserves unmarked directories and symbolic-link targets", async () =
   expect(output).toContain("no recognized runtime marker");
   expect(output).toContain("directory ownership is unknown");
 });
+
+it("Doctor warns instead of resolving service TMP against the shell cwd", async () => {
+  mocks.serviceCommand.mockResolvedValue({
+    programArguments: [],
+    workingDirectory: "relative-service-cwd",
+    environment: { TMP: "relative-scratch" },
+  });
+  expect(await runDoctor(true)).toContain("relative TMP without an absolute working directory");
+});
+
+it.each(["abandoned", "symlink", "bounded"])(
+  "Doctor recognizes a legacy pnpm projection after the installed version changes (%s)",
+  async (condition) => {
+    const store = path.join(parent, "node_modules/.pnpm");
+    const oldRoot = path.join(store, "openclaw@2026.9.5/node_modules/openclaw");
+    fs.mkdirSync(path.dirname(oldRoot), { recursive: true });
+    fs.renameSync(packageRoot, oldRoot);
+    packageRoot = oldRoot;
+    const directory = projection("Pnpm01");
+    fs.rmSync(oldRoot, { recursive: true });
+    packageRoot = path.join(store, "openclaw@2026.9.7/node_modules/openclaw");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+    mocks.packageRoots.mockReturnValue([packageRoot]);
+    if (condition === "symlink") {
+      const projectedStore = projectedPath(directory, store);
+      const external = path.join(parent, "foreign-projection");
+      fs.renameSync(projectedStore, external);
+      fs.symlinkSync(external, projectedStore, process.platform === "win32" ? "junction" : "dir");
+    }
+    if (condition === "bounded") {
+      const projectedStore = projectedPath(directory, store);
+      fs.rmSync(path.join(projectedStore, "openclaw@2026.9.5"), { recursive: true });
+      fs.mkdirSync(path.join(projectedStore, "unrelated-dependency"));
+      const [entry] = fs.readdirSync(projectedStore, { withFileTypes: true });
+      if (!entry) {
+        throw new Error("expected a projected store entry");
+      }
+      const opendir = fsPromises.opendir.bind(fsPromises);
+      vi.spyOn(fsPromises, "opendir").mockImplementation(async (...args) => {
+        const handle = await opendir(...args);
+        if (String(args[0]) === projectedStore) {
+          vi.spyOn(handle, Symbol.asyncIterator).mockImplementation(
+            async function* (): AsyncGenerator<fs.Dirent, undefined> {
+              try {
+                for (let index = 0; index < 4097; index++) {
+                  yield entry;
+                }
+              } finally {
+                await handle.close();
+              }
+            },
+          );
+        }
+        return handle;
+      });
+    }
+    const preview = await runDoctor(false);
+    expect(fs.existsSync(directory)).toBe(true);
+    if (condition === "abandoned") {
+      expect(preview).toContain("openclaw doctor --fix");
+    }
+    mocks.note.mockClear();
+    const output = await runDoctor(true);
+    expect(fs.existsSync(directory)).toBe(condition !== "abandoned");
+    expect(output).toContain(
+      condition === "abandoned"
+        ? `Removed abandoned updater runtime: ${directory}`
+        : condition === "bounded"
+          ? "exceeds the bounded lookup"
+          : "no recognized runtime marker",
+    );
+  },
+);
+
+it.each([
+  { scratch: "\\scratch", workingDirectory: "C:\\service", expected: "C:\\scratch" },
+  { scratch: "C:scratch", workingDirectory: "C:\\service", expected: "C:\\service\\scratch" },
+  { scratch: "D:scratch", workingDirectory: "C:\\service", expected: undefined },
+])(
+  "Doctor resolves the service's mixed-case Windows Temp without shell drive fallback ($scratch)",
+  async ({ scratch, workingDirectory, expected }) => {
+    const { inspectDoctorTemporaryDirectories } =
+      await import("../commands/doctor/shared/temporary-directories.js");
+    mocks.serviceCommand.mockResolvedValue({
+      programArguments: [],
+      workingDirectory,
+      environment: { Temp: scratch },
+    });
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const result = await inspectDoctorTemporaryDirectories({ HOME: parent, TMPDIR: "Z:\\shell" });
+    if (expected) {
+      expect(result.directories).toContain(expected);
+      expect(result.warnings).toEqual([]);
+    } else {
+      expect(result.directories.some((directory) => /^[dD]:/u.test(directory))).toBe(false);
+      expect(result.warnings.join("\n")).toContain(
+        "relative TEMP without an absolute working directory",
+      );
+    }
+  },
+);

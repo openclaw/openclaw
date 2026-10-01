@@ -1,11 +1,11 @@
+import { resolveNpmCommand } from "./npm-command.js";
 import { createSafeNpmInstallArgs } from "./safe-package-install.js";
 
 export function createManagedNpmPeerPlanArgs(params?: {
   force?: boolean;
   legacyPeerDeps?: boolean;
 }): string[] {
-  return [
-    "npm",
+  return resolveNpmCommand([
     "install",
     "--package-lock-only",
     ...(params?.force ? ["--force"] : []),
@@ -18,5 +18,5 @@ export function createManagedNpmPeerPlanArgs(params?: {
       noAudit: true,
       noFund: true,
     }).slice(1),
-  ];
+  ]);
 }

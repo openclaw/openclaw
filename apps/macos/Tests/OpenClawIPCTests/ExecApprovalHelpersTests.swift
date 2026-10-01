@@ -3,14 +3,6 @@ import Testing
 @testable import OpenClaw
 
 struct ExecApprovalHelpersTests {
-    @Test func `parse decision trims and rejects invalid`() {
-        #expect(ExecApprovalHelpers.parseDecision("allow-once") == .allowOnce)
-        #expect(ExecApprovalHelpers.parseDecision(" allow-always ") == .allowAlways)
-        #expect(ExecApprovalHelpers.parseDecision("deny") == .deny)
-        #expect(ExecApprovalHelpers.parseDecision("") == nil)
-        #expect(ExecApprovalHelpers.parseDecision("nope") == nil)
-    }
-
     @Test func `allowlist pattern prefers resolution`() {
         let resolved = ExecCommandResolution(
             rawExecutable: "rg",

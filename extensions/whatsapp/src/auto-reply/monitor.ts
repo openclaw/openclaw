@@ -43,8 +43,8 @@ import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
-import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
+import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebMonitorTuning } from "./types.js";
@@ -147,25 +147,15 @@ export async function monitorWebChannel(
     }).cfg;
 
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
-  const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
-  const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
+  const heartbeatSeconds = resolveHeartbeatSeconds(tuning.heartbeatSeconds);
+  const reconnectPolicy = resolveReconnectPolicy(tuning.reconnect);
   const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
-  const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit = resolvePromptHistoryLimit(
     account.historyLimit ??
       cfg.channels?.whatsapp?.historyLimit ??
       cfg.messages?.groupChat?.historyLimit,
   );
-  const groupHistories = new Map<
-    string,
-    Array<{
-      sender: string;
-      body: string;
-      timestamp?: number;
-      id?: string;
-      senderJid?: string;
-    }>
-  >();
+  const groupHistories = new Map<string, GroupHistoryEntry[]>();
   const groupMemberNames = new Map<string, Map<string, string>>();
   const groupMetadataCache: WhatsAppGroupMetadataCache = new Map();
   const recentMessageKeys: WhatsAppBaileysMessageCache = new Map();
@@ -258,8 +248,6 @@ export async function monitorWebChannel(
               backgroundTasks: connectionLocal.backgroundTasks,
               replyResolver: activeReplyResolver,
               replyLogger,
-              baseMentionConfig,
-              account,
               buildContext: pluginChannelRuntime?.inbound.buildContext,
               // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
               dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
@@ -499,43 +487,27 @@ export async function monitorWebChannel(
       });
 
       const normalizedAccountId = normalizeReconnectAccountId(account.accountId);
-      void drainPendingDeliveries({
-        drainKey: `whatsapp:${normalizedAccountId}`,
-        logLabel: "WhatsApp reconnect drain",
-        cfg,
-        log: reconnectLogger,
-        selectEntry: (entry) => ({
-          match:
-            entry.channel === "whatsapp" &&
-            normalizeReconnectAccountId(entry.accountId) === normalizedAccountId,
-          bypassBackoff: isNoListenerReconnectError(entry.lastError),
-        }),
-      }).catch((err: unknown) => {
-        reconnectLogger.warn(
-          { connectionId: connection.connectionId, error: String(err) },
-          "reconnect drain failed",
-        );
-      });
-
-      const periodicDrainInterval = setInterval(() => {
+      const drainDeliveries = (mode: "reconnect" | "periodic") => {
         void drainPendingDeliveries({
           drainKey: `whatsapp:${normalizedAccountId}`,
-          logLabel: "WhatsApp periodic drain",
+          logLabel: `WhatsApp ${mode} drain`,
           cfg,
           log: reconnectLogger,
           selectEntry: (entry) => ({
             match:
               entry.channel === "whatsapp" &&
               normalizeReconnectAccountId(entry.accountId) === normalizedAccountId,
-            bypassBackoff: false,
+            bypassBackoff: mode === "reconnect" && isNoListenerReconnectError(entry.lastError),
           }),
         }).catch((err: unknown) => {
           reconnectLogger.warn(
             { connectionId: connection.connectionId, error: String(err) },
-            "periodic drain failed",
+            `${mode} drain failed`,
           );
         });
-      }, 30_000);
+      };
+      drainDeliveries("reconnect");
+      const periodicDrainInterval = setInterval(() => drainDeliveries("periodic"), 30_000);
 
       const inboundPolicy = resolveWhatsAppInboundPolicy({
         cfg,

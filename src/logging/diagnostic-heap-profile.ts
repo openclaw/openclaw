@@ -24,6 +24,8 @@ type AllocationSummary = {
 type Metadata = {
   durationMs: number;
   samplingIntervalBytes: number;
+  includeObjectsCollectedByMajorGC: boolean;
+  includeObjectsCollectedByMinorGC: boolean;
   heapUsedBefore: number;
   heapUsedAfter: number;
   rssBefore: number;
@@ -174,6 +176,10 @@ export function captureDiagnosticHeapProfile(
 ) {
   const durationMs = Math.min(30_000, Math.max(1, options.durationMs ?? 5_000));
   const samplingIntervalBytes = Math.max(4_096, options.samplingIntervalBytes ?? 32_768);
+  const collectionOptions = {
+    includeObjectsCollectedByMajorGC: options.includeObjectsCollectedByMajorGC ?? false,
+    includeObjectsCollectedByMinorGC: options.includeObjectsCollectedByMinorGC ?? false,
+  };
   return captureDiagnosticProfile({
     signal: options.signal,
     hasAuthority: options.hasAuthority,
@@ -182,6 +188,7 @@ export function captureDiagnosticHeapProfile(
     start: (session) =>
       session.post("HeapProfiler.startSampling", {
         samplingInterval: samplingIntervalBytes,
+        ...collectionOptions,
       }),
     stop: (session) => session.post("HeapProfiler.stopSampling"),
     disable: (session) => session.post("HeapProfiler.disable"),
@@ -189,6 +196,7 @@ export function captureDiagnosticHeapProfile(
       boundProfile(profile, packageRoot, {
         durationMs: measurement.durationMs,
         samplingIntervalBytes,
+        ...collectionOptions,
         heapUsedBefore: measurement.before.heapUsed,
         heapUsedAfter: measurement.after.heapUsed,
         rssBefore: measurement.before.rss,

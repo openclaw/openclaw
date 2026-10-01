@@ -160,6 +160,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
     const startupPolicy = resolveCliStartupPolicy({
       argv,
+      options: actionCommand.opts(),
       commandPath,
       jsonOutputMode,
       machineOutputMode,

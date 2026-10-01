@@ -37,7 +37,6 @@
     "../../src/hooks/**",
     "../../src/daemon/**",
     "../../src/plugin-state/**",
-    "../../src/tasks/**",
     "../../src/state/**"
   ]
 }

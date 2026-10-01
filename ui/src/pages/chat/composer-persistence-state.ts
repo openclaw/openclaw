@@ -8,11 +8,11 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { readDraftRevisionState } from "../../lib/chat/outbox-store-draft-state.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   storedChatOutboxScopeKey,
   storageTargetForGateway,
   type ChatComposerScope,
-  type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import type { DurableChatComposerSnapshot } from "./durable-composer-persistence.ts";

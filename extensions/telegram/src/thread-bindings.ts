@@ -1,4 +1,3 @@
-import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
@@ -8,7 +7,7 @@ import {
   type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { runQueuedStoreWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,6 +17,7 @@ import {
   persistBindingMutation,
   updateStoredBindingSync,
 } from "./thread-bindings-persistence.js";
+import { reconcileTelegramAcpBindingsOnStartup } from "./thread-bindings-reconcile.js";
 import {
   fromSessionBindingInput,
   normalizeDurationMs,
@@ -99,53 +99,10 @@ async function initializeThreadBindingManager(
     });
   }
 
-  const acpSessionKeys = new Set<string>();
-  for (const binding of getThreadBindingsState().bindingsByAccountConversation.values()) {
-    if (binding.targetKind !== "acp" || !isAcpSessionKey(binding.targetSessionKey)) {
-      continue;
-    }
-    acpSessionKeys.add(binding.targetSessionKey);
-  }
-
-  const staleSessionKeys = new Set<string>();
-  for (const targetSessionKey of acpSessionKeys) {
-    const sessionEntry = readAcpSessionEntry({ sessionKey: targetSessionKey });
-    if (!sessionEntry || sessionEntry.storeReadFailed) {
-      continue;
-    }
-    const isStale =
-      !sessionEntry.entry ||
-      sessionEntry.entry.status === "failed" ||
-      sessionEntry.entry.status === "killed" ||
-      sessionEntry.entry.status === "timeout" ||
-      sessionEntry.acp?.state === "error";
-    if (isStale) {
-      staleSessionKeys.add(targetSessionKey);
-    }
-  }
-
-  for (const sessionKey of staleSessionKeys) {
-    const bindingsToRemove = listBindingsForAccount(accountId).filter(
-      (b) => b.targetSessionKey === sessionKey,
-    );
-    for (const binding of bindingsToRemove) {
-      getThreadBindingsState().bindingsByAccountConversation.delete(
-        resolveBindingKey({ accountId, conversationId: binding.conversationId }),
-      );
-      await persistBindingMutation({
-        accountId,
-        persist,
-        binding,
-        remove: true,
-        reason: "cleanup-stale",
-      });
-    }
-    if (bindingsToRemove.length > 0) {
-      logVerbose(
-        `telegram thread binding: cleaned up ${bindingsToRemove.length} stale binding(s) for session ${sessionKey}`,
-      );
-    }
-  }
+  await reconcileTelegramAcpBindingsOnStartup({
+    accountId,
+    persist,
+  });
 
   let sweepTimer: NodeJS.Timeout | null = null;
   let stopping: Promise<void> | undefined;
@@ -346,6 +303,8 @@ async function initializeThreadBindingManager(
     },
   };
 
+  const projectSessionBinding = (record: TelegramThreadBindingRecord) =>
+    toSessionBindingRecord(record, { idleTimeoutMs, maxAgeMs });
   const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "telegram",
     accountId,
@@ -461,19 +420,11 @@ async function initializeThreadBindingManager(
             },
           )})`,
         );
-        return toSessionBindingRecord(record, {
-          idleTimeoutMs,
-          maxAgeMs,
-        });
+        return projectSessionBinding(record);
       });
     },
     listBySession: (targetSessionKey) =>
-      manager.listBySessionKey(targetSessionKey).map((entry) =>
-        toSessionBindingRecord(entry, {
-          idleTimeoutMs,
-          maxAgeMs,
-        }),
-      ),
+      manager.listBySessionKey(targetSessionKey).map(projectSessionBinding),
     resolveByConversation: (ref) => {
       if (ref.channel !== "telegram") {
         return null;
@@ -483,12 +434,7 @@ async function initializeThreadBindingManager(
         return null;
       }
       const record = manager.getByConversationId(conversationId);
-      return record
-        ? toSessionBindingRecord(record, {
-            idleTimeoutMs,
-            maxAgeMs,
-          })
-        : null;
+      return record ? projectSessionBinding(record) : null;
     },
     touch: (bindingId, at) => {
       const conversationId = resolveThreadBindingConversationIdFromBindingId({
@@ -521,12 +467,7 @@ async function initializeThreadBindingManager(
           sendFarewell: false,
           throwOnPersistError: true,
         });
-        return removed.map((entry) =>
-          toSessionBindingRecord(entry, {
-            idleTimeoutMs,
-            maxAgeMs,
-          }),
-        );
+        return removed.map(projectSessionBinding);
       }
       const conversationId = resolveThreadBindingConversationIdFromBindingId({
         accountId,
@@ -541,14 +482,7 @@ async function initializeThreadBindingManager(
         sendFarewell: false,
         throwOnPersistError: true,
       });
-      return removed
-        ? [
-            toSessionBindingRecord(removed, {
-              idleTimeoutMs,
-              maxAgeMs,
-            }),
-          ]
-        : [];
+      return removed ? [projectSessionBinding(removed)] : [];
     },
   };
 

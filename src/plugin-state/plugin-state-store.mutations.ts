@@ -12,6 +12,7 @@ import {
   parseStoredJson,
   resolvePluginStateExpiresAtMs,
   selectPluginStateEntry,
+  upsertPluginStateEntry,
   type PluginStateDatabase,
 } from "./plugin-state-store.kernel.js";
 import {
@@ -57,14 +58,7 @@ export function registerPluginStateEntryIfAbsent(
   assertCanInsertPluginStateEntry({ store, ...params, now });
   const inserted = insertPluginStateEntryIfAbsent(
     store.db,
-    bindPluginStateEntry({
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      key: params.key,
-      valueJson: params.valueJson,
-      createdAt: now,
-      expiresAt,
-    }),
+    bindPluginStateEntry({ ...params, createdAt: now, expiresAt }),
   );
   if (!inserted) {
     return false;
@@ -76,6 +70,27 @@ export function registerPluginStateEntryIfAbsent(
     protectedKey: params.key,
   });
   return true;
+}
+
+/** Apply a prepared update after the caller has read and checked the current row. */
+export function updatePluginStateEntry(
+  store: PluginStateDatabase,
+  params: Omit<PluginStateRegisterEntryParams, "createdAtMs">,
+  now: number,
+  exists: boolean,
+): void {
+  if (!exists) {
+    assertCanInsertPluginStateEntry({ ...params, store, now });
+  }
+  const expiresAt = resolvePluginStateExpiresAtMs({
+    ttlMs: params.ttlMs,
+    namespace: params.namespace,
+    now,
+    operation: "register",
+    path: store.path,
+  });
+  upsertPluginStateEntry(store.db, bindPluginStateEntry({ ...params, createdAt: now, expiresAt }));
+  enforcePostRegisterLimits({ ...params, store, now, protectedKey: params.key });
 }
 
 /** The caller owns the transaction containing the authoritative comparison and deletion. */
@@ -100,12 +115,7 @@ export function consumePluginStateEntry(
   store: PluginStateDatabase,
   params: { pluginId: string; namespace: string; key: string },
 ): unknown {
-  const row = selectPluginStateEntry(store.db, {
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    key: params.key,
-    now: Date.now(),
-  });
+  const row = selectPluginStateEntry(store.db, { ...params, now: Date.now() });
   if (!row) {
     return undefined;
   }

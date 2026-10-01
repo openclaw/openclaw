@@ -21,18 +21,16 @@ function resolveThreadCreateRequest(opts: Record<string, unknown>) {
   };
 }
 
-/** Register thread create/list/reply commands. */
 export function registerMessageThreadCommands(message: Command, helpers: MessageCliHelpers) {
   const thread = message.command("thread").description("Thread actions");
 
   helpers
     .withMessageBase(
-      helpers.withRequiredMessageTarget(
-        thread
-          .command("create")
-          .description("Create a thread")
-          .requiredOption("--thread-name <name>", "Thread name"),
-      ),
+      thread
+        .command("create")
+        .description("Create a thread")
+        .requiredOption("--thread-name <name>", "Thread name"),
+      "required",
     )
     .option("--message-id <id>", "Message id (optional)")
     .option("-m, --message <text>", "Initial thread message text")
@@ -57,12 +55,11 @@ export function registerMessageThreadCommands(message: Command, helpers: Message
 
   helpers
     .withMessageBase(
-      helpers.withRequiredMessageTarget(
-        thread
-          .command("reply")
-          .description("Reply in a thread")
-          .requiredOption("-m, --message <text>", "Message body"),
-      ),
+      thread
+        .command("reply")
+        .description("Reply in a thread")
+        .requiredOption("-m, --message <text>", "Message body"),
+      "required",
     )
     .option(
       "--media <path-or-url>",

@@ -1,4 +1,3 @@
-// Codex plugin module implements periodic Computer Use health probes.
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -7,7 +6,6 @@ import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 type ComputerUseHealthMonitor = {
   fingerprint: string;
-  intervalMs: number;
   timer: ReturnType<typeof setInterval>;
   disposeCloseHandler: () => void;
   running: boolean;
@@ -48,7 +46,6 @@ export function startCodexComputerUseHealthMonitor(params: {
   }
   const monitor: ComputerUseHealthMonitor = {
     fingerprint,
-    intervalMs,
     timer: setInterval(() => {
       void runCodexComputerUseHealthProbe(params.client, params.config, monitor, params.tools);
     }, intervalMs),

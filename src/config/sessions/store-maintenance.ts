@@ -89,16 +89,6 @@ function resolveArchiveDashboardAfterMs(maintenance?: SessionMaintenanceConfig):
   return parsed > 0 ? parsed : null;
 }
 
-function resolveResetArchiveRetentionMs(
-  maintenance: SessionMaintenanceConfig | undefined,
-): number | null {
-  // null = keep extracted transcripts indefinitely (the disk budget still removes
-  // old archive artifacts under pressure). An explicit duration opts back into
-  // wall-clock deletion; parse failures stay on the keep side because losing
-  // history is the worse failure mode.
-  return resolveMaintenanceDuration(maintenance?.resetArchiveRetention, null);
-}
-
 function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | null {
   const raw = maintenance?.maxDiskBytes;
   if (raw === false) {
@@ -167,7 +157,8 @@ export function resolveMaintenanceConfigFromInput(
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
     modelRunPruneAfterMs: DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
     preserveRecentMs: resolveMaintenanceDuration(maintenance?.preserveRecent, null),
-    resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance),
+    // Missing or invalid retention keeps extracted transcripts until disk-budget pressure.
+    resetArchiveRetentionMs: resolveMaintenanceDuration(maintenance?.resetArchiveRetention, null),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };
@@ -236,24 +227,8 @@ export function shouldRunModelRunPrune(params: {
 }
 
 function isGatewayModelRunSessionKey(sessionKey: string): boolean {
-  const match =
-    /^agent:([^:\s]+):explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec(
-      sessionKey,
-    );
-  if (!match) {
-    return false;
-  }
-  const agentId = match[1];
-  if (!agentId || /\s/.test(agentId)) {
-    return false;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed || parsed.agentId !== agentId.toLowerCase()) {
-    return false;
-  }
-  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
-  return /^explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
-    rest,
+  return /^agent:([^:\s]+):explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    sessionKey,
   );
 }
 
@@ -281,14 +256,7 @@ export function pruneStaleEntries(
   const cutoffMs = now - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
-    if (
-      shouldPreserveMaintenanceEntry({
-        key,
-        entry,
-        preserveKeys: opts.preserveKeys,
-        preserveRecentMs: opts.preserveRecentMs,
-      })
-    ) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, ...opts })) {
       continue;
     }
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
@@ -331,14 +299,7 @@ export function pruneStaleModelRunEntries(
   const cutoffMs = Date.now() - overrideMaxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
-    if (
-      shouldPreserveMaintenanceEntry({
-        key,
-        entry,
-        preserveKeys: opts.preserveKeys,
-        preserveRecentMs: opts.preserveRecentMs,
-      })
-    ) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, ...opts })) {
       continue;
     }
     if (!isGatewayModelRunSessionKey(key)) {
@@ -532,12 +493,14 @@ function isProtectedSessionMaintenanceEntry(
   return chatType === "group" || chatType === "channel" || chatType === "thread";
 }
 
-function shouldPreserveNonArchivedMaintenanceEntry(params: {
+type SessionMaintenanceEntryParams = {
   key: string;
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
   preserveRecentMs?: number | null;
-}): boolean {
+};
+
+function shouldPreserveNonArchivedMaintenanceEntry(params: SessionMaintenanceEntryParams): boolean {
   if (params.entry?.pinnedAt !== undefined && isPinnableSessionEntry(params.key, params.entry)) {
     return true;
   }
@@ -554,12 +517,7 @@ function shouldPreserveNonArchivedMaintenanceEntry(params: {
   );
 }
 
-export function shouldPreserveMaintenanceEntry(params: {
-  key: string;
-  entry: SessionEntry | undefined;
-  preserveKeys?: ReadonlySet<string>;
-  preserveRecentMs?: number | null;
-}): boolean {
+export function shouldPreserveMaintenanceEntry(params: SessionMaintenanceEntryParams): boolean {
   // Ordinary age/count maintenance never deletes an archived session. Disk-budget cleanup has a
   // separate positive eligibility check for rows that this product automatically archived.
   return (
@@ -567,12 +525,9 @@ export function shouldPreserveMaintenanceEntry(params: {
   );
 }
 
-export function isSessionEntryDiskBudgetEvictable(params: {
-  key: string;
-  entry: SessionEntry | undefined;
-  preserveKeys?: ReadonlySet<string>;
-  preserveRecentMs?: number | null;
-}): params is { key: string; entry: SessionEntry } {
+export function isSessionEntryDiskBudgetEvictable(
+  params: SessionMaintenanceEntryParams,
+): params is { key: string; entry: SessionEntry } {
   return (
     params.entry?.archivedAt !== undefined &&
     params.entry.archiveReason === "active-session-cap" &&
@@ -658,16 +613,10 @@ export function getActiveSessionMaintenanceWarning(params: {
     params.preserveKeys,
     params.preserveRecentMs,
   ).includes(activeSessionKey);
-  const capOutcome = wouldCap
-    ? isSyntheticSessionMaintenanceKey(activeSessionKey)
-      ? "remove"
-      : "archive"
-    : null;
-
   if (!wouldPrune && !wouldCap) {
     return null;
   }
-
+  const outcome = isSyntheticSessionMaintenanceKey(activeSessionKey) ? "remove" : "archive";
   return {
     activeSessionKey,
     activeUpdatedAt: activeEntry.updatedAt,
@@ -676,12 +625,8 @@ export function getActiveSessionMaintenanceWarning(params: {
     maxEntries: params.maxEntries,
     wouldPrune,
     wouldCap,
-    capOutcome,
-    pruneOutcome: wouldPrune
-      ? isSyntheticSessionMaintenanceKey(activeSessionKey)
-        ? "remove"
-        : "archive"
-      : null,
+    capOutcome: wouldCap ? outcome : null,
+    pruneOutcome: wouldPrune ? outcome : null,
   };
 }
 

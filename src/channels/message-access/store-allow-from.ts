@@ -1,10 +1,5 @@
 import type { PairingChannel } from "../../pairing/pairing-store.types.js";
 import type { ResolveChannelMessageIngressParams } from "./runtime-types.js";
-import type {
-  ChannelIngressChannelId,
-  ChannelIngressPolicyInput,
-  ChannelIngressStateInput,
-} from "./types.js";
 
 /**
  * Read pairing-store allowlist entries when a direct-message policy permits
@@ -35,25 +30,13 @@ export async function readChannelIngressStoreAllowFromForDmPolicy(params: {
   return await readStore(params.provider, params.accountId).catch(() => []);
 }
 
-function shouldReadStore(params: {
-  conversationKind: ChannelIngressStateInput["conversation"]["kind"];
-  dmPolicy: ChannelIngressPolicyInput["dmPolicy"];
-}): boolean {
-  return (
-    params.conversationKind === "direct" &&
-    params.dmPolicy !== "allowlist" &&
-    params.dmPolicy !== "open"
-  );
-}
-
 export async function readChannelIngressStoreAllowFrom(
-  params: ResolveChannelMessageIngressParams & { channelId: ChannelIngressChannelId },
+  params: ResolveChannelMessageIngressParams,
 ): Promise<Array<string | number>> {
   if (
-    !shouldReadStore({
-      conversationKind: params.conversation.kind,
-      dmPolicy: params.policy.dmPolicy,
-    })
+    params.conversation.kind !== "direct" ||
+    params.policy.dmPolicy === "allowlist" ||
+    params.policy.dmPolicy === "open"
   ) {
     return [];
   }

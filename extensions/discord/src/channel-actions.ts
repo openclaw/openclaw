@@ -73,7 +73,7 @@ function matchesCurrentDiscordThread(params: {
 }
 
 const loadDiscordChannelActionsRuntime = createLazyRuntimeModule(
-  () => import("./channel-actions.runtime.js"),
+  () => import("./actions/handle-action.js"),
 );
 
 const discordActionGroups: ReadonlyArray<{

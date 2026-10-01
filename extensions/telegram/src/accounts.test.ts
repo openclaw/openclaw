@@ -216,6 +216,26 @@ describe("resolveDefaultTelegramAccountId", () => {
 
 describe("mergeTelegramAccountConfig", () => {
   afterEach(clearTelegramRuntimeForTest);
+  it.each([
+    { root: { port: 9000 }, account: undefined, expected: { port: 9000 } },
+    { root: { port: 9000 }, account: false, expected: false },
+    { root: false, account: undefined, expected: false },
+    { root: false, account: { port: 9001 }, expected: { port: 9001 } },
+  ] as const)(
+    "preserves legacy listener inheritance and false override %j",
+    ({ root, account, expected }) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            legacyWebhook: root,
+            accounts: { alerts: account === undefined ? {} : { legacyWebhook: account } },
+          },
+        },
+      };
+      expect(mergeTelegramAccountConfig(cfg, "alerts").legacyWebhook).toEqual(expected);
+    },
+  );
+
   it("drops account wildcard DM access when top-level allowFrom is restrictive", async () => {
     const cfg: OpenClawConfig = {
       channels: {

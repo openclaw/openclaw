@@ -2,13 +2,14 @@
 
 ## Orchestrated stable release
 
-Use the [manual publication flow](#publish-and-verify) when activation must wait for the
-selected publisher's gates. The current orchestrator activates GitHub as soon
-as npm is visible; it does not enforce that finalizer ordering. Do not use it
-without explicit operator approval for that early activation.
+Stable policy (Peter, 2026-09-28): the GitHub release becomes public and Latest
+as soon as core npm is verified. It never waits for ClawHub, Docker, or native
+apps. The orchestrator does this in `flip-github`; the manual direct publisher
+passes `finalize_release_before_docker=true`. The prepared button activates only
+after public ClawHub downloads verify, so stable releases use the direct route.
 
 `pnpm release:stable YYYY.M.PATCH` runs strict stable qualification and publication as one resumable state
-machine with the phases `cut → validate → publish → sync-beta → flip-github →
+machine with the phases `cut → validate → publish → flip-github → sync-beta →
 macos → closeout`. State lives in `.artifacts/release-YYYY.M.PATCH/state.json`;
 rerunning the command continues from the first incomplete phase, `--from <phase>`
 restarts from that phase, `--status` prints the table, and `--dry-run` prints
@@ -31,8 +32,8 @@ preflight lanes from the tag, dispatches `OpenClaw Release Publish` once with
 completes when `openclaw@YYYY.M.PATCH` is visible on npm; it never approves or
 cancels a child run (the API cannot prove which parent dispatched one), so
 when those capabilities are absent it prints the exact child-approval and
-stale-child sweep commands for the operator instead; `sync-beta` advances the
-beta dist-tag to the already-published stable version; `flip-github` un-drafts the release and marks it latest;
+stale-child sweep commands for the operator instead; `flip-github` un-drafts the release and marks it latest; `sync-beta` advances the
+beta dist-tag to the already-published stable version;
 `macos` waits for the preflight, dispatches the real publish, and requires the
 appcast on `main`; `closeout` waits for the publish parent, requires the exact
 shipped version and changelog on `main`, and dispatches the closeout run unless
@@ -54,10 +55,11 @@ changes, and `--from macos --macos-preflight-run-id <id>` /
 directory is bound to one cut and one tooling SHA; selecting another needs a
 fresh `--state-dir`, which the refusal prints.
 
-The current orchestrator directly activates GitHub in `flip-github`. This
-differs from the publisher finalizer ordering described below; it does not
-prove that the publisher's activation or Docker gates passed. For the manual
-flow, let the selected publisher complete those gates.
+`flip-github` activates GitHub directly, before Docker; the publisher's later
+finalizer verifies the already-public release. It does not prove that Docker
+passed, so the parent must still succeed before closeout. The orchestrator can
+only adopt a Full Release Validation that its own `validate` phase dispatched;
+after an externally dispatched parent, use the manual flow.
 
 ## Freeze and validate code
 
@@ -100,14 +102,16 @@ Record and reuse the full trusted Tooling SHA. Beta-publish uses
 `release_profile=beta`, `run_release_soak=false` (`npm-beta-v1` for a qualifying
 canonical beta target). Stable-publish requires `release_profile=stable` or
 `full`, soak, and blocking performance. Beta-profile evidence cannot qualify
-stable, and every selected validation lane must pass. See
-[validation](validation.md) and
+stable. Every selected validation lane except policy-owned `windows-node-ci`
+and authenticated `recorded-flake` jobs in `normalCi` must pass.
+See [shared release boundaries](../SKILL.md#shared-release-boundaries),
+[validation](validation.md), and
 [publication recovery](publication-recovery.md). Diagnose
 failures and use the controller's bounded retry for affected required proof.
 Continue eligible parents to seal; a parent that produced its own sealed
 candidate artifacts requires a new parent with verified successful evidence
-reuse. Diagnose selected test failures before rerunning; an untouched test or
-passing replay alone does not prove a flake or a fix. Only a confirmed product
+reuse. Classify each selected test failure as a real blocker or a flake before
+rerunning, per the shared release boundaries. Only a confirmed product
 defect that a required lane blocks on creates a new Code SHA: the
 update/install path (previous stable updates to the candidate, install smoke,
 pack budget, worker bundle), the bytes to publish, or another required gate
@@ -166,9 +170,14 @@ Manual tag creation remains the fallback. The push may print a
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`
 and, only if missing, create it with
 `gh api -X POST repos/openclaw/openclaw/git/refs -f ref=refs/tags/<tag> -f sha=<tooling-sha>`.
+Run the candidate from a clean tracked worktree whose HEAD is the Release SHA,
+with its frozen dependencies installed. The helper creates and relaunches trusted
+Tooling SHA code itself; starting in the tooling checkout fails the target HEAD check.
 Then consume existing validation against the untagged Release SHA:
 
 ```bash
+git worktree add --detach /private/tmp/openclaw-candidate-<version> <release-sha>
+cd /private/tmp/openclaw-candidate-<version> && pnpm install --frozen-lockfile
 pnpm release:candidate -- \
   --tag <tag> \
   --target-sha <release-sha> \
@@ -180,6 +189,12 @@ pnpm release:candidate -- \
   --plugin-sdk-api-acknowledgement <reviewed-8-character-digest> \
   --skip-dispatch
 ```
+
+If `pnpm` stalls on the global store lock, check for another agent running
+`pnpm store prune` (`pgrep -fl 'pnpm.*store.*prune'`). With dependencies already
+installed, bypass the pnpm launcher using `node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts ...`
+or `node --import ./scripts/tsx.mjs scripts/release-publish-preflight.mts ...`
+with the same helper arguments. A dependency install still needs the lock.
 
 Match channel, route, and profile to the frozen validation selection. The
 channel and route default to `beta` and `normal`; final versions require
@@ -232,10 +247,13 @@ parallel, builds and qualifies their final package bytes, and seals a readiness
 receipt only after every package can be downloaded and verified. Preparation
 does not publish packages or change public selectors.
 
-Every ClawHub package must already have the normal trusted-publisher binding.
-Preparation refuses to issue a readiness receipt for packages needing bootstrap
-or publisher repair; use the existing ClawHub owner workflow to finish that setup
-first. The button rechecks this prerequisite before starting any plugin writer.
+ClawHub packages needing publication or adoption must have the normal
+trusted-publisher binding. Use the existing ClawHub owner workflow to finish
+bootstrap or publisher repair first; the button rechecks this prerequisite before
+starting a plugin writer. Pending and failed publications stay out of writer and
+repair rosters, including staged package shells hidden by public metadata. Their
+publication state and operator recovery instructions remain visible in the release
+plan summary; final public verification still requires published downloads.
 
 When preparation succeeds, copy its summary's `prepared_artifact` JSON into
 **OpenClaw Release Button**, selecting the same protected tooling tag. This is
@@ -261,7 +279,7 @@ Optional stable Windows promotion starts after that outer activation, using the
 same sealed source tag, installer digests, and protected tooling. The ordinary
 unprepared publisher retains its own post-finalization Windows job; the two
 routes do not both dispatch. Missing Windows selection skips promotion, an
-incomplete selection fails visibly, and alpha/beta never dispatch it. Windows
+incomplete selection fails visibly, and beta never dispatches it. Windows
 failure does not undo npm or GitHub publication. Inspect the attempt-bound
 Windows dispatch artifact and linked child before an explicit manual retry;
 neither publisher waits for native completion.
@@ -270,8 +288,8 @@ This button covers core and plugin npm, ClawHub, the existing Docker/Windows
 contracts, and GitHub release visibility. It does **not** claim that independent
 macOS signing/feed promotion, Android completion, app-store submission, or
 website publication is ready. Those owners retain their existing release steps.
-Alpha, selected-plugin repairs, and historical releases without a readiness
-receipt continue to use their existing owner workflows. Extended-stable uses
+Selected-plugin repairs and historical releases without a readiness receipt
+continue to use their existing owner workflows. Extended-stable uses
 the shared direct publisher with its dedicated track inputs, not this button.
 
 ## Publish and verify
@@ -311,7 +329,10 @@ prove availability. The parent's
 `Complete publish workflows` step polls the registry document for the version
 under the target dist-tag (bounded 10 minutes), then dispatches the
 `sync_beta_to_stable` ledger sync through a release-ledger app token and waits
-for it before verification; if its summary reports the token unavailable,
+up to 50 minutes (`RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS`) before verification.
+Status changes and five-minute heartbeats identify the run. A still-running sync
+fails explicitly without judging the beta floor; inspect that run before resuming.
+If its summary reports the token unavailable,
 dispatch the sync by hand before the verify runs. For manual work, poll the
 registry yourself before the sync or verification. Run postpublish
 verification from a checkout of the Release SHA (a newer tooling checkout
@@ -331,13 +352,16 @@ floors through [registry selectors](publication-recovery.md#registry-selectors),
 preserving newer beta versions. Resume incomplete stages through the selected
 route; never republish successful immutable versions.
 
-Normal publication finalizes GitHub after npm and Docker verification. The
-prepared button also verifies public ClawHub downloads before activation. Let
-the selected finalizer make the draft public; do not manually bypass failed
-gates. The explicitly approved `finalize_release_before_docker=true` direct
-route changes ordering only; it retains activation approval and still requires
-Docker for parent success. It does not apply to prepared publication or waive
-stable validation.
+Stable direct publication passes `finalize_release_before_docker=true` (the
+standing policy above) and `wait_for_clawhub=false`; the candidate and
+publish-preflight commands emit both for final versions on `latest`. Approve the activation
+gate (`Approve GitHub release before Docker`, `npm-release`) as soon as the
+`publish` job succeeds; that job has already verified core npm. Activation
+keeps the Linux updater carry, and Docker is still required for parent success.
+Without the input, the publisher finalizes after Docker. The prepared button
+verifies public ClawHub downloads before activation. Do not make a release
+public while npm verification is failing; that bypasses a gate. Early
+activation does not waive stable validation.
 
 Native applications use [platform publication](platform-publication.md) as
 independent tasks; beta runs them only if requested. Their approval, build,
@@ -349,8 +373,9 @@ failure without republishing npm.
 Run [postpublish confidence](validation.md#postpublish-confidence) against the
 exact published package. For a beta-to-latest promotion, retain available
 deferred-lane results, including published-package Telegram, while enforcing
-the shared required publication proofs. All selected test outcomes must pass
-before publication. Run safe
+the shared required publication proofs. All selected tests outside the
+`windows-node-ci` and authenticated `recorded-flake` classes must pass before publication; retain advisory
+failures in the release evidence. Run safe
 independent rosters concurrently while controlling local Docker/VM load.
 Classify failures before admitting a fix to the next beta; do not scan moving
 main or automatically rerun all groups. An operator's beta-attempt cap counts
@@ -364,7 +389,7 @@ after verification and any requested announcement.
 
 Stable publication and any dist-tag promotion to `latest` require exact
 stable/full validation with soak, blocking performance, and successful selected
-lanes. Matching beta-profile evidence never qualifies stable. Run published npm
+blocking lanes. Matching beta-profile evidence never qualifies stable. Run published npm
 verification, Docker install/update, and selected platform checks against the
 qualified stable candidate. Promote beta to latest through the restricted dist-tag workflow in
 [publication recovery](publication-recovery.md#registry-selectors). After either

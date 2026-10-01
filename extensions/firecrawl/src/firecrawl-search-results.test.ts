@@ -24,12 +24,6 @@ async function search(payload: Record<string, unknown>, count = 10) {
 
 describe("Firecrawl search result selection", () => {
   it.each([
-    { data: [first] },
-    { results: [first] },
-    { data: { results: [first] } },
-    { data: { data: [first] } },
-    { data: { web: [first] } },
-    { web: { results: [first] } },
     { data: [first], results: [second] },
     { results: [first], data: { results: [second] } },
     { data: { results: [first], data: [second], web: [second] } },

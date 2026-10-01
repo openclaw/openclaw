@@ -190,8 +190,8 @@ function createRoundTripProbe(
     ...options,
     markerPrefix: "QA-TELEGRAM-RTT",
     input: {
-      conversation: { id: "telegram-rtt-room", kind: "group" },
-      senderId: "qa-rtt-driver",
+      fromScenario: true,
+      senderId: "primary",
       senderName: "QA RTT Driver",
     },
     textPrefix: "@openclaw Telegram RTT check. Reply exactly: ",

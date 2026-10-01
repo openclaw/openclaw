@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import { pageExecutionDecisionFactsForContextInDatabase } from "./execution-decision-facts.js";
 import type { ExecutionDecisionWork } from "./execution-decision-work.types.js";
@@ -69,7 +70,11 @@ describe("private execution decision work", () => {
     async (oversizedPart) => {
       const stateDir = tempDirs.make("openclaw-audit-private-decision-bounds-");
       const errors: string[] = [];
-      const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+      const writer = createAuditEventWriter({
+        scheduler: createTestGatewayScheduler(),
+        stateDir,
+        onError: (error) => errors.push(error),
+      });
       const token = createExecutionIdentityAdmissionToken("bounded-private-decision-run", {
         contextId: "bounded-private-decision-context",
         executionId: "bounded-private-decision-execution",
@@ -108,7 +113,11 @@ describe("private execution decision work", () => {
     const stateDir = tempDirs.make("openclaw-audit-private-decision-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
     const admittedAt = Date.now();
     const token = createExecutionIdentityAdmissionToken("private-decision-run", {
       contextId: "private-decision-context",
@@ -193,7 +202,10 @@ describe("private execution decision work", () => {
         now,
       });
       const database = { env: { OPENCLAW_STATE_DIR: params.stateDir } };
-      const writer = createAuditEventWriter({ stateDir: params.stateDir });
+      const writer = createAuditEventWriter({
+        scheduler: createTestGatewayScheduler(),
+        stateDir: params.stateDir,
+      });
       const clearAdmissionSink = configureExecutionIdentityAdmissionSink(
         writer.recordExecutionIdentity,
       );

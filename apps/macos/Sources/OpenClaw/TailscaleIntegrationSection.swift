@@ -56,8 +56,8 @@ private struct GatewayTailscaleApplyResult {
 private struct GatewayTailscaleApplyMessages {
     var statusMessage: String?
     var validationMessage: String?
-    var shouldRecordSuccess: Bool
-    var shouldRestartGateway: Bool
+    var shouldRecordSuccess = false
+    var shouldRestartGateway = false
 }
 
 private typealias GatewayTailscaleSettingsSaver = @MainActor @Sendable (
@@ -338,18 +338,7 @@ struct TailscaleIntegrationSection: View {
         let authModeRaw = auth["mode"] as? String
         let allowTailscale = auth["allowTailscale"] as? Bool
         let password = auth["password"] as? String ?? ""
-        let requireCredentialsForServe: Bool
-
-        if mode == .serve {
-            let usesExplicitAuth = authModeRaw == "password"
-            if let allowTailscale, allowTailscale == false {
-                requireCredentialsForServe = true
-            } else {
-                requireCredentialsForServe = usesExplicitAuth
-            }
-        } else {
-            requireCredentialsForServe = false
-        }
+        let requireCredentialsForServe = mode == .serve && (allowTailscale == false || authModeRaw == "password")
 
         return GatewayTailscaleLoadedSettings(
             snapshot: GatewayTailscaleSettingsSnapshot(
@@ -367,11 +356,7 @@ struct TailscaleIntegrationSection: View {
         saveSettings: GatewayTailscaleSettingsSaver) async -> GatewayTailscaleApplyResult
     {
         guard currentSettings != lastAppliedSettings else {
-            return GatewayTailscaleApplyResult(
-                didApply: false,
-                success: true,
-                errorMessage: nil,
-                validationMessage: nil)
+            return GatewayTailscaleApplyResult(didApply: false, success: true)
         }
 
         let requiresPassword = currentSettings.mode == .funnel
@@ -380,7 +365,6 @@ struct TailscaleIntegrationSection: View {
             return GatewayTailscaleApplyResult(
                 didApply: true,
                 success: false,
-                errorMessage: nil,
                 validationMessage: "Password required for this mode.")
         }
 
@@ -388,8 +372,7 @@ struct TailscaleIntegrationSection: View {
         return GatewayTailscaleApplyResult(
             didApply: true,
             success: success,
-            errorMessage: errorMessage,
-            validationMessage: nil)
+            errorMessage: errorMessage)
     }
 
     private static func messages(
@@ -398,27 +381,15 @@ struct TailscaleIntegrationSection: View {
         isPaused: Bool) -> GatewayTailscaleApplyMessages
     {
         guard result.didApply else {
-            return GatewayTailscaleApplyMessages(
-                statusMessage: nil,
-                validationMessage: nil,
-                shouldRecordSuccess: false,
-                shouldRestartGateway: false)
+            return GatewayTailscaleApplyMessages()
         }
 
         if let validationMessage = result.validationMessage {
-            return GatewayTailscaleApplyMessages(
-                statusMessage: nil,
-                validationMessage: validationMessage,
-                shouldRecordSuccess: false,
-                shouldRestartGateway: false)
+            return GatewayTailscaleApplyMessages(validationMessage: validationMessage)
         }
 
         if !result.success, let errorMessage = result.errorMessage {
-            return GatewayTailscaleApplyMessages(
-                statusMessage: errorMessage,
-                validationMessage: nil,
-                shouldRecordSuccess: false,
-                shouldRestartGateway: false)
+            return GatewayTailscaleApplyMessages(statusMessage: errorMessage)
         }
 
         let statusMessage = if connectionMode == .local, !isPaused {
@@ -428,7 +399,6 @@ struct TailscaleIntegrationSection: View {
         }
         return GatewayTailscaleApplyMessages(
             statusMessage: statusMessage,
-            validationMessage: nil,
             shouldRecordSuccess: true,
             shouldRestartGateway: true)
     }

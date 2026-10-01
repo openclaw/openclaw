@@ -1,4 +1,3 @@
-// Migrate Hermes provider module implements model/runtime integration.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   MigrationPlan,

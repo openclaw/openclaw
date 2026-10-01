@@ -260,7 +260,7 @@ describe("asynchronous agent database maintenance admission", () => {
                 openOpenClawAgentDatabase(
                   options,
                   { ...prepared, claim: () => leaseId },
-                  registered,
+                  { starting: registered, committed: registered },
                 ),
               ).toThrow(/maintenance is in progress/);
               expect(native?.isOpen).toBe(false);

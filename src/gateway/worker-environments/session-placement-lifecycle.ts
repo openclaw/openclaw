@@ -1,6 +1,7 @@
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
+import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRetirement,
@@ -8,6 +9,7 @@ import type {
 } from "./placement-store.js";
 import type {
   WorkerEnvironmentServiceContract,
+  WorkerPlacementCancellationTarget,
   WorkerPlacementDispatchContract,
   WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
@@ -22,17 +24,8 @@ export type SessionWorkerPlacementContext = {
 type PlacementMutationAction = "fork" | "reset" | "restore" | "rewind" | "switch";
 type Placement = WorkerSessionPlacementRecord;
 type PlacementState = Placement["state"];
-type PlacementOwner = Pick<
-  Placement,
-  | "sessionId"
-  | "sessionKey"
-  | "agentId"
-  | "state"
-  | "generation"
-  | "environmentId"
-  | "activeOwnerEpoch"
-  | "executionMode"
->;
+type PlacementOwner = WorkerPlacementCancellationTarget &
+  Pick<Placement, "sessionId" | "sessionKey" | "agentId" | "executionMode">;
 
 class SessionWorkerPlacementMutationError extends Error {
   constructor(state: PlacementState, action: PlacementMutationAction, key: string) {
@@ -145,15 +138,6 @@ export function resolveWorkerPlacementArchiveRestoreError(params: {
   return `Session ${params.key} cannot change archive state while cloud worker placement is ${params.placement.state}.`;
 }
 
-function retirementGuard(placement: RetirablePlacement): SessionWorkerPlacementMutationGuard {
-  return {
-    status: "retirement-required",
-    sessionId: placement.sessionId,
-    expectedState: placement.state,
-    expectedGeneration: placement.generation,
-  };
-}
-
 function resolveSessionWorkerPlacementMutationGuard(
   params: SessionWorkerPlacementMutationParams,
 ): SessionWorkerPlacementMutationGuard {
@@ -164,7 +148,12 @@ function resolveSessionWorkerPlacementMutationGuard(
 
   if (isWorkerPlacementSafeForMutation(params.context, placement)) {
     if (params.action === "reset") {
-      return retirementGuard(placement);
+      return {
+        status: "retirement-required",
+        sessionId: placement.sessionId,
+        expectedState: placement.state,
+        expectedGeneration: placement.generation,
+      };
     }
     // History rewrites rotate the session identity and would strand stopped cloud affinity.
     if (placement.state === "local" || params.action === "fork") {
@@ -218,10 +207,7 @@ function samePlacementOwner(
     current?.sessionId === expected?.sessionId &&
     current?.sessionKey === expected?.sessionKey &&
     current?.agentId === expected?.agentId &&
-    current?.state === expected?.state &&
-    current?.generation === expected?.generation &&
-    current?.environmentId === expected?.environmentId &&
-    current?.activeOwnerEpoch === expected?.activeOwnerEpoch &&
+    matchesWorkerPlacementTarget(current, expected) &&
     current?.executionMode === expected?.executionMode
   );
 }

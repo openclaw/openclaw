@@ -3,6 +3,14 @@ import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { assistantTextMessage } from "./session-history-fixtures.test-support.js";
 
+const internalContext = (text: string) =>
+  ["<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", text, "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"].join("\n");
+const userTextMessage = (text: string) => ({
+  role: "user",
+  content: [{ type: "text", text }],
+  __openclaw: { seq: 1 },
+});
+
 describe("internal history display projection", () => {
   it("hides attributed child coordination without hiding peer messages or parent answers", () => {
     const child = {
@@ -34,65 +42,15 @@ describe("internal history display projection", () => {
 
   it("strips legacy internal envelopes before exposing history", () => {
     const projected = projectChatDisplayMessages([
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: [
-              "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-              "secret runtime context",
-              "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              "",
-              "visible ask",
-            ].join("\n"),
-          },
-        ],
-        __openclaw: { seq: 1 },
-      },
+      userTextMessage(`${internalContext("secret runtime context")}\n\nvisible ask`),
     ]);
 
-    expect(projected).toHaveLength(1);
-    expect(
-      (
-        projected[0] as {
-          content?: Array<{ text?: string }>;
-        }
-      ).content?.[0]?.text,
-    ).toBe("visible ask");
+    expect(projected).toMatchObject([{ content: [{ text: "visible ask" }] }]);
   });
 
   it("drops internal-only user messages after envelope stripping", () => {
     const projected = projectChatDisplayMessages([
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: [
-              "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-              "subagent completion payload",
-              "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-            ].join("\n"),
-          },
-        ],
-        __openclaw: { seq: 1 },
-      },
-      assistantTextMessage("visible answer", 2),
-    ]);
-
-    expect(projected).toEqual([assistantTextMessage("visible answer", 2)]);
-  });
-
-  it("drops hidden runtime-context custom messages from projected history", () => {
-    const projected = projectChatDisplayMessages([
-      {
-        role: "custom",
-        customType: "openclaw.runtime-context",
-        content: "secret runtime context",
-        display: false,
-        __openclaw: { seq: 1 },
-      },
+      userTextMessage(internalContext("subagent completion payload")),
       assistantTextMessage("visible answer", 2),
     ]);
 
@@ -104,25 +62,18 @@ describe("internal history display projection", () => {
     (sourceTool) => {
       const projected = projectChatDisplayMessages([
         {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                `[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=${sourceTool} isUser=false`,
-                "This content was routed by OpenClaw from another session or internal tool.",
-                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "subagent completion payload",
-                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              ].join("\n"),
-            },
-          ],
+          ...userTextMessage(
+            [
+              `[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=${sourceTool} isUser=false`,
+              "This content was routed by OpenClaw from another session or internal tool.",
+              internalContext("subagent completion payload"),
+            ].join("\n"),
+          ),
           provenance: {
             kind: "inter_session",
             sourceSessionKey: "agent:main:subagent:child",
             sourceTool,
           },
-          __openclaw: { seq: 1 },
         },
         assistantTextMessage("clean child result", 2),
       ]);
@@ -145,24 +96,19 @@ describe("internal history display projection", () => {
     };
     const projected = projectChatDisplayMessages([
       {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: [
-              "A background task completed. Use this result to reply normally.",
-              "session_key: image_generate:task-123",
-              'path="/root/.openclaw/media/tool-image-generation/private.png"',
-            ].join("\n"),
-          },
-        ],
+        ...userTextMessage(
+          [
+            "A background task completed. Use this result to reply normally.",
+            "session_key: image_generate:task-123",
+            'path="/root/.openclaw/media/tool-image-generation/private.png"',
+          ].join("\n"),
+        ),
         provenance: {
           kind: "inter_session",
           sourceChannel: "internal",
           sourceSessionKey: "image_generate:task-123",
           sourceTool: "image_generate",
         },
-        __openclaw: { seq: 1 },
       },
       assistantReply,
     ]);

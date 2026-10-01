@@ -1,4 +1,3 @@
-// Openai provider module implements model/runtime integration.
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "./default-models.js";
 

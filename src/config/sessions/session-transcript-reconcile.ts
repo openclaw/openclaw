@@ -1,5 +1,5 @@
 // Transcript projection reconciliation owner. Gateway startup awaits it;
-// request paths may only schedule it and return a bounded retryable response.
+// Request paths schedule it and may wait boundedly for their session's projection.
 // Native timers keep accepted work runnable after a caller replaces its timer globals.
 import { randomUUID } from "node:crypto";
 import { setImmediate as yieldToGateway, setTimeout as delay } from "node:timers/promises";
@@ -210,13 +210,10 @@ async function reconcilePreparedTranscriptIndexes(
       publicationClient = client;
       publication = {
         execute: (command) =>
-          client.run(
-            (scope) => scope.execute(command),
-            () => {
-              operation.signal.throwIfAborted();
-              execution.assertCurrent();
-            },
-          ),
+          client.execute(command, () => {
+            operation.signal.throwIfAborted();
+            execution.assertCurrent();
+          }),
       };
       if (!(await publication.execute({ type: "preflight", input: undefined }))) {
         return { reconciledSessions: 0 };

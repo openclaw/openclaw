@@ -25,6 +25,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeStandaloneMockServer =
   chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
@@ -230,27 +231,36 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     }
   });
 
-  it.each([{ task: 1, user: "Map the run-status", assistant: "Tracing task events" }])(
-    "serves background task $task through both chat entry points",
-    async ({ task, user, assistant }) => {
+  it.each([
+    {
+      sessionKey: "agent:main:tax-research",
+      user: "Inspect this session.",
+      assistant: "The current state is available in the session controls.",
+    },
+  ])(
+    "serves preview session $sessionKey through both chat entry points",
+    async ({ sessionKey, user, assistant }) => {
       const page = await browser.newPage();
       try {
         await page.goto(new URL("/chat", fixtureServer.url).toString());
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
-        const sessionKey = `agent:openclaw-mock:subagent:mock-task-${task}`;
+        const sampledAt = 1_790_598_431_356;
+        await page.clock.setFixedTime(sampledAt);
         const [description] = (await requestPreviewGateway(page, [
           { method: "sessions.describe", params: { key: sessionKey } },
-        ])) as Array<{ session: { sessionId: string } }>;
+        ])) as Array<{ session: { sessionId: string; snapshotAt: number } }>;
         expect(description).toMatchObject({
-          session: { key: sessionKey, sessionId: expect.any(String) },
+          session: { key: sessionKey, sessionId: expect.any(String), snapshotAt: sampledAt },
         });
-        const replies = await requestPreviewGateway(
-          page,
-          ["chat.history", "chat.startup"].map((method) => ({
-            method,
-            params: { sessionKey },
-          })),
-        );
+        // Each projection samples its read clock, not the stored row. Advance
+        // Date without delaying timers so descriptor/history/startup cannot
+        // accidentally pass by sharing one millisecond.
+        const replies: unknown[] = [];
+        for (const [index, method] of ["chat.history", "chat.startup"].entries()) {
+          await page.clock.setFixedTime(sampledAt + index + 1);
+          const [reply] = await requestPreviewGateway(page, [{ method, params: { sessionKey } }]);
+          replies.push(reply);
+        }
         const userMessage = expect.objectContaining({
           role: "user",
           content: [{ type: "text", text: expect.stringContaining(user) }],
@@ -259,10 +269,10 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           role: "assistant",
           content: [{ type: "text", text: expect.stringContaining(assistant) }],
         });
-        for (const reply of replies) {
+        for (const [index, reply] of replies.entries()) {
           expect(reply).toMatchObject({
             sessionId: description!.session.sessionId,
-            sessionInfo: description!.session,
+            sessionInfo: { ...description!.session, snapshotAt: sampledAt + index + 1 },
             messages: expect.arrayContaining([userMessage, assistantMessage]),
           });
           const messages = asNullableRecord(reply)?.messages;
@@ -275,7 +285,14 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           );
           expect(userIndex).toBeLessThan(assistantIndex);
         }
-        expect(replies[1]).toMatchObject(replies[0]!);
+        const history = asNullableRecord(replies[0]);
+        expect(replies[1]).toMatchObject({
+          ...history,
+          sessionInfo: {
+            ...asNullableRecord(history?.sessionInfo),
+            snapshotAt: sampledAt + 2,
+          },
+        });
       } finally {
         await page.close();
       }
@@ -382,7 +399,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const context = await browser.newContext({
       serviceWorkers: "block",
       viewport: { width: 1440, height: 1000 },
-      recordVideo: { dir: artifacts },
+      recordVideo: captureUiProof ? { dir: artifacts } : undefined,
     });
     await runQaGatewayFixture(
       async () => {
@@ -991,7 +1008,9 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
     const artifactDir = createControlUiE2eArtifactDir("standalone-native-plugin-preview");
     const context = await previewBrowser.newContext({
       viewport: { width: 1440, height: 1000 },
-      recordVideo: { dir: artifactDir, size: { width: 1440, height: 1000 } },
+      recordVideo: captureUiProof
+        ? { dir: artifactDir, size: { width: 1440, height: 1000 } }
+        : undefined,
     });
     const page = await context.newPage();
     try {

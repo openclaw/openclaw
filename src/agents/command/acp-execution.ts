@@ -75,6 +75,17 @@ export async function runAcpAgentCommand(params: {
   const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
   const acpToolTracker = attemptExecutionRuntime.createAcpToolLifecycleTracker();
   const startedAt = Date.now();
+  const lifecycleContext = {
+    runId: params.runId,
+    agentId: params.sessionAgentId,
+    lifecycleGeneration: params.lifecycleGeneration,
+  };
+  const runtimeEventContext = {
+    ...lifecycleContext,
+    toolTracker: acpToolTracker,
+    sessionKey: params.sessionKey,
+    abortSignal: params.opts.abortSignal,
+  };
   const coordination = isSubagentCoordinationInputProvenance(params.opts.inputProvenance);
   registerAgentRunContext(params.runId, {
     sessionKey: params.sessionKey,
@@ -86,10 +97,8 @@ export async function runAcpAgentCommand(params: {
     ...(coordination ? { projectSessionMessages: false } : {}),
   });
   attemptExecutionRuntime.emitAcpLifecycleStart({
-    runId: params.runId,
+    ...lifecycleContext,
     startedAt,
-    agentId: params.sessionAgentId,
-    lifecycleGeneration: params.lifecycleGeneration,
   });
 
   const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
@@ -149,11 +158,7 @@ export async function runAcpAgentCommand(params: {
           }
           if (payload.text) {
             attemptExecutionRuntime.emitAcpRuntimeEvent({
-              runId: params.runId,
-              toolTracker: acpToolTracker,
-              sessionKey: params.sessionKey,
-              agentId: params.sessionAgentId,
-              abortSignal: params.opts.abortSignal,
+              ...runtimeEventContext,
               event: { type: "status", text: payload.text, tag: "elicitation" },
             });
           }
@@ -198,11 +203,7 @@ export async function runAcpAgentCommand(params: {
       onEvent: (event) => {
         if (event.type !== "text_delta") {
           attemptExecutionRuntime.emitAcpRuntimeEvent({
-            runId: params.runId,
-            toolTracker: acpToolTracker,
-            sessionKey: params.sessionKey,
-            agentId: params.sessionAgentId,
-            abortSignal: params.opts.abortSignal,
+            ...runtimeEventContext,
             event,
           });
         }
@@ -239,13 +240,8 @@ export async function runAcpAgentCommand(params: {
       fallbackMessage: "ACP turn failed before completion.",
     });
     attemptExecutionRuntime.emitAcpLifecycleError({
-      runId: params.runId,
-      toolTracker: acpToolTracker,
+      ...runtimeEventContext,
       error: acpError,
-      sessionKey: params.sessionKey,
-      agentId: params.sessionAgentId,
-      lifecycleGeneration: params.lifecycleGeneration,
-      abortSignal: params.opts.abortSignal,
       ...(terminalOutcome ? { terminalOutcome } : {}),
     });
     throw acpError;
@@ -322,21 +318,14 @@ export async function runAcpAgentCommand(params: {
   const restartAbortReason = params.opts.abortSignal?.reason;
   if (isAgentRunRestartAbortReason(restartAbortReason)) {
     attemptExecutionRuntime.emitAcpLifecycleError({
-      runId: params.runId,
-      toolTracker: acpToolTracker,
+      ...runtimeEventContext,
       error: restartAbortReason,
-      sessionKey: params.sessionKey,
-      agentId: params.sessionAgentId,
-      lifecycleGeneration: params.lifecycleGeneration,
-      abortSignal: params.opts.abortSignal,
     });
     throw restartAbortReason;
   }
   attemptExecutionRuntime.emitAcpLifecycleEnd({
-    runId: params.runId,
+    ...lifecycleContext,
     toolTracker: acpToolTracker,
-    agentId: params.sessionAgentId,
-    lifecycleGeneration: params.lifecycleGeneration,
     endFields,
     terminalReply,
   });

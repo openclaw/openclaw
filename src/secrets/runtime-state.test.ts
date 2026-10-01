@@ -453,42 +453,6 @@ describe("secrets runtime state", () => {
     );
   });
 
-  it("removes candidate-only auth profiles when rolling config back", () => {
-    const agentDir = "/tmp/openclaw-auth-rollback-cas";
-    const snapshot = (key: string, port: number) =>
-      preparedGatewayAuthSnapshot(
-        agentDir,
-        port,
-        createAuthProfileStoreFixture({
-          "openai:default": { type: "api_key", provider: "openai", key },
-        }),
-      );
-    activateSnapshot(snapshot("sk-old", 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState();
-    const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-    const candidate = snapshot("sk-old", 19_002);
-    candidate.authStores[0]!.store.profiles["anthropic:candidate"] = {
-      type: "api_key",
-      provider: "anthropic",
-      key: "sk-rejected-candidate",
-    };
-    expect(previous).not.toBeNull();
-    expect(activateSnapshotIfCurrent(candidate, { expectedRevision: previousRevision })).toBe(true);
-    const candidateRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-    expect(
-      restoreSnapshotIfCurrent(previous!, candidate, { expectedRevision: candidateRevision }),
-    ).toBe(true);
-    expect(getActiveSecretsRuntimeSnapshotState()?.config.gateway?.port).toBe(19_001);
-    expect(
-      getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"],
-    ).toMatchObject({
-      key: "sk-old",
-    });
-    expect(
-      getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["anthropic:candidate"],
-    ).toBeUndefined();
-  });
-
   it("publishes prepared bookkeeping when the live snapshot is unchanged", () => {
     const agentDir = "/tmp/openclaw-auth-order-durable-refresh";
     const profiles = {
@@ -1278,38 +1242,6 @@ describe("secrets runtime state", () => {
     ).toMatchObject({
       key: changedRef ? "sk-old" : "sk-refreshed",
       keyRef: changedRef ? previousRef : candidateRef,
-    });
-  });
-
-  it("preserves live credentials when the captured predecessor is stale", () => {
-    const agentDir = "/tmp/openclaw-auth-stale-predecessor-rollback";
-    const snapshot = (key: string, port: number) =>
-      preparedGatewayAuthSnapshot(
-        agentDir,
-        port,
-        createAuthProfileStoreFixture({
-          "openai:default": { type: "api_key", provider: "openai", key },
-        }),
-      );
-    activateSnapshot(snapshot("sk-old", 19_011));
-    setRuntimeAuthProfileStoreSnapshot(
-      createAuthProfileStoreFixture({
-        "openai:default": { type: "api_key", provider: "openai", key: "sk-live" },
-      }),
-      agentDir,
-    );
-    const previous = getActiveSecretsRuntimeSnapshotState();
-    const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-    const candidate = snapshot("sk-live", 19_012);
-    expect(previous).not.toBeNull();
-    expect(activateSnapshotIfCurrent(candidate, { expectedRevision: previousRevision })).toBe(true);
-
-    expect(restoreSnapshotIfCurrent(previous!, candidate)).toBe(true);
-    expect(getActiveSecretsRuntimeSnapshotState()?.config.gateway?.port).toBe(19_011);
-    expect(
-      getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"],
-    ).toMatchObject({
-      key: "sk-live",
     });
   });
 

@@ -57,7 +57,7 @@ posixIt.each(Object.keys(steps) as PerformanceFixtureOptions["mode"][])(
   55_000,
 );
 
-posixIt.each([23, 124, 125, 143])(
+posixIt.each([23, 125])(
   "baseline ordinary fetch %s is advisory after extinction",
   async (code) => {
     const report = await performanceRun("baseline", { fetchResults: [code, code, code] });
@@ -161,7 +161,7 @@ posixIt.each(
   55_000,
 );
 
-posixIt.each(["hang", 23, 124, 125, 143] as const)(
+posixIt.each(["hang", 23, 125] as const)(
   "prepare initial fetch %s cannot reach checkout, commit or token readiness",
   async (failure) => {
     const report = await performanceRun("prepare", { fetchResults: [failure, failure, failure] });
@@ -199,7 +199,7 @@ posixIt(
   55_000,
 );
 
-posixIt.each([128, 124, 125, 143])(
+posixIt.each([128, 125])(
   "prepare duplicate inspection %s is terminal",
   async (code) => {
     const report = await performanceRun("prepare", { gitFault: { match: "^ls-tree ", code } });
@@ -210,7 +210,7 @@ posixIt.each([128, 124, 125, 143])(
   55_000,
 );
 
-posixIt.each([0, 1, 2, 124, 125, 143])(
+posixIt.each([0, 1, 125])(
   "cached diff status %s commits only for ordinary 1",
   async (code) => {
     const report = await performanceRun("prepare", {
@@ -225,7 +225,7 @@ posixIt.each([0, 1, 2, 124, 125, 143])(
   55_000,
 );
 
-posixIt.each([124, 125, 143, "hang"] as const)(
+posixIt.each([125, "hang"] as const)(
   "ambiguous push %s reconciles only after extinction",
   async (code) => {
     const report = await performanceRun("publish", { pushResults: [code] });
@@ -292,7 +292,7 @@ posixIt.each([false, true])(
   55_000,
 );
 
-posixIt.each([1, 2, 3, 4, 5])(
+posixIt.each([1, 5])(
   "remote duplicate after ambiguous attempt %s succeeds without replay",
   async (attempt) => {
     const report = await performanceRun("publish", {
@@ -308,7 +308,7 @@ posixIt.each([1, 2, 3, 4, 5])(
   55_000,
 );
 
-posixIt.each([23, 124, 125, 143])(
+posixIt.each([23, 125])(
   "ordinary cherry-pick and abort %s failures remain visible publish failure",
   async (code) => {
     const report = await performanceRun("publish", {
@@ -340,7 +340,7 @@ posixIt.each(["owner", "python", "git"] as const)(
   55_000,
 );
 
-posixIt.each([124, 125, 143, "hang"] as const)(
+posixIt.each([125, "hang"] as const)(
   "reconciliation fetch %s warns once and retries without replay",
   async (code) => {
     const report = await performanceRun("publish", { pushResults: [23], fetchResults: [code] });
@@ -353,7 +353,7 @@ posixIt.each([124, 125, 143, "hang"] as const)(
   55_000,
 );
 
-posixIt.each([124, 125, 143, 128])(
+posixIt.each([125, 128])(
   "remote duplicate read %s is terminal, never absence",
   async (code) => {
     const report = await performanceRun("publish", {

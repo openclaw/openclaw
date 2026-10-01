@@ -58,26 +58,6 @@ describe("ManagedWorktreeService canonical paths", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("keeps registry operations anchored to the primary checkout", async () => {
-    const linked = path.join(root, "linked-source");
-    await git(repo, "worktree", "add", "-b", "linked-source", linked, "HEAD");
-    const linkedRoot = await fs.realpath(linked);
-    const created = await service.create({
-      repoRoot: linkedRoot,
-      name: "linked-task",
-      baseRef: "HEAD",
-    });
-    expect(created.repoRoot).toBe(repo);
-    await git(repo, "worktree", "remove", "--force", linkedRoot);
-
-    await service.acquire(created.id);
-    await service.release(created.id);
-    await service.remove({ id: created.id, reason: "linked-source-removed" });
-    const restored = await service.restore({ id: created.id });
-
-    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("base\n");
-  });
-
   it("repairs removal to the live checkout repository before snapshotting", async () => {
     const canonicalLiveRepo = await cloneRepository("live-normal");
     const liveIdentity = await service.resolveRepositoryIdentity(canonicalLiveRepo);

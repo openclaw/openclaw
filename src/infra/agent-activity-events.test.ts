@@ -21,6 +21,34 @@ describe("agent activity events", () => {
   });
 
   test.each([
+    { details: { status: "skipped", deniedReason: "steering" }, status: "skipped" },
+    { details: { status: "skipped", deniedReason: "other" }, status: "blocked" },
+    { details: { status: "approval-pending" }, status: "blocked" },
+    { details: { status: "approval-unavailable" }, status: "blocked" },
+    { details: { status: "error" }, status: "failed" },
+  ])("preserves $details as $status in live and history activity", ({ details, status }) => {
+    const result = {
+      role: "toolResult",
+      toolCallId: "read-context",
+      toolName: "read",
+      content: [{ type: "text", text: "Tool did not execute." }],
+      details,
+      isError: true,
+    };
+    const live = projectAgentToolActivity({
+      toolCallId: result.toolCallId,
+      name: result.toolName,
+      phase: "result",
+      result,
+      isError: true,
+    });
+    const history = projectAgentHistoryActivity([{ messageId: "result", message: result }]);
+    expect(live.status).toBe(status);
+    expect(history[0]?.items).toEqual([expect.objectContaining({ status })]);
+    expect(result.isError).toBe(true);
+  });
+
+  test.each([
     { outcome: "completed", hidden: true },
     { outcome: "failed", hidden: false },
     { outcome: "execution-failed", hidden: false },

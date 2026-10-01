@@ -2,6 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import {
   readOpenClawAgentDatabaseIdentity,
   type OpenClawAgentDatabaseIdentity,
@@ -14,11 +15,7 @@ import {
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import {
-  normalizeSqliteSessionKey,
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
   readSessionTranscriptHotWatermark,
   type SessionTranscriptWatermark,
@@ -33,11 +30,13 @@ import {
   assertSessionTranscriptHot,
   SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 
 const SESSION_BRANCH_CACHE_MAX_ENTRIES = 64;
 
 type SessionBranchCacheEntry = SessionTranscriptWatermark & {
   branches: SessionBranchSummary[];
+  appendSafe?: boolean;
   identity: OpenClawAgentDatabaseIdentity;
 };
 
@@ -68,31 +67,39 @@ function readCachedSessionBranchSummaries(
   database: OpenClawAgentReadOnlyDatabase,
   sessionId: string,
   watermark: SessionTranscriptWatermark,
-): SessionBranchSummary[] | undefined {
+  allowAppend = false,
+): SessionBranchCacheEntry | undefined {
   const cacheKey = sessionBranchCacheKey(database.path, sessionId);
   const cached = sessionBranchCache.get(cacheKey);
   if (
     !cached ||
     cached.identity !== readOpenClawAgentDatabaseIdentity(database).identity ||
     cached.generation !== watermark.generation ||
-    cached.maxSeq !== watermark.maxSeq
+    (cached.maxSeq !== watermark.maxSeq &&
+      !(
+        allowAppend &&
+        cached.maxSeq !== null &&
+        watermark.maxSeq !== null &&
+        cached.maxSeq < watermark.maxSeq
+      ))
   ) {
     return undefined;
   }
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, cached);
-  return cached.branches;
+  return cached;
 }
 
 function cacheSessionBranchSummaries(
   database: OpenClawAgentReadOnlyDatabase,
   sessionId: string,
-  snapshot: SessionTranscriptWatermark & { branches: SessionBranchSummary[] },
+  snapshot: SessionTranscriptWatermark & { branches: SessionBranchSummary[]; appendSafe?: boolean },
 ): void {
   const cacheKey = sessionBranchCacheKey(database.path, sessionId);
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, {
     branches: snapshot.branches,
+    appendSafe: snapshot.appendSafe,
     generation: snapshot.generation,
     maxSeq: snapshot.maxSeq,
     identity: readOpenClawAgentDatabaseIdentity(database).identity,
@@ -131,12 +138,24 @@ function readSessionBranchSnapshot(
       assertSessionTranscriptHot(database.db, expected.sessionId);
       // The watermark and rows must describe the same snapshot, even when a peer appends.
       const watermark = readSessionTranscriptHotWatermark(database, expected.sessionId);
-      const cached = readCachedSessionBranchSummaries(database, expected.sessionId, watermark);
-      const branches = cached ?? readSessionBranchSummaries(database, expected.sessionId);
-      if (!cached) {
-        cacheSessionBranchSummaries(database, expected.sessionId, { ...watermark, branches });
+      const cached = readCachedSessionBranchSummaries(
+        database,
+        expected.sessionId,
+        watermark,
+        true,
+      );
+      const summaries =
+        cached?.maxSeq === watermark.maxSeq
+          ? cached
+          : readSessionBranchSummaries(database, expected.sessionId, cached);
+      if (summaries !== cached) {
+        cacheSessionBranchSummaries(database, expected.sessionId, { ...watermark, ...summaries });
       }
-      return { status: "ok", ...watermark, branches: cloneSessionBranchSummaries(branches) };
+      return {
+        status: "ok",
+        ...watermark,
+        branches: cloneSessionBranchSummaries(summaries.branches),
+      };
     },
     { operationLabel: "session branch summaries read" },
   );
@@ -165,7 +184,7 @@ export function invalidateSessionBranchCache(
 export async function listSessionBranches(
   params: SessionBranchListParams,
 ): Promise<SessionBranchListResult> {
-  const sourceKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
+  const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.env ? { env: params.env } : {}),
@@ -205,7 +224,7 @@ export async function listSessionBranches(
       const cached = readCachedSessionBranchSummaries(database, selected.sessionId, watermark);
       let snapshot: SessionBranchSummaryReadResult;
       if (cached) {
-        snapshot = { status: "ok", ...watermark, branches: cached };
+        snapshot = { status: "ok", ...watermark, branches: cached.branches };
       } else if (typeof claim.identity === "symbol") {
         // Incognito transcripts live only in this process's in-memory database.
         snapshot = readSessionBranchSnapshot(database, expected);
@@ -217,9 +236,10 @@ export async function listSessionBranches(
         };
         // New transcripts, lifecycles, or database claims must never join an older snapshot.
         const key = JSON.stringify([request, claim.incarnation, watermark]);
-        let pending = pendingBranchReads.get(key);
-        if (!pending) {
-          pending = (async () => {
+        snapshot = await getOrCreatePromise(
+          pendingBranchReads,
+          key,
+          async () => {
             const { runSessionBranchSummaryWorkerRequest } =
               await import("./session-transcript-read-worker-runtime.js");
             const read = () => {
@@ -239,10 +259,9 @@ export async function listSessionBranches(
                 { assertCurrent },
               );
             }
-          })().finally(() => pendingBranchReads.delete(key));
-          pendingBranchReads.set(key, pending);
-        }
-        snapshot = await pending;
+          },
+          { evictOnSettled: true },
+        );
       }
       assertCurrent();
       const current = readSessionEntryRow(database, sourceKey)?.entry;

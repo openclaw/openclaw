@@ -375,7 +375,6 @@ describe("subagent coordination history", () => {
           stateDatabase: {
             path: stateContext.admission.databasePath,
             environment: stateContext.environment,
-            coordinatorRuntime: stateContext.coordinatorRuntime,
           },
         });
         const snapshot = await readSessionHistorySnapshotKernel(

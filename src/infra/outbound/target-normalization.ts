@@ -12,13 +12,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 
-/**
- * Normalizes raw user/channel target input before provider-specific parsing.
- */
-export function normalizeChannelTargetInput(raw: string): string {
-  return raw.trim();
-}
-
 type TargetNormalizer = ((raw: string) => string | undefined) | undefined;
 type TargetNormalizerCacheEntry = {
   version: number;
@@ -63,16 +56,12 @@ export function resolveReservedTargetLiteral(params: {
   if (!stripped || /^[@#]/.test(stripped) || /^(channel|group|user):/i.test(stripped)) {
     return undefined;
   }
-  const normalized = normalizeOptionalLowercaseString(stripped);
-  if (!normalized) {
-    return undefined;
-  }
-  const reserved = new Set(
-    reservedLiterals
-      .map(normalizeOptionalLowercaseString)
-      .filter((literal): literal is string => Boolean(literal)),
-  );
-  return reserved.has(normalized) ? normalized : undefined;
+  const normalized = stripped.toLowerCase();
+  return reservedLiterals.some(
+    (literal) => normalizeOptionalLowercaseString(literal) === normalized,
+  )
+    ? normalized
+    : undefined;
 }
 
 function resolveTargetNormalizer(
@@ -113,12 +102,9 @@ function resolvePreparedPluginSignatureId(plugin: ChannelPlugin): number {
  */
 export function normalizeTargetForProvider(
   provider: string,
-  raw?: string,
+  raw = "",
   plugin?: ChannelPlugin,
 ): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
   const fallback = normalizeOptionalString(raw);
   if (!fallback) {
     return undefined;
@@ -136,7 +122,7 @@ type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
 /**
  * Resolved outbound target returned by a channel plugin target resolver.
  */
-type ResolvedPluginMessagingTarget = {
+export type ResolvedPluginMessagingTarget = {
   to: string;
   kind: TargetResolveKindLike;
   display?: string;
@@ -152,7 +138,7 @@ export function resolveNormalizedTargetInput(
   raw?: string,
   plugin?: ChannelPlugin,
 ): { raw: string; normalized: string } | undefined {
-  const trimmed = normalizeChannelTargetInput(raw ?? "");
+  const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }

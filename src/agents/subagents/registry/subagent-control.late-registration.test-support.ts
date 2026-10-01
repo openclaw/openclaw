@@ -3,11 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import {
-  enqueueSwarmRun,
-  releaseSwarmRun,
-  removeQueuedSwarmRun,
-} from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun, releaseSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -79,7 +75,15 @@ export function registerLateDescendantControlTests({
       const registerChild = () => {
         const requester = phase === "admission drain" ? activeChild : parent;
         expect(requester.execution.endedAt).toBeUndefined();
-        const registration = registerSubagentRun({
+        enqueueSwarmRun({
+          groupId: "late-descendants",
+          runId: "late-child",
+          activeRunIds: [parent.runId],
+          maxConcurrent: 1,
+          start,
+          onStartFailure: () => true,
+        });
+        return registerSubagentRun({
           runId: "late-child",
           childSessionKey: childKey,
           requesterSessionKey: requester.childSessionKey,
@@ -90,17 +94,6 @@ export function registerLateDescendantControlTests({
           collect: true,
           queued: true,
         });
-        const enqueue = () => {
-          enqueueSwarmRun({
-            groupId: "late-descendants",
-            runId: "late-child",
-            activeRunIds: [parent.runId],
-            maxConcurrent: 1,
-            start,
-            onStartFailure: () => true,
-          });
-        };
-        return registration ? registration.then(enqueue) : enqueue();
       };
       setSubagentControlDepsForTest({
         isEmbeddedAgentRunActive: () => true,
@@ -125,6 +118,7 @@ export function registerLateDescendantControlTests({
           await registration;
         }
       }
+      const reservationReleases: Promise<void>[] = [];
       const pending = killAllControlledSubagentRuns({
         cfg,
         controller,
@@ -143,7 +137,12 @@ export function registerLateDescendantControlTests({
           await reached.promise;
         }
         if (replaceChild) {
-          expect(removeQueuedSwarmRun("late-child")).toBe(true);
+          const hold = holdQueuedSwarmRun("late-child");
+          const withdrawn = hold?.withdraw();
+          if (hold) {
+            reservationReleases.push(hold.release());
+          }
+          expect(withdrawn).toBe(true);
         }
         const registration = registerChild();
         if (registration) {
@@ -204,8 +203,12 @@ export function registerLateDescendantControlTests({
       } finally {
         proceed.resolve();
         admission.release();
-        await pending;
-        swarmSchedulerTesting.reset();
+        try {
+          await pending;
+        } finally {
+          await Promise.all(reservationReleases);
+          swarmSchedulerTesting.reset();
+        }
       }
     },
   );

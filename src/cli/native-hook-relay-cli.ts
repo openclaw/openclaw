@@ -1,4 +1,3 @@
-// CLI adapter for invoking native provider hooks through direct relay or gateway fallback.
 import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,
@@ -104,7 +103,7 @@ export async function runNativeHookRelayCli(
   const event = readRequiredOption(opts.event, "event");
   let timeoutMs: number;
   try {
-    timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 5_000);
+    timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 5_000, { invalidType: "error" });
   } catch (error) {
     writeText(stderr, formatRelayCliError("invalid native hook timeout", error));
     return 1;

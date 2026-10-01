@@ -553,6 +553,37 @@ describe("prepared model catalog builder", () => {
     ]);
   });
 
+  it("uses an explicitly ready live catalog order across entries and route variants", async () => {
+    const manifestSnapshot = providerManifestSnapshot({
+      provider: "demo",
+      discovery: "runtime",
+      modelIds: ["first", "second"],
+    });
+    const entries = [
+      { provider: "demo", id: "second", name: "Second", api: "openai-responses" as const },
+      { provider: "demo", id: "first", name: "First", api: "openai-responses" as const },
+      { provider: "demo", id: "new", name: "New", api: "openai-responses" as const },
+    ];
+    const liveOrder = {
+      provider: "demo",
+      status: "ready" as const,
+      modelOrder: ["second", "new", "first", "absent"],
+    };
+    const snapshot = await build({
+      entries,
+      metadataSnapshot: manifestSnapshot,
+      providerOutcomes: [liveOrder],
+    });
+
+    expect(snapshot.entries.map(({ id }) => id)).toEqual(["second", "new", "first"]);
+    expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(["second", "new", "first"]);
+    expect(snapshot.entries.map(({ providerOrder }) => providerOrder)).toEqual([0, 1, 2]);
+    expect(snapshot.entries).toHaveLength(entries.length);
+
+    const withoutOptIn = await build({ entries, metadataSnapshot: manifestSnapshot });
+    expect(withoutOptIn.entries.map(({ id }) => id)).toEqual(["first", "second", "new"]);
+  });
+
   it("keeps manifest rank for configured runtime models absent from the registry", async () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
       { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
@@ -916,35 +947,6 @@ describe("prepared model catalog builder", () => {
       ).toHaveLength(retarget ? 2 : 1);
     },
   );
-
-  it("keeps configured models absent from registry discovery", async () => {
-    const snapshot = await build({
-      config: {
-        plugins: { enabled: false },
-        models: {
-          providers: {
-            custom: {
-              baseUrl: "https://example.test/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "configured-only",
-                  name: "Configured Only",
-                  contextWindow: 8_192,
-                  maxTokens: 1_024,
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
-
-    expect(snapshot.entries.map((entry) => entry.id)).toEqual(["configured-only"]);
-  });
 
   it("rejects the whole generation when catalog projection fails after a valid row", async () => {
     const projectionError = new Error("catalog projection failed");

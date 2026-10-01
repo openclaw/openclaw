@@ -91,6 +91,7 @@ export async function invokeChatAbortHandler(params: {
     agentId?: string;
     runId?: string;
     preserveSideRuns?: boolean;
+    discardPendingInput?: boolean;
   };
   client?: {
     connId?: string;

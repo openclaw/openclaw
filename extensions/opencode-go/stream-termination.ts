@@ -5,6 +5,7 @@ import type { AssistantMessage, AssistantMessageEvent } from "openclaw/plugin-sd
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { asPositiveFiniteNumber as validTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createEmptyTransportUsage } from "openclaw/plugin-sdk/provider-transport-runtime";
 
 type ProviderStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
 
@@ -78,14 +79,7 @@ function buildStreamErrorEvent(
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createEmptyTransportUsage(),
         timestamp: Date.now(),
       }),
       stopReason: "error",
@@ -118,7 +112,7 @@ export function createOpencodeGoStalledStreamWrapper(
     const idleTimeoutMs = resolveTimeoutMs(model, idleTimeoutMsDefault);
     const firstEventTimeoutMs = resolveTimeoutMs(model, firstEventTimeoutMsDefault);
     const controller = new AbortController();
-    const callerSignal = (callOptions as { signal?: AbortSignal } | undefined)?.signal;
+    const callerSignal = callOptions?.signal;
     const signal = callerSignal
       ? AbortSignal.any([callerSignal, controller.signal])
       : controller.signal;
@@ -185,13 +179,6 @@ export function createOpencodeGoStalledStreamWrapper(
       }
     };
 
-    const releaseResolvedStream = (baseStream: AsyncIterable<AssistantMessageEvent>) => {
-      const iterator = baseStream[Symbol.asyncIterator]();
-      if (iterator.return) {
-        void Promise.resolve(iterator.return()).catch(() => undefined);
-      }
-    };
-
     armTimer(firstEventTimeoutMs);
     let baseStreamResult: ReturnType<ProviderStreamFn>;
     try {
@@ -203,14 +190,12 @@ export function createOpencodeGoStalledStreamWrapper(
 
     void (async () => {
       try {
-        const baseStream = await Promise.resolve(
-          baseStreamResult as Awaited<ReturnType<ProviderStreamFn>>,
-        );
+        const baseStream = await baseStreamResult;
+        baseIterator = baseStream[Symbol.asyncIterator]();
         if (settled) {
-          releaseResolvedStream(baseStream as AsyncIterable<AssistantMessageEvent>);
+          releaseBaseStream();
           return;
         }
-        baseIterator = (baseStream as AsyncIterable<AssistantMessageEvent>)[Symbol.asyncIterator]();
         for (;;) {
           const result = await baseIterator.next();
           if (settled) {

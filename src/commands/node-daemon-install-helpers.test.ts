@@ -153,6 +153,7 @@ describe("buildNodeInstallPlan", () => {
   });
 
   it("marks node gateway credentials as file-backed service env", async () => {
+    mocks.resolvePreferredNodePath.mockResolvedValue("/usr/bin/node");
     mocks.resolveNodeProgramArguments.mockResolvedValue({
       programArguments: ["node", "node-host"],
       workingDirectory: "/Users/me",

@@ -1,6 +1,8 @@
 // Windows schtasks exec tests cover scheduled task command execution.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { isRegisteredScheduledTask } from "./schtasks-runtime.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
 
@@ -42,59 +44,42 @@ describe("execSchtasks", () => {
   });
 
   it.each([
-    { allowance: 700, enforced: 700 },
-    { allowance: 699.5, enforced: 699 },
-    { allowance: 1, enforced: 1 },
-    { allowance: 20_000, enforced: 15_000 },
-  ])(
-    "bounds explicit inspection allowance $allowance without raising the native cap",
-    async ({ allowance, enforced }) => {
+    { termination: "timeout", detail: "schtasks timed out after 15000ms" },
+    { termination: "no-output-timeout", detail: "schtasks produced no output for 30000ms" },
+    { termination: "signal", detail: "schtasks command terminated before confirmed completion" },
+  ] as const)(
+    "maps $termination into a non-zero lifecycle result",
+    async ({ termination, detail }) => {
       runCommandWithTimeout.mockResolvedValue({
         stdout: "",
         stderr: "",
         code: null,
         signal: "SIGTERM",
         killed: true,
-        termination: "timeout",
+        termination,
       });
 
-      await expect(execSchtasks(["/Query"], allowance)).resolves.toEqual({
+      await expect(execSchtasks(["/Create"])).resolves.toEqual({
         stdout: "",
-        stderr: `schtasks timed out after ${enforced}ms`,
+        stderr: detail,
         code: 124,
       });
-      expect(runCommandWithTimeout).toHaveBeenCalledWith(["schtasks", "/Query"], {
-        baseEnv: expect.any(Object),
-        timeoutMs: enforced,
-        noOutputTimeoutMs: enforced,
-      });
+      await expect(isRegisteredScheduledTask({})).resolves.toBe(false);
     },
   );
 
-  it.each([0, -1, 0.75, Number.NaN, Number.POSITIVE_INFINITY])(
-    "does not replace unavailable allowance %s with the control default or a longer timer",
-    async (allowance) => {
-      await expect(execSchtasks(["/Query"], allowance)).rejects.toThrow(
-        "inspection deadline expired",
-      );
-      expect(runCommandWithTimeout).not.toHaveBeenCalled();
-    },
-  );
+  it("retains lifecycle fallback for ordinary registration failures", async () => {
+    runCommandWithTimeout.mockRejectedValue(new Error("synthetic spawn failure"));
+    await expect(isRegisteredScheduledTask({})).resolves.toBe(false);
+    expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+      ["schtasks", "/Query", "/TN", "OpenClaw Gateway"],
+      expect.objectContaining({ timeoutMs: 15_000, noOutputTimeoutMs: 30_000 }),
+    );
+  });
 
-  it("maps a timeout into a non-zero schtasks result", async () => {
-    runCommandWithTimeout.mockResolvedValue({
-      stdout: "",
-      stderr: "",
-      code: null,
-      signal: "SIGTERM",
-      killed: true,
-      termination: "timeout",
-    });
-
-    await expect(execSchtasks(["/Create"])).resolves.toEqual({
-      stdout: "",
-      stderr: "schtasks timed out after 15000ms",
-      code: 124,
-    });
+  it("propagates registration cleanup uncertainty rather than allowing lifecycle fallback", async () => {
+    const cleanup = new CommandProcessCleanupError();
+    runCommandWithTimeout.mockRejectedValue(cleanup);
+    await expect(isRegisteredScheduledTask({})).rejects.toBe(cleanup);
   });
 });

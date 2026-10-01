@@ -27,12 +27,16 @@ export type GatewayReloadPlan = {
   restartHeartbeat: boolean;
   reconcileSystemJobs?: boolean;
   reloadPlugins: boolean;
+  /** Canonical config/install deltas that require a plugin replacement. */
+  reloadPluginPaths?: string[];
   /** Plugin owners whose undeclared channel settings require fresh registration. */
   reloadPluginIds?: Set<string>;
   pluginLifecycle?: {
     pluginIds: readonly string[];
     reason: PluginLifecycleReason;
     operationId: string;
+    waitForDrain?: boolean;
+    drainSignal?: AbortSignal;
     expectedSourceDigests?: Readonly<Record<string, string>>;
     expectedInstallHashes?: Readonly<Record<string, string>>;
   };
@@ -80,6 +84,7 @@ type ReloadPolicy = {
 type ReloadRule = Omit<ReloadPolicy, "prefixes"> & { prefix: string };
 
 type GatewayReloadPlanOptions = {
+  pluginLifecycle?: GatewayReloadPlan["pluginLifecycle"];
   noopPaths?: Iterable<string>;
   forceChangedPaths?: Iterable<string>;
   /** Candidate config used to reject removed, unknown, or unresolvable account targets. */
@@ -155,6 +160,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.http.endpoints",
       "gateway.http.securityHeaders.strictTransportSecurity",
       "gateway.tools",
+      "gateway.uploads",
       "gateway.cliAgents",
       "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
@@ -570,6 +576,9 @@ export function buildGatewayReloadPlan(
     plan.hotReasons.push(path);
     for (const action of rule?.actions ?? []) {
       plan[action] = true;
+      if (action === "reloadPlugins") {
+        (plan.reloadPluginPaths ??= []).push(path);
+      }
     }
     if (rule?.replaceChannelPlugins) {
       // Manifest channel IDs survive even when registration has no active channel.
@@ -605,6 +614,22 @@ export function buildGatewayReloadPlan(
   // A wholesale restart covers its account targets and must run only once.
   for (const channel of plan.restartChannels) {
     restartChannelAccounts.delete(channel);
+  }
+
+  const { pluginLifecycle } = options;
+  if (pluginLifecycle) {
+    plan.pluginLifecycle = pluginLifecycle;
+    plan.reloadPlugins = true;
+    const unrelatedRestart = plan.restartReasons.find(
+      (path) => path !== "plugins" && !path.startsWith("plugins."),
+    );
+    if (unrelatedRestart) {
+      throw new Error(
+        `Cannot apply plugin change while ${unrelatedRestart} requires a Gateway restart.`,
+      );
+    }
+    plan.restartGateway = false;
+    plan.restartReasons = [];
   }
 
   return plan;

@@ -422,6 +422,7 @@ internal fun ClawListItem(
   modifier: Modifier = Modifier,
   subtitle: String? = null,
   metadata: String? = null,
+  maxLines: Int = Int.MAX_VALUE,
   leading: (@Composable () -> Unit)? = null,
   trailing: (@Composable () -> Unit)? = null,
   onClick: (() -> Unit)? = null,
@@ -455,12 +456,16 @@ internal fun ClawListItem(
           text = title,
           style = ClawTheme.type.body,
           color = ClawTheme.colors.text,
+          maxLines = maxLines,
+          overflow = TextOverflow.Ellipsis,
         )
         listOfNotNull(subtitle, metadata).forEach { detail ->
           Text(
             text = detail,
             style = ClawTheme.type.caption,
             color = ClawTheme.colors.textMuted,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
           )
         }
       }

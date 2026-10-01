@@ -88,7 +88,6 @@ import {
   fetchNpmPackageTargetStatus,
   fetchNpmTagVersion,
   makeOkUpdateResult,
-  mockUpdateStateSnapshotWorker,
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
   resolveExtendedStablePackage,
@@ -113,15 +112,14 @@ type UpdateCliLifecycleFixture = {
   baseConfig: ConfigFileSnapshot["config"];
   baseSnapshot: ConfigFileSnapshot;
   fixtureRoot: string;
-  fixtureStateDatabases: Set<string>;
   globalNpmConfig: string;
   initializeExistingUpdateProfile: () => void;
   mockGatewayHealth: (version: string, connId: string) => void;
   primeNpmChannelTag: (tag: string, version: string | null) => void;
   reportCandidateSteps: <T extends { steps: UpdateRunResult["steps"] }>(
-    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void },
+    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void | Promise<void> },
     result: T,
-  ) => T;
+  ) => Promise<T>;
   setStdoutTty: (value: boolean | undefined) => void;
   setTty: (value: boolean | undefined) => void;
   tempDirs: { make: (prefix: string) => string };
@@ -133,7 +131,6 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     baseConfig,
     baseSnapshot,
     fixtureRoot,
-    fixtureStateDatabases,
     globalNpmConfig,
     initializeExistingUpdateProfile,
     mockGatewayHealth,
@@ -146,11 +143,16 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
   } = fixture;
   let tempHome: TempHomeEnv | undefined;
 
+  const invocationCwd = process.cwd();
   beforeEach(async () => {
-    fixtureStateDatabases.clear();
+    // Default install roots use cwd; artifact admission must own the fixture, not the checkout.
+    process.chdir(path.join(fixtureRoot, "checkout"));
     process.exitCode = undefined;
     const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
     tempHome = await createTempHomeEnv("openclaw-update-cli-home-");
+    // Original-state capture must discover this simulated install's plugins.
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(fixtureRoot, "checkout", "extensions");
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     commandTransport.npmPrefix = tempDirs.make("openclaw-cli-npm-prefix-");
     process.env.NPM_CONFIG_GLOBALCONFIG = globalNpmConfig;
     process.env.npm_config_globalconfig = globalNpmConfig;
@@ -171,7 +173,6 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     vi.resetAllMocks();
     retainUpdateRuntime.mockImplementation(async ({ assertCurrent }) => assertCurrent());
     systemdPolicy.mockResolvedValue(false);
-    mockUpdateStateSnapshotWorker(fixtureStateDatabases);
     // Service simulations do not provide foreign-platform ACL libraries. Keep
     // real exclusive host creation; actual Windows runs retain the native DACL path.
     if (sqliteHostPlatform !== "win32") {
@@ -386,7 +387,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
         ? { status: "running", pid: gatewayFixturePid, state: "running" }
         : { status: "stopped", state: "stopped", missingUnit: true },
     );
-    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 1]));
     inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "busy",
@@ -435,6 +436,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    process.chdir(invocationCwd);
     process.exitCode = undefined;
     // Relocated stores can retain workers whose coordinator lives in this temporary home.
     await closeOpenClawStateDatabaseAsync();

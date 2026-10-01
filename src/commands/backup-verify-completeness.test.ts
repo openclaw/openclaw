@@ -34,10 +34,7 @@ async function repack(root: string, archiveRoot: string, name: string, omit: str
   return archivePath;
 }
 
-async function writeSmallArchive(
-  sqliteSnapshots: unknown,
-  options: { onlyConfig?: boolean; legacy?: boolean } = {},
-) {
+async function writeSmallArchive(sqliteSnapshots: unknown, options: { legacy?: boolean } = {}) {
   const root = tempDirs.make("backup-inventory-contract-");
   const archiveRoot = "backup";
   const stateDir = "/synthetic/state";
@@ -51,18 +48,14 @@ async function writeSmallArchive(
     platform: process.platform,
     runtimeVersion: "test",
     nodeVersion: process.version,
-    options: { onlyConfig: options.onlyConfig ?? false },
     paths: { stateDir },
-    assets: [
-      { kind: options.onlyConfig ? "config" : "state", sourcePath: stateDir, archivePath: payload },
-    ],
+    assets: [{ kind: "state", sourcePath: stateDir, archivePath: payload }],
     ...(options.legacy ? {} : { sqliteSnapshots }),
   };
   await fs.writeFile(path.join(root, archiveRoot, "manifest.json"), JSON.stringify(manifest));
   return {
     root,
     archiveRoot,
-    stateDir,
     payload,
     archivePath: await repack(root, archiveRoot, "fixture"),
   };

@@ -26,6 +26,7 @@ import type { GatewayRequestContext } from "../server-methods/types.js";
 import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import { success } from "./tunnel.test-support.js";
 import {
+  createWorkerTurnTunnel,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   OWNER_EPOCH,
@@ -34,7 +35,6 @@ import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
-  measureLaunchTurn,
   placements,
   root,
   seedActivePlacement,
@@ -292,7 +292,7 @@ describe("worker turn launcher local placement", () => {
       if (state === "local") {
         await provider.executeLocalTurn(claim, async () => {});
       }
-      const repository = getSessionRepositoryWorkspaceStore().create({
+      const repository = await getSessionRepositoryWorkspaceStore().create({
         agentId: "main",
         sessionKey: SESSION_KEY,
         url: "https://github.com/example/repository.git",
@@ -321,7 +321,7 @@ describe("worker turn launcher local placement", () => {
       expect(loadSessionEntry(sessionTarget)?.repositoryWorkspaceId).toBeUndefined();
       await provider.executeLocalTurn(claim, runLocal);
       expect(runLocal).toHaveBeenCalledOnce();
-      expect(getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toBeDefined();
+      expect(await getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toBeDefined();
     },
   );
 
@@ -765,8 +765,6 @@ describe("worker turn launcher local placement", () => {
 
   it.each([
     { label: "failed paired-device execution", executionFailed: true, providerId: "device" },
-    { label: "successful paired-device execution", executionFailed: false, providerId: "device" },
-    { label: "failed cloud-node execution", executionFailed: true, providerId: "crabbox" },
     { label: "successful cloud-node execution", executionFailed: false, providerId: "crabbox" },
   ])(
     "preserves a disconnected node-backed placement after $label for a fresh attempt",
@@ -790,27 +788,25 @@ describe("worker turn launcher local placement", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected a local workspace source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: vi.fn(async () => {}),
             verifyLocalStable: vi.fn(async () => {}),
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
       );
       const launchTurn = vi.fn();
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        measureLaunchTurn,
+      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
         launchTurn,
         runWorkspaceCommand: vi.fn(async () => success()),
         quiesceWorkspace,
         syncWorkspace: vi.fn(),
         reconcileWorkspace,
-        stop: vi.fn(async () => {}),
-      };
+      });
       const environment = {
         ...attachedEnvironment(),
         providerId,

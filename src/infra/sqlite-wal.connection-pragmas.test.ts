@@ -25,7 +25,8 @@ describe("SQLite connection pragma acquisition", () => {
         const exec = db.exec.bind(db);
         const execSpy = vi.spyOn(db, "exec").mockImplementation((sql) => {
           if (sql === `PRAGMA ${pragma};`) {
-            expect(vi.getTimerCount()).toBe(1);
+            // One maintenance owner arms the periodic pass and the checkpoint-only tick.
+            expect(vi.getTimerCount()).toBe(2);
             throw failure;
           }
           exec(sql);
@@ -49,7 +50,7 @@ describe("SQLite connection pragma acquisition", () => {
         });
         try {
           expect(db.prepare("SELECT value FROM payload").all()).toEqual([{ value: "committed" }]);
-          expect(vi.getTimerCount()).toBe(1);
+          expect(vi.getTimerCount()).toBe(2);
         } finally {
           maintenance.close();
         }

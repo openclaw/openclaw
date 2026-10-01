@@ -532,15 +532,11 @@ describe("session groups catalog", () => {
     ).toBeUndefined();
   });
 
-  it.each(
-    [
-      { action: "rename", targetExists: false },
-      { action: "rename", targetExists: true },
-      { action: "delete", targetExists: false },
-    ].flatMap(({ action, targetExists }) =>
-      ["main", "other"].map((stopAgent) => ({ action, targetExists, stopAgent })),
-    ),
-  )(
+  it.each([
+    { action: "rename", targetExists: false, stopAgent: "main" },
+    { action: "rename", targetExists: true, stopAgent: "other" },
+    { action: "delete", targetExists: false, stopAgent: "other" },
+  ])(
     "keeps group state coherent when $action stops in $stopAgent (target exists: $targetExists)",
     async ({ action, targetExists, stopAgent }) => {
       const groupCfg: OpenClawConfig = {

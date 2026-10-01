@@ -2,6 +2,9 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createRecoveryTypingManager } from "../../../gateway/recovery-typing.js";
+import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { registerGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import type { sendMessage } from "../../../infra/outbound/message.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
@@ -40,7 +43,12 @@ describe("late exact requester recovery", () => {
     const state = { entry: initialEntry, allowed: true };
     const storePath = "/synthetic/requester-recovery/sessions.json";
     const cfg: OpenClawConfig = { session: { store: storePath } };
-    const dispatch = vi.fn(async function <T>() {
+    let executionStarted: (() => unknown) | undefined;
+    const dispatch = vi.fn(async function <T>(
+      ...args: Parameters<typeof dispatchGatewayMethodInProcess>
+    ) {
+      executionStarted = args[2]?.onExecutionStarted;
+      args[2]?.onAccepted?.({ status: "accepted" });
       dispatchEntered.resolve();
       return (await dispatchDone.promise) as T;
     });
@@ -105,7 +113,6 @@ describe("late exact requester recovery", () => {
       requesterAgentId: "main",
       targetRequesterSessionKey: sessionKey,
       triggerMessage: "All children settled",
-      steerMessage: "All children settled",
       directOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
       sourceTool: "subagent_settle",
       requesterIsSubagent: false,
@@ -131,6 +138,7 @@ describe("late exact requester recovery", () => {
       dispatch,
       dispatchEntered,
       dispatchDone,
+      startExecution: () => executionStarted?.(),
       read,
       readEntered,
       readDone,
@@ -138,6 +146,100 @@ describe("late exact requester recovery", () => {
       steer,
     };
   }
+
+  it.each([
+    "completed",
+    "cancelled",
+    "authority revoked",
+    "private",
+    "child",
+    "session-only",
+  ] as const)("scopes resumed parent activity to its live visible run (%s)", async (ending) => {
+    await import("../../agent-scope-config.js");
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const sendTyping = vi.fn(async () => {});
+    const clearTyping = vi.fn(async () => {});
+    const typing = createRecoveryTypingManager({
+      getConfig: () => ({}),
+      isAvailable: () => true,
+      resolveAdapter: async () => ({ sendTypingGuarded: sendTyping, clearTyping }),
+    });
+    const unused = async () => {
+      throw new Error("unexpected recovery dispatch");
+    };
+    const unregister = registerGatewayRecoveryRuntime({
+      dispatchSessionMethod: unused,
+      dispatchAgent: unused,
+      waitForAgent: unused,
+      sendRecoveryNotice: unused,
+      startRecoveryTyping: (params) => typing.start(params),
+    });
+    const fixture = setup();
+    fixture.params.directOrigin = {
+      channel: "telegram",
+      to: "123",
+      accountId: "work",
+      threadId: "42",
+    };
+    const visible = ending !== "private" && ending !== "child" && ending !== "session-only";
+    if (ending === "private") {
+      fixture.params.completionTarget = "parent";
+      fixture.params.completionRequesterSessionId = "requester-session";
+      fixture.params.completionRequesterLifecycleRevision = "requester-revision";
+    }
+    if (ending === "child") {
+      fixture.params.requesterIsSubagent = true;
+    }
+    if (ending === "session-only") {
+      fixture.params.directOrigin = undefined;
+    }
+    onTestFinished(() => {
+      typing.close();
+      unregister();
+      vi.useRealTimers();
+    });
+    const delivery = fixture.startDelivery();
+    await fixture.dispatchEntered.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sendTyping).not.toHaveBeenCalled();
+    fixture.startExecution();
+    await vi.advanceTimersByTimeAsync(0);
+    if (!visible) {
+      expect(sendTyping).not.toHaveBeenCalled();
+      fixture.readDone.resolve();
+      fixture.dispatchDone.resolve({ status: "ok", result: { payloads: [] } });
+      await delivery;
+      expect(clearTyping).not.toHaveBeenCalled();
+      return;
+    }
+    expect(sendTyping).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "123", accountId: "work", threadId: "42" }),
+    );
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(sendTyping.mock.calls.length).toBeGreaterThan(10);
+    if (ending === "cancelled") {
+      fixture.controller.abort();
+    }
+    if (ending === "authority revoked") {
+      fixture.state.allowed = false;
+    }
+    if (ending !== "completed") {
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(clearTyping).toHaveBeenCalledOnce();
+    }
+    fixture.dispatchDone.resolve({
+      status: "ok",
+      result: { payloads: [{ text: "Done" }], deliveryStatus: sentDeliveryStatus },
+    });
+    await delivery;
+    await vi.advanceTimersByTimeAsync(0);
+    const count = sendTyping.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sendTyping).toHaveBeenCalledTimes(count);
+    expect(clearTyping).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { name: "empty final", response: { status: "ok", result: { payloads: [] } } },
@@ -317,6 +419,7 @@ describe("late exact requester recovery", () => {
       if (scope === "private") {
         fixture.params.completionTarget = "parent";
         fixture.params.completionRequesterSessionId = "requester-session";
+        fixture.params.completionRequesterLifecycleRevision = "requester-revision";
       } else if (scope === "incognito") {
         fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
         fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;

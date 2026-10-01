@@ -97,12 +97,6 @@ public protocol GatewayDeviceTokenRetryTrustProviding: AnyObject {
     var allowsDeviceTokenRetryAuth: Bool { get }
 }
 
-enum GatewayTLSFirstUsePolicy {
-    static func allowsFirstUsePin(systemTrustOk: Bool) -> Bool {
-        systemTrustOk
-    }
-}
-
 enum GatewayTLSChallengeDecision: Equatable {
     case accept(fingerprint: String?, enforcePin: Bool, saveFirstUse: Bool)
     case reject(GatewayTLSValidationFailureKind)
@@ -126,7 +120,7 @@ enum GatewayTLSValidationPolicy {
         }
         if allowTOFU,
            let observedFingerprint,
-           GatewayTLSFirstUsePolicy.allowsFirstUsePin(systemTrustOk: systemTrustOk)
+           systemTrustOk
         {
             return .accept(fingerprint: observedFingerprint, enforcePin: true, saveFirstUse: true)
         }

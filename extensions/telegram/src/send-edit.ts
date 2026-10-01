@@ -1,5 +1,4 @@
 import type { Message } from "grammy/types";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -20,6 +19,7 @@ import {
   buildTelegramRichMarkdownPlan,
   type TelegramInputRichMessage,
 } from "./rich-message.js";
+import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import { sendLogger, withTelegramApiContext, type TelegramApiContext } from "./send-context.js";
 import type { TelegramApiCallOpts, TelegramSendOpts } from "./send-message-types.js";
@@ -31,9 +31,6 @@ import {
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramEditMessageTextParams = Parameters<TelegramApiContext["api"]["editMessageText"]>[3];
-type TelegramEditMessageCaptionParams = Parameters<
-  TelegramApiContext["api"]["editMessageCaption"]
->[2];
 
 type TelegramEditReplyMarkupOpts = TelegramApiCallOpts &
   Pick<TelegramSendOpts, "buttons" | "signal" | "assertPlatformSendAuthorized">;
@@ -113,13 +110,14 @@ export async function editMessageTelegram(
       const textMode = opts.textMode ?? "markdown";
       const linkPreviewEnabled = opts.linkPreview ?? account.config.linkPreview ?? true;
       // Caller-authored HTML edits keep legacy parse_mode HTML semantics too.
-      const useRichMessages = account.config.richMessages === true && textMode !== "html";
-      const tableMode = resolveMarkdownTableMode({
+      const richMessagesParams = {
         cfg,
-        channel: "telegram",
         accountId: account.accountId,
-        supportsBlockTables: useRichMessages,
-      });
+        accountConfig: account.config,
+        htmlTextMode: textMode === "html",
+      };
+      const useRichMessages = resolveTelegramRichMessages(richMessagesParams);
+      const tableMode = resolveTelegramTableMode(richMessagesParams);
       const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
       const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;
 
@@ -127,29 +125,16 @@ export async function editMessageTelegram(
       // - buttons === undefined → don't send reply_markup (keep existing)
       // - buttons is [] (or filters to empty) → send { inline_keyboard: [] } (remove)
       // - otherwise → send built inline keyboard
-      const shouldTouchButtons = opts.buttons !== undefined;
-      const builtKeyboard = shouldTouchButtons ? buildInlineKeyboard(opts.buttons) : undefined;
-      const replyMarkup = shouldTouchButtons
-        ? (builtKeyboard ?? { inline_keyboard: [] })
-        : undefined;
+      const replyMarkup =
+        opts.buttons === undefined
+          ? undefined
+          : (buildInlineKeyboard(opts.buttons) ?? { inline_keyboard: [] });
+      const replyMarkupParams = replyMarkup === undefined ? {} : { reply_markup: replyMarkup };
 
       const commonTextParams: TelegramEditMessageTextParams = {
         ...(linkPreviewEnabled ? {} : { link_preview_options: { is_disabled: true } }),
-        ...(replyMarkup === undefined ? {} : { reply_markup: replyMarkup }),
+        ...replyMarkupParams,
       };
-      const captionEditParams: TelegramEditMessageCaptionParams = {
-        caption: htmlText,
-        parse_mode: "HTML",
-      };
-      if (replyMarkup !== undefined) {
-        captionEditParams.reply_markup = replyMarkup;
-      }
-      const plainCaptionParams: TelegramEditMessageCaptionParams = {
-        caption: plainText,
-      };
-      if (replyMarkup !== undefined) {
-        plainCaptionParams.reply_markup = replyMarkup;
-      }
 
       const performTextEdit = async () => {
         const richPlan = useRichMessages
@@ -220,11 +205,23 @@ export async function editMessageTelegram(
           warn: (message) => sendLogger.warn(message),
           sendFormatted: () =>
             edit(
-              () => api.editMessageCaption(chatId, messageId, captionEditParams),
+              () =>
+                api.editMessageCaption(chatId, messageId, {
+                  caption: htmlText,
+                  parse_mode: "HTML",
+                  ...replyMarkupParams,
+                }),
               "editMessageCaption",
             ),
           sendPlain: (_plan, label) =>
-            edit(() => api.editMessageCaption(chatId, messageId, plainCaptionParams), label),
+            edit(
+              () =>
+                api.editMessageCaption(chatId, messageId, {
+                  caption: plainText,
+                  ...replyMarkupParams,
+                }),
+              label,
+            ),
         });
 
       let editedMessage: TelegramOutboundPromptContextMessage | true | undefined;
@@ -244,9 +241,7 @@ export async function editMessageTelegram(
           }
         }
       } catch (err) {
-        if (isTelegramMessageNotModifiedError(err)) {
-          // no-op: Telegram reports message content unchanged, treat as success
-        } else {
+        if (!isTelegramMessageNotModifiedError(err)) {
           throw err;
         }
       }

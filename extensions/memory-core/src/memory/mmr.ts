@@ -42,7 +42,7 @@ export function applyMMRToHybridResults<T extends MMRItem & { path: string; star
   }
   const clampedLambda = Math.max(0, Math.min(1, lambda));
   if (clampedLambda === 1) {
-    return [...items].toSorted((a, b) => b.score - a.score);
+    return items.toSorted((a, b) => b.score - a.score);
   }
   const prepared: PreparedMMRItem<T>[] = items.map((item) => {
     const snippet = item.snippet;

@@ -6,25 +6,10 @@ export type { Period, PeriodDescriptor } from "./periods.js";
 
 export type ActivityWindow = { sinceMs: number; untilMs: number };
 
+export type ActivityEntry<T> = { key: string; value: T };
+
 /** Identity map entry supplied by the operator (config `people` or `peopleFile`) or derived from a GitHub team roster. */
-export type Person = {
-  /** GitHub logins; the first entry is the primary/display login. */
-  github: string[];
-  display?: string;
-  /** Public company/affiliation label. */
-  affiliation?: string;
-  roleGroup?: "core" | "volunteer" | "readonly" | (string & {});
-  roleLabel?: string;
-  /** Free-form access flags, e.g. ["security", "release", "moderation"]. */
-  access?: string[];
-  /** Ownership/steward areas. */
-  areas?: string[];
-  discordUserId?: string;
-  discordUsername?: string;
-  status?: "active" | "archived";
-  /** YYYY-MM-DD */
-  archivedAt?: string;
-};
+export type Person = NonNullable<TeamReportsConfig["people"]>[number];
 
 export type Roster = {
   /** Current (non-archived) members. */
@@ -100,19 +85,21 @@ export type DiscordSourceConfig = Omit<NonNullable<TeamReportsConfig["discord"]>
 export interface GithubSource {
   /** Roster from configured org teams (and direct collaborators when enabled). Returns people with `github: [login]`. */
   loadRoster(config: GithubSourceConfig): Promise<{ people: Person[]; status: SourceStatus }>;
-  /** All GitHub items in the window across configured orgs; attribution rules live in aggregate, not here, except merged_by lookup. */
+  /** Emits bounded batches with stable event keys; attribution rules live in aggregate, except merged_by lookup. */
   collect(
     config: GithubSourceConfig,
     window: ActivityWindow,
     roster: Roster,
-  ): Promise<{ items: GithubItem[]; status: SourceStatus }>;
+    emit: (entries: ActivityEntry<GithubItem>[]) => Promise<void>,
+  ): Promise<SourceStatus>;
 }
 
 export interface DiscordSource {
-  /** Messages in the window from configured channels and their threads. */
+  /** Emits bounded message batches keyed by snowflake from configured channels and their threads. */
   collect(
     config: DiscordSourceConfig,
     window: ActivityWindow,
     roster: Roster,
-  ): Promise<{ messages: DiscordMessage[]; status: SourceStatus }>;
+    emit: (entries: ActivityEntry<DiscordMessage>[]) => Promise<void>,
+  ): Promise<SourceStatus>;
 }

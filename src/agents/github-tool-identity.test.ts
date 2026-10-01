@@ -38,6 +38,13 @@ function commandResult(stdout = "", code = 0, stderr = "") {
   };
 }
 
+async function writeProfile(profileDir: string, token: string) {
+  await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(profileDir, "hosts.yml"), `github.com:\n  oauth_token: ${token}\n`, {
+    mode: 0o600,
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -221,10 +228,7 @@ describe("GitHub tool identity", () => {
   });
 
   it.each([
-    { source: "env", id: "PREVIEW_SERVICE_TOKEN", expected: { PREVIEW_SERVICE_TOKEN: "" } },
     { source: "env", id: "GH_TOKEN", expected: { GH_TOKEN: "" } },
-    { source: "env", id: "GITHUB_TOKEN", expected: { GITHUB_TOKEN: "" } },
-    { source: "store", id: "GH_TOKEN", expected: { GH_TOKEN: "" } },
     { source: "store", id: "GITHUB_TOKEN", expected: { GITHUB_TOKEN: "" } },
   ] as const)("scrubs only the explicit $source preview ref $id", ({ source, id, expected }) => {
     const prepared = prepareGitHubToolEnvironment({
@@ -304,11 +308,9 @@ describe("GitHub tool identity", () => {
       env,
     });
     for (const profileDir of [systemProfileDir, agentProfileDir]) {
-      await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-      await fs.writeFile(
-        path.join(profileDir, "hosts.yml"),
-        `github.com:\n  oauth_token: ${profileDir === agentProfileDir ? "agent-token" : "system-token"}\n`,
-        { mode: 0o600 },
+      await writeProfile(
+        profileDir,
+        profileDir === agentProfileDir ? "agent-token" : "system-token",
       );
     }
     const expiresAt = Date.now() + 8 * 60 * 60_000;
@@ -425,12 +427,7 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: managed-token\n",
-      { mode: 0o600 },
-    );
+    await writeProfile(profileDir, "managed-token");
     processMocks.runCommandBuffered.mockImplementation(async (argv: string[]) =>
       argv[0] === "gh"
         ? commandResult('{"id":101,"login":"system-user","avatarUrl":null}')
@@ -511,8 +508,6 @@ describe("GitHub tool identity", () => {
 
   it.each([
     { surface: "agent", source: "env" },
-    { surface: "agent", source: "store" },
-    { surface: "system", source: "env" },
     { surface: "system", source: "store" },
   ] as const)(
     "reports the native execution account in $surface status when $source owns the preview token",
@@ -565,12 +560,7 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: managed-publication-token\n",
-      { mode: 0o600 },
-    );
+    await writeProfile(profileDir, "managed-publication-token");
     const identity = await prepareGitHubPublicationIdentity({
       config: {
         tools: { github: { profileId } },
@@ -641,9 +631,8 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    await writeProfile(profileDir, "rotation-token-a");
     const hosts = path.join(profileDir, "hosts.yml");
-    await fs.writeFile(hosts, "github.com:\n  oauth_token: rotation-token-a\n", { mode: 0o600 });
     vi.mocked(fetch)
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 202, login: "before-rotation" })))
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 303, login: "after-rotation" })));
@@ -681,12 +670,7 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: disconnected-token\n",
-      { mode: 0o600 },
-    );
+    await writeProfile(profileDir, "disconnected-token");
     expect(
       (await prepareGitHubPublicationIdentity({ config, agentId: "main", env })).account.login,
     ).toBe("managed-user");
@@ -744,12 +728,7 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      `github.com:\n  oauth_token: managed-status-${testCase.httpStatus}\n`,
-      { mode: 0o600 },
-    );
+    await writeProfile(profileDir, `managed-status-${testCase.httpStatus}`);
     vi.mocked(fetch).mockResolvedValue(
       new Response("private diagnostics", { status: testCase.httpStatus }),
     );

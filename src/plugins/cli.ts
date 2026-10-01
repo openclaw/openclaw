@@ -1,4 +1,3 @@
-// Registers plugin-related CLI commands.
 import type { Command } from "commander";
 import { getRuntimeConfigSnapshot, readConfigFileSnapshot } from "../config/config.js";
 import {
@@ -7,7 +6,6 @@ import {
 } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createPluginCliLogger,
   createPluginCliLoadSession,
   type PluginCliLoadSession,
   loadPluginCliRegistrationEntriesWithDefaults,
@@ -15,6 +13,7 @@ import {
 } from "./cli-registry-loader.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
+import { createPluginRuntimeLoaderLogger } from "./runtime/load-context.js";
 export { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
 
 type PluginCliRegistrationMode = "eager" | "lazy" | "metadata";
@@ -26,7 +25,7 @@ type RegisterPluginCliOptions = {
   session?: PluginCliLoadSession;
 };
 
-const logger = createPluginCliLogger();
+const logger = createPluginRuntimeLoaderLogger();
 
 export async function registerPluginCliCommands(
   program: Command,

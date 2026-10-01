@@ -1,4 +1,3 @@
-/** Cleans up embedded attempt subscription resources. */
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isFastTestRuntimeEnv } from "../../../infra/test-runtime-env.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";

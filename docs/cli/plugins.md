@@ -41,7 +41,7 @@ openclaw plugins inspect --all [--runtime] [--json]
 openclaw plugins info <id>                    # alias for inspect
 openclaw plugins enable <ids...> [--accept-capabilities]
 openclaw plugins disable <ids...>
-openclaw plugins reload <ids...> [--accept-capabilities] [--json]
+openclaw plugins reload <ids...> [--wait] [--accept-capabilities] [--json]
 openclaw plugins uninstall <ids...> [--dry-run] [--keep-files] [--force]
 openclaw plugins update <ids-or-npm-specs...> | --all [--dry-run]
 openclaw plugins registry [--refresh] [--json]

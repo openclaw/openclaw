@@ -25,6 +25,11 @@ function runtime() {
 
 const entrypoints = [
   {
+    name: "gateway restart readiness",
+    run: (host: RuntimeEnv) =>
+      ensureConfigReady({ runtime: host, commandPath: ["gateway", "restart"] }),
+  },
+  {
     name: "command readiness",
     run: (host: RuntimeEnv) => ensureConfigReady({ runtime: host, commandPath: ["config", "get"] }),
   },

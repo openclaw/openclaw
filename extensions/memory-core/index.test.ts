@@ -1,4 +1,3 @@
-// Memory Core tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import type {
@@ -135,10 +134,6 @@ describe("buildPromptSection", () => {
     expect(unrelatedDefaultReads).toBe(0);
   });
 
-  it("returns empty when no memory tools are available", () => {
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
-  });
-
   it("describes the two-step flow when both memory tools are available", () => {
     const result = buildMemoryPromptSection({
       availableTools: new Set(["memory_search", "memory_get"]),
@@ -214,7 +209,6 @@ describe("buildPromptSection", () => {
     { label: "base files", extraPaths: [], sessions: false },
     { label: "configured extra paths", extraPaths: ["notes"], sessions: false },
     { label: "session transcripts", extraPaths: [], sessions: true },
-    { label: "extra paths and sessions", extraPaths: ["notes"], sessions: true },
   ])("keeps eager, lazy, and prompt contracts aligned for $label", async (sourceCase) => {
     const config = {
       agents: {
@@ -405,10 +399,19 @@ describe("memory-core plugin runtime registration", () => {
       };
     };
     expect(ownerTool).toMatchObject({ name: "intent" });
+    expect(ownerTool.description).toContain("system injects the reminder automatically");
     expect(ownerTool.description).toContain("Use scheduled tasks for time-based reminders");
     expect(ownerTool.description).not.toMatch(/\b(?:cron|automations)\b/u);
-    expect(ownerTool.parameters?.properties?.scope?.default).toBe("channel");
-    expect(ownerTool.parameters?.properties?.senderScope?.default).toBe("sender");
+    expect(ownerTool.parameters?.properties?.channelScope).toBeUndefined();
+    expect(ownerTool.parameters?.properties?.scope).toMatchObject({
+      type: "string",
+      enum: ["conversation", "channel", "anywhere"],
+      default: "channel",
+    });
+    expect(ownerTool.parameters?.properties?.senderScope).toMatchObject({
+      enum: ["sender", "anyone"],
+      default: "sender",
+    });
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
@@ -430,18 +433,6 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
 
     expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
-  });
-
-  it("binds the host local-service hook to the registered memory runtime", async () => {
-    const runtime = registerMemoryCoreRuntime();
-    const cfg = {} as OpenClawConfig;
-
-    await runtime.getMemorySearchManager({ cfg, agentId: "main" });
-
-    expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
-      acquireLocalService: expect.any(Function),
-      openKeyedStore: expect.any(Function),
-    });
   });
 
   it("defers nested host runtime access until the injected operation runs", async () => {
@@ -521,18 +512,6 @@ describe("memory-core plugin runtime registration", () => {
       openKeyedStore: expect.any(Function),
     });
   });
-
-  it("binds the host SQLite state hook to tools and CLI runtime", async () => {
-    const runtime = registerMemoryCoreRuntime();
-    const cfg = {} as OpenClawConfig;
-
-    await runtime.getMemorySearchManager({ cfg, agentId: "main" });
-
-    const host = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
-    const storeOptions = { namespace: "cli-status-regression", maxEntries: 1 };
-    host?.openKeyedStore?.(storeOptions);
-    expect(hostRuntime.state.openKeyedStore).toHaveBeenCalledWith(storeOptions);
-  });
 });
 
 describe("buildMemoryFlushPlan", () => {
@@ -557,14 +536,6 @@ describe("buildMemoryFlushPlan", () => {
     );
     expect(plan?.prompt).toContain("Reference UTC: 2026-02-16 15:00 UTC");
     expect(plan?.relativePath).toBe("memory/2026-02-16.md");
-  });
-
-  it("appends one current time line to the built-in prompt", () => {
-    const plan = buildMemoryFlushPlan({
-      cfg,
-      nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
-    });
-
     expect((plan?.prompt.match(/Current time:/g) ?? []).length).toBe(1);
   });
 

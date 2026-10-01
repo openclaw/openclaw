@@ -38,15 +38,19 @@ export function updateSessionGroupCategoriesInWorker(params: {
       const planned = prepareSessionGroupCategoryMutation(database, from);
       keys = [...planned.keys()];
       assertCurrent();
-      return runOpenClawAgentWriteTransaction((current) => {
-        assertCurrent();
-        return applySessionGroupCategoryMutation(
-          current,
-          planned,
-          to,
-          capturedScope.env ?? process.env,
-        ).length;
-      }, options);
+      return runOpenClawAgentWriteTransaction(
+        (current) => {
+          assertCurrent();
+          return applySessionGroupCategoryMutation(
+            current,
+            planned,
+            to,
+            capturedScope.env ?? process.env,
+          ).length;
+        },
+        options,
+        { operationLabel: "session.group-categories.update" },
+      );
     },
     (changed, location, database) => {
       releasePublicationFence?.();
@@ -94,6 +98,12 @@ export function updateSessionGroupCategoriesInWorker(params: {
           superseded.add(change.sessionKey);
         }
       });
+    },
+    () => {
+      // The prepared keys bound category writes, but a concurrent structural publication
+      // requires the original store-wide fence. Our own recovery must not supersede itself.
+      releasePublicationFence?.();
+      return superseded.size === 0 ? keys : undefined;
     },
   ).finally(() => releasePublicationFence?.());
 }

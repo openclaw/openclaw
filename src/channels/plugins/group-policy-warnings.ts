@@ -1,8 +1,3 @@
-/**
- * Channel group-policy warning collectors.
- *
- * Composes warning helpers for default, allowlist, and open-provider group policy states.
- */
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -244,69 +239,49 @@ export function createOpenGroupPolicyRestrictSendersWarningCollector<ResolvedAcc
     });
 }
 
-export function collectAllowlistProviderGroupPolicyWarnings(params: {
-  cfg: OpenClawConfig;
-  providerConfigPresent: boolean;
-  configuredGroupPolicy?: GroupPolicy | null;
-  collect: GroupPolicyWarningCollector;
-}): string[] {
-  const defaultGroupPolicy = resolveDefaultGroupPolicy(params.cfg);
-  const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.configuredGroupPolicy ?? undefined,
-    defaultGroupPolicy,
-  });
-  return params.collect(groupPolicy);
+function createProviderGroupPolicyWarningCollectors(
+  resolvePolicy: typeof resolveOpenProviderRuntimeGroupPolicy,
+) {
+  const collectWarnings = (params: {
+    cfg: OpenClawConfig;
+    providerConfigPresent: boolean;
+    configuredGroupPolicy?: GroupPolicy | null;
+    collect: GroupPolicyWarningCollector;
+  }): string[] =>
+    params.collect(
+      resolvePolicy({
+        providerConfigPresent: params.providerConfigPresent,
+        groupPolicy: params.configuredGroupPolicy ?? undefined,
+        defaultGroupPolicy: resolveDefaultGroupPolicy(params.cfg),
+      }).groupPolicy,
+    );
+
+  const createCollector =
+    <Params extends { cfg: OpenClawConfig }>(params: {
+      providerConfigPresent: (cfg: OpenClawConfig) => boolean;
+      resolveGroupPolicy: (params: Params) => GroupPolicy | null | undefined;
+      collect: (params: Params & { groupPolicy: GroupPolicy }) => string[];
+    }): ConfigGroupPolicyWarningCollector<Params> =>
+    (runtime) =>
+      collectWarnings({
+        cfg: runtime.cfg,
+        providerConfigPresent: params.providerConfigPresent(runtime.cfg),
+        configuredGroupPolicy: params.resolveGroupPolicy(runtime),
+        collect: (groupPolicy) => params.collect({ ...runtime, groupPolicy }),
+      });
+
+  return { collectWarnings, createCollector };
 }
 
-/** Build a config-aware allowlist-provider warning collector from an arbitrary policy resolver. */
-export function createAllowlistProviderGroupPolicyWarningCollector<
-  Params extends { cfg: OpenClawConfig },
->(params: {
-  providerConfigPresent: (cfg: OpenClawConfig) => boolean;
-  resolveGroupPolicy: (params: Params) => GroupPolicy | null | undefined;
-  collect: (params: Params & { groupPolicy: GroupPolicy }) => string[];
-}): ConfigGroupPolicyWarningCollector<Params> {
-  return (runtime) =>
-    collectAllowlistProviderGroupPolicyWarnings({
-      cfg: runtime.cfg,
-      providerConfigPresent: params.providerConfigPresent(runtime.cfg),
-      configuredGroupPolicy: params.resolveGroupPolicy(runtime),
-      collect: (groupPolicy) => params.collect({ ...runtime, groupPolicy }),
-    });
-}
+export const {
+  collectWarnings: collectAllowlistProviderGroupPolicyWarnings,
+  createCollector: createAllowlistProviderGroupPolicyWarningCollector,
+} = createProviderGroupPolicyWarningCollectors(resolveAllowlistProviderRuntimeGroupPolicy);
 
-export function collectOpenProviderGroupPolicyWarnings(params: {
-  cfg: OpenClawConfig;
-  providerConfigPresent: boolean;
-  configuredGroupPolicy?: GroupPolicy | null;
-  collect: GroupPolicyWarningCollector;
-}): string[] {
-  const defaultGroupPolicy = resolveDefaultGroupPolicy(params.cfg);
-  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.configuredGroupPolicy ?? undefined,
-    defaultGroupPolicy,
-  });
-  return params.collect(groupPolicy);
-}
-
-/** Build a config-aware open-provider warning collector from an arbitrary policy resolver. */
-export function createOpenProviderGroupPolicyWarningCollector<
-  Params extends { cfg: OpenClawConfig },
->(params: {
-  providerConfigPresent: (cfg: OpenClawConfig) => boolean;
-  resolveGroupPolicy: (params: Params) => GroupPolicy | null | undefined;
-  collect: (params: Params & { groupPolicy: GroupPolicy }) => string[];
-}): ConfigGroupPolicyWarningCollector<Params> {
-  return (runtime) =>
-    collectOpenProviderGroupPolicyWarnings({
-      cfg: runtime.cfg,
-      providerConfigPresent: params.providerConfigPresent(runtime.cfg),
-      configuredGroupPolicy: params.resolveGroupPolicy(runtime),
-      collect: (groupPolicy) => params.collect({ ...runtime, groupPolicy }),
-    });
-}
+export const {
+  collectWarnings: collectOpenProviderGroupPolicyWarnings,
+  createCollector: createOpenProviderGroupPolicyWarningCollector,
+} = createProviderGroupPolicyWarningCollectors(resolveOpenProviderRuntimeGroupPolicy);
 
 /** Build an account-aware allowlist-provider warning collector for simple open-policy warnings. */
 export function createAllowlistProviderOpenWarningCollector<ResolvedAccount>(params: {

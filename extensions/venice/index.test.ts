@@ -1,33 +1,102 @@
-// Venice tests cover index plugin behavior.
+import {
+  type AssistantMessage,
+  type Context,
+  createAssistantMessageEventStream,
+  type Model,
+  type ToolCall,
+} from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
-describe("venice provider plugin", () => {
-  it("registers provider-owned usage hooks", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
+const GEMINI_MODEL = "gemini-3-6-flash";
 
-    expect(provider).toMatchObject({
-      resolveUsageAuth: expect.any(Function),
-      fetchUsageSnapshot: expect.any(Function),
-    });
+function veniceModel(id: string): Model<"openai-completions"> {
+  return {
+    id,
+    name: id,
+    provider: "venice",
+    api: "openai-completions",
+    baseUrl: "https://api.venice.ai/api/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    maxTokens: 4096,
+  };
+}
+
+function toolCall(
+  id: string,
+  name: string,
+  thoughtSignature?: string,
+  args: Record<string, unknown> = {},
+): ToolCall {
+  return { type: "toolCall", id, name, arguments: args, thoughtSignature };
+}
+
+function assistant(
+  content: ToolCall[],
+  route: Partial<Pick<AssistantMessage, "api" | "provider" | "model">> = {},
+): AssistantMessage {
+  return {
+    role: "assistant",
+    api: "openai-completions",
+    provider: "venice",
+    model: GEMINI_MODEL,
+    content,
+    usage: createZeroUsageFixture(),
+    stopReason: "toolUse",
+    timestamp: 0,
+    ...route,
+  };
+}
+
+function wireCall(id: string, name: string, args?: string) {
+  return {
+    id,
+    type: "function",
+    function: { name, ...(args === undefined ? {} : { arguments: args }) },
+  };
+}
+
+function wireAssistant(...calls: ReturnType<typeof wireCall>[]) {
+  return { role: "assistant", tool_calls: calls };
+}
+
+function wireResult(id: string, content: string) {
+  return { role: "tool", tool_call_id: id, content };
+}
+
+async function patchPayload(
+  payload: { model: string; messages: Record<string, unknown>[] } & Record<string, unknown>,
+  messages: Context["messages"] = [],
+) {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const streamFn = provider.wrapStreamFn?.({
+    provider: "venice",
+    modelId: payload.model,
+    thinkingLevel: "high",
+    streamFn: (model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      const stream = createAssistantMessageEventStream();
+      stream.end();
+      return stream;
+    },
   });
+  expect(streamFn).toBeTypeOf("function");
+  await streamFn?.(veniceModel(payload.model), { messages }, {});
+  return payload;
+}
 
+describe("venice provider plugin", () => {
   it("applies the shared xAI compat patch to Grok-backed Venice models only", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-
+    const model = { ...veniceModel("grok-4"), compat: { supportsUsageInStreaming: true } };
     expect(
-      provider.normalizeResolvedModel?.({
-        modelId: "venice/grok-4",
-        model: {
-          id: "grok-4",
-          compat: {
-            supportsUsageInStreaming: true,
-          },
-        },
-      } as never),
+      provider.normalizeResolvedModel?.({ provider: "venice", modelId: "venice/grok-4", model }),
     ).toEqual({
-      id: "grok-4",
+      ...model,
       compat: {
         supportsUsageInStreaming: true,
         toolSchemaProfile: "xai",
@@ -42,263 +111,106 @@ describe("venice provider plugin", () => {
         toolCallArgumentsEncoding: "html-entities",
       },
     });
-
     expect(
       provider.normalizeResolvedModel?.({
+        provider: "venice",
         modelId: "venice/qwen3-coder-480b-a35b-instruct-turbo",
-        model: {
-          id: "qwen3-coder-480b-a35b-instruct-turbo",
-          compat: {},
-        },
-      } as never),
+        model: veniceModel("qwen3-coder-480b-a35b-instruct-turbo"),
+      }),
     ).toBeUndefined();
   });
 
   it("fills missing DeepSeek V4 reasoning_content on Venice replay turns", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload = {
-        model: "deepseek-v4-pro",
-        thinking: { type: "enabled" },
-        reasoning_effort: "high",
-        messages: [
-          {
-            role: "assistant",
-            tool_calls: [
-              {
-                id: "call_1",
-                type: "function",
-                function: { name: "read", arguments: "{}" },
-              },
-            ],
-          },
-          { role: "assistant", content: "done" },
-        ],
-      };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
-
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "venice",
-      modelId: "deepseek-v4-pro",
-      thinkingLevel: "high",
-    } as never);
-
-    expect(streamFn).toBeTypeOf("function");
-    await streamFn?.({ provider: "venice", id: "deepseek-v4-pro" } as never, {} as never, {});
-
-    expect(capturedPayloads).toEqual([
-      {
-        model: "deepseek-v4-pro",
-        messages: [
-          {
-            role: "assistant",
-            tool_calls: [
-              {
-                id: "call_1",
-                type: "function",
-                function: { name: "read", arguments: "{}" },
-              },
-            ],
-            reasoning_content: "",
-          },
-          {
-            role: "assistant",
-            content: "done",
-            reasoning_content: "",
-          },
-        ],
-      },
-    ]);
+    const payload = await patchPayload({
+      model: "deepseek-v4-pro",
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+      messages: [
+        wireAssistant(wireCall("call_1", "read", "{}")),
+        { role: "assistant", content: "done" },
+      ],
+    });
+    expect(payload).toEqual({
+      model: "deepseek-v4-pro",
+      messages: [
+        { ...wireAssistant(wireCall("call_1", "read", "{}")), reasoning_content: "" },
+        { role: "assistant", content: "done", reasoning_content: "" },
+      ],
+    });
   });
 
   it("replays Gemini signatures and downgrades foreign tool history to text", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload = {
-        model: "gemini-3-6-flash",
-        messages: [
-          { role: "user", content: "echo" },
-          {
-            role: "assistant",
-            tool_calls: [
-              {
-                id: "call_1",
-                type: "function",
-                function: { name: "echo_value", arguments: '{"value":"repro"}' },
-              },
-            ],
-          },
-          { role: "tool", tool_call_id: "call_1", content: "ok" },
-        ],
-      };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
-
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "venice",
-      modelId: "gemini-3-6-flash",
-      thinkingLevel: "high",
-    } as never);
-
-    expect(streamFn).toBeTypeOf("function");
-    await streamFn?.(
-      { api: "openai-completions", provider: "venice", id: "gemini-3-6-flash" } as never,
-      {
-        messages: [
-          { role: "user", content: "echo" },
-          {
-            role: "assistant",
-            api: "openai-completions",
-            provider: "venice",
-            model: "gemini-3-6-flash",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_1",
-                name: "echo_value",
-                arguments: { value: "repro" },
-                thoughtSignature: "SIG-VENICE-OPAQUE-ABC==",
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "echo_value",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-          },
-        ],
-      } as never,
-      {},
-    );
-
-    expect(capturedPayloads[0]).toMatchObject({
+    const payload = {
+      model: GEMINI_MODEL,
       messages: [
         { role: "user", content: "echo" },
-        {
-          role: "assistant",
-          tool_calls: [
-            {
-              id: "call_1",
-              thought_signature: "SIG-VENICE-OPAQUE-ABC==",
-            },
-          ],
-        },
-        { role: "tool", tool_call_id: "call_1", content: "ok" },
+        wireAssistant(wireCall("call_1", "echo_value", '{"value":"repro"}')),
+        wireResult("call_1", "ok"),
       ],
-    });
-    const replayedToolCall = (
-      (capturedPayloads[0]!.messages as Array<Record<string, unknown>>)[1]!.tool_calls as Array<
-        Record<string, unknown>
-      >
-    )[0];
-    expect(replayedToolCall).not.toHaveProperty("extra_content");
-
-    await streamFn?.(
-      { api: "openai-completions", provider: "venice", id: "gemini-3-6-flash" } as never,
+    };
+    const signed = await patchPayload(structuredClone(payload), [
+      { role: "user", content: "echo", timestamp: 0 },
+      assistant([toolCall("call_1", "echo_value", "SIG-VENICE-OPAQUE-ABC==", { value: "repro" })]),
       {
-        messages: [
-          {
-            role: "assistant",
-            api: "google-generative-ai",
-            provider: "google",
-            model: "gemini-3-6-flash",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_1",
-                name: "echo_value",
-                arguments: {},
-                thoughtSignature: "SIG-CROSS-ROUTE",
-              },
-            ],
-          },
-        ],
-      } as never,
-      {},
-    );
-    const crossRouteMessages = capturedPayloads[1]!.messages as Array<Record<string, unknown>>;
-    expect(crossRouteMessages[1]).toMatchObject({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "echo_value",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 0,
+      },
+    ]);
+    expect(signed.messages).toMatchObject([
+      { role: "user", content: "echo" },
+      {
+        role: "assistant",
+        tool_calls: [{ id: "call_1", thought_signature: "SIG-VENICE-OPAQUE-ABC==" }],
+      },
+      wireResult("call_1", "ok"),
+    ]);
+    expect(signed.messages[1]).not.toHaveProperty("tool_calls.0.extra_content");
+
+    const foreign = await patchPayload(structuredClone(payload), [
+      assistant([toolCall("call_1", "echo_value", "SIG-CROSS-ROUTE")], {
+        api: "google-generative-ai",
+        provider: "google",
+      }),
+    ]);
+    expect(foreign.messages[1]).toMatchObject({
       role: "assistant",
       content: expect.stringContaining("[Historical tool call: echo_value("),
     });
-    expect(crossRouteMessages[1]).not.toHaveProperty("tool_calls");
-    expect(crossRouteMessages[2]).toMatchObject({
+    expect(foreign.messages[1]).not.toHaveProperty("tool_calls");
+    expect(foreign.messages[2]).toEqual({
       role: "user",
       content: "[Historical tool result for echo_value:\nok]",
     });
-    expect(crossRouteMessages[2]).not.toHaveProperty("tool_call_id");
   });
 
   it("downgrades mixed signed and unsigned Gemini tool batches to text history", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload = {
-        model: "gemini-3-6-flash",
+    const { messages } = await patchPayload(
+      {
+        model: GEMINI_MODEL,
         messages: [
-          {
-            role: "assistant",
-            tool_calls: [
-              { id: "foreign_call", type: "function", function: { name: "web_fetch" } },
-              { id: "legacy_call", type: "function", function: { name: "read" } },
-              { id: "signed_call", type: "function", function: { name: "read" } },
-            ],
-          },
-          { role: "tool", tool_call_id: "foreign_call", content: "foreign result" },
-          { role: "tool", tool_call_id: "legacy_call", content: "legacy result" },
-          { role: "tool", tool_call_id: "signed_call", content: "signed result" },
+          wireAssistant(
+            wireCall("foreign_call", "web_fetch"),
+            wireCall("legacy_call", "read"),
+            wireCall("signed_call", "read"),
+          ),
+          wireResult("foreign_call", "foreign result"),
+          wireResult("legacy_call", "legacy result"),
+          wireResult("signed_call", "signed result"),
           { role: "user", content: "current prompt" },
         ],
-      };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayload = payload;
-      return {} as never;
-    };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "venice",
-      modelId: "gemini-3-6-flash",
-      thinkingLevel: "high",
-    } as never);
-
-    await streamFn?.(
-      { api: "openai-completions", provider: "venice", id: "gemini-3-6-flash" } as never,
-      {
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-completions",
-            provider: "venice",
-            model: "gemini-3-6-flash",
-            content: [
-              { type: "toolCall", id: "foreign_call", name: "web_fetch", arguments: {} },
-              { type: "toolCall", id: "legacy_call", name: "read", arguments: {} },
-              {
-                type: "toolCall",
-                id: "signed_call",
-                name: "read",
-                arguments: {},
-                thoughtSignature: "SIG-EXACT-SAME-ROUTE==",
-              },
-            ],
-          },
-        ],
-      } as never,
-      {},
+      },
+      [
+        assistant([
+          toolCall("foreign_call", "web_fetch"),
+          toolCall("legacy_call", "read"),
+          toolCall("signed_call", "read", "SIG-EXACT-SAME-ROUTE=="),
+        ]),
+      ],
     );
-
-    const messages = capturedPayload!.messages as Array<Record<string, unknown>>;
     expect(messages[0]).toMatchObject({
       role: "assistant",
       content: expect.stringContaining("[Historical tool call: web_fetch("),
@@ -313,197 +225,54 @@ describe("venice provider plugin", () => {
   });
 
   it("pairs reused Gemini tool-call ids by assistant occurrence", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const payloads = [
-      {
-        model: "gemini-3-6-flash",
+    function payload(readResult: string, writeResult: string) {
+      return {
+        model: GEMINI_MODEL,
         messages: [
-          {
-            role: "assistant",
-            tool_calls: [
-              { id: "call_0", type: "function", function: { name: "read", arguments: "{}" } },
-            ],
-          },
-          { role: "tool", tool_call_id: "call_0", content: "read result" },
-          {
-            role: "assistant",
-            tool_calls: [
-              { id: "call_0", type: "function", function: { name: "write", arguments: "{}" } },
-            ],
-          },
-          { role: "tool", tool_call_id: "call_0", content: "write result" },
+          wireAssistant(wireCall("call_0", "read", "{}")),
+          wireResult("call_0", readResult),
+          wireAssistant(wireCall("call_0", "write", "{}")),
+          wireResult("call_0", writeResult),
           { role: "user", content: "current prompt" },
         ],
-      },
-      {
-        model: "gemini-3-6-flash",
-        messages: [
-          {
-            role: "assistant",
-            tool_calls: [
-              { id: "call_0", type: "function", function: { name: "read", arguments: "{}" } },
-            ],
-          },
-          { role: "tool", tool_call_id: "call_0", content: "legacy result" },
-          {
-            role: "assistant",
-            tool_calls: [
-              { id: "call_0", type: "function", function: { name: "write", arguments: "{}" } },
-            ],
-          },
-          { role: "tool", tool_call_id: "call_0", content: "signed result" },
-          { role: "user", content: "current prompt" },
-        ],
-      },
-    ];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload = structuredClone(payloads[capturedPayloads.length]!);
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "venice",
-      modelId: "gemini-3-6-flash",
-      thinkingLevel: "high",
-    } as never);
-
-    await streamFn?.(
-      { api: "openai-completions", provider: "venice", id: "gemini-3-6-flash" } as never,
-      {
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-completions",
-            provider: "venice",
-            model: "gemini-3-6-flash",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_0",
-                name: "read",
-                arguments: {},
-                thoughtSignature: "SIG-READ",
-              },
-            ],
-          },
-          {
-            role: "assistant",
-            api: "openai-completions",
-            provider: "venice",
-            model: "gemini-3-6-flash",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_0",
-                name: "write",
-                arguments: {},
-                thoughtSignature: "SIG-WRITE",
-              },
-            ],
-          },
-        ],
-      } as never,
-      {},
-    );
-
-    const signedMessages = capturedPayloads[0]!.messages as Array<Record<string, unknown>>;
-    expect(signedMessages[0]).toMatchObject({
+      };
+    }
+    const signed = await patchPayload(payload("read result", "write result"), [
+      assistant([toolCall("call_0", "read", "SIG-READ")]),
+      assistant([toolCall("call_0", "write", "SIG-WRITE")]),
+    ]);
+    expect(signed.messages[0]).toMatchObject({
       tool_calls: [{ id: "call_0", thought_signature: "SIG-READ" }],
     });
-    expect(signedMessages[2]).toMatchObject({
+    expect(signed.messages[2]).toMatchObject({
       tool_calls: [{ id: "call_0", thought_signature: "SIG-WRITE" }],
     });
 
-    await streamFn?.(
-      { api: "openai-completions", provider: "venice", id: "gemini-3-6-flash" } as never,
-      {
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-completions",
-            provider: "venice",
-            model: "gemini-3-6-flash",
-            content: [{ type: "toolCall", id: "call_0", name: "read", arguments: {} }],
-          },
-          {
-            role: "assistant",
-            api: "openai-completions",
-            provider: "venice",
-            model: "gemini-3-6-flash",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_0",
-                name: "write",
-                arguments: {},
-                thoughtSignature: "SIG-WRITE",
-              },
-            ],
-          },
-        ],
-      } as never,
-      {},
-    );
-
-    const mixedMessages = capturedPayloads[1]!.messages as Array<Record<string, unknown>>;
-    expect(mixedMessages[0]).toMatchObject({
+    const mixed = await patchPayload(payload("legacy result", "signed result"), [
+      assistant([toolCall("call_0", "read")]),
+      assistant([toolCall("call_0", "write", "SIG-WRITE")]),
+    ]);
+    expect(mixed.messages[0]).toMatchObject({
       role: "assistant",
       content: expect.stringContaining("[Historical tool call: read("),
     });
-    expect(mixedMessages[0]).not.toHaveProperty("tool_calls");
-    expect(mixedMessages[1]).toEqual({
+    expect(mixed.messages[0]).not.toHaveProperty("tool_calls");
+    expect(mixed.messages[1]).toEqual({
       role: "user",
       content: "[Historical tool result for read:\nlegacy result]",
     });
-    expect(mixedMessages[2]).toMatchObject({
+    expect(mixed.messages[2]).toMatchObject({
       role: "assistant",
       tool_calls: [{ id: "call_0", thought_signature: "SIG-WRITE" }],
     });
-    expect(mixedMessages[3]).toEqual({
-      role: "tool",
-      tool_call_id: "call_0",
-      content: "signed result",
-    });
+    expect(mixed.messages[3]).toEqual(wireResult("call_0", "signed result"));
   });
 
   it("leaves unsigned Gemini 2.5 history unchanged", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload = {
-        model: "gemini-2.5-flash",
-        messages: [
-          {
-            role: "assistant",
-            tool_calls: [{ id: "call_1", type: "function", function: { name: "read" } }],
-          },
-        ],
-      };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayload = payload;
-      return {} as never;
+    const payload = {
+      model: "gemini-2.5-flash",
+      messages: [wireAssistant(wireCall("call_1", "read"))],
     };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "venice",
-      modelId: "gemini-2.5-flash",
-      thinkingLevel: "high",
-    } as never);
-
-    await streamFn?.(
-      { api: "openai-completions", provider: "venice", id: "gemini-2.5-flash" } as never,
-      { messages: [] } as never,
-      {},
-    );
-
-    const toolCall = (
-      (capturedPayload!.messages as Array<Record<string, unknown>>)[0]!.tool_calls as Array<
-        Record<string, unknown>
-      >
-    )[0];
-    expect(toolCall).not.toHaveProperty("thought_signature");
+    expect(await patchPayload(structuredClone(payload))).toEqual(payload);
   });
 });

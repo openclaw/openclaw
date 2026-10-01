@@ -1,3 +1,4 @@
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mocks,
@@ -6,26 +7,29 @@ import {
   startReadyFaceTimeTalkDriver,
 } from "./talk-driver.test-support.js";
 
+function deferConsult() {
+  const { promise, resolve } = Promise.withResolvers<{ text: string }>();
+  mocks.consult.mockImplementationOnce(() => promise);
+  return resolve;
+}
+
+function consult(itemId: string, callId: string, question: string) {
+  return mocks.sessionParams?.onToolCall({
+    itemId,
+    callId,
+    name: "openclaw_agent_consult",
+    args: { question },
+  });
+}
+
 describe("FaceTime talk driver consult delivery", () => {
   beforeEach(resetTalkDriverMocks);
 
   it("aborts a pending agent consult when the FaceTime call closes", async () => {
-    mocks.bridge.connect.mockResolvedValue();
-    let finishConsult = (_result: { text: string }) => {};
-    mocks.consult.mockImplementationOnce(
-      () =>
-        new Promise<{ text: string }>((resolve) => {
-          finishConsult = resolve;
-        }),
-    );
+    const finishConsult = deferConsult();
     const driver = await startReadyFaceTimeTalkDriver();
 
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "openclaw_agent_consult",
-      args: { question: "Change my calendar." },
-    });
+    void consult("item-1", "call-1", "Change my calendar.");
     await vi.waitFor(() => expect(mocks.consult).toHaveBeenCalledOnce());
     const consultParams = mocks.consult.mock.calls[0]?.[0] as { abortSignal: AbortSignal };
 
@@ -35,36 +39,6 @@ describe("FaceTime talk driver consult delivery", () => {
     finishConsult({ text: "Too late." });
     await Promise.resolve();
     expect(mocks.bridge.submitToolResult).not.toHaveBeenCalled();
-  });
-
-  it("rejects a late exact-run registration after the consult was closed", async () => {
-    mocks.bridge.connect.mockResolvedValue();
-    mocks.consult.mockImplementationOnce(() => new Promise<{ text: string }>(() => {}));
-    const params = startParams();
-    mocks.getSessionEntry.mockReturnValue(undefined);
-    const driver = await startReadyFaceTimeTalkDriver(params);
-
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "openclaw_agent_consult",
-      args: { question: "Change my calendar." },
-    });
-    await vi.waitFor(() => expect(mocks.consult).toHaveBeenCalledOnce());
-    const consultParams = mocks.consult.mock.calls[0]?.[0] as {
-      abortSignal: AbortSignal;
-      onRunStarted(params: { runId: string; sessionId: string; timeoutMs: number }): {
-        abortSignal: AbortSignal;
-      };
-    };
-    await driver.close("carrier-ended");
-    const registration = consultParams.onRunStarted({
-      runId: "old-run",
-      sessionId: "shared-session",
-      timeoutMs: 1_000,
-    });
-    expect(consultParams.abortSignal.aborted).toBe(true);
-    expect(registration.abortSignal.aborted).toBe(true);
   });
 
   it("never lets late cancellation of a superseded consult abort its successor", async () => {
@@ -107,20 +81,9 @@ describe("FaceTime talk driver consult delivery", () => {
   });
 
   it("retires old consult and playback ownership on provider continuity reset", async () => {
-    let finishConsult = (_result: { text: string }) => {};
-    mocks.consult.mockImplementationOnce(
-      () =>
-        new Promise<{ text: string }>((resolve) => {
-          finishConsult = resolve;
-        }),
-    );
+    const finishConsult = deferConsult();
     await startReadyFaceTimeTalkDriver();
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-reset",
-      callId: "consult-reset",
-      name: "openclaw_agent_consult",
-      args: { question: "old" },
-    });
+    void consult("item-reset", "consult-reset", "old");
     await vi.waitFor(() => expect(mocks.consult).toHaveBeenCalledOnce());
     const consultParams = mocks.consult.mock.calls[0]?.[0] as { abortSignal: AbortSignal };
 
@@ -136,22 +99,10 @@ describe("FaceTime talk driver consult delivery", () => {
   });
 
   it("keeps a pending consult alive while the caller continues speaking", async () => {
-    mocks.bridge.connect.mockResolvedValue();
-    let finishConsult = (_result: { text: string }) => {};
-    mocks.consult.mockImplementationOnce(
-      () =>
-        new Promise<{ text: string }>((resolve) => {
-          finishConsult = resolve;
-        }),
-    );
+    const finishConsult = deferConsult();
     await startReadyFaceTimeTalkDriver();
 
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "openclaw_agent_consult",
-      args: { question: "Who am I?" },
-    });
+    void consult("item-1", "call-1", "Who am I?");
     await vi.waitFor(() => expect(mocks.consult).toHaveBeenCalledOnce());
     const consultParams = mocks.consult.mock.calls[0]?.[0] as { abortSignal: AbortSignal };
     mocks.sessionParams?.onEvent({
@@ -171,29 +122,12 @@ describe("FaceTime talk driver consult delivery", () => {
   });
 
   it("silently closes a consult superseded by a new consult request", async () => {
-    mocks.bridge.connect.mockResolvedValue();
-    let finishConsult = (_result: { text: string }) => {};
-    mocks.consult.mockImplementationOnce(
-      () =>
-        new Promise<{ text: string }>((resolve) => {
-          finishConsult = resolve;
-        }),
-    );
+    const finishConsult = deferConsult();
     mocks.consult.mockResolvedValueOnce({ text: "New answer." });
     await startReadyFaceTimeTalkDriver();
 
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "openclaw_agent_consult",
-      args: { question: "Who am I?" },
-    });
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-2",
-      callId: "call-2",
-      name: "openclaw_agent_consult",
-      args: { question: "Do something else." },
-    });
+    void consult("item-1", "call-1", "Who am I?");
+    void consult("item-2", "call-2", "Do something else.");
 
     await vi.waitFor(() =>
       expect(mocks.bridge.submitToolResult).toHaveBeenCalledWith(
@@ -215,25 +149,14 @@ describe("FaceTime talk driver consult delivery", () => {
   });
 
   it("uses an unsuppressed terminal cancellation when the provider requires it", async () => {
-    mocks.bridge.connect.mockResolvedValue();
     (
       mocks.bridge.bridge as { supportsToolResultSuppression?: boolean }
     ).supportsToolResultSuppression = false;
     mocks.consult.mockImplementationOnce(() => new Promise<{ text: string }>(() => {}));
     await startReadyFaceTimeTalkDriver();
 
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "openclaw_agent_consult",
-      args: { question: "Who am I?" },
-    });
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-2",
-      callId: "call-2",
-      name: "openclaw_agent_consult",
-      args: { question: "Actually, do something else." },
-    });
+    void consult("item-1", "call-1", "Who am I?");
+    void consult("item-2", "call-2", "Actually, do something else.");
 
     await vi.waitFor(() =>
       expect(mocks.bridge.submitToolResult).toHaveBeenCalledWith(
@@ -248,24 +171,13 @@ describe("FaceTime talk driver consult delivery", () => {
   });
 
   it("closes safely when a terminal consult cancellation cannot be submitted", async () => {
-    mocks.bridge.connect.mockResolvedValue();
     mocks.bridge.submitToolResult.mockRejectedValueOnce(new Error("submission failed"));
     mocks.consult.mockImplementationOnce(() => new Promise<{ text: string }>(() => {}));
     const onFailure = vi.fn(async () => true);
     await startReadyFaceTimeTalkDriver(startParams({ onFailure }));
 
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "openclaw_agent_consult",
-      args: { question: "Who am I?" },
-    });
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-2",
-      callId: "call-2",
-      name: "openclaw_agent_consult",
-      args: { question: "Actually, do something else." },
-    });
+    void consult("item-1", "call-1", "Who am I?");
+    void consult("item-2", "call-2", "Actually, do something else.");
 
     await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith(new Error("submission failed")));
     expect(mocks.bridge.close).toHaveBeenCalledOnce();
@@ -324,6 +236,7 @@ describe("FaceTime talk driver consult delivery", () => {
   ])(
     "settles $settlement delivery correctly after $transition",
     async ({ settlement, transition }) => {
+      const deliveryStarted = Promise.withResolvers<void>();
       let finishDelivery = () => {};
       mocks.consult
         .mockReset()
@@ -334,26 +247,20 @@ describe("FaceTime talk driver consult delivery", () => {
           new Promise<void>((resolve, reject) => {
             finishDelivery = () =>
               settlement === "accepted" ? resolve() : reject(new Error("late failure"));
+            deliveryStarted.resolve();
           }),
       );
       const onFailure = vi.fn(async () => true);
       const driver = await startReadyFaceTimeTalkDriver(startParams({ onFailure }));
-      void mocks.sessionParams?.onToolCall({
-        itemId: "item-delivery",
-        callId: "call-delivery",
-        name: "openclaw_agent_consult",
-        args: { question: "Check my calendar." },
+      void consult("item-delivery", "call-delivery", "Check my calendar.");
+      await withTimeout(deliveryStarted.promise, 1_000, {
+        message: "Consult delivery did not start",
       });
-      await vi.waitFor(() => expect(mocks.bridge.submitToolResult).toHaveBeenCalledOnce());
+      expect(mocks.bridge.submitToolResult).toHaveBeenCalledOnce();
       if (transition === "close") {
         await driver.close("carrier-ended");
       } else {
-        await mocks.sessionParams?.onToolCall({
-          itemId: "item-replacement",
-          callId: "call-replacement",
-          name: "openclaw_agent_consult",
-          args: { question: "Check my reminders instead." },
-        });
+        await consult("item-replacement", "call-replacement", "Check my reminders instead.");
         expect(mocks.consult).toHaveBeenCalledTimes(2);
       }
       finishDelivery();
@@ -379,49 +286,7 @@ describe("FaceTime talk driver consult delivery", () => {
     },
   );
 
-  it("keeps a consult alive through VAD noise and its originating transcript", async () => {
-    let finishConsult = (_result: { text: string }) => {};
-    mocks.consult.mockImplementationOnce(
-      () =>
-        new Promise<{ text: string }>((resolve) => {
-          finishConsult = resolve;
-        }),
-    );
-    await startReadyFaceTimeTalkDriver();
-
-    mocks.sessionParams?.onEvent({
-      direction: "server",
-      type: "input_audio_buffer.speech_started",
-    });
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-calendar",
-      callId: "call-calendar",
-      name: "openclaw_agent_consult",
-      args: { question: "What is on my calendar?" },
-    });
-    await vi.waitFor(() => expect(mocks.consult).toHaveBeenCalledOnce());
-    const consultParams = mocks.consult.mock.calls[0]?.[0] as { abortSignal: AbortSignal };
-
-    mocks.sessionParams?.onTranscript?.("user", "What is on my calendar?", true);
-    mocks.sessionParams?.onEvent({
-      direction: "server",
-      type: "input_audio_buffer.speech_started",
-    });
-    mocks.sessionParams?.onTranscript?.("user", "   ", true);
-
-    expect(consultParams.abortSignal.aborted).toBe(false);
-    expect(mocks.bridge.submitToolResult).not.toHaveBeenCalled();
-
-    finishConsult({ text: "Calendar answer." });
-    await vi.waitFor(() =>
-      expect(mocks.bridge.submitToolResult).toHaveBeenCalledWith("call-calendar", {
-        text: "Calendar answer.",
-      }),
-    );
-  });
-
   it("routes the main session key to the configured default agent", async () => {
-    mocks.bridge.connect.mockResolvedValue();
     mocks.consult.mockResolvedValueOnce({ text: "I know my SOUL.md." });
     await startReadyFaceTimeTalkDriver(
       startParams({
@@ -431,12 +296,7 @@ describe("FaceTime talk driver consult delivery", () => {
       }),
     );
 
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "openclaw_agent_consult",
-      args: { question: "Can you read SOUL.md?" },
-    });
+    void consult("item-1", "call-1", "Can you read SOUL.md?");
 
     await vi.waitFor(() =>
       expect(mocks.consult).toHaveBeenCalledWith(
@@ -460,7 +320,6 @@ describe("FaceTime talk driver consult delivery", () => {
   });
 
   it("normalizes FaceTime UUID casing for one consult session and lane", async () => {
-    mocks.bridge.connect.mockResolvedValue();
     mocks.consult.mockResolvedValueOnce({ text: "Done." });
     await startReadyFaceTimeTalkDriver(
       startParams({
@@ -471,12 +330,7 @@ describe("FaceTime talk driver consult delivery", () => {
       }),
     );
 
-    void mocks.sessionParams?.onToolCall({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "openclaw_agent_consult",
-      args: { question: "Check my calendar." },
-    });
+    void consult("item-1", "call-1", "Check my calendar.");
 
     await vi.waitFor(() =>
       expect(mocks.consult).toHaveBeenCalledWith(

@@ -182,13 +182,13 @@ export class DiscordRealtimeConsults {
     switch (outcome.kind) {
       case "exact-speech-echo":
         logger.info(
-          `discord voice: realtime exact speech consult bypassed call=${callId || "unknown"} answerChars=${outcome.text.length}`,
+          `discord voice: realtime exact speech consult bypassed call=${callId} answerChars=${outcome.text.length}`,
         );
         await session.submitToolResult(callId, { text: outcome.text });
         return;
       case "malformed":
         logger.warn(
-          `discord voice: realtime consult rejected malformed args call=${callId || "unknown"}: ${outcome.error}`,
+          `discord voice: realtime consult rejected malformed args call=${callId}: ${outcome.error}`,
         );
         await session.submitToolResult(callId, { error: outcome.error });
         return;
@@ -197,7 +197,7 @@ export class DiscordRealtimeConsults {
     }
     const consultMessage = outcome.message;
     logger.info(
-      `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatVoiceLogPreview(consultMessage)}`,
+      `discord voice: realtime consult requested call=${callId} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatVoiceLogPreview(consultMessage)}`,
     );
     const nativeConsult = this.params.harness.forcedConsults.recordNativeConsult(
       event.args,
@@ -256,9 +256,7 @@ export class DiscordRealtimeConsults {
     }
     const state = recent?.context;
     if (!context || !state) {
-      logger.warn(
-        `discord voice: realtime consult has no speaker context call=${callId || "unknown"}`,
-      );
+      logger.warn(`discord voice: realtime consult has no speaker context call=${callId}`);
       await session.submitToolResult(callId, { error: "No Discord speaker context available" });
       return;
     }

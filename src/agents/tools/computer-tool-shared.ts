@@ -13,7 +13,7 @@ export const MAX_WAIT_SECONDS = 100;
 export const MAX_HOLD_SECONDS = 10;
 export const MODEL_OBSERVATION_MAX_ELEMENTS = 200;
 
-export type ComputerToolAction = ComputerUseV2ActionName;
+export type ComputerToolAction = ComputerUseV2ActionName | "take_control";
 
 const COMPUTER_OBSERVATION_ACTIONS = new Set<string>([
   "screenshot",

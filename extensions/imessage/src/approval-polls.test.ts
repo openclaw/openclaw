@@ -82,30 +82,21 @@ function buildVote(overrides?: {
   } as IMessagePayload;
 }
 
+type VoteParams = Parameters<typeof maybeResolveIMessageApprovalPollVote>[0];
+
+function resolveVote(
+  message: IMessagePayload,
+  overrides: Partial<Omit<VoteParams, "message">> = {},
+) {
+  return maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message, ...overrides });
+}
+
 beforeEach(() => {
   iMessageApprovalPollTargets.clearForTest();
   resolverMocks.resolveApprovalOverGateway.mockReset();
   resolverMocks.resolveApprovalOverGateway.mockResolvedValue({ applied: true, approval: {} });
   resolverMocks.isApprovalNotFoundError.mockReset();
   resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
-});
-
-describe("buildApprovalPollOptions", () => {
-  it("emits canonical decision order with labels", () => {
-    expect(
-      buildApprovalPollOptions({ allowedDecisions: ["deny", "allow-always", "allow-once"] }),
-    ).toEqual([
-      { decision: "allow-once", text: "👍 Allow Once" },
-      { decision: "allow-always", text: "♾️ Allow Always" },
-      { decision: "deny", text: "👎 Deny" },
-    ]);
-  });
-
-  it("drops decisions the approval does not allow", () => {
-    expect(buildApprovalPollOptions({ allowedDecisions: ["allow-once", "deny"] })).toHaveLength(2);
-    // Messages requires >= 2 options, so the caller skips the poll entirely here.
-    expect(buildApprovalPollOptions({ allowedDecisions: ["deny"] })).toHaveLength(1);
-  });
 });
 
 describe("mapSentPollOptionsToDecisions", () => {
@@ -138,15 +129,6 @@ describe("mapSentPollOptionsToDecisions", () => {
     ).toEqual([]);
   });
 
-  it("fails closed when the bridge returns only a subset", () => {
-    expect(
-      mapSentPollOptionsToDecisions({
-        requested,
-        sent: [{ id: "id-a", text: "👍 Allow Once" }],
-      }),
-    ).toEqual([]);
-  });
-
   it("fails closed when option ids are duplicated", () => {
     expect(
       mapSentPollOptionsToDecisions({
@@ -165,14 +147,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(await bind()).toBe(true);
     const gatewayRuntime = { request: vi.fn() } as never;
 
-    await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildVote(),
-        gatewayRuntime,
-      }),
-    ).resolves.toBe(true);
+    await expect(resolveVote(buildVote(), { gatewayRuntime })).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -188,34 +163,30 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(await bind()).toBe(true);
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: {
-          sender: APPROVER,
-          poll: {
-            kind: "vote",
-            original_guid: POLL_GUID,
-            vote: {
+      resolveVote({
+        sender: APPROVER,
+        poll: {
+          kind: "vote",
+          original_guid: POLL_GUID,
+          vote: {
+            option_id: ALLOW_ONCE_OPTION,
+            participant: "+15559999999",
+            event_type: "selected",
+          },
+          votes: [
+            {
               option_id: ALLOW_ONCE_OPTION,
               participant: "+15559999999",
               event_type: "selected",
             },
-            votes: [
-              {
-                option_id: ALLOW_ONCE_OPTION,
-                participant: "+15559999999",
-                event_type: "selected",
-              },
-              {
-                option_id: DENY_OPTION,
-                participant: APPROVER,
-                event_type: "selected",
-              },
-            ],
-          },
-        } as IMessagePayload,
-      }),
+            {
+              option_id: DENY_OPTION,
+              participant: APPROVER,
+              event_type: "selected",
+            },
+          ],
+        },
+      } as IMessagePayload),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
@@ -227,29 +198,25 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(await bind()).toBe(true);
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: {
-          sender: APPROVER,
-          poll: {
-            kind: "vote",
-            original_guid: POLL_GUID,
-            votes: [
-              {
-                option_id: ALLOW_ONCE_OPTION,
-                participant: "+15559999998",
-                event_type: "selected",
-              },
-              {
-                option_id: DENY_OPTION,
-                participant: "+15559999999",
-                event_type: "selected",
-              },
-            ],
-          },
-        } as IMessagePayload,
-      }),
+      resolveVote({
+        sender: APPROVER,
+        poll: {
+          kind: "vote",
+          original_guid: POLL_GUID,
+          votes: [
+            {
+              option_id: ALLOW_ONCE_OPTION,
+              participant: "+15559999998",
+              event_type: "selected",
+            },
+            {
+              option_id: DENY_OPTION,
+              participant: "+15559999999",
+              event_type: "selected",
+            },
+          ],
+        },
+      } as IMessagePayload),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
@@ -259,29 +226,25 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(await bind()).toBe(true);
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: {
-          sender: APPROVER,
-          poll: {
-            kind: "vote",
-            original_guid: POLL_GUID,
-            votes: [
-              {
-                option_id: ALLOW_ONCE_OPTION,
-                participant: "e:active-account-alias@example.com",
-                event_type: "selected",
-              },
-              {
-                option_id: DENY_OPTION,
-                participant: "e:active-account-alias@example.com",
-                event_type: "removed",
-              },
-            ],
-          },
-        } as IMessagePayload,
-      }),
+      resolveVote({
+        sender: APPROVER,
+        poll: {
+          kind: "vote",
+          original_guid: POLL_GUID,
+          votes: [
+            {
+              option_id: ALLOW_ONCE_OPTION,
+              participant: "e:active-account-alias@example.com",
+              event_type: "selected",
+            },
+            {
+              option_id: DENY_OPTION,
+              participant: "e:active-account-alias@example.com",
+              event_type: "removed",
+            },
+          ],
+        },
+      } as IMessagePayload),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
@@ -293,29 +256,25 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(await bind()).toBe(true);
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: {
-          sender: APPROVER,
-          poll: {
-            kind: "vote",
-            original_guid: POLL_GUID,
-            votes: [
-              {
-                option_id: ALLOW_ONCE_OPTION,
-                participant: APPROVER,
-                event_type: "selected",
-              },
-              {
-                option_id: DENY_OPTION,
-                participant: APPROVER,
-                event_type: "selected",
-              },
-            ],
-          },
-        } as IMessagePayload,
-      }),
+      resolveVote({
+        sender: APPROVER,
+        poll: {
+          kind: "vote",
+          original_guid: POLL_GUID,
+          votes: [
+            {
+              option_id: ALLOW_ONCE_OPTION,
+              participant: APPROVER,
+              event_type: "selected",
+            },
+            {
+              option_id: DENY_OPTION,
+              participant: APPROVER,
+              event_type: "selected",
+            },
+          ],
+        },
+      } as IMessagePayload),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
@@ -325,16 +284,14 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(await bind()).toBe(true);
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildVote({
+      resolveVote(
+        buildVote({
           sender: "",
           participant: APPROVER,
           isFromMe: true,
           destinationCallerId: APPROVER,
         }),
-      }),
+      ),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
@@ -346,16 +303,14 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(await bind()).toBe(true);
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildVote({
+      resolveVote(
+        buildVote({
           sender: "",
           participant: APPROVER,
           isFromMe: false,
           destinationCallerId: APPROVER,
         }),
-      }),
+      ),
     ).resolves.toBe(false);
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
@@ -365,16 +320,14 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(await bind()).toBe(true);
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildVote({
+      resolveVote(
+        buildVote({
           sender: APPROVER,
           participant: APPROVER,
           isFromMe: false,
           destinationCallerId: APPROVER,
         }),
-      }),
+      ),
     ).resolves.toBe(false);
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
@@ -391,13 +344,9 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
       expiresAtMs: Date.now() + 60_000,
     });
 
-    await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildVote({ pollGuid: "actual-native-poll-guid" }),
-      }),
-    ).resolves.toBe(true);
+    await expect(resolveVote(buildVote({ pollGuid: "actual-native-poll-guid" }))).resolves.toBe(
+      true,
+    );
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -437,11 +386,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     await bindGroup();
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildGroupVote({ sender: "+15559999999", participant: APPROVER }),
-      }),
+      resolveVote(buildGroupVote({ sender: "+15559999999", participant: APPROVER })),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
@@ -465,11 +410,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     await bindGroup();
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildGroupVote({ sender: APPROVER, participant: APPROVER }),
-      }),
+      resolveVote(buildGroupVote({ sender: APPROVER, participant: APPROVER })),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
@@ -490,15 +431,14 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     });
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg: emailCfg,
-        accountId: "default",
-        message: buildVote({
+      resolveVote(
+        buildVote({
           sender: "person@example.com",
           participant: "another-alias@example.com",
           optionId: DENY_OPTION,
         }),
-      }),
+        { cfg: emailCfg },
+      ),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
@@ -509,13 +449,9 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   it("requires explicit approvers", async () => {
     await bind();
 
-    await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg: { channels: { imessage: {} } },
-        accountId: "default",
-        message: buildVote(),
-      }),
-    ).resolves.toBe(true);
+    await expect(resolveVote(buildVote(), { cfg: { channels: { imessage: {} } } })).resolves.toBe(
+      true,
+    );
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
@@ -523,13 +459,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   it("owns an un-vote without resolving it", async () => {
     await bind();
 
-    await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildVote({ eventType: "removed" }),
-      }),
-    ).resolves.toBe(true);
+    await expect(resolveVote(buildVote({ eventType: "removed" }))).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
@@ -537,13 +467,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   it("ignores an option id that is not bound to a decision", async () => {
     await bind();
 
-    await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildVote({ optionId: "opt-unknown" }),
-      }),
-    ).resolves.toBe(true);
+    await expect(resolveVote(buildVote({ optionId: "opt-unknown" }))).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
@@ -555,11 +479,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     await bind();
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: { sender: APPROVER, poll } as unknown as IMessagePayload,
-      }),
+      resolveVote({ sender: APPROVER, poll } as unknown as IMessagePayload),
     ).resolves.toBe(false);
   });
 
@@ -567,14 +487,10 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     await bind();
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: {
-          sender: APPROVER,
-          poll: { kind: "vote", original_guid: POLL_GUID, vote: null, votes: [] },
-        } as IMessagePayload,
-      }),
+      resolveVote({
+        sender: APPROVER,
+        poll: { kind: "vote", original_guid: POLL_GUID, vote: null, votes: [] },
+      } as IMessagePayload),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
@@ -584,18 +500,14 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     await bind();
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: {
-          sender: APPROVER,
-          poll: {
-            kind: "vote",
-            original_guid: POLL_GUID,
-            votes: [{ option_id: 7, participant: APPROVER }],
-          },
-        } as unknown as IMessagePayload,
-      }),
+      resolveVote({
+        sender: APPROVER,
+        poll: {
+          kind: "vote",
+          original_guid: POLL_GUID,
+          votes: [{ option_id: 7, participant: APPROVER }],
+        },
+      } as unknown as IMessagePayload),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
@@ -605,27 +517,23 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     await bind();
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildVote({
+      resolveVote(
+        buildVote({
           pollGuid: "some-other-poll",
           optionId: "some-other-option",
         }),
-      }),
+      ),
     ).resolves.toBe(false);
   });
 
   it("swallows late votes after the approval resolved", async () => {
     await bind();
-    await maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() });
+    await resolveVote(buildVote());
     resolverMocks.resolveApprovalOverGateway.mockClear();
 
     // Messages cannot close a poll, so the balloon stays tappable; a late tap
     // must not reach the agent as prose.
-    await expect(
-      maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() }),
-    ).resolves.toBe(true);
+    await expect(resolveVote(buildVote())).resolves.toBe(true);
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 
@@ -646,13 +554,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
       ).toBe(true);
       vi.setSystemTime(1_002);
 
-      await expect(
-        maybeResolveIMessageApprovalPollVote({
-          cfg,
-          accountId: "default",
-          message: buildVote({ pollGuid: expiringPollGuid }),
-        }),
-      ).resolves.toBe(true);
+      await expect(resolveVote(buildVote({ pollGuid: expiringPollGuid }))).resolves.toBe(true);
       expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -670,13 +572,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
       }),
     ).toBe(true);
 
-    await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildVote({ pollGuid: orphanPollGuid }),
-      }),
-    ).resolves.toBe(true);
+    await expect(resolveVote(buildVote({ pollGuid: orphanPollGuid }))).resolves.toBe(true);
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 
@@ -685,13 +581,13 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     resolverMocks.isApprovalNotFoundError.mockReturnValue(true);
     resolverMocks.resolveApprovalOverGateway.mockRejectedValue(new Error("not found"));
 
-    await maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() });
+    await resolveVote(buildVote());
 
     resolverMocks.resolveApprovalOverGateway.mockClear();
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
     resolverMocks.resolveApprovalOverGateway.mockResolvedValue({ applied: true, approval: {} });
 
-    await maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() });
+    await resolveVote(buildVote());
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 
@@ -699,12 +595,10 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     await bind();
     resolverMocks.resolveApprovalOverGateway.mockRejectedValueOnce(new Error("gateway 503"));
 
-    await expect(
-      maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() }),
-    ).rejects.toThrow("gateway 503");
+    await expect(resolveVote(buildVote())).rejects.toThrow("gateway 503");
 
     resolverMocks.resolveApprovalOverGateway.mockResolvedValue({ applied: true, approval: {} });
-    await maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() });
+    await resolveVote(buildVote());
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenLastCalledWith(
       expect.objectContaining({ approvalId: "exec-1", decision: "allow-once" }),
@@ -728,13 +622,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
       }),
     ).toBe(false);
 
-    await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildVote({ pollGuid: expiredPollGuid }),
-      }),
-    ).resolves.toBe(false);
+    await expect(resolveVote(buildVote({ pollGuid: expiredPollGuid }))).resolves.toBe(false);
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 
@@ -754,9 +642,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
       chat_guid: "iMessage;-;+15551230000",
     } as IMessagePayload;
 
-    await expect(
-      maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message }),
-    ).resolves.toBe(true);
+    await expect(resolveVote(message)).resolves.toBe(true);
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: "exec-chat" }),
     );
@@ -774,7 +660,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
       ],
     });
 
-    await maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() });
+    await resolveVote(buildVote());
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 });

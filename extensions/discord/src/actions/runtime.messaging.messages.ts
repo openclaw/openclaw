@@ -28,29 +28,6 @@ function parseDiscordMessageLink(link: string) {
   };
 }
 
-function describeDiscordMessageListResult(value: unknown): string {
-  if (Array.isArray(value)) {
-    return "array";
-  }
-  if (value === null) {
-    return "null";
-  }
-  if (value && typeof value === "object") {
-    const keys = Object.keys(value).toSorted();
-    return keys.length ? `object with keys ${keys.join(", ")}` : "object";
-  }
-  return typeof value;
-}
-
-function assertDiscordMessageListResult(value: unknown): Array<unknown> {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  throw new Error(
-    `Discord message read returned ${describeDiscordMessageListResult(value)} instead of an array.`,
-  );
-}
-
 export async function handleDiscordMessageManagementAction(ctx: DiscordMessagingActionContext) {
   switch (ctx.action) {
     case "permissions": {
@@ -119,13 +96,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
               ctx.withOpts(),
             ),
           ]
-        : assertDiscordMessageListResult(
-            await discordMessagingActionRuntime.readMessagesDiscord(
-              channelId,
-              query,
-              ctx.withOpts(),
-            ),
-          );
+        : await discordMessagingActionRuntime.readMessagesDiscord(channelId, query, ctx.withOpts());
       return jsonResult({
         ok: true,
         channelId,
@@ -223,7 +194,6 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       }
       const channelId = readStringParam(ctx.params, "channelId");
       const channelIds = readStringArrayParam(ctx.params, "channelIds");
-      // Resolve guildId from channel info when not explicitly provided.
       if (!guildId) {
         const rawInferChannelId = channelId ?? channelIds?.[0];
         if (rawInferChannelId) {
@@ -274,9 +244,6 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
         },
         ctx.withOpts(),
       );
-      if (!results || typeof results !== "object") {
-        return jsonResult({ ok: true, results });
-      }
       const messages = results.messages;
       const normalizedMessages = Array.isArray(messages)
         ? messages.map((group) =>

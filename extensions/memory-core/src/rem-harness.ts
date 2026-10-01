@@ -1,10 +1,10 @@
-// Memory Core plugin module implements rem harness behavior.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { DAILY_MEMORY_FILENAME_RE } from "./dreaming-ingestion-state.js";
 import {
   filterRecallEntriesWithinLookback,
   previewRemDreaming,
@@ -18,8 +18,6 @@ import {
   readShortTermRecallEntries,
   type PromotionCandidate,
 } from "./short-term-promotion.js";
-
-const DAILY_MEMORY_FILE_NAME_RE = /^\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i;
 
 type MemoryRemHarnessRemConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
 type MemoryRemHarnessDeepConfig = ReturnType<typeof resolveMemoryDeepDreamingConfig>;
@@ -88,7 +86,7 @@ async function listWorkspaceDailyFiles(workspaceDir: string, limit?: number): Pr
   try {
     const dirEntries = await listWorkspaceDirectory(workspaceDir, memoryDir);
     entries = dirEntries
-      .filter((entry) => entry.isFile() && DAILY_MEMORY_FILE_NAME_RE.test(entry.name))
+      .filter((entry) => entry.isFile() && DAILY_MEMORY_FILENAME_RE.test(entry.name))
       .map((entry) => entry.name);
   } catch (err) {
     if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {

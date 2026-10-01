@@ -712,6 +712,8 @@ describe("browser.request profile selection", () => {
     const invoke = invokeParams(nodeRegistry);
     expect(invoke.nodeId).toBe("cafe-node");
     expect(invoke.command).toBe("browser.proxy");
+    expect(invoke.params?.method).toBe("GET");
+    expect(invoke.params?.path).toBe("/profiles");
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
@@ -744,18 +746,8 @@ describe("browser.request profile selection", () => {
       body: { name: "poc", cdpUrl: "http://10.0.0.42:9222" },
     },
     {
-      method: "DELETE",
-      path: "profiles/poc",
-      body: undefined,
-    },
-    {
       method: "POST",
       path: "/reset-profile",
-      body: { profile: "poc", name: "poc" },
-    },
-    {
-      method: "POST",
-      path: "reset-profile",
       body: { profile: "poc", name: "poc" },
     },
   ])("blocks persistent profile mutations for $method $path", async ({ method, path, body }) => {
@@ -774,39 +766,19 @@ describe("browser.request profile selection", () => {
     );
   });
 
-  it.each([
-    { method: "POST", path: "/profiles/create", body: { name: "poc" } },
-    { method: "DELETE", path: "/profiles/poc", body: undefined },
-    { method: "POST", path: "/reset-profile", body: { profile: "poc", name: "poc" } },
-  ])(
-    "dispatches host-local admin mutations for $method $path when no node handles the request",
-    async ({ method, path, body }) => {
-      const { respond, nodeRegistry } = await runBrowserRequest(
-        { method, path, body },
-        undefined,
-        [],
-      );
+  it("dispatches host-local admin mutations when no node handles the request", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      { method: "POST", path: "/profiles/create", body: { name: "poc" } },
+      undefined,
+      [],
+    );
 
-      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-      expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
-      const [ok, payload, error] = firstRespondCall(respond);
-      expect(ok).toBe(false);
-      expect(payload).toBeUndefined();
-      expect(error?.message).toContain("browser control disabled:");
-    },
-  );
-
-  it("allows non-mutating profile reads", async () => {
-    const { respond, nodeRegistry } = await runBrowserRequest({
-      method: "GET",
-      path: "/profiles",
-    });
-
-    const invoke = invokeParams(nodeRegistry);
-    expect(invoke.command).toBe("browser.proxy");
-    expect(invoke.params?.method).toBe("GET");
-    expect(invoke.params?.path).toBe("/profiles");
-    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
+    const [ok, payload, error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.message).toContain("browser control disabled:");
   });
 
   it("falls back to host dispatch when an auto-selected node has no browser host", async () => {

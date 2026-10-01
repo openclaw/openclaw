@@ -68,6 +68,7 @@ export function renderArtTile(
     authorIconUrl?: string;
     loading?: boolean;
     className?: string;
+    whiteBackground?: boolean;
   } = {},
 ): TemplateResult {
   const {
@@ -76,6 +77,7 @@ export function renderArtTile(
     authorIconUrl,
     loading = false,
     className = "plugins-tile",
+    whiteBackground = false,
   } = options;
   // Fetch admission already limits requests to rendered tiles. Eager loading
   // lets the hidden image finish before replacing its skeleton.
@@ -83,7 +85,7 @@ export function renderArtTile(
     const pending = url ? image.loading : loading;
     if (url || pending) {
       return html`<span
-        class=${`${className}${pending ? " skeleton" : ""}`}
+        class=${`${className}${whiteBackground ? " plugins-tile--white" : ""}${pending ? " skeleton" : ""}`}
         data-plugin-icon-id=${slug}
         aria-hidden="true"
       >

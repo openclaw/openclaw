@@ -128,9 +128,7 @@ private func stringifyLogMetadataValue(_ value: Logger.Metadata.Value) -> String
     }
 }
 
-private protocol AppLogLevelBackedHandler: LogHandler {
-    var metadata: Logger.Metadata { get set }
-}
+private protocol AppLogLevelBackedHandler: LogHandler {}
 
 extension AppLogLevelBackedHandler {
     var logLevel: Logger.Level {

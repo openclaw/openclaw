@@ -316,7 +316,7 @@ suite.define(() => {
       );
       await expect(section.getByRole("button", { name: "Change System GitHub" })).toHaveCount(0);
       await expect(section.locator('[data-github-connection="agent"]')).toHaveCount(0);
-      expect(await gateway.getRequests("users.self")).toHaveLength(0);
+      expect(await gateway.getRequests("users.self")).toHaveLength(1);
       const configReads = (await gateway.getRequests("config.get")).length;
       const configWrites = (await gateway.getRequests("config.set")).length;
       await section.getByRole("button", { name: "Connect My GitHub" }).click();
@@ -470,6 +470,19 @@ suite.define(() => {
       const connect = await gateway.waitForRequest("connect");
       const instanceId = (connect.params as { client: { instanceId: string } }).client.instanceId;
       const reads = (await gateway.getRequests("users.github.status")).length;
+      await gateway.setMethodResponse("users.self", {
+        profile: {
+          id: "55555555-5555-4555-8555-555555555555",
+          displayName: "Second Person",
+          emails: [],
+          avatarMime: null,
+          hasAvatar: false,
+          githubIdentity: null,
+          mergedInto: null,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      });
       await gateway.emitGatewayEvent("presence", {
         presence: [
           {

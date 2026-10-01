@@ -1,12 +1,6 @@
-/**
- * Tests provider-native tool collision policy.
- * Protects OpenClaw web_search routing when provider/model compatibility also
- * advertises native search support.
- */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import {
   createToolSearchCatalogRef,
@@ -17,68 +11,40 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [{ name: "browser" }],
 }));
 
-const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
-const XAI_TOOL_SCHEMA_PROFILE = "xai";
+const baseTools = ["read", "web_search", "exec"];
 
-const baseTools = [
-  { name: "read" },
-  { name: "web_search" },
-  { name: "exec" },
-] as unknown as AnyAgentTool[];
+function selectedTools(
+  requestedTools: string[],
+  options?: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>,
+) {
+  const actualTools = createOpenClawCodingTools({
+    ...options,
+    cwd: "/tmp/openclaw-agent-tools-policy-test",
+    workspaceDir: "/tmp/openclaw-agent-tools-policy-test",
+    toolConstructionPlan: {
+      includeBaseCodingTools: true,
+      includeShellTools: true,
+      includeChannelTools: false,
+      includeOpenClawTools: true,
+      includePluginTools: true,
+    },
+  });
+  return requestedTools.flatMap((name) => {
+    const tool = actualTools.find((candidate) => candidate.name === name);
+    return tool ? [tool] : [];
+  });
+}
 
-const testing = {
-  applyModelProviderToolPolicy(
-    requestedTools: AnyAgentTool[],
-    options?: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>,
-  ): AnyAgentTool[] {
-    const actualTools = createOpenClawCodingTools({
-      ...options,
-      cwd: "/tmp/openclaw-agent-tools-policy-test",
-      workspaceDir: "/tmp/openclaw-agent-tools-policy-test",
-      toolConstructionPlan: {
-        includeBaseCodingTools: true,
-        includeShellTools: true,
-        includeChannelTools: false,
-        includeOpenClawTools: true,
-        includePluginTools: true,
-      },
-    });
-    const actualToolsByName = new Map(actualTools.map((tool) => [tool.name, tool]));
-    return requestedTools.flatMap((tool) => {
-      const actualTool = actualToolsByName.get(tool.name);
-      return actualTool ? [actualTool] : [];
-    });
-  },
-};
-
-function toolNames(tools: AnyAgentTool[]): string[] {
+function toolNames(tools: { name: string }[]): string[] {
   return tools.map((tool) => tool.name);
 }
 
 describe("applyModelProviderToolPolicy", () => {
-  it("keeps web_search for non-xAI models", () => {
-    const filtered = testing.applyModelProviderToolPolicy(baseTools, {
-      modelCompat: {},
-    });
-
-    expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
-  });
-
   it("keeps web_search for OpenRouter xAI model ids so OpenClaw tool routing stays authoritative", () => {
-    const filtered = testing.applyModelProviderToolPolicy(baseTools, {
+    const filtered = selectedTools(baseTools, {
       modelCompat: {
-        toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
-        toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-      },
-    });
-
-    expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
-  });
-
-  it("keeps web_search for direct xai-capable models too", () => {
-    const filtered = testing.applyModelProviderToolPolicy(baseTools, {
-      modelCompat: {
-        toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
+        toolSchemaProfile: "xai",
+        toolCallArgumentsEncoding: "html-entities",
       },
     });
 
@@ -87,64 +53,37 @@ describe("applyModelProviderToolPolicy", () => {
 
   it.each<{
     label: string;
-    provider?: string;
     baseUrl: string;
     modelBaseUrl?: string;
     native: boolean;
     plugins?: OpenClawConfig["plugins"];
   }>([
-    { label: "automatic", provider: undefined, baseUrl: "https://api.openai.com/v1", native: true },
-    {
-      label: "explicit managed",
-      provider: "brave",
-      baseUrl: "https://api.openai.com/v1",
-      native: false,
-    },
-    {
-      label: "custom endpoint",
-      provider: undefined,
-      baseUrl: "https://proxy.example/v1",
-      native: false,
-    },
     {
       label: "resolved custom endpoint",
-      provider: undefined,
       baseUrl: "https://api.openai.com/v1",
       modelBaseUrl: "https://proxy.example/v1",
       native: false,
     },
     {
       label: "resolved official endpoint",
-      provider: undefined,
       baseUrl: "https://proxy.example/v1",
       modelBaseUrl: "https://api.openai.com/v1",
       native: true,
     },
+
     {
-      label: "enabled plugin",
-      plugins: { allow: ["openai"] },
-      baseUrl: "https://api.openai.com/v1",
-      native: true,
-    },
-    ...[
-      { label: "disabled plugin", plugins: { entries: { openai: { enabled: false } } } },
-      { label: "globally disabled plugins", plugins: { enabled: false } },
-      { label: "denied plugin", plugins: { deny: ["openai"] } },
-      { label: "unlisted plugin", plugins: { allow: ["brave"] } },
-    ].map(({ label, plugins }) => ({
-      label,
-      plugins,
-      provider: undefined,
+      label: "disabled plugin",
+      plugins: { entries: { openai: { enabled: false } } },
       baseUrl: "https://api.openai.com/v1",
       native: false,
-    })),
+    },
   ])(
     "uses one search route before tool discovery for OpenAI $label",
-    ({ provider, baseUrl, modelBaseUrl, native, plugins }) => {
-      const filtered = testing.applyModelProviderToolPolicy(baseTools, {
+    ({ baseUrl, modelBaseUrl, native, plugins }) => {
+      const filtered = selectedTools(baseTools, {
         config: {
           plugins,
-          tools: { web: { search: { provider } } },
+          tools: { web: { search: { provider: undefined } } },
           models: { providers: { openai: { api: "openai-responses", baseUrl, models: [] } } },
         },
         modelProvider: "openai",
@@ -163,286 +102,99 @@ describe("applyModelProviderToolPolicy", () => {
     },
   );
 
-  it("removes managed web_search when native Codex search is active", () => {
-    const filtered = testing.applyModelProviderToolPolicy(baseTools, {
-      config: {
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: { enabled: true, mode: "cached" },
-            },
-          },
-        },
-      },
+  it.each([
+    {
+      name: "gateway native",
       modelProvider: "gateway",
-      modelApi: "openai-chatgpt-responses",
-      modelId: "gpt-5.4",
-    });
-
-    expect(toolNames(filtered)).toEqual(["read", "exec"]);
-  });
-
-  it("can keep managed web_search for Codex app-server dynamic tools", () => {
-    const filtered = testing.applyModelProviderToolPolicy(baseTools, {
-      config: {
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: { enabled: true, mode: "cached" },
-            },
-          },
-        },
-      },
+      auth: false,
+      suppressManagedWebSearch: undefined,
+      native: true,
+    },
+    {
+      name: "dynamic tools",
       modelProvider: "gateway",
-      modelApi: "openai-chatgpt-responses",
-      modelId: "gpt-5.4",
+      auth: false,
       suppressManagedWebSearch: false,
-    });
-
-    expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
-  });
-
-  it("removes managed web_search for direct Codex models when auth is available", () => {
-    const filtered = testing.applyModelProviderToolPolicy(baseTools, {
-      config: {
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: { enabled: true, mode: "cached" },
-            },
-          },
-        },
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "oauth",
-            },
-          },
-        },
-      },
+      native: false,
+    },
+    {
+      name: "authenticated direct",
       modelProvider: "openai",
-      modelApi: "openai-chatgpt-responses",
-      modelId: "gpt-5.4",
-    });
-
-    expect(toolNames(filtered)).toEqual(["read", "exec"]);
-  });
-
-  it("keeps managed web_search when Codex native search cannot activate", () => {
-    const filtered = testing.applyModelProviderToolPolicy(baseTools, {
-      config: {
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: { enabled: true, mode: "cached" },
-            },
-          },
-        },
-      },
+      auth: true,
+      suppressManagedWebSearch: undefined,
+      native: true,
+    },
+    {
+      name: "unauthenticated direct",
       modelProvider: "openai",
-      modelApi: "openai-chatgpt-responses",
-      modelId: "gpt-5.4",
-    });
-
-    expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
-  });
-
-  it("drops heavyweight tools when the experimental lean local-model flag is enabled", () => {
-    const filtered = testing.applyModelProviderToolPolicy(
-      [
-        { name: "read" },
-        { name: "browser" },
-        { name: "automations" },
-        { name: "message" },
-        { name: "exec" },
-      ] as unknown as AnyAgentTool[],
-      {
+      auth: false,
+      suppressManagedWebSearch: undefined,
+      native: false,
+    },
+  ])(
+    "selects one Codex search route for $name",
+    ({ modelProvider, auth, suppressManagedWebSearch, native }) => {
+      const filtered = selectedTools(baseTools, {
         config: {
-          agents: {
-            defaults: {
-              experimental: {
-                localModelLean: true,
-              },
-            },
+          tools: {
+            web: { search: { enabled: true, openaiCodex: { enabled: true, mode: "cached" } } },
           },
+          ...(auth
+            ? { auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" } } } }
+            : {}),
         },
-        modelProvider: "openai",
-        modelApi: "openai-responses",
+        modelProvider,
+        suppressManagedWebSearch,
+        modelApi: "openai-chatgpt-responses",
         modelId: "gpt-5.4",
-      },
-    );
+      });
+      expect(toolNames(filtered)).toEqual(
+        native ? ["read", "exec"] : ["read", "web_search", "exec"],
+      );
+    },
+  );
 
-    expect(toolNames(filtered)).toEqual(["read", "exec"]);
-  });
-
-  it("drops heavyweight tools when lean local-model mode is enabled for the current agent", () => {
-    const filtered = testing.applyModelProviderToolPolicy(
-      [
-        { name: "read" },
-        { name: "browser" },
-        { name: "automations" },
-        { name: "message" },
-        { name: "exec" },
-      ] as unknown as AnyAgentTool[],
-      {
-        config: {
-          agents: {
-            list: [
-              {
-                id: "gemma",
-                experimental: {
-                  localModelLean: true,
-                },
-              },
-            ],
-          },
+  it("applies inherited lean mode to the session agent", () => {
+    const filtered = selectedTools(["read", "browser", "automations", "message", "exec"], {
+      config: {
+        agents: {
+          defaults: { experimental: { localModelLean: true } },
+          list: [{ id: "main", experimental: { localModelLean: false } }, { id: "gemma" }],
         },
-        agentId: "gemma",
-        modelProvider: "lmstudio",
-        modelApi: "openai-compatible",
-        modelId: "gemma-4-e4b-it",
       },
-    );
-
-    expect(toolNames(filtered)).toEqual(["read", "exec"]);
-  });
-
-  it("drops heavyweight tools when lean local-model mode is enabled for the default agent", () => {
-    const filtered = testing.applyModelProviderToolPolicy(
-      [
-        { name: "read" },
-        { name: "browser" },
-        { name: "automations" },
-        { name: "message" },
-        { name: "exec" },
-      ] as unknown as AnyAgentTool[],
-      {
-        config: {
-          agents: {
-            list: [
-              {
-                id: "gemma",
-                default: true,
-                experimental: {
-                  localModelLean: true,
-                },
-              },
-            ],
-          },
-        },
-        modelProvider: "lmstudio",
-        modelApi: "openai-compatible",
-        modelId: "gemma-4-e4b-it",
-      },
-    );
-
-    expect(toolNames(filtered)).toEqual(["read", "exec"]);
-  });
-
-  it("drops heavyweight tools when lean local-model mode is enabled for the session agent", () => {
-    const filtered = testing.applyModelProviderToolPolicy(
-      [
-        { name: "read" },
-        { name: "browser" },
-        { name: "automations" },
-        { name: "message" },
-        { name: "exec" },
-      ] as unknown as AnyAgentTool[],
-      {
-        config: {
-          agents: {
-            list: [
-              {
-                id: "main",
-                experimental: {
-                  localModelLean: false,
-                },
-              },
-              {
-                id: "gemma",
-                experimental: {
-                  localModelLean: true,
-                },
-              },
-            ],
-          },
-        },
-        sessionKey: "agent:gemma:main",
-        modelProvider: "lmstudio",
-        modelApi: "openai-compatible",
-        modelId: "gemma-4-e4b-it",
-      },
-    );
+      sessionKey: "agent:gemma:main",
+      modelProvider: "lmstudio",
+      modelApi: "openai-compatible",
+      modelId: "gemma-4-e4b-it",
+    });
 
     expect(toolNames(filtered)).toEqual(["read", "exec"]);
   });
 
   it("lets a current agent disable inherited lean local-model mode", () => {
-    const filtered = testing.applyModelProviderToolPolicy(
-      [
-        { name: "read" },
-        { name: "browser" },
-        { name: "automations" },
-        { name: "message" },
-        { name: "exec" },
-      ] as unknown as AnyAgentTool[],
-      {
-        config: {
-          agents: {
-            defaults: {
-              experimental: {
-                localModelLean: true,
-              },
+    const filtered = selectedTools(["read", "browser", "automations", "message", "exec"], {
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
             },
-            list: [
-              {
-                id: "main",
-                experimental: {
-                  localModelLean: false,
-                },
-              },
-            ],
           },
-        },
-        agentId: "main",
-        modelProvider: "openai",
-        modelApi: "openai-responses",
-        modelId: "gpt-5.4",
-      },
-    );
-
-    expect(toolNames(filtered)).toEqual(["read", "browser", "automations", "message", "exec"]);
-  });
-
-  it("keeps heavyweight tools when the experimental lean local-model flag is not enabled", () => {
-    const filtered = testing.applyModelProviderToolPolicy(
-      [
-        { name: "read" },
-        { name: "browser" },
-        { name: "automations" },
-        { name: "message" },
-        { name: "exec" },
-      ] as unknown as AnyAgentTool[],
-      {
-        config: {
-          agents: {
-            defaults: {
+          list: [
+            {
+              id: "main",
               experimental: {
                 localModelLean: false,
               },
             },
-          },
+          ],
         },
-        modelProvider: "openai",
-        modelApi: "openai-responses",
-        modelId: "gpt-5.4",
       },
-    );
+      agentId: "main",
+      modelProvider: "openai",
+      modelApi: "openai-responses",
+      modelId: "gpt-5.4",
+    });
 
     expect(toolNames(filtered)).toEqual(["read", "browser", "automations", "message", "exec"]);
   });

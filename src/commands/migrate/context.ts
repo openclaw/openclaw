@@ -53,7 +53,6 @@ export function resolveMigrationTargetAgentId(
   return resolveConfiguredAgentId(config, agentId);
 }
 
-/** Builds the provider-facing migration context from CLI options and runtime state. */
 export function buildMigrationContext(params: {
   source?: string;
   targetAgentId?: string;

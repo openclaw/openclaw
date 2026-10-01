@@ -4,6 +4,7 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { prepareModelRequestBody } from "../transports/model-request-body.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
@@ -12,12 +13,10 @@ import {
 import { recordResponsesContextUsage } from "../transports/openai-responses-context-usage.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
-import {
-  createOpenAIResponsesAssistantOutput,
-  createResponsesStreamWithEncryptedContentRetry,
-} from "../transports/openai-responses-replay-internal.js";
+import { createResponsesStreamWithEncryptedContentRetry } from "../transports/openai-responses-replay-internal.js";
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
+import type { ResponsesStreamOptions } from "../transports/openai-responses-stream-types-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
   failTransportStream,
@@ -39,19 +38,13 @@ import {
   resolveOpenAIRequestReasoning,
   type OpenAIRequestReasoningEffort,
 } from "./openai-request-reasoning.js";
+import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 
-interface OpenAIResponsesStreamOptions {
-  serviceTier?: ResponseCreateParamsStreaming["service_tier"];
-  resolveServiceTier?: (
-    responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-    requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => ResponseCreateParamsStreaming["service_tier"] | undefined;
-  applyServiceTierPricing?: (
-    usage: Usage,
-    serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => void;
-}
+type OpenAIResponsesStreamOptions = Pick<
+  ResponsesStreamOptions,
+  "serviceTier" | "resolveServiceTier" | "applyServiceTierPricing"
+>;
 
 export { convertResponsesToolPayload };
 
@@ -89,16 +82,18 @@ type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
 
 type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
-type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
+type ResponsesCommonParamsOptions = Pick<
+  StreamOptions,
+  "maxTokens" | "temperature" | "responseFormat"
+> & {
   reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: ResponsesReasoningSummary;
 };
 
-type ResponsesLifecycleRequest = OpenAIResponsesRequestParams;
-
-export { convertProviderResponsesMessages as convertResponsesMessages } from "../transports/openai-responses-replay-internal.js";
-
-export const createResponsesAssistantOutput = createOpenAIResponsesAssistantOutput;
+export {
+  convertProviderResponsesMessages as convertResponsesMessages,
+  createOpenAIResponsesAssistantOutput as createResponsesAssistantOutput,
+} from "../transports/openai-responses-replay-internal.js";
 
 export function applyResponsesServiceTierPricing(
   usage: Usage,
@@ -138,6 +133,13 @@ export function applyCommonResponsesParams<TApi extends Api>(
     params.temperature = options.temperature;
   }
 
+  if (options?.responseFormat !== undefined) {
+    params.text = {
+      ...params.text,
+      format: resolveOpenAIResponsesTextFormat(options.responseFormat),
+    };
+  }
+
   if (context.tools) {
     const tools = convertResponsesToolPayload(context.tools, { model });
     if (tools.length > 0) {
@@ -170,16 +172,6 @@ export function applyCommonResponsesParams<TApi extends Api>(
   }
 }
 
-function buildResponsesRequestOptions(
-  options: ResponsesLifecycleStreamOptions | undefined,
-): ResponsesRequestOptions {
-  return {
-    ...(options?.signal ? { signal: options.signal } : {}),
-    ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-    maxRetries: 0,
-  };
-}
-
 function cleanStreamingScratchBuffers(output: AssistantMessage): void {
   for (const block of output.content) {
     delete (block as { index?: number }).index;
@@ -198,7 +190,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   buildParams: (
     model: Model<TApi>,
     replayMode: OpenAIResponsesReplayMode,
-  ) => ResponsesLifecycleRequest;
+  ) => OpenAIResponsesRequestParams;
   processStreamOptions?: OpenAIResponsesProcessStreamOptions;
 }): Promise<void> {
   const { stream, output, options } = params;
@@ -207,11 +199,12 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   try {
     const model = params.resolveRequestModel?.(params.model) ?? params.model;
     const client = params.createClient(model);
+    const encodeBody = prepareModelRequestBody(options);
     const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
       let request = params.buildParams(model, replayMode);
       const nextRequest = await options?.onPayload?.(request, model);
       if (nextRequest !== undefined) {
-        request = nextRequest as ResponsesLifecycleRequest;
+        request = nextRequest as OpenAIResponsesRequestParams;
       }
       return request;
     };
@@ -220,15 +213,18 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     const firstEvent = createFirstStreamEventAbortController(options?.signal);
     firstEventAbort = firstEvent;
     let started = false;
-    let admittedRequest: ResponsesLifecycleRequest | undefined;
+    let admittedRequest: OpenAIResponsesRequestParams | undefined;
+    const requestOptions: ResponsesRequestOptions = {
+      signal: firstEvent.signal,
+      ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+      maxRetries: 0,
+    };
     const { stream: hookedOpenAIStream } = await createResponsesStreamWithEncryptedContentRetry({
       client: client as never,
       request: requestParams as never,
-      requestOptions: {
-        ...buildResponsesRequestOptions(options),
-        signal: firstEvent.signal,
-      },
+      requestOptions,
       model,
+      encodeBody,
       buildFullHistoryRequest: () => buildRequest("full-history"),
       onCompactionRejected: (checkpoint) =>
         suppressOpenAIResponsesCompaction(output, model, options, checkpoint),

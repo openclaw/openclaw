@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -48,14 +48,13 @@ function createParams(signal: AbortSignal): Parameters<typeof startGatewayEventS
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     chatAbortControllers: new Map(),
     restartRecoveryCandidates: new Map(),
-    terminalSessions: { closeTaskSessions: vi.fn() },
     refreshConnectedUserProfiles: vi.fn(),
   };
 }
 
-it.each(["before startup", "before inherited connection drain"] as const)(
+it.for(["before startup", "before inherited connection drain"] as const)(
   "cancels auxiliary model work %s",
-  async (phase) => {
+  async (phase, { signal }) => {
     let unsubs: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     const testState = await createOpenClawTestState({ scenario: "minimal" });
     const connectionWork = new GatewayConnectionWork();
@@ -65,6 +64,7 @@ it.each(["before startup", "before inherited connection drain"] as const)(
       agentId: target.agentId,
       sessionId: "shutdown-recap",
     };
+    const started = createDeferred();
     const finish = createDeferred();
     const prepared = vi.spyOn(sessionObserverModel, "defaultPrepareModel").mockResolvedValue({
       config: {},
@@ -77,6 +77,7 @@ it.each(["before startup", "before inherited connection drain"] as const)(
     });
     const complete = vi.spyOn(sessionObserverModel, "defaultCompleteModel").mockImplementation(() =>
       trackAsyncWork(async () => {
+        started.resolve();
         await finish.promise;
         return {
           text: "Finished.",
@@ -108,7 +109,9 @@ it.each(["before startup", "before inherited connection drain"] as const)(
         return;
       }
       await connectionWork.track(() => unsubs!.sessionActivitySummaries.ensure(target));
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+      // ensure returns a projection before the real transcript worker reaches the model.
+      await withinTest(started.promise, signal);
+      expect(complete).toHaveBeenCalledOnce();
       const modelSignal = complete.mock.calls[0]![0].abortSignal!;
       let drained = false;
       draining = connectionWork.drain().then(() => {
@@ -127,7 +130,6 @@ it.each(["before startup", "before inherited connection drain"] as const)(
       unsubs?.heartbeatUnsub();
       unsubs?.transcriptUnsub();
       unsubs?.lifecycleUnsub();
-      await unsubs?.taskUnsub();
       unsubs = undefined;
       await draining;
       prepared.mockRestore();

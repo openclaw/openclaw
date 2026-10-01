@@ -159,18 +159,6 @@ function classifyDanglingToolCalls(content: unknown): DanglingToolCallClassifica
     : { kind: "none" };
 }
 
-// Unlike isPendingAssistantToolCall, visible text beside the call is fine —
-// the tail is not replayed, only continued past. Code Mode control calls are
-// excluded so their replay-safe checkpoint gating stays authoritative.
-function readResumablePendingToolCallTail(
-  message: unknown,
-): { forceRestartSafeTools: boolean } | undefined {
-  const classified = classifyDanglingToolCalls(readPendingAssistantContent(message));
-  return classified?.kind === "resumable"
-    ? { forceRestartSafeTools: classified.forceRestartSafeTools }
-    : undefined;
-}
-
 function readCodeModeCheckpoint(
   message: unknown,
 ): { replaySafe: boolean; runId?: string } | undefined {
@@ -446,8 +434,10 @@ export function resolveMainSessionResumePolicy(
   // failure notice used to demand: the dangling call is dropped from the next
   // provider payload and the continuation prompt lets the model re-decide.
   // Code Mode control calls keep the stricter checkpoint gating above.
-  const pendingToolCallTail = readResumablePendingToolCallTail(lastMeaningful);
-  if (pendingToolCallTail) {
+  const pendingToolCallTail = classifyDanglingToolCalls(
+    readPendingAssistantContent(lastMeaningful),
+  );
+  if (pendingToolCallTail?.kind === "resumable") {
     return { action: "resume", forceRestartSafeTools: pendingToolCallTail.forceRestartSafeTools };
   }
   const danglingControlCalls =

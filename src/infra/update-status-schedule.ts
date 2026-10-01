@@ -2,7 +2,6 @@ import type { UpdateScheduleState } from "../../packages/gateway-protocol/src/in
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
-import { gatewayUpdateCampaign } from "./update-campaign.js";
 import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -21,7 +20,7 @@ export function getGatewayUpdateSchedule(
 
   // Read policy, not discovery success. External supervision must not rewrite
   // the authored auto-update preference, and status must never clear a campaign.
-  const campaign = gatewayUpdateCampaign.getState();
+  const campaign = currentUpdateCheckLifecycle().campaign?.getState();
   const { campaign: _cachedCampaign, ...cachedFacts } = schedule ?? {
     channel,
     campaign: undefined,
@@ -60,7 +59,7 @@ export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
         }).channel;
       const isCurrent = () => {
         const schedule = getUpdateSchedule();
-        const campaign = gatewayUpdateCampaign.getState();
+        const campaign = lifecycle.campaign?.getState();
         return (
           lifecycle.isCurrent() &&
           !signal.aborted &&

@@ -60,6 +60,8 @@ type ReplacementProjectionOptions = {
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
+  labelClaim?: SessionEntryReplacementCommit["labelClaim"];
+  preparedTranscript?: SessionEntryReplacementCommit["preparedTranscript"];
   checkPendingArchiveRecovery?: boolean;
   onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   env?: NodeJS.ProcessEnv;
@@ -256,6 +258,8 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             checkPendingArchiveRecovery: params.checkPendingArchiveRecovery,
             consumePendingReset: params.consumePendingReset,
             ownerAssignment: params.ownerAssignment,
+            labelClaim: params.labelClaim,
+            preparedTranscript: params.preparedTranscript,
             maintenance,
           };
           // Native harness rollback closures and process-held databases cannot cross isolates.

@@ -40,7 +40,7 @@ export type ImportSystemProfileResult = {
   systemProfile: string;
   into: string;
   browser: SystemBrowser;
-  cookies: { total: number; imported: number; failed: number; skipped: number };
+  cookies: CookieImportCounts;
   domains: string[];
 };
 
@@ -63,7 +63,6 @@ const SYSTEM_BROWSER_DIRS: Record<SystemBrowser, string[]> = {
   chromium: ["Chromium"],
 };
 
-/** Normalize a supported Chrome-family browser identifier. */
 function resolveSystemBrowser(value?: string): SystemBrowser {
   const browser = value?.trim().toLowerCase() || "chrome";
   if (browser === "chrome" || browser === "brave" || browser === "edge" || browser === "chromium") {
@@ -72,7 +71,6 @@ function resolveSystemBrowser(value?: string): SystemBrowser {
   throw new Error(`unsupported system browser "${value}"; use chrome, brave, edge, or chromium`);
 }
 
-/** Resolve the macOS user-data root for one Chrome-family browser. */
 function resolveSystemBrowserRoot(browser: SystemBrowser, homeDir = os.homedir()): string {
   return path.join(homeDir, "Library", "Application Support", ...SYSTEM_BROWSER_DIRS[browser]);
 }
@@ -96,7 +94,6 @@ export function assertSystemCookiePlatform(
   }
 }
 
-/** Resolve one Chrome-family profile's source cookie database. */
 export function resolveSystemCookieSource(
   params: { browser?: string; systemProfile?: string },
   deps: Pick<SystemCookieReaderDeps, "homeDir"> = {},
@@ -235,11 +232,7 @@ export async function importSystemProfileCookies(
   if (!sourceProfile) {
     throw new Error(`system browser profile "${systemProfile}" was not found for ${browser}`);
   }
-  const root = resolveSystemBrowserRoot(browser, deps.homeDir);
-  const cookiesFile = resolveSystemCookiesFile(root, sourceProfile.id);
-  if (!cookiesFile) {
-    throw new Error(`cookies database not found for ${browser} profile "${systemProfile}"`);
-  }
+  resolveSystemCookieSource({ browser, systemProfile }, deps);
 
   if (!(into in runtime.ctx.state().resolved.profiles)) {
     await runtime.createProfile({ name: into, driver: "openclaw" });
@@ -309,7 +302,7 @@ export async function importSystemProfileCookies(
           // Cookies rejected by Playwright are counted, not fatal: the import stays
           // best-effort and imported reflects what actually landed in the profile.
           const rejected = decrypted.cookies.length - injected;
-          const result: ImportSystemProfileResult = {
+          return {
             ok: true,
             systemProfile,
             into,
@@ -321,8 +314,7 @@ export async function importSystemProfileCookies(
               skipped: decrypted.counts.skipped,
             },
             domains: decrypted.domains,
-          };
-          return result;
+          } satisfies ImportSystemProfileResult;
         },
         {
           commit: async (result) => await runtime.finalize?.(result),

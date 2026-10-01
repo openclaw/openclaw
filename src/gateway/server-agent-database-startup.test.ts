@@ -29,13 +29,14 @@ import { withAgentDatabaseStartupAdmission } from "../state/agent-database-start
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.runtime-state.js";
@@ -79,7 +80,11 @@ DatabaseSync.prototype.prepare = function(sql) {
   const location = this.location();
   const index = /integrity_check/.test(sql) && location ? paths.indexOf(fs.realpathSync.native(location)) : -1;
   if (index >= 0) {
-    fs.writeFileSync(markers[index], String(process.pid));
+    // Existence is the shutdown gate; never expose a truncated PID.
+    const marker = markers[index];
+    const pendingMarker = marker + '.' + process.pid + '.tmp';
+    fs.writeFileSync(pendingMarker, String(process.pid));
+    fs.renameSync(pendingMarker, marker);
     const pause = new Int32Array(new SharedArrayBuffer(4));
     const deadline = Date.now() + 60000;
     while (paused[index] && !fs.existsSync(release) && !fs.existsSync(releases[index])) {
@@ -175,8 +180,10 @@ it.each([
     }
     database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
     const agentPath = database.path;
+    // Join worker reader retirement before changing journal mode or replacing files.
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     // These fixtures exercise full startup inspection after unclean external mutation.
     clearOpenClawAgentIntegrityVerification(agentPath, env);
     const raw = new DatabaseSync(agentPath);
@@ -196,7 +203,7 @@ it.each([
       // A configured, unregistered store needs cold write admission before the
       // canonical-validation worker can lend its own verification receipt.
       unregisterOpenClawAgentDatabase({ agentId, path: agentPath, env });
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
     }
     const agentBytes = fs.readFileSync(agentPath);
     const paused = outcome !== "corrupt" && outcome !== "physical-corrupt" && outcome !== "fast";
@@ -370,7 +377,7 @@ it.each([
       const hostJournalRead = createDeferredCore();
       let hostJournalReads = 0;
       if (outcome === "recover") {
-        observeHostDataSql(env, (sql) => {
+        observeHostDataSql((sql) => {
           if (sql.includes("agent_deletion_journal")) {
             hostJournalReads++;
             hostJournalRead.resolve();
@@ -488,8 +495,9 @@ it("recovers queued agents after both inspection slots expire without refusing a
   const cfg = loadGatewayTestConfig();
   const agentIds = ["a", "b", "main"];
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   for (const pathname of paths) {
     clearOpenClawAgentIntegrityVerification(pathname, env);
     const database = new DatabaseSync(pathname);

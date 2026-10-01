@@ -10,7 +10,7 @@ import {
 } from "../skills/workshop/store.js";
 import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { migrateLegacySkillWorkshopProposals } from "./doctor-skill-workshop-sqlite.js";
@@ -106,7 +106,7 @@ export async function expectRelocationWriteFailure(params: {
   }
 }
 
-export function seedLegacyV15ProposalRows(
+export async function seedLegacyV15ProposalRows(
   env: NodeJS.ProcessEnv,
   rows: readonly {
     record: SkillProposalRecord;
@@ -114,9 +114,9 @@ export function seedLegacyV15ProposalRows(
     claimReleasedTime: number | null;
     ownerAgentId?: string | null;
   }[],
-): void {
+): Promise<void> {
   const databasePath = openOpenClawStateDatabase({ env }).path;
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawStateDatabaseAsync();
   const legacy = openNodeSqliteDatabase(databasePath);
   legacy.exec(`
     ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';

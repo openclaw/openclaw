@@ -2,14 +2,6 @@
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 
-function sortSubagentRuns(runs: readonly SubagentRunRecord[]): SubagentRunRecord[] {
-  return runs.toSorted((a, b) => {
-    const aTime = a.execution.startedAt ?? a.createdAt ?? 0;
-    const bTime = b.execution.startedAt ?? b.createdAt ?? 0;
-    return bTime - aTime;
-  });
-}
-
 /** Keep display indices and command targets on the same latest-run/liveness policy. */
 export function buildSubagentRunView(params: {
   runs: readonly SubagentRunRecord[];
@@ -23,7 +15,11 @@ export function buildSubagentRunView(params: {
   const active: SubagentRunRecord[] = [];
   const recent: SubagentRunRecord[] = [];
   const seen = new Set<string>();
-  for (const entry of sortSubagentRuns(params.runs)) {
+  for (const entry of params.runs.toSorted((a, b) => {
+    const aTime = a.execution.startedAt ?? a.createdAt;
+    const bTime = b.execution.startedAt ?? b.createdAt;
+    return bTime - aTime;
+  })) {
     if (seen.has(entry.childSessionKey)) {
       continue;
     }

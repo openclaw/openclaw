@@ -2,9 +2,9 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
-import type { ModelAuthStatusResult, ProviderLoginOption } from "../../api/types.ts";
+import type { ModelAuthStatusResult, SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { providerDisplayLabel, renderProviderBrandIcon } from "../../components/provider-icon.ts";
+import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { WizardLoginController } from "../../components/wizard-login-controller.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -20,7 +20,9 @@ import type {
 } from "../model-setup/wizard-runner.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
+import { buildLoginProviders } from "./login-providers.ts";
 import { renderProviderAccountSummary } from "./profiles-view.ts";
+import "../../styles/model-providers.css";
 registerSettingsEnglish();
 
 type LoginControllerOptions = {
@@ -34,14 +36,8 @@ type LoginControllerOptions = {
   refresh: () => Promise<unknown>;
   onDiscover?: () => void;
   onApiKey?: (provider: string) => void;
-};
-
-type LoginProvider = {
-  id: string;
-  label: string;
-  choices: ProviderLoginOption[];
-  authProviders: string[];
-  apiKeyProvider?: string;
+  getManualProviders?: () => SystemAgentSetupDetectResult["manualProviders"];
+  onManualProvider?: (authChoice: string) => void;
 };
 
 export class ModelProviderLoginController implements ReactiveController {
@@ -199,52 +195,15 @@ export class ModelProviderLoginController implements ReactiveController {
     });
   }
 
-  private loginProviders(
-    providers?: string[],
-    authStatus = this.options.getScope().authStatus,
-  ): LoginProvider[] {
-    const groups = new Map<string, LoginProvider>();
-    const choices = new Set<string>();
-    for (const capability of authStatus?.providerCapabilities ?? []) {
-      if (providers && !providers.includes(capability.provider)) {
-        continue;
-      }
-      for (const option of capability.loginOptions ?? []) {
-        let group = groups.get(option.brandId);
-        if (!group) {
-          group = { id: option.brandId, label: "", choices: [], authProviders: [] };
-          groups.set(group.id, group);
-        }
-        group.label ||= option.groupLabel?.trim() ?? "";
-        if (!group.authProviders.includes(capability.provider)) {
-          group.authProviders.push(capability.provider);
-        }
-        if (!choices.has(option.id)) {
-          choices.add(option.id);
-          group.choices.push(option);
-        }
-      }
-      // Quick-key support is independent of wizard choices. Keep the exact
-      // capability owner for the key form even when its login brand is an alias.
-      if (capability.quickApiKeySetup && this.options.onApiKey) {
-        const brands = capability.loginOptions?.length
-          ? capability.loginOptions.map((option) => option.brandId)
-          : [capability.provider];
-        for (const id of new Set(brands)) {
-          const group = groups.get(id) ?? { id, label: "", choices: [], authProviders: [] };
-          if (!group.authProviders.includes(capability.provider)) {
-            group.authProviders.push(capability.provider);
-          }
-          groups.set(id, { ...group, apiKeyProvider: group.apiKeyProvider ?? capability.provider });
-        }
-      }
-    }
-    for (const group of groups.values()) {
-      group.label ||= providerDisplayLabel(group.id);
-    }
-    return [...groups.values()].toSorted(
-      (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id),
-    );
+  private loginProviders(providers?: string[], authStatus = this.options.getScope().authStatus) {
+    return buildLoginProviders({
+      providers,
+      authStatus,
+      allowQuickApiKey: Boolean(this.options.onApiKey),
+      manualProviders: this.options.onManualProvider
+        ? this.options.getManualProviders?.()
+        : undefined,
+    });
   }
 
   async open(providers?: string[], authChoice?: string): Promise<void> {
@@ -398,7 +357,7 @@ export class ModelProviderLoginController implements ReactiveController {
           <div class="model-setup-wizard model-provider-login">
             <div class="model-setup-wizard__header">
               <h2 class="model-provider-login__provider">
-                ${provider ? html`${renderProviderBrandIcon(provider.id)} ${provider.label}` : t("modelProviders.login.title")}
+                ${provider ? html`${renderProviderBrandIcon(provider.id, { className: "model-providers__icon" })} ${provider.label}` : t("modelProviders.login.title")}
               </h2>
             </div>
             <div class="model-setup-wizard__body">
@@ -406,7 +365,9 @@ export class ModelProviderLoginController implements ReactiveController {
                 ${
                   recovery
                     ? t("modelProviders.login.useAccountDescription", { model: recovery.model })
-                    : t("modelProviders.login.description")
+                    : this.options.onManualProvider
+                      ? t("modelProviders.login.setupDescription")
+                      : t("modelProviders.login.description")
                 }
               </p>
               ${
@@ -448,6 +409,11 @@ export class ModelProviderLoginController implements ReactiveController {
                                     ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
                                     @click=${() => {
                                       if (!canSelect()) {
+                                        return;
+                                      }
+                                      if (selected.kind === "setup-secret") {
+                                        this.reset();
+                                        this.options.onManualProvider?.(selected.id);
                                         return;
                                       }
                                       this.picker = null;
@@ -538,7 +504,7 @@ export class ModelProviderLoginController implements ReactiveController {
                                       this.host.requestUpdate();
                                     }}
                                   >
-                                    ${renderProviderBrandIcon(group.id)}
+                                    ${renderProviderBrandIcon(group.id, { className: "model-providers__icon" })}
                                     <span class="model-provider-login__copy">
                                       <strong>${group.label}</strong>
                                       <span>

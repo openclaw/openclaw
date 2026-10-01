@@ -176,24 +176,21 @@ export function createCodexAttemptLifecycleController(
     fastModeAutoProgressState.offAnnounced = true;
     await emitFastModeAutoProgress(next);
   };
-  const maybeEmitFastModeAutoReset = async () => {
-    if (
-      params.fastModeAuto !== true ||
-      !fastModeAutoProgressState.offAnnounced ||
-      fastModeAutoProgressState.resetAnnounced
-    ) {
-      return;
-    }
-    fastModeAutoProgressState.resetAnnounced = true;
-    await emitFastModeAutoProgress({
-      enabled: true,
-      elapsedSeconds: 0,
-      fastAutoOnSeconds: params.fastModeAutoOnSeconds,
-    });
-  };
   const maybeEmitFastModeAutoResetBestEffort = async () => {
     try {
-      await maybeEmitFastModeAutoReset();
+      if (
+        params.fastModeAuto !== true ||
+        !fastModeAutoProgressState.offAnnounced ||
+        fastModeAutoProgressState.resetAnnounced
+      ) {
+        return;
+      }
+      fastModeAutoProgressState.resetAnnounced = true;
+      await emitFastModeAutoProgress({
+        enabled: true,
+        elapsedSeconds: 0,
+        fastAutoOnSeconds: params.fastModeAutoOnSeconds,
+      });
     } catch (error) {
       embeddedAgentLog.warn(
         `codex app-server fast mode auto reset progress failed: ${formatErrorMessage(error)}`,

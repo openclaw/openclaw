@@ -3,18 +3,18 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  claimCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import {
+  claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob,
 } from "../store/run-receipt-store.test-support.js";
@@ -23,13 +23,11 @@ import { ensureLoadedForRead } from "./ops-shared.js";
 import { makeCronRecoveryState, observeCronTimerAdmissions } from "./run-recovery.test-support.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
-import { tryCreateCronTaskRunHandle } from "./task-runs.js";
 import { onTimer } from "./timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-settlement-" });
 
 it("publishes a committed repair once after reply loss and leaves the remaining batch for the next tick", async () => {
-  using deliveries = captureTaskDeliveryWork();
   const { storePath } = await makeStorePath();
   const nowMs = Date.now();
   const jobs = ["first", "second"].map((id, index) => {
@@ -43,6 +41,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   const onEvent = vi.fn<(event: CronEvent) => void>();
   const runner = vi.fn(async () => ({ status: "ok" as const }));
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     defaultAgentId: "alpha",
@@ -58,14 +57,21 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   await writeCronStoreSnapshot({ storePath, jobs });
   for (const job of jobs) {
     const startedAtMs = job.state.runningAtMs!;
-    const prepared = prepareCronRunReceiptClaim({ storePath, job, agentId: "alpha", startedAtMs });
+    const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
+      storePath,
+      job,
+      agentId: "alpha",
+      startedAtMs,
+    });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({ database: db, prepared, resolveAgentId: () => "alpha" }),
+      claimCronRunReceiptInDatabaseForTest({
+        database: db,
+        prepared,
+        resolveAgentId: () => "alpha",
+      }),
     );
     job.state.runningReceiptId = receipt.receiptId;
-    expect(
-      tryCreateCronTaskRunHandle({ state, job, startedAt: startedAtMs, runReceipt: receipt }),
-    ).toBeDefined();
     releaseLocalCronRunReceiptOwnership(receipt);
   }
   await writeCronStoreSnapshot({ storePath, jobs });
@@ -75,7 +81,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
     onEvent.mock.calls.flatMap(([event]) => (event.action === "finished" ? [event.jobId] : []));
   const notificationKeys = () =>
     enqueueSystemEvent.mock.calls.map(([, options]) => options.contextKey);
-  await deliveries.settle();
+
   const admissions = observeCronTimerAdmissions(state);
   const reply = loseFirstCronMutationReply();
   const pending: Promise<unknown>[] = [];
@@ -84,7 +90,6 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
     stop(state);
     await Promise.allSettled(pending);
     await state.op;
-    await deliveries.settle();
   });
 
   const firstTick = onTimer(state);
@@ -119,7 +124,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   }
   expect(runner).not.toHaveBeenCalled();
   expect(state.activeTimerTicks).toBe(0);
-  await deliveries.settle();
+
   await admissions.expectReleased(2);
 });
 

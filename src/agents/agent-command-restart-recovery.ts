@@ -7,12 +7,12 @@ import type {
 } from "../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
+import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import {
   captureHarnessCompletionRecovery,
   createHarnessCompletionSourceAssertion,
   getOwedHarnessCompletionTask,
-} from "../tasks/agent-harness-completion-recovery.js";
-import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+} from "./agent-harness-completion-recovery.js";
 import type { AgentCommandOpts } from "./command/types.js";
 import {
   collectDeliveredMediaUrls,

@@ -12,10 +12,8 @@ import {
   type SessionStoreTarget,
 } from "../config/sessions.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import type {
-  SessionEntryListScope,
-  SessionEntryReadSource,
-} from "../config/sessions/session-accessor.types.js";
+import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { ExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -392,7 +390,7 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
     agentId: string;
     targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
   },
-  prepareReads: (reads: readonly GatewaySessionStoreRead[]) => Promise<void>,
+  prepareReads: <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => Promise<T>,
 ): Promise<GatewaySessionStoreTargetWithStore> {
   const normalized = {
     ...params,
@@ -402,11 +400,12 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
     projection: "list" as const,
   };
   const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
-    await prepareReads(plan.reads);
-    if (plan.reads.some((read) => read.result === undefined)) {
-      throw new Error("Session lookup facts were not prepared");
-    }
-    return plan.resolve();
+    return await prepareReads(plan.reads, () => {
+      if (plan.reads.some((read) => read.result === undefined)) {
+        throw new Error("Session lookup facts were not prepared");
+      }
+      return plan.resolve();
+    });
   };
   const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized);
   if (deletedMain) {
@@ -493,7 +492,7 @@ export function createGatewaySessionEntryReader(params: {
 }
 
 /** Resolve one synchronous set of logical metadata targets using exact grouped reads. */
-export function resolveGatewaySessionStoreTargetsReadOnly(params: {
+function resolveGatewaySessionStoreTargetsReadOnly(params: {
   env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];

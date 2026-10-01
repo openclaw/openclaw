@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import "../plugins/plugin-source-capture-context.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -8,6 +9,7 @@ import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
 import { installCliSignalExitHandlers } from "./signal-exit-barrier.js";
 
 export type CliHarnessCleanup = {
+  scheduler: GatewayScheduler;
   harnesses: Map<AgentHarness, () => Promise<void>>;
   registries: Set<PluginRegistry>;
   pluginResources?: CliPluginInvocationResources;
@@ -46,10 +48,10 @@ export async function retainCliProcessJobUntilExit(): Promise<void> {
   retainWindowsProcessJobUntilExit(koffi);
 }
 
-export function withCliCommandCleanup<T>(
+export async function withCliCommandCleanup<T>(
   gatewayRun: boolean,
-  run: (cleanup?: CliHarnessCleanup) => T,
-): T {
+  run: (cleanup?: CliHarnessCleanup) => T | Promise<T>,
+): Promise<T> {
   if (gatewayRun) {
     // Gateway owns its process lifetime; borrowed calls must not inherit CLI ownership.
     return scope.run(undefined, () => run());
@@ -57,12 +59,17 @@ export function withCliCommandCleanup<T>(
   if (scope.getStore() !== "process") {
     return run();
   }
+  const { GatewayScheduler } = await import("../infra/gateway-scheduler.js");
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
   pluginResources.adopt({ release: async () => releaseSignals() });
   const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  const scheduler = new GatewayScheduler();
+  sdkResourceHost.bindScheduler(scheduler);
   pluginResources.adopt({ release: () => sdkResourceHost.close() });
+  pluginResources.adopt({ release: () => scheduler.stop() });
   const cleanup: CliHarnessCleanup = {
+    scheduler,
     harnesses: new Map(),
     registries: new Set(),
     pluginResources,

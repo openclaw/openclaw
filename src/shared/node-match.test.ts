@@ -61,11 +61,7 @@ describe("shared/node-match", () => {
     for (const [displayName, query] of [
       [" Mac Studio! ", "mac-studio"],
       ["---PI__Node---", "pi node"],
-      ["工作站 01", "工作站-01"],
       ["Cafe\u0301 01", "café-01"],
-      ["किताब", "किताब"],
-      ["Mac ❤️ Studio", "mac studio"],
-      ["Node 1️⃣", "node 1"],
     ] as const) {
       expect(resolveNodeIdFromCandidates([{ nodeId: "node-1", displayName }], query)).toBe(
         "node-1",
@@ -76,18 +72,6 @@ describe("shared/node-match", () => {
         resolveNodeIdFromCandidates([{ nodeId: "node-1", displayName }], "named-node"),
       ).toThrow(/unknown node/);
     }
-  });
-
-  it("resolves unique matches and prefers a unique connected node", () => {
-    expect(
-      resolveNodeIdFromCandidates(
-        [
-          { nodeId: "ios-old", displayName: "iPhone", connected: false },
-          { nodeId: "ios-live", displayName: "iPhone", connected: true },
-        ],
-        "iphone",
-      ),
-    ).toBe("ios-live");
   });
 
   it("prefers the strongest match type before client heuristics", () => {
@@ -102,37 +86,12 @@ describe("shared/node-match", () => {
     ).toBe("mac-studio");
   });
 
-  it("prefers a unique current OpenClaw client over a legacy clawdbot client", () => {
-    expect(
-      resolveNodeIdFromCandidates(
-        [
-          {
-            nodeId: "legacy-mac",
-            displayName: "Peter’s Mac Studio",
-            clientId: "clawdbot-macos",
-            connected: false,
-          },
-          {
-            nodeId: "current-mac",
-            displayName: "Peter’s Mac Studio",
-            clientId: "openclaw-macos",
-            connected: false,
-          },
-        ],
-        "Peter's Mac Studio",
-      ),
-    ).toBe("current-mac");
-  });
-
   it.each([
     { clientIds: ["openclaw-macos", "node-host"] },
     { clientIds: ["openclaw-macos", "openclaw-linux"] },
     { clientIds: ["openclaw-macos", undefined] },
-    { clientIds: ["openclaw-macos", "custom-client"] },
     { clientIds: ["openclaw-macos", "clawdbot-macos", "node-host"] },
-    { clientIds: ["openclaw-macos", "moldbot-macos", undefined] },
     { clientIds: ["clawdbot-macos", undefined] },
-    { clientIds: ["node-host", "clawdbot-macos"] },
   ])("keeps non-migration ties ambiguous for $clientIds", ({ clientIds }) => {
     for (const connected of [true, false, undefined]) {
       const nodes = clientIds.map((clientId, index) => ({

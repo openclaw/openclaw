@@ -1,6 +1,9 @@
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
-import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import {
+  persistSessionTranscriptTurn,
+  type SessionTranscriptTurnPersistOptions,
+} from "../../config/sessions/session-accessor.js";
 import { appendAbortedSessionTranscriptPartial } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -84,6 +87,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   contextFreeCommand?: true;
   now?: number;
   config?: OpenClawConfig;
+  onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 }): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const resolvedContent = resolveInjectedAssistantContent(params);
@@ -179,6 +183,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         expectedSessionId: params.expectedSessionId,
         expectedLifecycleRevision: params.expectedLifecycleRevision,
         updateMode: "inline",
+        onMessageCommitted: params.onMessageCommitted,
         ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
         touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
         ...(params.config ? { config: params.config } : {}),
@@ -188,7 +193,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
             idempotencyLookup: "scan-assistant",
             ...(params.abortMeta
               ? {
-                  shouldAppendInTransaction: (latestAssistantMessage: unknown) => {
+                  shouldAppendInTransaction: (readLatestAssistantMessage) => {
+                    const latestAssistantMessage = readLatestAssistantMessage();
                     const committedRunId = resolveTerminalAssistantTranscriptRunId(
                       latestAssistantMessage,
                       readSessionTranscriptRunId(latestAssistantMessage),

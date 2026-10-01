@@ -149,39 +149,61 @@ describe("package verification bounds", () => {
     },
   );
 
-  it.each(["activation", "rollback", "changed identity", "changed version"] as const)(
-    "handles %s after the baseline fingerprint times out",
-    async (outcome) => {
+  it.each(
+    (
+      ["activation", "rollback", "changed identity", "changed version", "launcher limit"] as const
+    ).flatMap((outcome) => (["time", "byte"] as const).map((budget) => ({ outcome, budget }))),
+  )(
+    "handles $outcome after the baseline fingerprint exhausts its $budget budget",
+    async ({ outcome, budget }) => {
       await withTestDir({ prefix: "openclaw-fingerprint-advisory-" }, async (base) => {
         const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
         const original = await fs.stat(packageRoot);
+        if (outcome === "launcher limit") {
+          await fs.truncate(launcher, 1024 * 1024 + 1);
+        }
         const open = fs.open.bind(fs);
         const blocked = createDeferredCore();
         let entered = false;
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          if (!entered && String(args[0]) === path.join(packageRoot, "dist", "index.js")) {
-            entered = true;
-            await blocked.promise;
-          }
-          return open(...args);
-        });
+        if (budget === "byte") {
+          const payload = path.join(packageRoot, "runtime-payload.bin");
+          await fs.writeFile(payload, "");
+          await fs.truncate(payload, 1024 * 1024 * 1024 + 1);
+        } else {
+          vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            if (!entered && String(args[0]) === path.join(packageRoot, "dist", "index.js")) {
+              entered = true;
+              await blocked.promise;
+            }
+            return open(...args);
+          });
+        }
         let transaction: PackageUpdateTransaction | undefined;
         const beforeActivate = vi.fn();
         try {
           const result = await swapStagedPackageInstall({
             ...params,
-            timeoutMs: 200,
+            ...(budget === "time" ? { timeoutMs: 200 } : {}),
             beforeActivate,
             onTransaction: (value) => {
               transaction = value;
             },
           });
-          expect(entered).toBe(true);
+          expect(entered).toBe(budget === "time");
+          if (outcome === "launcher limit") {
+            expect(result.status).toBe("failed");
+            expect(result.step.stderrTail).toContain("byte limit exceeded");
+            expect(result.step.stderrTail).not.toContain("Baseline package scan failed");
+            expect(beforeActivate).not.toHaveBeenCalled();
+            expect((await fs.stat(packageRoot)).ino).toBe(original.ino);
+            return;
+          }
           expect(result.status, result.step.stderrTail ?? "").toBe("committed");
           expect(beforeActivate).toHaveBeenCalledOnce();
           expect(result.step.advisory?.message).toContain(
             "baseline package fingerprint incomplete",
           );
+          expect(result.step.advisory?.message).toContain("full package contents are unverified");
           expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
             expect.objectContaining({ step: "warning:package-swap", status: "completed" }),
           );
@@ -191,10 +213,16 @@ describe("package verification bounds", () => {
           }
           if (outcome === "changed identity" || outcome === "changed version") {
             if (outcome === "changed identity") {
-              await fs.rename(transaction.backupRoot, `${transaction.backupRoot}.original`);
-              await fs.cp(`${transaction.backupRoot}.original`, transaction.backupRoot, {
-                recursive: true,
-              });
+              const originalRoot = `${transaction.backupRoot}.original`;
+              await fs.rename(transaction.backupRoot, originalRoot);
+              await fs.mkdir(transaction.backupRoot);
+              // Replace only the root identity without copying the large sparse payload.
+              for (const name of await fs.readdir(originalRoot)) {
+                await fs.rename(
+                  path.join(originalRoot, name),
+                  path.join(transaction.backupRoot, name),
+                );
+              }
             } else {
               await fs.writeFile(
                 path.join(transaction.backupRoot, "package.json"),
@@ -231,54 +259,52 @@ describe("package verification bounds", () => {
     },
   );
 
-  it.each([1024 * 1024 + 1, 1024 * 1024 * 1024 + 1])(
-    "rejects manifest growth to %i bytes without attempting an oversized metadata allocation",
-    async (size) => {
-      await withTestDir({ prefix: "openclaw-rollback-metadata-bound-" }, async (base) => {
-        const { params, packageRoot } = await createPackageSwapFixture(base);
-        const manifest = path.join(packageRoot, "package.json");
-        const open = fs.open.bind(fs);
-        let manifestOpens = 0;
-        let grew = false;
-        let oversizedRead = false;
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
-          if (String(args[0]) !== manifest) {
-            return handle;
-          }
-          if (++manifestOpens === 1) {
-            const close = handle.close.bind(handle);
-            vi.spyOn(handle, "close").mockImplementation(async () => {
-              await close();
-              await fs.truncate(manifest, size);
-              grew = true;
-            });
-          } else {
-            // Intercept either read path before buffering an oversized sparse file.
-            const rejectOversizedRead = async () => {
-              oversizedRead = true;
-              throw new Error("oversized metadata allocation intercepted");
-            };
-            vi.spyOn(handle, "readFile").mockImplementation(rejectOversizedRead);
-            vi.spyOn(handle, "read").mockImplementation(rejectOversizedRead);
-          }
+  it("rejects manifest growth past the byte limit without an oversized metadata allocation", async () => {
+    const size = 1024 * 1024 + 1;
+    await withTestDir({ prefix: "openclaw-rollback-metadata-bound-" }, async (base) => {
+      const { params, packageRoot } = await createPackageSwapFixture(base);
+      const manifest = path.join(packageRoot, "package.json");
+      const open = fs.open.bind(fs);
+      let manifestOpens = 0;
+      let grew = false;
+      let oversizedRead = false;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]) !== manifest) {
           return handle;
-        });
-        const beforeActivate = vi.fn();
-        const onLiveMutation = vi.fn();
-        const result = await swapStagedPackageInstall({
-          ...params,
-          beforeActivate,
-          onLiveMutation,
-        });
-        expect(grew).toBe(true);
-        expect(result.status).toBe("failed");
-        expect(oversizedRead).toBe(false);
-        expect(beforeActivate).not.toHaveBeenCalled();
-        expect(onLiveMutation).not.toHaveBeenCalled();
+        }
+        if (++manifestOpens === 1) {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementation(async () => {
+            await close();
+            await fs.truncate(manifest, size);
+            grew = true;
+          });
+        } else {
+          // Intercept either read path before buffering an oversized sparse file.
+          const rejectOversizedRead = async () => {
+            oversizedRead = true;
+            throw new Error("oversized metadata allocation intercepted");
+          };
+          vi.spyOn(handle, "readFile").mockImplementation(rejectOversizedRead);
+          vi.spyOn(handle, "read").mockImplementation(rejectOversizedRead);
+        }
+        return handle;
       });
-    },
-  );
+      const beforeActivate = vi.fn();
+      const onLiveMutation = vi.fn();
+      const result = await swapStagedPackageInstall({
+        ...params,
+        beforeActivate,
+        onLiveMutation,
+      });
+      expect(grew).toBe(true);
+      expect(result.status).toBe("failed");
+      expect(oversizedRead).toBe(false);
+      expect(beforeActivate).not.toHaveBeenCalled();
+      expect(onLiveMutation).not.toHaveBeenCalled();
+    });
+  });
 
   it("accepts a valid manifest at the metadata byte limit", async () => {
     await withTestDir({ prefix: "openclaw-rollback-metadata-valid-" }, async (base) => {
@@ -565,7 +591,7 @@ describe("package verification bounds", () => {
         });
         return directory;
       });
-      const open = vi.spyOn(fs, "open").mockRejectedValue(new Error("unexpected file read"));
+      const open = vi.spyOn(fs, "open");
       const beforeActivate = vi.fn();
       const onLiveMutation = vi.fn();
       const result = await swapStagedPackageInstall({
@@ -574,17 +600,19 @@ describe("package verification bounds", () => {
         onLiveMutation,
         timeoutMs: 5000,
       });
-      expect(result.status).toBe("failed");
-      expect(beforeActivate).not.toHaveBeenCalled();
-      expect(onLiveMutation).not.toHaveBeenCalled();
+      expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+      expect(beforeActivate).toHaveBeenCalledOnce();
+      expect(onLiveMutation).toHaveBeenCalledOnce();
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"1.0.0"',
+        '"version":"2.0.0"',
       );
-      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
       // Includes one overflow entry; the root itself consumes the other slot.
       expect(discovered).toBeLessThanOrEqual(50_000);
-      expect(result.step.stderrTail).toContain("entry limit exceeded");
-      expect(open).not.toHaveBeenCalled();
+      expect(result.step.advisory?.message).toContain("entry limit exceeded");
+      expect(open.mock.calls.some(([file]) => String(file) === path.join(nested, "index.js"))).toBe(
+        false,
+      );
     });
   });
 });

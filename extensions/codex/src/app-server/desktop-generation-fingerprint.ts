@@ -3,7 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isNotFoundPathError } from "@openclaw/fs-safe/path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveMacOSDesktopCodexAppPathCandidates,
@@ -99,7 +99,8 @@ export async function readCodexDesktopArtifactTreeFingerprint(root: string): Pro
   try {
     rootStat = await fs.lstat(root, { bigint: true });
   } catch (error) {
-    if (isNotFoundPathError(error)) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
       return "missing";
     }
     throw error;
@@ -162,7 +163,8 @@ async function statFingerprint(filePath: string): Promise<string> {
     const content = target.isFile() ? await readFileFingerprint(filePath, target, true) : "";
     return `${type}:${own}:${link}:${realPath}:${statTuple(target)}:${content}`;
   } catch (error) {
-    if (isNotFoundPathError(error)) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
       return "missing";
     }
     throw error;

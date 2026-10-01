@@ -1,14 +1,14 @@
 ---
-summary: "Hook agent turns, subagent runs, and Task Flow record binding"
+doc-schema-version: 1
+summary: "Hook agent turns and subagent runs"
 read_when:
   - You are dispatching an agent turn for untrusted external content
   - You are launching or waiting on a background subagent run
-  - You are binding Task Flow or Task Run state to an owner session
 title: "Plugin runtime background work"
 sidebarTitle: "Background work"
 ---
 
-Start agent work in the background: hook-dispatched turns for external content, subagent runs, and the Task Flow records that track them. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
+Start agent work in the background: hook-dispatched turns for external content and subagent runs. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
 ## Background work namespaces
 
@@ -149,146 +149,18 @@ Start agent work in the background: hook-dispatched turns for external content, 
     `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
 
   </Accordion>
-  <Accordion title="api.runtime.tasks">
-    Prefer `api.runtime.tasks.async` for reads, managed-flow state changes, and child-task linkage. It has `runs`, `flows`, and
-    `managedFlows` namespaces with the same synchronous `bindSession(...)` and
-    `fromToolContext(...)` factories. Await `get`, `list`, `findLatest`, and
-    `resolve`; both flow namespaces also provide awaited `getTaskSummary`.
-
-    ```typescript
-    const flows = api.runtime.tasks.async.managedFlows.fromToolContext(ctx);
-    const current = await flows.get(flowId);
-    ```
-
-    The async `managedFlows` binding also provides `createManaged`,
-    `tryCreateManaged`, `setWaiting`, `resume`, `finish`, `fail`, and
-    `requestCancel`, plus `runTask` for linking existing work. Await creation before starting work and await each mutation
-    before reporting its result. Updates check the owner, managed mode, and
-    expected revision together inside the worker's SQLite transaction.
-
-    On an ordinary persistence rejection, `createManaged` throws
-    `TaskFlow persistence failed.` with the original error in `cause`;
-    `tryCreateManaged` returns `null`. Both methods propagate preparation and
-    input-validation errors.
-
-    Results preserve the corresponding synchronous payloads and owner scope.
-    Reads query persisted SQLite records in the shared database worker, without
-    overwriting the process registry. Cold restoration also reads through the
-    worker and installs a complete snapshot before exposing the registry. Concurrent
-    callers share restoration, and newer synchronous writes take precedence over
-    delayed snapshots. Access checks for bare owner keys await any required
-    runtime configuration, plugin metadata, and consent preparation.
-    Committed writes reconcile the relevant process task and flow registries before
-    publication; a failed reconciliation leaves that projection dirty without
-    changing the durable write result. A result describes its operation snapshot
-    and may be superseded by a later mutation.
-
-    The shared worker uses the canonical database opener and preserves classified
-    schema and ownership errors. Closing the shared database waits for in-flight
-    worker results and native cleanup before releasing its connection ownership.
-
-    Lists sort newest first. Equal task timestamps sort by task ID descending;
-    equal flow timestamps sort by flow ID ascending. Run-ID lookup retains its
-    runtime preference and oldest-first selection, then uses task ID ascending
-    for ties. When an ACP run ID is reused, lookup excludes superseded backing
-    generations before applying that ordering. Backing details stay internal and
-    are not included in task views. Legacy synchronous methods
-    keep their existing insertion-order tie behavior.
-
-    The synchronous read methods and corresponding managed-flow state mutations
-    remain supported but are deprecated in
-    favor of this opt-in surface. Their removal requires a supported external
-    plugin migration and an explicitly approved Plugin SDK major release.
-    Native cancellation continues through the existing namespaces. An awaited read
-    does not authorize a later write: retain revision checks. Async `runTask`
-    rereads the canonical flow and backing inside its write admission and refuses
-    a new active link when that backing has already completed. Existing terminal
-    projections can still receive metadata updates without restarting work.
-    For duplicate reuse, async `runTask` uses persisted creation-time/task-ID
-    order, then the existing ACP preference. Deprecated sync `runTask` preserves
-    its insertion-order tie behavior.
-    A worker error with code `outcome-unknown` can follow a committed write.
-    The code may appear directly, in a cause, or in `AggregateError.errors` when
-    cleanup also fails. Creation and child linkage propagate these errors; reread
-    current state before deciding whether to retry that operation.
-
-    Bind Task Flow and Task Run state to a trusted, existing OpenClaw owner session.
-
-    - `managedFlows` creates and mutates managed flow records. Bind with `fromToolContext(ctx)` or `bindSession({ sessionKey, requesterOrigin })` using host-resolved context, never raw user input.
-    - `flows` and `runs` provide owner-scoped DTO lookups (`get`, `list`, `findLatest`, `resolve`). `flows` also exposes `getTaskSummary`; `runs.cancel` cancels an existing task.
-    - `managedFlows.get(flowId)` returns the record with its revision. The read-only `flows` DTO is not the revision-bearing mutation record.
-
-    A skill file does not provide `api` or register a plugin. For operator/agent
-    workflows, use [managed Lobster execution](/automation/taskflow#run-a-managed-lobster-workflow).
-    The following contract is for actual plugin/controller code.
-
-    **Launching and linking a child**
-
-    `runTask` records a link to existing work; it never launches ACP/subagent
-    execution. The backing task must already exist with the same owner,
-    canonical run/session identities and task runtime. Arbitrary IDs or a
-    `status: "running"` declaration cannot establish that authority.
-
-    1. Create a managed flow bound to the real requester session. Handle creation failure before launching work. Binding state access does not grant subagent requester authority.
-    2. Inside an active requester-bound `before_dispatch` hook for an authenticated inbound request, call `api.runtime.subagent.run` with a unique agent-qualified child session key, the task message and `completionDelivery: "current-requester"`. The Gateway captures the requester and delivery route; retain the returned canonical `runId` and `sessionKey`. Missing identities or a rejected launch are failures, not permission to fabricate a task. Ordinary runs without `current-requester` have `not_applicable` completion delivery and lack the mirrored backing needed for this link.
-    3. Resolve the canonical task with the owner-bound `await runs.resolve(runId)`. Verify its owner, run id, child session key and task runtime. Use its actual `sourceId`, queued/running status and available timing facts in `await managedFlows.runTask(...)`, alongside the managed flow id and task description. Do not confuse the launch result's harness/provider metadata with the task DTO's `runtime`. The async link checks current backing again before writing; check `created` before proceeding. Controllers retaining the deprecated sync API must keep their final backing read/check and link synchronous, with no intervening `await`.
-    4. Observe completion through `subagent.waitForRun` and the canonical task. A bounded wait returning `pending` or an observation timeout is not a terminal child failure and does not cancel the run. Interpret results only after actual completion. On failure, record a failed/blocked flow outcome and report it; never insert a replacement child declaration to hide launch/link refusal.
-    5. Reload the managed record after awaited work. Stop for terminal state or cancellation intent; use the latest revision for the next state transition. Check every `applied` result, including `finish`/`fail`, and check `cancelled` for cancellation. On revision conflict, reread and reconcile rather than blindly retrying side effects.
-
-    <Warning>
-    A child can finish before step 3. `runTask` does not replay terminal events
-    that preceded linkage, so never label a completed backing task as queued or
-    running. Handle its completed result directly in the controller instead of
-    creating a stale active projection. The launch/link sequence is not atomic.
-    </Warning>
-
-    `completionDelivery: "current-requester"` is available only within the
-    genuine hook invocation. Do not retain that authority after the hook ends
-    or call private requester-context/registry helpers. See `api.runtime.subagent`
-    above for the public launch and wait contract. ACP linkage likewise requires
-    an existing owner-backed ACP launch, not a standalone `runTask` declaration.
-
-    **State without a child**
-
-    For inline work, await `createManaged` on the async managed-flow binding,
-    then await and check `setWaiting`, `resume`, `finish` or `fail` transitions
-    as appropriate; no `runTask` is needed.
-    Keep `stateJson` and `waitJson` bounded. Waiting metadata records the reason
-    and correlation, but the controller must register the real event listener.
-
-    Records persist in SQLite; arbitrary JavaScript is not replayed after
-    restart. Reload with the same trusted owner binding and explicitly resume
-    from current state. Task Flow is not a scheduler: use Automations or
-    `api.session.workflow.scheduleSessionTurn(...)` for future wakeups. See
-    [Task Flow](/automation/taskflow) for durability and cancellation.
-
-  </Accordion>
 </AccordionGroup>
 
-## Harness task execution ownership
+## Native harness completion delivery
 
-`createAgentHarnessTaskRuntime(...)` from
-`openclaw/plugin-sdk/agent-harness-task-runtime` accepts an optional
-`executionPid` for the local process that executes the harness's tasks. The SDK
-captures its host and process start identity once when creating the scoped
-runtime. Task records keep that identity so a successor Gateway can settle
-running tasks whose recorded process is verifiably gone, without waiting for
-their normal reconciliation grace period.
-
-Pass only a local PID reported by the harness transport. Codex's stdio transport
-provides one; its WebSocket and Unix-socket transports do not. Omit `executionPid`
-for remote or unidentified owners, including Copilot, whose SDK does not expose
-its process identity. The SDK never substitutes the Gateway PID. Records without
-an identity retain the existing grace period, including records written before
-execution ownership was available.
-
-Bundled harnesses delivering a completion can pass
-`isSourceSessionAdmissionAllowed` to `deliverAgentHarnessTaskCompletion(...)`.
-Keep this callback bound to the current parent and task ownership. The delivery
-owner rechecks it after asynchronous routing and immediately before a new Gateway
-turn or message injection is accepted. Work already accepted keeps its own
-lifecycle and can finish after the source retires. Use `signal` when the caller
-also intends to cancel accepted work.
+Bundled harnesses use `openclaw/plugin-sdk/agent-harness-completion` to route
+native child results through the existing requester completion-delivery owner.
+`deliverAgentHarnessCompletion` requires a host-issued `AgentHarnessCompletionScope`
+and a live `isSourceSessionAdmissionAllowed` callback. Keep the callback bound
+to the exact native assignment and its current parent. Requester identity and
+admission are rechecked after awaited routing and before new effects.
+Native runtime history, cancellation, and submission receipts remain owned by
+the harness; there is no generic task registry or managed-flow API.
 
 For detached native work, await `captureAgentHarnessCompletionCustody(scope)`
 during the admitting parent registration, before publishing the registration or
@@ -299,48 +171,10 @@ its result. Release each hold when its registration or assignment ends. The hold
 preserves the original operator ceiling and requester lifecycle; it does not
 grant general tool access or survive revocation or Gateway closure.
 
-Capture `captureAgentHarnessTaskAssignment(task)` from the exact task record returned
-by creation or selected for recovery, before history reads. Pass the same immutable
-receipt as `expectedTask` to task mutations, the event sink, and completion delivery.
-Metadata changes keep that receipt valid; replacing the assignment invalidates it.
-If a successful exact transition normalizes the creation timestamp, advance the
-receipt only from that transition's returned record. Carry the successor through
-later mutations, events, and delivery; never adopt it from a fresh task lookup.
-
-On hosts that provide them, await the scoped runtime's optional
-`finalizeTaskRunByRunIdAsync(...)` and `setDetachedTaskDeliveryStatusByRunIdAsync(...)`
-methods for background completion. Core persistence waits run through its existing
-worker and retain the same `expectedTask` and `completionCustody` fences. Custom
-runtimes keep their registered exact-assignment adapter; asynchronous callers never
-fall through to core when an adapter is present.
-
-For admission checks, await `prepareTaskRunRead(runId)` before delivery. Its returned
-accessor reads current resident records without synchronous database I/O. It rejects
-if the runtime, store, or relevant task identity is no longer prepared. Prepare again
-on a later attempt; do not treat a rejected read as proof that the task is absent.
-The accessor follows settled updates, but it never grants ownership of a replacement
-assignment. Continue checking the original `expectedTask` on every effect.
-
-Before admitting exact-assignment work, call the scoped task runtime's
-`assertTaskAssignmentSupported()` on each registration, including reused runtimes.
-This checks the original runtime owner without rebinding it to a replacement.
-Local agent commands use their scoped plugin registry without requiring Gateway
-activation. Retiring or replacing that owner still invalidates retained runtimes.
-Custom detached runtimes must implement the optional `transitionTaskAssignment`
-operation for these guarded mutations. Check its `expectedTask` against the current
-record and call `assertCurrent()` immediately before persistence. An adapter without
-this operation receives an explicit unsupported-operation error before effects;
-legacy calls without `expectedTask` keep their existing behavior. Core never bypasses
-the registered adapter to perform the write.
-Native monitors reject registration before submitting a turn when the adapter
-lacks this operation. Upgrade the custom adapter to support exact transitions;
-existing persisted tasks remain available for recovery. Rejected registrations
-release their completion custody without starting child work or scheduling retries.
-
-Bind `createAgentHarnessTaskEventSink(...)` with that receipt as soon as the task row
-exists. It routes activity only to that exact task and keeps accepted persistence
-work within the admitting Gateway root during a drain. Call `settleExecution()`
-after terminal persistence and the current completion handoff finish, before
-sleeping delivery retries. Keep the hold until delivery settles. After restart,
-recovery must obtain fresh custody from a live registration and validate its
-historical task and requester; stored history never grants authority.
+Bind `createAgentHarnessCompletionEventSink(...)` to the same completion custody
+and an `isSourceCurrent` callback for the exact native assignment. After native
+terminal persistence and the first completion handoff settle, call
+`completionCustody.settleExecution()` before sleeping delivery retries. This
+releases the execution drain obligation while retaining completion delivery
+authority. After a restart, recovery must capture fresh custody from a live
+registration and validate its requester; stored history never grants authority.

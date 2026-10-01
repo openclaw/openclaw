@@ -1,7 +1,3 @@
-/**
- * Shared command execution utilities for extensions and custom tools.
- */
-
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
@@ -13,9 +9,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
 const FORCE_KILL_GRACE_MS = 5000;
 
-/**
- * Options for executing shell commands.
- */
 export interface ExecOptions {
   /** AbortSignal to cancel the command */
   signal?: AbortSignal;
@@ -27,9 +20,6 @@ export interface ExecOptions {
   maxOutputChars?: number;
 }
 
-/**
- * Result of executing a shell command.
- */
 export interface ExecResult {
   stdout: string;
   stderr: string;

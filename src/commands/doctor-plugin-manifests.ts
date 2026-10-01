@@ -1,4 +1,3 @@
-/** Doctor migration for legacy plugin manifest capability keys into contracts.* fields. */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -93,7 +92,6 @@ function buildLegacyManifestContractMigration(params: {
   };
 }
 
-/** Collects manifest rewrites needed to move legacy top-level capability keys under contracts. */
 export function collectLegacyPluginManifestContractMigrations(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -153,11 +151,6 @@ export function legacyPluginManifestContractMigrationToHealthFinding(
   };
 }
 
-function migrationToManifestJson(migration: LegacyManifestContractMigration): string {
-  return `${JSON.stringify(migration.nextRaw, null, 2)}\n`;
-}
-
-/** Prompts and rewrites legacy plugin manifest contract fields when doctor repair is enabled. */
 export async function maybeRepairLegacyPluginManifestContracts(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -167,12 +160,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   prompter: DoctorPrompter;
   note?: typeof note;
 }): Promise<boolean> {
-  const migrations = collectLegacyPluginManifestContractMigrations({
-    ...(params.config ? { config: params.config } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    ...(params.manifestRoots ? { manifestRoots: params.manifestRoots } : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
+  const migrations = collectLegacyPluginManifestContractMigrations(params);
   if (migrations.length === 0) {
     return false;
   }
@@ -199,7 +187,11 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   const applied: string[] = [];
   for (const migration of migrations) {
     try {
-      fs.writeFileSync(migration.manifestPath, migrationToManifestJson(migration), "utf-8");
+      fs.writeFileSync(
+        migration.manifestPath,
+        `${JSON.stringify(migration.nextRaw, null, 2)}\n`,
+        "utf-8",
+      );
       applied.push(...migration.changeLines);
     } catch (error) {
       params.runtime.error(

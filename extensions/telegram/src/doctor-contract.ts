@@ -6,11 +6,18 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import {
   asObjectRecord,
+  createLegacyWebhookListenerDoctorContract,
   defineChannelAliasMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelAccounts,
   type CompatMutationResult,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+
+const webhookListenerMigration = createLegacyWebhookListenerDoctorContract({
+  channelKey: "telegram",
+  defaultPort: 8787,
+  defaultHost: "127.0.0.1",
+});
 
 const streamingAliasMigration = defineChannelAliasMigration({
   channelId: "telegram",
@@ -243,6 +250,7 @@ function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  ...webhookListenerMigration.legacyConfigRules,
   {
     path: ["channels", "telegram", "groupMentionsOnly"],
     message:
@@ -294,7 +302,9 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const changes: string[] = [];
-  const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
+  const webhook = webhookListenerMigration.normalizeCompatibilityConfig({ cfg });
+  changes.push(...webhook.changes);
+  const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg: webhook.config, changes });
   const rawEntry = asObjectRecord(
     (aliases.config.channels as Record<string, unknown> | undefined)?.telegram,
   );

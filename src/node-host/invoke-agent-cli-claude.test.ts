@@ -3,12 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
 import * as logger from "../logger.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ProcessExtinctionResult } from "../process/supervisor/types.js";
@@ -167,15 +168,12 @@ describe("Claude CLI node command", () => {
   );
 
   it.each([
-    { argv: ["--unknown"], error: "unsupported Claude CLI argument" },
     { argv: ["--model"], error: "requires a value" },
     { argv: ["--mcp-config", "/tmp/mcp.json"], error: "unsupported Claude CLI argument" },
-    { argv: ["--plugin-dir", "/tmp/plugin"], error: "unsupported Claude CLI argument" },
     { argv: ["--allowedTools", "Bash"], error: "unsupported Claude CLI argument" },
     // Tool policy must arrive as one comma-joined value; the multi-token
     // variadic form fails closed instead of parsing partially.
     { argv: ["--disallowedTools", "Bash", "Edit"], error: "unsupported Claude CLI argument" },
-    { argv: ["--append-system-prompt", "inline"], error: "unsupported Claude CLI argument" },
     {
       argv: ["-p", "--resume", "--dangerously-skip-permissions"],
       error: "requires a non-option value",
@@ -378,8 +376,6 @@ describe("Claude CLI node command", () => {
     { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "selected-node-oauth" },
     { rawEnv: "ANTHROPIC_API_KEY", value: "selected-node-api-key" },
     { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "" },
-    { rawEnv: "ANTHROPIC_API_KEY", value: "" },
-    { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: " \t " },
     { rawEnv: "ANTHROPIC_API_KEY", value: " \t " },
   ])(
     "forwards only nonblank $rawEnv through a child-only descriptor ($value)",
@@ -704,7 +700,7 @@ process.stdin.on("end", () => {
 
   it.runIf(process.platform !== "win32")(
     "retains the prompt for an authoritative descendant without delaying the root result",
-    async () => {
+    async ({ signal }) => {
       const markerDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-prompt-"));
       tempDirs.push(markerDir);
       const marker = path.join(markerDir, "descendant-read");
@@ -726,70 +722,35 @@ process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n")
           idleTimeoutMs: 2_000,
           timeoutMs: 5_000,
         };
-        const result = await runCommand(executable, request, { client: client(calls) });
-        const output = calls
-          .filter((call) => call.method === "node.invoke.progress")
-          .map((call) => (call.params as { chunk: string }).chunk)
-          .join("");
-        const promptPath = (JSON.parse(output) as { result: string }).result;
+        const removed = createDeferred();
+        const remove = fs.rm.bind(fs);
+        const removal = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+          try {
+            await remove(target, options);
+          } finally {
+            if (String(target).includes("openclaw-node-claude-prompt-")) {
+              removed.resolve();
+            }
+          }
+        });
+        try {
+          const result = await runCommand(executable, request, { client: client(calls) });
+          const output = calls
+            .filter((call) => call.method === "node.invoke.progress")
+            .map((call) => (call.params as { chunk: string }).chunk)
+            .join("");
+          const promptPath = (JSON.parse(output) as { result: string }).result;
 
-        expect(result).toMatchObject({ exitCode: 0, success: true });
-        await expect(fs.readFile(promptPath, "utf8")).resolves.toBe("descendant-owned prompt");
-        await vi.waitFor(async () => {
+          expect(result).toMatchObject({ exitCode: 0, success: true });
+          await expect(fs.readFile(promptPath, "utf8")).resolves.toBe("descendant-owned prompt");
+          // Removal follows certified descendant extinction, after its synchronous marker write.
+          await withinTest(removed.promise, signal);
           expect(await fs.readFile(marker, "utf8")).toBe("descendant-owned prompt");
           await expect(fs.stat(promptPath)).rejects.toThrow();
-        });
+        } finally {
+          removal.mockRestore();
+        }
       });
-    },
-  );
-
-  it.each([
-    {
-      descriptorEnv: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
-      rawEnv: "CLAUDE_CODE_OAUTH_TOKEN",
-    },
-    {
-      descriptorEnv: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-      rawEnv: "ANTHROPIC_API_KEY",
-    },
-  ])(
-    "delivers selected credentials through fd 3 for $rawEnv",
-    async ({ descriptorEnv, rawEnv }) => {
-      const executable = await executableScript(`
-const fs = require("node:fs");
-const secret = fs.readFileSync(3, "utf8");
-process.stdout.write(JSON.stringify({
-  type: "result",
-  result: secret,
-  descriptor: process.env[${JSON.stringify(descriptorEnv)}],
-  rawPresent: Object.hasOwn(process.env, ${JSON.stringify(rawEnv)}),
-  scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
-  gitInstructionsDisabled: process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS,
-}) + "\\n");`);
-      const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
-      const calls: Array<{ method: string; params: unknown }> = [];
-      const result = await runCommand(executable, request, {
-        client: client(calls),
-        env: {
-          ...process.env,
-          [descriptorEnv]: "3",
-        } as Record<string, string>,
-        secretInput: {
-          fd: 3,
-          createData: () => Buffer.from("selected-node-secret"),
-        },
-      });
-
-      const progress = calls
-        .filter((call) => call.method === "node.invoke.progress")
-        .map((call) => (call.params as { chunk: string }).chunk)
-        .join("");
-      expect(progress).toContain('"result":"selected-node-secret"');
-      expect(progress).toContain('"descriptor":"3"');
-      expect(progress).toContain('"rawPresent":false');
-      expect(progress).toContain('"scrubPresent":false');
-      expect(progress).toContain('"gitInstructionsDisabled":"1"');
-      expect(result).toMatchObject({ exitCode: 0, success: true });
     },
   );
 

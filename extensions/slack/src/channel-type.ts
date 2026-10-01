@@ -9,6 +9,7 @@ import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normaliz
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import { createSlackReadClient, createSlackWebClient } from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
+import { readLruMapEntry } from "./monitor/lru-map-cache.js";
 
 export type SlackConversationInfo = {
   type: "channel" | "group" | "dm" | "unknown";
@@ -18,15 +19,6 @@ export type SlackConversationInfo = {
 
 const SLACK_CONVERSATION_INFO_CACHE_MAX_ENTRIES = 1024;
 const SLACK_CONVERSATION_INFO_CACHE = new Map<string, SlackConversationInfo>();
-
-function getCachedSlackConversationInfo(cacheKey: string): SlackConversationInfo | undefined {
-  const cached = SLACK_CONVERSATION_INFO_CACHE.get(cacheKey);
-  if (cached) {
-    SLACK_CONVERSATION_INFO_CACHE.delete(cacheKey);
-    SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, cached);
-  }
-  return cached;
-}
 
 function setCachedSlackConversationInfo(
   cacheKey: string,
@@ -93,7 +85,7 @@ export async function resolveSlackConversationInfo(params: {
   const teamId = normalizeLowercaseStringOrEmpty(params.teamId) || "no-team-id";
   const cacheKey = `${account.accountId}:${teamId}:${operation}:${credentialRole}:${credentialFingerprint}:${channelId}`;
   if (!params.requireFreshName) {
-    const cached = getCachedSlackConversationInfo(cacheKey);
+    const cached = readLruMapEntry(SLACK_CONVERSATION_INFO_CACHE, cacheKey);
     if (cached) {
       return cached;
     }
@@ -115,10 +107,7 @@ export async function resolveSlackConversationInfo(params: {
           prevent_creation: true,
           return_im: true,
         });
-        const user =
-          typeof opened.channel?.user === "string" && opened.channel.user.trim()
-            ? opened.channel.user.trim()
-            : undefined;
+        const user = normalizeOptionalString(opened.channel?.user);
         const result: SlackConversationInfo = user ? { type: "dm", user } : { type: "dm" };
         if (user) {
           setCachedSlackConversationInfo(cacheKey, result);

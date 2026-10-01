@@ -11,7 +11,10 @@ import {
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
+import type {
+  AgentDatabaseOperations,
+  AgentDatabaseRequestExecutionSource,
+} from "../../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   type OpenClawAgentDatabaseExecution,
@@ -24,10 +27,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
-import type {
-  SessionEntryReplacementCommit,
-  SessionEntryReplacementCommitted,
-} from "./session-accessor.sqlite-replacement-types.js";
+import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
@@ -56,6 +56,7 @@ export async function withSessionEntryWorker<T>(
     facts: unknown,
   ) => void,
   retainedExecution?: OpenClawAgentDatabaseExecution,
+  signal?: AbortSignal,
 ): Promise<T> {
   const execution =
     retainedExecution ??
@@ -128,7 +129,12 @@ export async function withSessionEntryWorker<T>(
     },
   };
   try {
-    return await runOpenClawAgentWorkerWrite(options, () => run(execution, source, context));
+    return await runOpenClawAgentWorkerWrite(
+      options,
+      () => run(execution, source, context),
+      undefined,
+      signal,
+    );
   } finally {
     if (!retainedExecution) {
       await execution.release();
@@ -240,7 +246,7 @@ export async function initializeSessionTranscriptInWorker(
 export async function commitSessionEntryReplacementsInWorker(
   options: ReplacementDatabaseOptions,
   databaseIdentity: string,
-  input: SessionEntryReplacementCommit,
+  input: AgentDatabaseOperations["session.entries.replace"]["input"],
   assertCurrent: () => void,
   lifecycle: {
     identityAgentId: string;

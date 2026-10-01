@@ -14,7 +14,6 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RequestClient } from "../internal/discord.js";
@@ -163,7 +162,6 @@ export async function deliverDiscordReply(params: {
   token: string;
   accountId?: string;
   rest?: RequestClient;
-  runtime: RuntimeEnv;
   textLimit: number;
   maxLinesPerMessage?: number;
   replyToId?: string;
@@ -179,8 +177,6 @@ export async function deliverDiscordReply(params: {
   onPlatformSendDispatch?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
 }) {
-  void params.runtime;
-
   const binding = resolveBoundThreadBinding(params);
   const to = binding ? `channel:${binding.channelId}` : params.target;
   const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, {

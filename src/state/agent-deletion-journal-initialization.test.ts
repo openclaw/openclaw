@@ -6,9 +6,9 @@ import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareConfigFileWrite } from "../config/backup-rotation.js";
 import { withDeferredPluginMigrationsCurrent } from "../infra/deferred-plugin-migrations.js";
+import * as stateOwners from "../infra/gateway-state-owner.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteIntegrityCheckSync } from "../infra/sqlite-integrity.js";
-import * as stateCoordinator from "../infra/state-database-coordinator.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
@@ -177,7 +177,7 @@ describe("agent deletion journal initialization", () => {
     }
   });
 
-  it("captures checkpoint freshness after an earlier config publication obtains the state coordinator", async () => {
+  it("captures checkpoint freshness after earlier config publication and process ownership", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-checkpoint-publication-") };
     const originalAgentPath = createLegacyDatabaseFixture({
       env,
@@ -201,9 +201,9 @@ describe("agent deletion journal initialization", () => {
       previousRaw: "{}",
       fsModule: fs,
     });
-    const acquire = stateCoordinator.acquireStateDatabaseCoordinator;
+    const acquire = stateOwners.acquireStateDatabaseSchemaLease;
     const publication = vi
-      .spyOn(stateCoordinator, "acquireStateDatabaseCoordinator")
+      .spyOn(stateOwners, "acquireStateDatabaseSchemaLease")
       .mockImplementationOnce((options) => {
         withDeferredPluginMigrationsCurrent({ env, expectedPending: [] }, () =>
           preparedFile.publish(),

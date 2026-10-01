@@ -42,12 +42,8 @@ export { redactCdpUrl };
  * from HTTP(S) endpoints that require /json/version discovery.
  */
 export function isWebSocketUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "ws:" || parsed.protocol === "wss:";
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return parsed?.protocol === "ws:" || parsed?.protocol === "wss:";
 }
 
 /**
@@ -63,17 +59,11 @@ export function isWebSocketUrl(url: string): boolean {
  * Chrome will reject with HTTP 400.
  */
 export function isDirectCdpWebSocketEndpoint(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return (
-      (parsed.protocol === "ws:" || parsed.protocol === "wss:") &&
-      /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
-        parsed.pathname,
-      )
-    );
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return (
+    (parsed?.protocol === "ws:" || parsed?.protocol === "wss:") &&
+    /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(parsed.pathname)
+  );
 }
 
 /** Restrict a trusted CDP endpoint to its configured control-plane host. */
@@ -95,7 +85,7 @@ export function scopeCdpPolicyToConfiguredEndpoint(
 type CdpEndpointSource =
   | { source?: "configured" }
   | { source: "discovered"; configuredUrl: string };
-type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
+export type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
 
 function cdpEndpointAuthority(url: string): string {
   const parsed = new URL(url);
@@ -371,7 +361,9 @@ export async function closeTrackedCdpTarget(
   params: CdpTabOwnershipParams & {
     expectedProfileFingerprint: string;
     expectedBrowserInstanceFingerprint: string;
-    shouldClose?: () => boolean;
+    closeIfCurrent?: (
+      dispatch: () => Promise<CloseTrackedCdpTargetResult>,
+    ) => Promise<CloseTrackedCdpTargetResult>;
   },
 ): Promise<CloseTrackedCdpTargetResult> {
   const resolved = await resolveCdpTabOwnershipContext(params);
@@ -414,31 +406,29 @@ export async function closeTrackedCdpTarget(
         if (!exists) {
           return { status: "missing" } as const;
         }
-        // The SQLite cleanup generation can be revoked while browser identity
-        // is being resolved. Recheck on this same socket immediately before
-        // the irreversible close so fresh activity cancels an idle sweep.
-        if (params.shouldClose && !params.shouldClose()) {
-          return { status: "cancelled" } as const;
-        }
-        try {
-          params.signal?.throwIfAborted();
-          const closeResponse = await send("Target.closeTarget", {
-            targetId: params.nativeTargetId,
-          });
-          params.signal?.throwIfAborted();
-          return closeResponse &&
-            typeof closeResponse === "object" &&
-            (closeResponse as { success?: unknown }).success === true
-            ? ({ status: "closed" } as const)
-            : ({ status: "unavailable", reason: "target-close-failed" } as const);
-        } catch (error) {
-          // Chromium can destroy the page between getTargets and closeTarget.
-          // Its protocol implementation uses this exact InvalidParams message.
-          if (String(error).includes("No target with given id found")) {
-            return { status: "missing" } as const;
+        const dispatch = async (): Promise<CloseTrackedCdpTargetResult> => {
+          try {
+            params.signal?.throwIfAborted();
+            const closeResponse = await send("Target.closeTarget", {
+              targetId: params.nativeTargetId,
+            });
+            params.signal?.throwIfAborted();
+            return closeResponse &&
+              typeof closeResponse === "object" &&
+              (closeResponse as { success?: unknown }).success === true
+              ? ({ status: "closed" } as const)
+              : ({ status: "unavailable", reason: "target-close-failed" } as const);
+          } catch (error) {
+            // Chromium can destroy the page between getTargets and closeTarget.
+            // Its protocol implementation uses this exact InvalidParams message.
+            if (String(error).includes("No target with given id found")) {
+              return { status: "missing" } as const;
+            }
+            throw error;
           }
-          throw error;
-        }
+        };
+        // Fresh-row admission includes synchronous send, not the network response.
+        return params.closeIfCurrent ? await params.closeIfCurrent(dispatch) : await dispatch();
       },
       {
         commandTimeoutMs: params.timeoutMs,
@@ -513,7 +503,13 @@ export async function fetchCdpChecked(
     }
   };
   try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
+    const requestHeaders = init?.headers;
+    const headers = getHeadersWithAuth(
+      url,
+      requestHeaders instanceof Headers || Array.isArray(requestHeaders)
+        ? Object.fromEntries(new Headers(requestHeaders))
+        : requestHeaders,
+    );
     const fetchUrl = stripCdpUrlCredentials(url);
     const res = await withManagedProxyForCdpUrl(fetchUrl, () =>
       withNoProxyForCdpUrl(fetchUrl, async () => {

@@ -6,7 +6,7 @@ import {
   readDirectoryIdentity,
   type DirectoryIdentity,
 } from "@openclaw/fs-safe/advanced";
-import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";
 
 type OwnedServiceParent = DirectoryIdentity & {
@@ -135,7 +135,7 @@ export async function assertNotSymlink(filePath: string, label: string): Promise
       throw new Error(`${label} must not be a symbolic link: ${filePath}`);
     }
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
+    if (extractErrorCode(error) === "ENOENT") {
       return;
     }
     throw error;

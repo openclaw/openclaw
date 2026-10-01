@@ -18,7 +18,7 @@ import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "./io.health-state.js";
-import type { ConfigHealthFingerprint, ConfigHealthSnapshot } from "./io.health-state.types.js";
+import type { ConfigHealthSnapshot } from "./io.health-state.types.js";
 import {
   createConfigRecoveryStatEffect,
   createConfigBackupMissingEffect,
@@ -28,8 +28,6 @@ import {
 import {
   createConfigHealthFingerprint,
   extractRestoreErrorDetails,
-  readConfigFingerprintForPath,
-  readConfigFingerprintForPathSync,
   readConfigHealthEntry,
 } from "./io.observe-state.js";
 import { resolveConfigReadRecoveryContext } from "./io.observe-suspicious.js";
@@ -226,7 +224,7 @@ export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryPara
     params.configPath,
     params.assertCurrent,
   );
-  const plan = await runConfigRecoveryAsync(planSuspiciousConfigRead(params), health);
+  const plan = await runConfigRecoveryAsync(planSuspiciousConfigRead(params, true), health);
   const captureApplyHealth = () => health.captureContinuation();
   return (
     plan && {
@@ -244,7 +242,7 @@ export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryPara
         };
         assertAllowed();
         const currentPlan = await runConfigRecoveryAsync(
-          planSuspiciousConfigRead(params),
+          planSuspiciousConfigRead(params, true),
           applyHealth,
         );
         if (!currentPlan || !isDeepStrictEqual(currentPlan.candidate, plan.candidate)) {
@@ -300,6 +298,7 @@ function* recoverSuspiciousConfigRead(
 
 function* planSuspiciousConfigRead(
   params: ConfigReadRecoveryParams,
+  requireIdentity = false,
 ): ConfigRecoveryOperation<SuspiciousConfigRecoveryPlan | null> {
   const { deps, configPath, raw, parsed } = params;
   // External owners also own recovery; do not substitute backup bytes or create sidecars.
@@ -311,7 +310,13 @@ function* planSuspiciousConfigRead(
   if (yield createConfigBackupMissingEffect(deps, backupPath)) {
     return null;
   }
-  const stat = (yield createConfigRecoveryStatEffect(deps, configPath)) as fs.Stats | null;
+  // Explicit preparation will recheck these identities before publishing a replacement.
+  // Ordinary recovery uses stat only as optional diagnostic metadata.
+  const stat = (yield createConfigRecoveryStatEffect(
+    deps,
+    configPath,
+    requireIdentity,
+  )) as fs.Stats | null;
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
     raw,
@@ -328,13 +333,19 @@ function* planSuspiciousConfigRead(
   }
   const healthState = healthSnapshot.state;
   const entry = readConfigHealthEntry(healthState, configPath);
+  let backupRaw: string | null = null;
+  if (!entry.lastKnownGood) {
+    backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
+  }
   const backupBaseline =
     entry.lastKnownGood ??
-    ((yield {
-      sync: () => readConfigFingerprintForPathSync(deps, backupPath),
-      async: () => readConfigFingerprintForPath(deps, backupPath),
-    }) as ConfigHealthFingerprint | null) ??
-    undefined;
+    (backupRaw
+      ? createConfigHealthFingerprint({
+          raw: backupRaw,
+          parsed: parseBackupConfigRaw(deps, backupRaw)?.parsed ?? {},
+          stat: null,
+        })
+      : undefined);
   const recoveryContext = resolveConfigReadRecoveryContext({
     current,
     parsed,
@@ -345,7 +356,7 @@ function* planSuspiciousConfigRead(
     return null;
   }
   const { suspicious, suspiciousSignature } = recoveryContext;
-  const backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
+  backupRaw ??= (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
   if (!backupRaw) {
     return null;
   }
@@ -365,7 +376,11 @@ function* planSuspiciousConfigRead(
     return null;
   }
   const preparedCandidate = prepared.candidate;
-  const backupStat = (yield createConfigRecoveryStatEffect(deps, backupPath)) as fs.Stats | null;
+  const backupStat = (yield createConfigRecoveryStatEffect(
+    deps,
+    backupPath,
+    requireIdentity,
+  )) as fs.Stats | null;
   const backup = createConfigHealthFingerprint({
     raw: backupRaw,
     parsed: backupParse.parsed,
@@ -386,7 +401,7 @@ function* planSuspiciousConfigRead(
         [backupPath, backupRaw, backupStat],
       ] as const) {
         const actualRaw = createConfigBackupReadEffect(deps, pathname).sync();
-        const actualStat = createConfigRecoveryStatEffect(deps, pathname).sync();
+        const actualStat = createConfigRecoveryStatEffect(deps, pathname, true).sync();
         if (
           actualRaw !== expectedRaw ||
           !actualStat ||

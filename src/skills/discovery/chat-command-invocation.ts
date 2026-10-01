@@ -66,22 +66,13 @@ function findSkillCommand(
   }
   const lowered = normalizeOptionalLowercaseString(trimmed) ?? "";
   const normalized = normalizeSkillCommandLookup(trimmed);
-  return skillCommands.find((entry) => {
-    if (normalizeOptionalLowercaseString(entry.name) === lowered) {
-      return true;
-    }
-    if (normalizeOptionalLowercaseString(entry.skillName) === lowered) {
-      return true;
-    }
-    return (
+  return skillCommands.find(
+    (entry) =>
+      normalizeOptionalLowercaseString(entry.name) === lowered ||
+      normalizeOptionalLowercaseString(entry.skillName) === lowered ||
       normalizeSkillCommandLookup(entry.name) === normalized ||
-      normalizeSkillCommandLookup(entry.skillName) === normalized
-    );
-  });
-}
-
-function skillReferenceMatches(text: string): IterableIterator<RegExpMatchArray> {
-  return text.matchAll(/\$([-a-zA-Z0-9_:]+)/gu);
+      normalizeSkillCommandLookup(entry.skillName) === normalized,
+  );
 }
 
 function isEscapedReference(text: string, index: number): boolean {
@@ -92,20 +83,11 @@ function isEscapedReference(text: string, index: number): boolean {
   return backslashes % 2 === 1;
 }
 
-function isShellVariableReference(name: string): boolean {
-  return !/[a-z]/u.test(name);
-}
-
 function* skillReferenceNames(text: string): IterableIterator<string> {
-  for (const match of skillReferenceMatches(text)) {
+  for (const match of text.matchAll(/\$([-a-zA-Z0-9_:]+)/gu)) {
     const name = match[1]?.replace(/:+$/gu, "");
     const index = match.index;
-    if (
-      name &&
-      index !== undefined &&
-      !isEscapedReference(text, index) &&
-      !isShellVariableReference(name)
-    ) {
+    if (name && index !== undefined && !isEscapedReference(text, index) && /[a-z]/u.test(name)) {
       yield name;
     }
   }
@@ -141,13 +123,11 @@ export function resolveSkillCommandInvocation(params: {
 
 export function expandBundleCommandPromptTemplate(template: string, args?: string): string {
   const normalizedArgs = args?.trim() ?? "";
-  const rendered = template.includes("$ARGUMENTS")
-    ? template.replaceAll("$ARGUMENTS", () => normalizedArgs)
-    : template;
-  if (!normalizedArgs || template.includes("$ARGUMENTS")) {
-    return rendered.trim();
+  if (template.includes("$ARGUMENTS")) {
+    return template.replaceAll("$ARGUMENTS", () => normalizedArgs).trim();
   }
-  return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
+  const rendered = template.trim();
+  return normalizedArgs ? `${rendered}\n\nUser input:\n${normalizedArgs}` : rendered;
 }
 
 /** Expands model-routed skill references while leaving unknown slash commands untouched. */

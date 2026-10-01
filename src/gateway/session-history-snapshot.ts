@@ -32,6 +32,7 @@ export async function readSessionHistorySnapshotKernel(
   options: SessionHistorySnapshotOptions,
 ): Promise<SessionHistorySnapshot> {
   let rawMessages: unknown[];
+  let windowReset = false;
   let totalRawMessages: number | undefined;
   let transcriptPath: string | undefined;
   let projected: ReturnType<typeof projectChatDisplayMessagesWithState>;
@@ -65,13 +66,18 @@ export async function readSessionHistorySnapshotKernel(
       preserveProjectionContext: true,
       ...options,
     });
+    windowReset = tail.windowReset ?? false;
     projected = tail.projection;
     rawMessages = tail.rawMessages;
     totalRawMessages = tail.readPage.totalMessages;
     transcriptPath = tail.readPage.transcriptPath;
   }
   const rawHistoryMessages = rawMessages.filter(isRecord);
-  const history = paginateSessionMessages(projected.messages, params.limit, params.cursor);
+  const history = paginateSessionMessages(
+    projected.messages,
+    params.limit,
+    windowReset ? undefined : params.cursor,
+  );
   if (
     typeof totalRawMessages === "number" &&
     totalRawMessages > rawMessages.length &&
@@ -84,7 +90,7 @@ export async function readSessionHistorySnapshotKernel(
     }
   }
   return {
-    history,
+    history: { ...history, ...(windowReset ? { windowReset: true } : {}) },
     rawTranscriptSeq:
       totalRawMessages ?? resolveMessageSeq(rawHistoryMessages.at(-1)) ?? rawHistoryMessages.length,
     turnBoundaryPending: projected.turnBoundaryPending,

@@ -15,6 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createTranscriptsAutoStartService } from "../transcripts/auto-start.js";
 import type {
   TranscriptSourceProvider,
@@ -175,6 +176,7 @@ it.for([false, true])(
             },
           );
           const reloader = startGatewayConfigReloader({
+            scheduler: createTestGatewayScheduler("fake-timers"),
             initialConfig: current,
             initialCompareConfig: snapshot.sourceConfig ?? current,
             initialSnapshotRawHash: snapshot.hash ?? null,

@@ -97,21 +97,6 @@ export type PlainTextToolCallScan = PlainTextToolCallScanBranches &
       }
   );
 
-type PlainTextToolCallScanCandidate = {
-  name: PlainTextJsonToolCallSpan;
-  nameComplete: boolean;
-  payload?: PlainTextJsonToolCallSpan;
-};
-
-type PlainTextToolCallScanBranch =
-  | ({
-      end: number;
-      kind: "complete";
-      payload: PlainTextJsonToolCallSpan;
-    } & PlainTextToolCallScanCandidate)
-  | { candidate?: PlainTextToolCallScanCandidate; kind: "prefix" }
-  | { at: number; candidate?: PlainTextToolCallScanCandidate; kind: "invalid" };
-
 type PlainTextJsonToolCallOpening = {
   cursor: number;
   kind: "complete";
@@ -330,11 +315,10 @@ export function scanPlainTextToolCall(
   const json = scanPlainTextJsonToolCall(text, start, options?.structuralLineBreaks);
   const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
   const allowed = (
-    scan: PlainTextToolCallScanBranch,
+    scan: PlainTextToolCallScanBranches["json" | "xmlish"],
   ): {
     accepted: boolean;
     payload?: PlainTextJsonToolCallSpan;
-    value?: PlainTextToolCallScanCandidate;
   } => {
     const value = scan.kind === "complete" ? scan : scan.candidate;
     if (!value) {
@@ -345,7 +329,7 @@ export function scanPlainTextToolCall(
       ? (options?.matcher?.hasExactName(name) ?? true)
       : (options?.matcher?.hasNamePrefix(name) ?? true);
     return matches
-      ? { accepted: true, value, ...(value.payload ? { payload: value.payload } : {}) }
+      ? { accepted: true, ...(value.payload ? { payload: value.payload } : {}) }
       : { accepted: false };
   };
   const xml = allowed(xmlish);
@@ -519,24 +503,18 @@ function parsePlainTextToolCallBlockAtAnySyntax(
   return null;
 }
 
-function normalizeParseOptions(
-  options?: PlainTextToolCallParseOptions,
-): NormalizedPlainTextToolCallParseOptions | undefined {
-  return options
-    ? {
-        ...options,
-        allowedToolNames: options.allowedToolNames ? new Set(options.allowedToolNames) : undefined,
-      }
-    : undefined;
-}
-
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
   options?: PlainTextToolCallParseOptions,
   structuralLineBreaks?: StructuralLineBreakOptions,
 ): PlainTextToolCallBlock[] | null {
   const blocks: PlainTextToolCallBlock[] = [];
-  const normalizedOptions = normalizeParseOptions(options);
+  const normalizedOptions = options
+    ? {
+        ...options,
+        allowedToolNames: options.allowedToolNames ? new Set(options.allowedToolNames) : undefined,
+      }
+    : undefined;
   let cursor = skipWhitespace(text, 0);
   while (cursor < text.length) {
     const block = parsePlainTextToolCallBlockAtAnySyntax(

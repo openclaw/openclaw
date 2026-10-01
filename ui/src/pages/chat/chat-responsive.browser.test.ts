@@ -89,9 +89,8 @@ function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGateway
   });
 }
 
-async function getSharedAppPage(): Promise<Page> {
-  sharedAppPagePromise ??= createSharedAppPage();
-  return await sharedAppPagePromise;
+function getSharedAppPage(): Promise<Page> {
+  return (sharedAppPagePromise ??= createSharedAppPage());
 }
 
 async function createSharedAppPage(): Promise<Page> {
@@ -105,7 +104,8 @@ async function createSharedAppPage(): Promise<Page> {
     page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
     await page.route("https://cdn.example/**", async (route) => {
       const request = route.request();
-      if (request.url() === SHARED_APP_IMAGE_URL) {
+      // Chromium normalizes the escaped dot before sending the image request.
+      if (decodeURI(request.url()) === decodeURI(SHARED_APP_IMAGE_URL)) {
         await route.fulfill({
           contentType: "image/png",
           body: Buffer.from(
@@ -594,7 +594,7 @@ function composerControlsHtml() {
           </details>
           <details class="chat-controls__inline-select chat-controls__permission-picker">
           <summary class="chat-controls__inline-select-trigger chat-controls__permission-trigger" aria-label="Permissions: Guarded">
-            <span class="chat-controls__inline-select-label">Guarded</span>
+            <span class="chat-controls__permission-icon" aria-hidden="true">${iconSvg()}</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__permission-menu">
             <button class="chat-controls__permission-option">Guarded</button>
@@ -1020,7 +1020,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <div class="chat-split-view__cell" style="width: 320px;">
-            <div class="chat-pane__header">
+            <div class="chat-pane__header chat-pane__header--closable">
               <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
               <span class="chat-pane__session-title"
                 ><span class="chat-pane__session-title-text"
@@ -1141,7 +1141,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <div class="chat-split-view__cell" style="width: 640px;">
-            <div class="chat-pane__header">
+            <div class="chat-pane__header chat-pane__header--closable">
               <div class="chat-pane__crumbs">
                 <div class="chat-pane__project-row">
                   <wa-dropdown class="chat-pane__workspace-menu">
@@ -1316,12 +1316,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
         const { toolRowGap, ...disclosureStyles } = styles;
         expect(disclosureStyles).toEqual({
-          activity: "text",
+          activity: "none",
           activityBackground: "rgba(0, 0, 0, 0)",
           activityPaddingBlock: hasTouch ? ["8px", "8px"] : ["5px", "5px"],
           // Summary gap (8px) less the chevron's own -3px inset.
           chevronGap: 5,
-          tool: "text",
+          tool: "none",
           toolPaddingBlock: ["3px", "3px"],
         });
         expect(toolRowGap).toBeGreaterThanOrEqual(0);
@@ -2385,6 +2385,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
     await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
     expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
+    await image.evaluate((element: HTMLImageElement) => element.decode());
     expect(await page.getByText(SHARED_APP_TTS_TEXT, { exact: true }).count()).toBe(1);
     expect(await page.getByText(/MEDIA:/u).count()).toBe(0);
     for (const [fileName, type, , playback] of SHARED_APP_PLAYBACK_MEDIA) {
@@ -3155,7 +3156,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(textareaRect.height).toBeLessThanOrEqual(layout.viewportHeight * 0.25 + 1);
       expect(textareaMetrics.scrollHeight).toBeGreaterThan(textareaMetrics.clientHeight);
       expect(input.y - (thread.y + thread.height)).toBeCloseTo(0, 0);
-      expect(shell.x).toBeCloseTo(16, 0);
+      expect(shell.x).toBeCloseTo(20, 0);
       expect(layout.viewportWidth - (shell.x + shell.width)).toBeCloseTo(shell.x, 0);
       expect(attach.x - input.x).toBeLessThanOrEqual(10);
       expect(model.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
@@ -3349,7 +3350,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             ".agent-chat__composer-combobox > textarea",
           );
           const selectors = [
-            ".chat-controls__permission-trigger .chat-controls__inline-select-label",
             ".chat-controls__model-trigger .chat-controls__inline-select-label",
             ".chat-controls__effort-trigger .chat-controls__inline-select-label",
           ];
@@ -3371,7 +3371,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         });
         expect(composerFontSizes).toEqual({
-          labels: [14, 14, 14],
+          labels: [14, 14],
           placeholder: 16,
           textarea: 16,
         });
@@ -3578,53 +3578,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
     },
   );
-
-  it("keeps crowded task sections independently scrollable in the side rail", async () => {
-    await withBrowserPage(openBrowserPage(1000, 700), async (page) => {
-      const taskRows = Array.from(
-        { length: 10 },
-        (_, index) => `<div class="chat-tasks-rail__task">Task ${index + 1}</div>`,
-      ).join("");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div style="width: 360px; height: 320px; display: flex;">
-              <aside class="chat-tasks-rail" style="width: 100%; height: 100%;">
-                <div class="chat-tasks-rail__scroll">
-                  <section class="chat-tasks-rail__section">
-                    <div class="chat-tasks-rail__section-title">Running</div>
-                    <div class="chat-tasks-rail__list">${taskRows}</div>
-                  </section>
-                  <section class="chat-tasks-rail__section">
-                    <div class="chat-tasks-rail__section-title">Finished</div>
-                    <div class="chat-tasks-rail__list">${taskRows}</div>
-                  </section>
-                </div>
-              </aside>
-          </div>
-        </body></html>`,
-      );
-
-      const sections = await page.$$eval(".chat-tasks-rail__section", (nodes) =>
-        nodes.map((node) => {
-          const section = node as HTMLElement;
-          section.scrollTop = 100;
-          return {
-            clientHeight: section.clientHeight,
-            overflowY: getComputedStyle(section).overflowY,
-            scrollHeight: section.scrollHeight,
-            scrollTop: section.scrollTop,
-          };
-        }),
-      );
-
-      expect(sections).toHaveLength(2);
-      for (const section of sections) {
-        expect(section.overflowY).toBe("auto");
-        expect(section.scrollHeight).toBeGreaterThan(section.clientHeight);
-        expect(section.scrollTop).toBeGreaterThan(0);
-      }
-    });
-  });
 
   it("keeps short-landscape composer adjunct rows scroll-reachable", async () => {
     await withBrowserPage(
@@ -4400,7 +4353,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it("renders the terminal turn recap as plain transcript text", async () => {
     await withBrowserPage(openBrowserPage(820, 640), async (page) => {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <div class="chat-tasks-status chat-turn-recap">Done in 7 seconds · 58 tokens</div>
+        <div class="chat-turn-recap">Done in 7 seconds · 58 tokens</div>
       </body></html>`);
       const style = await page.locator(".chat-turn-recap").evaluate((element) => {
         const computed = getComputedStyle(element);

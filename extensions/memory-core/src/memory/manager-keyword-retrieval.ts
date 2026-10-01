@@ -11,8 +11,9 @@ import {
   type MemorySearchResult,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { buildFtsQuery, scoreExactPathTieForTemporalDecay } from "./hybrid.js";
+import { scoreExactPathTieForTemporalDecay } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
+import { buildFtsQuery } from "./keyword-query.js";
 import {
   runMemoryCuratedCandidates,
   runMemoryKeywordSearch,
@@ -473,7 +474,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         result.score = result.exactPathSpecificity > 0 ? 1 : result.pathScore;
       }
     }
-    return merged.toSorted(compareKeywordSearchHits);
+    return merged;
   }
 
   private limitKeywordSearchHits(

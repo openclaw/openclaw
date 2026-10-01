@@ -46,10 +46,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     "typescript/package.json",
   );
   const dynamicOwners = new Map<string, { expressions: string[]; targets: string[] }>([
-    [
-      "scripts/lib/dist-artifact-ownership.mts",
-      { expressions: ["script"], targets: [generatorEntry] },
-    ],
+    ["scripts/lib/dist-artifact-lock.mts", { expressions: ["script"], targets: [generatorEntry] }],
     [
       "scripts/lib/local-check-runtime.mts",
       {
@@ -65,6 +62,13 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       },
     ],
     [
+      "scripts/lib/native-typescript-toolchain.mts",
+      {
+        expressions: ["executableResolver"],
+        targets: [nativeManifest, path.join(path.dirname(nativeManifest), "lib/getExePath.js")],
+      },
+    ],
+    [
       "scripts/lib/tsdown-declaration-writer.mts",
       {
         expressions: ['pathToFileURL(path.join(root, "tsdown.config.ts")).href'],
@@ -76,6 +80,15 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       {
         expressions: ["resolveTsxImport(SHIM_CHECKOUT_ROOT)"],
         targets: [fileURLToPath(resolveTsxImport(root))],
+      },
+    ],
+    [
+      "scripts/tsdown-build.mts",
+      {
+        // Runtime-only live Gateway dist fence. Declaration writers import this
+        // file for constants/plan helpers and must not walk daemon service-layout.
+        expressions: ["liveGatewayDistFenceHref"],
+        targets: [generatorEntry],
       },
     ],
   ]);

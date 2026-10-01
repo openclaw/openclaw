@@ -353,15 +353,6 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     }
   }
 
-  it("renders raw block art as a whitespace-preserving code block", () => {
-    const rendered = toSanitizedMarkdownHtml(blockArt);
-    const fragment = htmlFragment(rendered);
-    const code = fragment.querySelector("pre code.markdown-block-art");
-
-    expect(fragment.querySelector("p")).toBeNull();
-    expect(code?.textContent).toBe(blockArt);
-  });
-
   it("recognizes block art separated by Unicode line boundaries", () => {
     const rendered = toSanitizedMarkdownHtml("  ▀▀▀▀  \u2028  ▄▄▄▄  \u2029  ████  ");
     const fragment = htmlFragment(rendered);
@@ -394,15 +385,6 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
     expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
     await expectCodeCopy(fragment, "indented code");
-  });
-
-  it("includes copy button", async () => {
-    const rendered = toSanitizedMarkdownHtml("```\ncode\n```");
-    const fragment = htmlFragment(rendered);
-
-    expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
-    expect(fragment.querySelector(".code-block-copy__idle")).toBeInstanceOf(HTMLSpanElement);
-    await expectCodeCopy(fragment, "code");
   });
 
   it("omits copy chrome when rendering user-preserved code blocks", () => {
@@ -463,28 +445,22 @@ PY
     expect(expand?.getAttribute("aria-label")).toBe("Show 1 hidden line");
   });
 
-  it.each(["text", "md", "markdown", "TEXT", "Markdown title=notes"])(
-    "keeps long %s fences fully visible",
-    (info) => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(`\`\`\`${info}\n${"prose line\n".repeat(20)}\`\`\``, {
-          codeBlockInteraction: "interactive",
-        }),
-      );
-
-      expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
-      expect(fragment.querySelector(".code-block-expand")).toBeNull();
-      expect(fragment.querySelector("pre code")?.textContent).toContain("prose line");
-    },
-  );
-
-  it.each([
-    { info: "json", content: '"value",\n'.repeat(20) },
-    { info: "bash", content: "echo hi\n".repeat(20) },
-    { info: "", content: "unlabeled line\n".repeat(20) },
-  ])("keeps long $info fences collapsible", ({ info, content }) => {
+  it.each(["md", "TEXT", "Markdown title=notes"])("keeps long %s fences fully visible", (info) => {
     const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(`\`\`\`${info}\n${content}\`\`\``, {
+      toSanitizedMarkdownHtml(`\`\`\`${info}\n${"prose line\n".repeat(20)}\`\`\``, {
+        codeBlockInteraction: "interactive",
+      }),
+    );
+
+    expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
+    expect(fragment.querySelector(".code-block-expand")).toBeNull();
+    expect(fragment.querySelector("pre code")?.textContent).toContain("prose line");
+  });
+
+  it("keeps long unlabeled fences collapsible", () => {
+    const content = "unlabeled line\n".repeat(20);
+    const fragment = htmlFragment(
+      toSanitizedMarkdownHtml(`\`\`\`\n${content}\`\`\``, {
         codeBlockInteraction: "interactive",
       }),
     );

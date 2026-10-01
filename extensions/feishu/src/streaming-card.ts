@@ -62,19 +62,12 @@ export class FeishuStreamingFinalizationError extends Error {
   }
 }
 
-/** Options for customising the initial streaming card appearance. */
-type StreamingCardOptions = {
-  /** Optional header with title and color template. */
-  header?: CardHeaderConfig;
-  /** Optional grey note footer text. */
-  note?: string;
-};
-
 type StreamingStartOptions = {
   replyToMessageId?: string;
   replyInThread?: boolean;
   rootId?: string;
   header?: CardHeaderConfig;
+  note?: string;
 };
 
 const STREAMING_UPDATE_THROTTLE_MS = 160;
@@ -196,9 +189,6 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
 }
 
 function truncateSummary(text: string, max = 50): string {
-  if (!text) {
-    return "";
-  }
   const clean = text.replace(/\n/g, " ").trim();
   // Slice on a code-point boundary so CardKit never receives a lone surrogate at the limit.
   return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";
@@ -225,10 +215,10 @@ export function mergeStreamingText(
   if (!previous || next === previous) {
     return next;
   }
-  if (next.startsWith(previous) || next.includes(previous)) {
+  if (next.includes(previous)) {
     return next;
   }
-  if (previous.startsWith(next) || previous.includes(next)) {
+  if (previous.includes(next)) {
     return previous;
   }
   const maxOverlap = Math.min(previous.length, next.length);
@@ -240,7 +230,6 @@ export function mergeStreamingText(
   return `${previous}${next}`;
 }
 
-/** Streaming card session manager */
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;
@@ -312,7 +301,7 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: StreamingCardOptions & StreamingStartOptions,
+    options?: StreamingStartOptions,
   ): Promise<void> {
     if (this.state) {
       return;
@@ -580,12 +569,10 @@ export class FeishuStreamingSession {
       }
     }
 
-    // Update note with final model/provider info
     if (options?.note) {
       await this.updateNoteContent(options.note);
     }
 
-    // Close streaming mode
     // A rejected final write must not advertise content that CardKit never accepted.
     const acceptedText = this.state.sentText;
     this.state.sequence += 1;
