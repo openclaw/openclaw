@@ -205,3 +205,13 @@ describe("AWS candidate prefilter", () => {
     }
   });
 });
+
+describe("base64-safe vendor token patterns", () => {
+  it("keeps a large plus-joined run linear through the data-URL guard", () => {
+    // Every `+` is a token boundary; the spliced key only trips the obfuscated-key prefilter.
+    const input = `${"a+".repeat(50_000)}pass\u200Bword=opaque-value-1234567890`;
+    const started = performance.now();
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+});

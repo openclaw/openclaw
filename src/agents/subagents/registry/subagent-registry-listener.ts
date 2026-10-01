@@ -18,6 +18,7 @@ export function createSubagentRegistryListener(config: {
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
   persist: (...runIds: string[]) => void;
+  resumeRequesterSettleWake: (runId: string, entry: SubagentRunRecord) => void;
   refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
     params: SubagentCompletionRequest,
@@ -34,14 +35,12 @@ export function createSubagentRegistryListener(config: {
     completeSubagentRunWithRecovery,
     warn,
   } = config;
-  let listenerStarted = false;
   let listenerStop: (() => void) | null = null;
 
   function ensureListener() {
-    if (listenerStarted) {
+    if (listenerStop) {
       return;
     }
-    listenerStarted = true;
     listenerStop = onAgentEvent((evt) => {
       void (async () => {
         if (!evt || evt.stream !== "lifecycle") {
@@ -129,6 +128,9 @@ export function createSubagentRegistryListener(config: {
             ) {
               persist(entry.runId);
             }
+            if (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake?.pauseNotice) {
+              config.resumeRequesterSettleWake(entry.runId, entry);
+            }
             return;
           }
           // A collector result is read by an explicit wait and never delivered by
@@ -198,7 +200,6 @@ export function createSubagentRegistryListener(config: {
         listenerStop();
         listenerStop = null;
       }
-      listenerStarted = false;
     },
   };
 }

@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  readAdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import { createComputerTool } from "../agents/tools/computer-tool.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
@@ -174,53 +179,9 @@ describe("resolveMcpLoopbackScopedTools", () => {
 });
 
 describe("McpLoopbackToolCache", () => {
-  it("does not let a source-less cached list hide a later non-owner writer", async () => {
+  it("does not let a source-less cached list hide a later admitted writer", async () => {
     const cache = new McpLoopbackToolCache();
     const params = scopeParams({ toolsAllow: ["sessions"] });
-    const authority = createAdmittedRunOperatorAuthority({
-      profileId: "archive-writer",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-    });
-    resolveGatewayScopedTools.mockImplementation(
-      ({ sessionControlAuthority }: Pick<ScopeParams, "sessionControlAuthority">) =>
-        scopedToolFixture(sessionControlAuthority === authority ? ["sessions"] : []),
-    );
-
-    const withoutSource = await cache.resolve(params);
-    expect(withoutSource.toolSchema).toEqual([]);
-    const writerParams = { ...params, sessionControlAuthority: authority };
-    const withSource = await cache.resolve(writerParams);
-    expect(withSource.toolSchema.map((tool) => tool.name)).toEqual(["sessions"]);
-    expect(resolveGatewayScopedTools.mock.calls[1]?.[0].sessionControlAuthority).toBe(authority);
-    expect(resolveGatewayScopedTools.mock.calls[1]?.[0].senderIsOwner).toBe(false);
-    expect(await cache.resolve(writerParams)).toBe(withSource);
-    expect(await cache.resolve(params)).toBe(withoutSource);
-    expect(
-      await cache.resolve({
-        ...params,
-        sessionControlAuthority: createAdmittedRunOperatorAuthority({
-          profileId: "archive-reader",
-          scopes: ["operator.read"],
-          assertCurrent: () => {},
-        }),
-      }),
-    ).toBe(withoutSource);
-    expect(
-      await cache.resolve({
-        ...params,
-        sessionControlAuthority: createAdmittedRunOperatorAuthority({
-          profileId: "narrow-writer",
-          scopes: ["operator.sessions.write"],
-          assertCurrent: () => {},
-        }),
-      }),
-    ).toBe(withoutSource);
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-  });
-
-  it("rejects copied and revoked authority instead of returning cached archive tools", async () => {
-    const cache = new McpLoopbackToolCache();
     const controller = new AbortController();
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "archive-writer",
@@ -228,23 +189,44 @@ describe("McpLoopbackToolCache", () => {
       signal: controller.signal,
       assertCurrent: () => {},
     });
-    const params = {
-      ...scopeParams({ toolsAllow: ["sessions"], grantToken: "archive-grant" }),
-      sessionControlAuthority: authority,
-    };
-    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["sessions"]));
+    const runId = "cached-session-controls";
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      operatorAuthority: authority,
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+      facts: {
+        runId,
+        agentId: "main",
+        ingress: { kind: "system", boundary: "mcp-cache-test", state: "present" },
+      },
+    });
+    resolveGatewayScopedTools.mockImplementation(
+      ({ admittedRunContext }: Pick<ScopeParams, "admittedRunContext">) =>
+        scopedToolFixture(readAdmittedRunOperatorAuthority(admittedRunContext) ? ["sessions"] : []),
+    );
+    try {
+      const withoutSource = await cache.resolve(params);
+      expect(withoutSource.toolSchema).toEqual([]);
+      const admittedRunContext = await admission.admit("gateway");
+      const writerParams = { ...params, admittedRunContext };
+      const withSource = await cache.resolve(writerParams);
+      expect(withSource.toolSchema.map((tool) => tool.name)).toEqual(["sessions"]);
+      expect(resolveGatewayScopedTools.mock.calls[1]?.[0].admittedRunContext).toBe(
+        admittedRunContext,
+      );
+      expect(resolveGatewayScopedTools.mock.calls[1]?.[0].senderIsOwner).toBe(false);
+      expect(await cache.resolve(writerParams)).toBe(withSource);
+      expect(await cache.resolve(params)).toBe(withoutSource);
 
-    const cached = await cache.resolve(params);
-    expect(cached.toolSchema.map((tool) => tool.name)).toEqual(["sessions"]);
-    expect(await cache.resolve(params)).toBe(cached);
-    await expect(
-      cache.resolve({ ...params, sessionControlAuthority: { ...authority } }),
-    ).rejects.toThrow("operator run authority must be issued by the host");
-
-    const reason = new Error("archive operator source revoked");
-    controller.abort(reason);
-    await expect(cache.resolve(params)).rejects.toBe(reason);
-    expect(resolveGatewayScopedTools).toHaveBeenCalledOnce();
+      const reason = new Error("archive operator source revoked");
+      controller.abort(reason);
+      await expect(cache.resolve(writerParams)).rejects.toThrow(
+        "admitted run operator authority is no longer active",
+      );
+      expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    } finally {
+      admission.close();
+    }
   });
 
   it("rechecks execution availability before reusing cached schemas", async () => {

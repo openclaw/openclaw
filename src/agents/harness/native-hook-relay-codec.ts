@@ -26,22 +26,6 @@ export const codexNativeHookRelayProviderAdapter: NativeHookRelayProviderAdapter
   readToolInput: readCodexToolInput,
   readToolResponse: readCodexToolResponse,
   ...codexNativeHookRelayResponseCodec,
-  renderBeforeAgentFinalizeReviseResponse: (reason) => ({
-    stdout: `${JSON.stringify({
-      decision: "block",
-      reason,
-    })}\n`,
-    stderr: "",
-    exitCode: 0,
-  }),
-  renderBeforeAgentFinalizeStopResponse: (reason) => ({
-    stdout: `${JSON.stringify({
-      continue: false,
-      ...(reason?.trim() ? { stopReason: reason.trim() } : {}),
-    })}\n`,
-    stderr: "",
-    exitCode: 0,
-  }),
 };
 
 export function normalizeNativeHookInvocation(params: {

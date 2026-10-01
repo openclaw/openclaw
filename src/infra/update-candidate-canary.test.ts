@@ -64,26 +64,14 @@ const admission = vi.hoisted(
     beforeGrant?: (stage: string) => void;
   } => ({ active: false }),
 );
-vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./sqlite-worker-operation-admission.js")>();
-  return {
-    ...actual,
-    createSqliteWorkerOperationAdmission: (
-      ...args: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
-    ) => {
-      const [admit, attachment] = args;
-      return actual.createSqliteWorkerOperationAdmission((request, grant) => {
-        admission.active = true;
-        try {
-          admission.beforeGrant?.(request.stage);
-          admit(request, grant);
-        } finally {
-          admission.active = false;
-        }
-      }, attachment);
-    },
-  };
-});
+vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) =>
+  (
+    await import("./update-candidate-canary-mocks.test-support.js")
+  ).mockCanarySqliteOperationAdmission(
+    await importOriginal<typeof import("./sqlite-worker-operation-admission.js")>(),
+    admission,
+  ),
+);
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     admission.beforeGrant = undefined;
@@ -190,10 +178,19 @@ describe("update candidate canary", () => {
 
   it("keeps snapshot and validation source selection inside the candidate", async () => {
     stubHealthyGateway();
+    const warnings = ["Update checks could not inspect plugin esm-fixture: unsupported syntax."];
+    mocks.snapshot.mockImplementation(async (_command, options: { input: string }) =>
+      createCanarySnapshotResult(options.input, databasePath, warnings),
+    );
     const servingRoot = path.join(root, "installed");
     const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
     const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3000), env });
     expect(result.status).toBe("ok");
+    expect(result.steps[0]?.warnings).toEqual(warnings);
+    expect(mocks.snapshot.mock.calls[0]?.[0]).toEqual([
+      process.execPath,
+      path.join(root, "dist", "infra", "update-candidate-state.worker.js"),
+    ]);
     expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
     expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
     for (const call of mocks.spawn.mock.calls) {
@@ -619,6 +616,7 @@ describe("update candidate canary", () => {
       "candidate-gateway-startup",
     ]);
     expect(completed.map((step) => step.name)).toEqual(result.steps.map((step) => step.name));
+    expect(completed.at(-1)?.argv.filter((arg) => arg === "--update-canary")).toHaveLength(2);
     expect(completed.map((step) => step.argv.slice(1, 3))).toEqual([
       [],
       ["doctor", "--fix"],
@@ -670,103 +668,121 @@ describe("update candidate canary", () => {
     await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["lint", "startup", "startup-multiline", "config", "multiline", "envelope", "compact"])(
-    "retains the CLI reason when %s exits before its report",
-    async (scenario) => {
-      const phase = scenario.startsWith("startup")
-        ? "startup"
-        : scenario === "config"
-          ? "config"
-          : "lint";
-      const spawnNormally = mocks.spawn.getMockImplementation()!;
-      mocks.spawn.mockImplementation((command, args: string[], options) => {
-        if (
-          !args.includes({ lint: "--lint", startup: "--update-canary", config: "validate" }[phase])
-        ) {
-          return spawnNormally(command, args, options);
+  it.each([
+    "lint",
+    "startup",
+    "startup-multiline",
+    "startup-tail",
+    "config",
+    "multiline",
+    "envelope",
+    "compact",
+  ])("retains the failure reason when %s exits before its report", async (scenario) => {
+    const phase = scenario.startsWith("startup")
+      ? "startup"
+      : scenario === "config"
+        ? "config"
+        : "lint";
+    const spawnNormally = mocks.spawn.getMockImplementation()!;
+    mocks.spawn.mockImplementation((command, args: string[], options) => {
+      if (
+        !args.includes({ lint: "--lint", startup: "--update-canary", config: "validate" }[phase])
+      ) {
+        return spawnNormally(command, args, options);
+      }
+      const error = scenario.endsWith("multiline")
+        ? createInvalidConfigError(
+            "/fixture/openclaw.json",
+            `- gateway.port: invalid ${"x".repeat(160)} token=synthetic-secret\n- gateway.host: unknown`,
+          )
+        : new Error("Unable to resolve health API token=synthetic-secret");
+      if (scenario === "startup-multiline") {
+        throw error;
+      }
+      const child = new FakeChild(nextPid++);
+      queueMicrotask(() => {
+        if (phase === "config") {
+          child.stdout.write(
+            JSON.stringify({
+              ok: false,
+              error: { message: "OpenClaw config is invalid" },
+              valid: false,
+              issues: [
+                { path: "gateway.port", message: "Expected number; token=synthetic-secret" },
+              ],
+            }),
+          );
         }
-        const error = scenario.endsWith("multiline")
-          ? createInvalidConfigError(
-              "/fixture/openclaw.json",
-              `- gateway.port: invalid ${"x".repeat(160)} token=synthetic-secret\n- gateway.host: unknown`,
-            )
-          : new Error("Unable to resolve health API token=synthetic-secret");
-        if (scenario === "startup-multiline") {
-          throw error;
+        if (["envelope", "compact"].includes(scenario)) {
+          child.stdout.write(
+            JSON.stringify(
+              formatCliJsonFailure(error, { argv: [], env: {} }),
+              null,
+              scenario === "compact" ? undefined : 2,
+            ) + "\n",
+          );
         }
-        const child = new FakeChild(nextPid++);
-        queueMicrotask(() => {
-          if (phase === "config") {
-            child.stdout.write(
-              JSON.stringify({
-                ok: false,
-                error: { message: "OpenClaw config is invalid" },
-                valid: false,
-                issues: [
-                  { path: "gateway.port", message: "Expected number; token=synthetic-secret" },
-                ],
-              }),
-            );
-          }
-          if (["envelope", "compact"].includes(scenario)) {
-            child.stdout.write(
-              JSON.stringify(
-                formatCliJsonFailure(error, { argv: [], env: {} }),
-                null,
-                scenario === "compact" ? undefined : 2,
-              ) + "\n",
-            );
-          }
+        if (scenario === "startup-tail") {
+          child.stderr.write("openclaw-update-canary-progress: cli.main.argv\nEarlier warning\n");
+          child.stderr.write(`${"x".repeat(20_001)} ${error.message}\n`);
+          child.stderr.write("openclaw-update-canary-progress: cli.main.gateway-run-bootstrap\n");
+        } else {
           child.stderr.write(
             formatCliFailureLines({ title: "The CLI command failed.", error, env: {} }).join("\n") +
               "\n",
           );
-          if (["lint", "startup", "config"].includes(scenario)) {
-            child.stderr.write(
-              Array.from({ length: 60 }, (_, index) => `cleanup ${index}\n`).join(""),
-            );
-          }
-          child.emit("close", 1);
-        });
-        return child;
+        }
+        if (["lint", "startup", "config"].includes(scenario)) {
+          child.stderr.write(
+            Array.from({ length: 60 }, (_, index) => `cleanup ${index}\n`).join(""),
+          );
+        }
+        child.emit("close", 1);
       });
-      const env = { API_TOKEN: "synthetic-secret" };
-      const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), env });
-      expect(result).toMatchObject({ status: "error", phase });
-      const failed = result.steps.at(-1)!;
-      expect(failed.failureFacts?.[0]?.message).toContain(
-        phase === "config"
-          ? "Expected number"
-          : scenario.endsWith("multiline")
-            ? "Invalid config"
-            : "Unable to resolve health API",
-      );
-      if (!["lint", "config"].includes(scenario)) {
-        const output = renderSteps([failed]);
-        if (scenario.endsWith("multiline")) {
-          expect(output).toContain("gateway.port: invalid");
-          expect(output).toContain("gateway.host: unknown");
-          expect(updateRunStepsFromResultStep(failed).map((step) => step.detail)).toContainEqual(
-            expect.stringContaining(
-              scenario === "multiline" ? "gateway.port: invalid" : "Invalid config",
-            ),
-          );
-        } else {
-          const report = renderUpdateRunReport(
-            updateRunReportInputFromResult({ ...result, mode: "git", root }),
-          );
-          for (const text of [output, report.markdown]) {
+      return child;
+    });
+    const env = { API_TOKEN: "synthetic-secret" };
+    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), env });
+    expect(result).toMatchObject({ status: "error", phase });
+    const failed = result.steps.at(-1)!;
+    if (scenario === "startup-tail") {
+      expect.soft(failed.stderrTail).toContain("Unable to resolve health API");
+    }
+    expect(failed.failureFacts?.[0]?.message).toContain(
+      phase === "config"
+        ? "Expected number"
+        : scenario.endsWith("multiline")
+          ? "Invalid config"
+          : "Unable to resolve health API",
+    );
+    if (!["lint", "config"].includes(scenario)) {
+      const output = renderSteps([failed]);
+      if (scenario.endsWith("multiline")) {
+        expect(output).toContain("gateway.port: invalid");
+        expect(output).toContain("gateway.host: unknown");
+        expect(updateRunStepsFromResultStep(failed).map((step) => step.detail)).toContainEqual(
+          expect.stringContaining(
+            scenario === "multiline" ? "gateway.port: invalid" : "Invalid config",
+          ),
+        );
+      } else {
+        const report = renderUpdateRunReport(
+          updateRunReportInputFromResult({ ...result, mode: "git", root }),
+        );
+        for (const text of [output, report.markdown]) {
+          expect(text).toContain("Unable to resolve health API");
+          if (scenario !== "startup-tail") {
             expect(text.match(/Unable to resolve health API/gu)).toHaveLength(1);
           }
-          expect(result.logTail.join("\n")).toContain("Unable to resolve health API");
         }
+        expect(result.logTail.join("\n")).toContain("Unable to resolve health API");
       }
-      if (phase === "config") {
-        expect(failed.failureFacts?.[0]?.affectedKey).toBe("gateway.port");
-      }
-      expect(JSON.stringify(result)).not.toContain("synthetic-secret");
-    },
-  );
+    }
+    if (phase === "config") {
+      expect(failed.failureFacts?.[0]?.affectedKey).toBe("gateway.port");
+    }
+    expect(JSON.stringify(result)).not.toContain("synthetic-secret");
+  });
 
   it.each(["snapshot", "doctor", "plugins", "runtime", "readiness"] as const)(
     "records the %s outcome and cleans private state",

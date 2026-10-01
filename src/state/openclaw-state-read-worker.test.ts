@@ -183,7 +183,7 @@ it.each(["query failed", "native reader close failed"])(
   },
 );
 
-it.each(["cleanup-fact", "bun"] as const)(
+it.each(["cleanup-fact", "conservative", "capable"] as const)(
   "settles successful reads with retirement only for native cleanup (%s)",
   async (reason) => {
     const { options } = source();
@@ -194,13 +194,11 @@ it.each(["cleanup-fact", "bun"] as const)(
       stopping.resolve();
       return stopped.promise;
     });
-    if (reason === "bun") {
-      // Policy-only control: the task and its native retirement are both mocked.
-      vi.stubGlobal("process", {
-        ...process,
-        versions: { ...process.versions, bun: "1.4.2" },
-      });
-    }
+    mock.capabilities.mockReturnValue({
+      explicitSqliteCloseReleasesNativeResources: reason !== "conservative",
+      decided: true,
+      reason: "test policy",
+    });
     try {
       const result = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
       let settled = false;
@@ -236,9 +234,6 @@ it.each(["cleanup-fact", "bun"] as const)(
       expect(task.close).toHaveBeenCalledOnce();
     } finally {
       stopped.resolve();
-      if (reason === "bun") {
-        vi.unstubAllGlobals();
-      }
     }
   },
 );

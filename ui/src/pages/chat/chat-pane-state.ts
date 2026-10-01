@@ -1,11 +1,13 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { isChatControlCommand } from "../../lib/chat/commands.ts";
 import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
@@ -95,12 +97,27 @@ export function dismissChatError(state: {
   state.chatError = null;
 }
 
-export function initialHistorySubmitState(state: ChatState, unavailable: boolean) {
+export function chatSubmitState(
+  state: ChatState & Pick<ChatPageHost, "handleChatDraftChange">,
+  unavailable: boolean,
+  nativeChat: boolean,
+) {
   const historyLoad = getChatHistoryLoadState(state);
   const failure = unavailable && historyLoad.phase === "failed" ? historyLoad.message : null;
+  const pendingReason = nativeChat ? chatSendPendingReason(state, state.sessionKey) : null;
+  const controlCommand = isChatControlCommand(state.chatMessage);
   return {
-    submitDisabledReason: unavailable ? (failure ?? t("chat.thread.loading")) : null,
-    submitPending: unavailable && historyLoad.phase !== "failed",
+    ...(pendingReason && !controlCommand ? { canSend: false } : {}),
+    submitDisabledReason:
+      pendingReason ?? (unavailable ? (failure ?? t("chat.thread.loading")) : null),
+    submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
+    onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
+      state.handleChatDraftChange(...args);
+      // Nonempty draft edits can skip a pane render, but this gate depends on command intent.
+      if (pendingReason && controlCommand !== isChatControlCommand(state.chatMessage)) {
+        state.requestUpdate?.();
+      }
+    },
   };
 }
 

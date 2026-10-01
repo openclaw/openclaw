@@ -170,11 +170,7 @@ function encodeEdgeDecorationLiteral(unit: NameUnit | undefined): string {
   if (!spelled) {
     // A markless edge is spelled with joiners and spacing alone. The joiners
     // are taken at the core's seam, and the whitespace is the member's own.
-    return encodeOptionalJoiners(
-      Array.from(unit.literal)
-        .filter((character) => JOINER_ONLY.test(character))
-        .join(""),
-    );
+    return encodeOptionalJoiners(unit.literal.replace(/[^\u200C\u200D]/gu, ""));
   }
   return spelled;
 }
@@ -185,11 +181,7 @@ function encodeInteriorDecoration(unit: DecorationUnit): string {
   if (!spelled) {
     // Joiners vanish during matching; whitespace survives and remains required
     // only when the original gap carried it.
-    const joiners = encodeOptionalJoiners(
-      Array.from(unit.literal)
-        .filter((character) => JOINER_ONLY.test(character))
-        .join(""),
-    );
+    const joiners = encodeOptionalJoiners(unit.literal.replace(/[^\u200C\u200D]/gu, ""));
     return unit.spaced ? String.raw`${joiners}\s${DECORATION_SPACING}` : joiners;
   }
   // A gap carrying whitespace keeps a one-separator floor so the bare

@@ -77,6 +77,25 @@ do not request a check. Cancellation, approval waits, accepted child/media compl
 status-only refreshes, and explicit plugin finalization retain their
 existing behavior. Other agent harnesses retain their own finalization policies.
 
+## Pause without marking work complete
+
+If no authorized step can proceed because of an explicit pause, required approval,
+or an external dependency, replace the checklist with a Markdown-only card. Keep
+the unfinished work, blocker, responsible owner, and resume condition visible.
+Do not mark blocked steps completed or imply that the request is finished.
+
+```json
+{
+  "markdown": "Update remains open and paused. Waiting for the source owner to publish the reviewed repair. No deployment is authorized; reconcile the new packet and current instructions before resuming."
+}
+```
+
+Omitting `plan` removes the checklist, not the note or the task’s unresolved work.
+A note-only replacement does not request a completion self-check. Re-saving an
+unfinished checklist during a later ordinary turn can request another check, even
+when the same blocker remains. Restore a checklist when authorized work can
+proceed; keep any other unresolved dependencies in the note.
+
 ## Format the note
 
 For eligible multi-step work with a known total, prefer a leading progress bar using observed completed/total counts: PRs reviewed, tests finished, files processed, or other meaningful work units. Prefer those counts over coarse phase counts such as "1 of 3 steps." Label exactly what the count measures: reviewed PRs are not merged PRs, and finished tests are not necessarily passing tests. Never invent percentages or infer completion from elapsed time. When the total is unknown, use a compact status note or table instead.

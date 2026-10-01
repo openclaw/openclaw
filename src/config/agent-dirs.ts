@@ -1,4 +1,3 @@
-// Resolves agent-specific config and workspace directories.
 import path from "node:path";
 import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

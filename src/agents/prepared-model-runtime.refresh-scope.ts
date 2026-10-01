@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -184,6 +185,41 @@ export function resolveSafeRefreshAgentIds(
     }
   }
   return requested;
+}
+
+/** A retired Gateway lender cannot leave a live configured publication without a successor. */
+export function createPreparedModelRuntimePluginRecovery(
+  owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
+  canRecover: () => boolean,
+  publish: (
+    config: () => OpenClawConfig,
+    options: PreparedModelRuntimeRefreshOptions,
+  ) => Promise<void>,
+) {
+  return (owner: PreparedModelRuntimeOwner): void => {
+    if (
+      !canRecover() ||
+      owner.provenance !== "configured" ||
+      owner.pending ||
+      owners.get(ownerKey(owner.input)) !== owner
+    ) {
+      return;
+    }
+    // The publication queue owns recovery, not the closing caller or its retired
+    // cache. Install its barrier synchronously; serialized builds join prior cleanup.
+    void runInDetachedAsyncContext(async () => {
+      try {
+        await publish(() => owner.input.config, {
+          catalogMode: "static",
+          allowGatewaySubagentBinding: true,
+        });
+      } catch (error) {
+        if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+          log.warn(`retired plugin generation refresh failed: ${formatErrorMessage(error)}`);
+        }
+      }
+    });
+  };
 }
 
 /** A failed shared catalog isolate retires its borrowers through the publication owner. */

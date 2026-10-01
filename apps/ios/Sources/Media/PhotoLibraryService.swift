@@ -39,17 +39,12 @@ final class PhotoLibraryService: PhotosServicing {
         let formatter = ISO8601DateFormatter()
 
         assets.enumerateObjects { asset, _, stop in
-            if results.count >= limit {
-                stop.pointee = true
-                return
-            }
             if let payload = try? Self.renderAsset(
                 asset,
                 maxWidth: maxWidth,
                 quality: quality,
                 formatter: formatter)
             {
-                // Keep the entire response under the gateway WS max payload.
                 if payload.base64.count > remainingBudget {
                     stop.pointee = true
                     return

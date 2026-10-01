@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { Worker } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -10,6 +12,7 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.j
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -19,11 +22,17 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
-import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionAccessScope,
+  SqliteSessionReclamationDiagnostics,
+} from "./session-accessor.sqlite-contract.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
-import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
+import type {
+  ReclamationDatabaseOptions,
+  SqliteSessionReclamationPlan,
+} from "./session-accessor.sqlite-lifecycle-types.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
@@ -33,33 +42,43 @@ import { createSessionEntryReclamationPlan } from "./session-accessor.sqlite-rec
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
+function createEntryFixture(
+  scope: SessionAccessScope & { sessionId: string },
+  databaseOptions: ReclamationDatabaseOptions,
+) {
+  ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const entry = loadSessionEntry(scope);
+  assert.ok(entry);
+  return {
+    scope,
+    entry,
+    plan: createSessionEntryReclamationPlan({
+      databaseOptions,
+      deleteParams: {
+        archiveTranscript: false,
+        storePath: databaseOptions.path,
+        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+      },
+      preparedTargetSnapshot: [{ entry, sessionKey: scope.sessionKey }],
+      materializedPlans: [],
+    }),
+  };
+}
+
 test("retains one Worker across twenty admission refusals and interleaved reclamation operations", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const databaseOptions = reclamation.resolveSessionReclamationDatabaseOptions(options);
-    const entries = Array.from({ length: 4 }, (_, index) => {
-      const scope = {
-        ...options,
-        sessionId: `interleaved-${index}`,
-        sessionKey: `agent:main:interleaved-${index}`,
-      };
-      ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const entry = loadSessionEntry(scope);
-      assert.ok(entry);
-      return {
-        scope,
-        plan: createSessionEntryReclamationPlan({
-          databaseOptions,
-          deleteParams: {
-            archiveTranscript: false,
-            storePath: databaseOptions.path,
-            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-          },
-          preparedTargetSnapshot: [{ entry, sessionKey: scope.sessionKey }],
-          materializedPlans: [],
-        }),
-      };
-    });
+    const entries = Array.from({ length: 4 }, (_, index) =>
+      createEntryFixture(
+        {
+          ...options,
+          sessionId: `interleaved-${index}`,
+          sessionKey: `agent:main:interleaved-${index}`,
+        },
+        databaseOptions,
+      ),
+    );
     let refusalPoint: "admission-request" | "commit-request" | undefined;
     let superseded = false;
     const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
@@ -138,6 +157,42 @@ test("retains one Worker across twenty admission refusals and interleaved reclam
   });
 });
 
+test.each(["path", "root"] as const)(
+  "retires a retained Worker by the symlinked %s its requester used",
+  async (retirement) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const link = path.join(state.root, "state-link");
+      const stateDir = expectDefined(state.env.OPENCLAW_STATE_DIR, "test state directory");
+      await fs.symlink(stateDir, link, process.platform === "win32" ? "junction" : "dir");
+      // The Worker runs at the physical path; cleanup selects the lexical path the caller used.
+      const options = { agentId: "main", env: { ...state.env, OPENCLAW_STATE_DIR: link } };
+      const databaseOptions = reclamation.resolveSessionReclamationDatabaseOptions(options);
+      const scope = { ...options, sessionId: "linked", sessionKey: "agent:main:linked" };
+      const { plan } = createEntryFixture(scope, databaseOptions);
+      const spawned: Worker[] = [];
+      const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
+      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
+        const worker = create(data);
+        spawned.push(worker);
+        return worker;
+      });
+      try {
+        await runSqliteSessionReclamation({
+          forceInProcess: false,
+          plan,
+        });
+        expect(spawned).toHaveLength(1);
+        await (retirement === "path"
+          ? closeOpenClawAgentDatabaseByPathAsync(databaseOptions.path)
+          : closeOpenClawAgentDatabasesAsync(link));
+        expect(spawned[0]?.threadId).toBe(-1);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+  },
+);
+
 test("binds first shared-state creation without host SQL and reuses reclamation until thirty idle minutes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
@@ -162,26 +217,16 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
         }
       },
     );
-    const plans = Array.from({ length: 4 }, (_, index) => {
-      const scope = {
-        ...options,
-        sessionId: `synthetic-reclamation-idle-${index}`,
-        sessionKey: `agent:main:synthetic-reclamation-idle-${index}`,
-      };
-      ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const entry = loadSessionEntry(scope);
-      assert.ok(entry);
-      return createSessionEntryReclamationPlan({
-        databaseOptions,
-        deleteParams: {
-          archiveTranscript: false,
-          storePath: databaseOptions.path,
-          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+    const entries = Array.from({ length: 4 }, (_, index) =>
+      createEntryFixture(
+        {
+          ...options,
+          sessionId: `synthetic-reclamation-idle-${index}`,
+          sessionKey: `agent:main:synthetic-reclamation-idle-${index}`,
         },
-        preparedTargetSnapshot: [{ entry, sessionKey: scope.sessionKey }],
-        materializedPlans: [],
-      });
-    });
+        databaseOptions,
+      ),
+    );
     const workers: Worker[] = [];
     const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
     vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
@@ -191,19 +236,14 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
     });
     const reclaim = async (index: number) => {
       const diagnostics: SqliteSessionReclamationDiagnostics = {};
-      const plan = plans[index];
-      assert.ok(plan);
+      const fixture = entries[index];
+      assert.ok(fixture);
       await runSqliteSessionReclamation({
         forceInProcess: false,
-        plan,
+        plan: fixture.plan,
         diagnostics,
       });
-      expect(
-        loadSessionEntry({
-          ...options,
-          sessionKey: `agent:main:synthetic-reclamation-idle-${index}`,
-        }),
-      ).toBeUndefined();
+      expect(loadSessionEntry(fixture.scope)).toBeUndefined();
       return diagnostics.workerThreadId;
     };
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -238,14 +278,12 @@ test("retains a late lease receipt for exact cleanup after source read admission
       sessionId: "synthetic-late-lease",
       sessionKey: "agent:main:synthetic-late-lease",
     };
-    ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const databaseOptions = {
       agentId: scope.agentId,
       env: state.env,
       path: openOpenClawAgentDatabase(scope).path,
     };
-    const entry = loadSessionEntry(scope);
-    assert.ok(entry);
+    const { entry, plan } = createEntryFixture(scope, databaseOptions);
     const sharedPath = resolveOpenClawStateSqlitePath(state.env);
     const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedPath);
     const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
@@ -268,16 +306,7 @@ test("retains a late lease receipt for exact cleanup after source read admission
       await expect(
         runSqliteSessionReclamation({
           forceInProcess: false,
-          plan: createSessionEntryReclamationPlan({
-            databaseOptions,
-            deleteParams: {
-              archiveTranscript: false,
-              storePath: databaseOptions.path,
-              target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-            },
-            preparedTargetSnapshot: [{ entry, sessionKey: scope.sessionKey }],
-            materializedPlans: [],
-          }),
+          plan,
         }),
       ).rejects.toThrow("OpenClaw state database read admission changed");
       expect(revoked).toBe(true);
@@ -305,14 +334,12 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
         sessionId: "synthetic-reclamation-session",
         sessionKey: "agent:main:synthetic-reclamation-session",
       };
-      ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const databaseOptions = {
         agentId: scope.agentId,
         env: state.env,
         path: openOpenClawAgentDatabase(scope).path,
       };
-      const entry = loadSessionEntry(scope);
-      assert.ok(entry);
+      const { entry, plan } = createEntryFixture(scope, databaseOptions);
       const file = state.path("reclamation.log");
       await fs.writeFile(file, "");
       setLoggerOverride({ level: "info", consoleLevel: "silent", file });
@@ -334,16 +361,7 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
         await expect(
           runSqliteSessionReclamation({
             forceInProcess: false,
-            plan: createSessionEntryReclamationPlan({
-              databaseOptions,
-              deleteParams: {
-                archiveTranscript: false,
-                storePath: databaseOptions.path,
-                target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-              },
-              preparedTargetSnapshot: [{ entry, sessionKey: scope.sessionKey }],
-              materializedPlans: [],
-            }),
+            plan,
           }),
         ).rejects.toThrow("synthetic reclamation crash");
         expect(worker.threadId).toBe(-1);

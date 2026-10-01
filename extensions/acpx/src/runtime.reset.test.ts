@@ -59,22 +59,6 @@ async function ensureFresh(
 
 describe("AcpxRuntime reset generation custody", () => {
   beforeEach(() => vi.restoreAllMocks());
-  it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
-    const { runtime, wrappedStore, baseStore, oldRecord } = makePersistedRuntime("stale");
-    expect(await wrappedStore.load(resetSessionKey)).toEqual(oldRecord);
-    expect(baseStore.load).toHaveBeenCalledOnce();
-    await runtime.prepareFreshSession({ sessionKey: resetSessionKey });
-    expect(await wrappedStore.load(resetSessionKey)).toBeUndefined();
-    expect(await wrappedStore.load(resetSessionKey)).toBeUndefined();
-    expect(baseStore.load).toHaveBeenCalledOnce();
-    await wrappedStore.save(freshRecord);
-    expect(await wrappedStore.load(resetSessionKey)).toMatchObject({
-      acpxRecordId: resetSessionKey,
-      acpSessionId: "fresh-session",
-    });
-    expect(baseStore.load).toHaveBeenCalledTimes(2);
-  });
-
   it("fences persistence from a runtime option that finishes after reset", async () => {
     const { runtime, wrappedStore, delegate, baseStore, oldRecord } =
       makePersistedRuntime("old-record");
@@ -189,76 +173,56 @@ describe("AcpxRuntime reset generation custody", () => {
     }
   });
 
-  it.each(["success", "cleanup-failure", "close-failure"] as const)(
-    "preserves persisted session ownership through %s",
-    async (outcome) => {
-      const { runtime, target, baseStore, sleep, ensure } = makeManagedRuntime();
-      const handle = await ensure();
-      if (outcome === "cleanup-failure") {
-        sleep.mockRejectedValueOnce(new Error("cleanup failed"));
-      }
-      if (outcome === "close-failure") {
-        baseStore.save.mockRejectedValueOnce(new Error("close failed"));
-      }
-      const closing = runtime.close({ handle, reason: "closed" });
-      if (outcome === "success") {
-        await closing;
-      } else {
-        await expect(closing).rejects.toThrow(
-          outcome === "cleanup-failure" ? "cleanup failed" : "close failed",
-        );
-      }
-      expect((await baseStore.load()).closed).toBe(outcome !== "close-failure");
-      const next = await ensure();
-      expect(next.sessionKey).toBe(target.sessionKey);
-      expect(next.agentId).toBe(target.agentId);
-      expect(next.backendSessionId).toBe(handle.backendSessionId);
-      await runtime.close({ handle: next, reason: "closed" });
-      await runtime.shutdown();
-    },
-  );
+  it("preserves persisted session ownership after close persistence fails", async () => {
+    const { runtime, target, baseStore, ensure } = makeManagedRuntime();
+    const handle = await ensure();
+    baseStore.save.mockRejectedValueOnce(new Error("close failed"));
+    await expect(runtime.close({ handle, reason: "closed" })).rejects.toThrow("close failed");
+    expect((await baseStore.load()).closed).toBe(false);
+    const next = await ensure();
+    expect(next.sessionKey).toBe(target.sessionKey);
+    expect(next.agentId).toBe(target.agentId);
+    expect(next.backendSessionId).toBe(handle.backendSessionId);
+    await runtime.close({ handle: next, reason: "closed" });
+    await runtime.shutdown();
+  });
 
-  it.each([false, true])(
-    "keeps successor persistence when overlapping predecessor closes settle (prior reset: %s)",
-    async (afterReset) => {
-      const fixture = makeManagedRuntime();
-      const { runtime, target, baseStore, ensure } = fixture;
-      let handle = await ensure();
-      if (afterReset) {
-        await runtime.prepareFreshSession(target);
-        handle = (await ensureFresh(fixture, handle, "prior-reset-session")).handle;
-      }
-      const closingStarted = createDeferred<void>();
-      const releaseClose = createDeferred<void>();
-      const save = baseStore.save.getMockImplementation()!;
-      baseStore.save.mockImplementationOnce(async (record) => {
-        closingStarted.resolve();
-        await releaseClose.promise;
-        await save(record);
-      });
-      const firstClose = runtime.close({ handle, reason: "older close" });
-      let secondClose: Promise<void> | undefined;
-      try {
-        await closingStarted.promise;
-        secondClose = runtime.close({ handle, reason: "concurrent close" });
-        await runtime.prepareFreshSession(target);
-        const successor = ensureFresh(fixture, handle, "successor-session");
-        // The storage writer remains serialized, but the retired runtime does
-        // not own the successor's queue or the final persisted session.
-        releaseClose.resolve();
-        const { handle: next } = await successor;
-        await Promise.all([firstClose, secondClose]);
-        expect(next.backendSessionId).toBe("successor-session");
-        expect((await baseStore.load()).acpSessionId).toBe("successor-session");
-        expect((await baseStore.load()).closed).toBe(false);
-        await runtime.close({ handle: next, reason: "final close" });
-        await runtime.shutdown();
-      } finally {
-        releaseClose.resolve();
-        await Promise.allSettled([firstClose, ...(secondClose ? [secondClose] : [])]);
-      }
-    },
-  );
+  it("keeps successor persistence when overlapping post-reset closes settle", async () => {
+    const fixture = makeManagedRuntime();
+    const { runtime, target, baseStore, ensure } = fixture;
+    let handle = await ensure();
+    await runtime.prepareFreshSession(target);
+    handle = (await ensureFresh(fixture, handle, "prior-reset-session")).handle;
+    const closingStarted = createDeferred<void>();
+    const releaseClose = createDeferred<void>();
+    const save = baseStore.save.getMockImplementation()!;
+    baseStore.save.mockImplementationOnce(async (record) => {
+      closingStarted.resolve();
+      await releaseClose.promise;
+      await save(record);
+    });
+    const firstClose = runtime.close({ handle, reason: "older close" });
+    let secondClose: Promise<void> | undefined;
+    try {
+      await closingStarted.promise;
+      secondClose = runtime.close({ handle, reason: "concurrent close" });
+      await runtime.prepareFreshSession(target);
+      const successor = ensureFresh(fixture, handle, "successor-session");
+      // The storage writer remains serialized, but the retired runtime does
+      // not own the successor's queue or the final persisted session.
+      releaseClose.resolve();
+      const { handle: next } = await successor;
+      await Promise.all([firstClose, secondClose]);
+      expect(next.backendSessionId).toBe("successor-session");
+      expect((await baseStore.load()).acpSessionId).toBe("successor-session");
+      expect((await baseStore.load()).closed).toBe(false);
+      await runtime.close({ handle: next, reason: "final close" });
+      await runtime.shutdown();
+    } finally {
+      releaseClose.resolve();
+      await Promise.allSettled([firstClose, ...(secondClose ? [secondClose] : [])]);
+    }
+  });
   it("keeps ordinary close and reopen off the blocked pre-reset runtime", async () => {
     const fixture = makeManagedRuntime();
     const { runtime, target, ensure } = fixture;

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { valid as validSemver } from "semver";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
@@ -114,7 +115,7 @@ async function resolveNpmOwner(params: {
     .runCommand([params.command, "--version"], { timeoutMs: params.timeoutMs })
     .catch((error: unknown) => ({
       stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
+      stderr: coerceErrorMessage(error),
       code: 1,
     }));
   const version = result.code === 0 ? readPackageManagerProbeValue(result.stdout) : "";
@@ -227,15 +228,12 @@ function resolveNpmAliasPackageName(spec: string): string | null {
     return null;
   }
   const target = spec.slice(spec.indexOf(":") + 1).trim();
-  if (target.startsWith("@")) {
-    const scopeSeparator = target.indexOf("/");
-    if (scopeSeparator <= 1) {
-      return null;
-    }
-    const versionSeparator = target.indexOf("@", scopeSeparator + 1);
-    return versionSeparator === -1 ? target : target.slice(0, versionSeparator);
+  const scoped = target.startsWith("@");
+  const scopeSeparator = scoped ? target.indexOf("/") : -1;
+  if (scoped && scopeSeparator <= 1) {
+    return null;
   }
-  const versionSeparator = target.indexOf("@");
+  const versionSeparator = target.indexOf("@", scopeSeparator + 1);
   const packageName = versionSeparator === -1 ? target : target.slice(0, versionSeparator);
   return packageName || null;
 }

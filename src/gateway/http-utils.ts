@@ -84,14 +84,16 @@ export function isAgentSelectionRequiredError(err: unknown): err is AgentSelecti
   return err instanceof AgentSelectionRequiredError;
 }
 
-export function isInvalidGatewayModelError(err: unknown): err is InvalidGatewayModelError {
-  return err instanceof InvalidGatewayModelError;
+export function isGatewayAgentRequestError(err: unknown): err is Error {
+  return (
+    isAgentSelectionRequiredError(err) ||
+    err instanceof InvalidGatewayModelError ||
+    isUnknownGatewayAgentError(err)
+  );
 }
 
-export function isGatewaySessionKeyOverrideError(
-  err: unknown,
-): err is GatewaySessionKeyOverrideError {
-  return err instanceof GatewaySessionKeyOverrideError;
+export function isGatewayRequestContextError(err: unknown): err is Error {
+  return isGatewayAgentRequestError(err) || err instanceof GatewaySessionKeyOverrideError;
 }
 
 function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {

@@ -78,6 +78,16 @@ catalog reads return retained rows while the existing inventory owner refreshes
 the provider in the background. `ttlMs: 0` still disables response caching and
 does not record an expiry for this renewal path.
 
+A successful authenticated outcome may include private `modelServiceTiers`
+observations: `{ modelId, runtimeId, api, baseUrl, serviceTiers }` rows bound to
+that outcome's `profileId`. Supply only tier IDs explicitly advertised by the
+account's successful response; never copy them from static seeds or native
+fallback catalogs. The host matches the selected profile, model, route, and
+runtime before projecting `serviceTiers` on a public model choice. Account tier
+maps never appear in public `providerOutcomes`. Missing, failed, stale, or
+mismatched observations leave support unknown. This metadata does not authorize
+execution or guarantee upstream fulfillment.
+
 Public metadata requests declare `authentication: "none"` in discovery
 options. The prepared request then has no credential or profile identity;
 its cache key is independent of the configured inference credential.
@@ -266,7 +276,8 @@ credential scope of discovery.
 
 The private `createUpstreamProviderCatalog` helper keeps this snapshot lifecycle in one prepared
 owner. Supply the trusted seed, provider routes, metadata and model-list
-endpoints, static-entry eligibility, and any model decoration. An optional
+endpoints, discovery and starter-model audit labels, static-entry eligibility,
+and any model decoration. An optional
 `upstreamSeed` controls which seed lifecycle facts survive an upstream refresh.
 The owner exposes `getSnapshot`, `refreshMetadata`, `buildStaticProvider`, and
 `buildLiveProvider`; credentials belong to each build call. Live builds refresh
@@ -276,6 +287,10 @@ and empty results remain strict. `refreshMetadata` returns `undefined` when the
 feed lacks the provider, so explicit model preparation cannot mistake retained
 metadata for a successful refresh. Plugin policy still owns which models may
 resolve directly from the seed or current snapshot.
+
+`resolveStarterModel` checks the preferred provider/model reference against a
+fresh account model-list response. It returns that reference only when its exact
+model ID is advertised, without refreshing or extending the metadata snapshot.
 
 Upstream reasoning metadata preserves omitted controls as unspecified and an
 empty options or effort list as no effort control. A native `null` effort maps
@@ -464,3 +479,8 @@ takes precedence over another provider's live key; fields are never mixed
 across accounts. It returns `undefined` when no provider has auth and
 propagates lookup failures. Official plugin releases using this host export
 must require a host version that provides it in their `compat.pluginApi`.
+
+`findNormalizedProviderKey(entries, providerId)` from the private-local
+`openclaw/plugin-sdk/provider-model-metadata` surface returns the first configured
+key whose trimmed, lowercase spelling matches the provider ID. Callers that
+prefer an exact authored key must check that key first.

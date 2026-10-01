@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   isFutureDateTimestampMs,
@@ -59,12 +60,7 @@ function setCachedProbeResult(
     return result;
   }
   probeCache.set(cacheKey, { result, expiresAt });
-  if (probeCache.size > MAX_PROBE_CACHE_SIZE) {
-    const oldest = probeCache.keys().next().value;
-    if (oldest !== undefined) {
-      probeCache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(probeCache, MAX_PROBE_CACHE_SIZE);
   return result;
 }
 

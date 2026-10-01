@@ -1,5 +1,9 @@
 import { compareEvents, finalizeEvent, type Event, type Relay } from "nostr-tools";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 
 const PROFILE_KIND = 0;
@@ -10,17 +14,7 @@ const CHANNEL_ADD_POLICIES = new Set(["anyone", "owner_only", "nobody"]);
 type BuzzProfileSyncResult = { status: "unchanged" } | { status: "published"; eventId: string };
 
 function parseProfileContent(event: Event | undefined): Record<string, unknown> {
-  if (!event) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(event.content);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? { ...parsed }
-      : {};
-  } catch {
-    return {};
-  }
+  return asNonArrayRecord(event ? safeParseJson<unknown>(event.content) : undefined);
 }
 
 function resolveProfileTags(event: Event | undefined, authTag: string[] | undefined): string[][] {

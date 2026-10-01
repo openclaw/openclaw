@@ -204,13 +204,6 @@ const RESPONSE_FAILED_FAILURE_FIELD_KEYS = [
   "error_details",
 ] as const;
 
-function readResponseFailedString(
-  record: Record<string, unknown> | undefined,
-  key: string,
-): string {
-  return stringifyUnknown(record?.[key]);
-}
-
 function buildResponsesFailedEventSummary(
   message: string,
   responseId: string | undefined,
@@ -228,11 +221,6 @@ function buildResponsesFailedEventSummary(
 function isResponseFailedIdentifierKey(key: string): boolean {
   const normalized = key.replace(/[-_\s]/g, "").toLowerCase();
   return (
-    normalized === "requestid" ||
-    normalized === "xrequestid" ||
-    normalized === "providerrequestid" ||
-    normalized === "providerresponseid" ||
-    normalized === "litellmrequestid" ||
     (normalized.includes("request") && normalized.endsWith("id")) ||
     (normalized.includes("provider") && normalized.endsWith("id"))
   );
@@ -357,10 +345,10 @@ function buildResponsesFailedNoDetailsObservation(
     ? Object.keys(response.metadata).toSorted()
     : [];
   const responsePreview = {
-    id: readResponseFailedString(response, "id"),
-    status: readResponseFailedString(response, "status"),
-    model: readResponseFailedString(response, "model"),
-    object: readResponseFailedString(response, "object"),
+    id: stringifyUnknown(response?.id),
+    status: stringifyUnknown(response?.status),
+    model: stringifyUnknown(response?.model),
+    object: stringifyUnknown(response?.object),
     failureFields,
     metadataKeys,
   };
@@ -400,11 +388,11 @@ export function normalizeResponsesFailedEvent(
   model: Model,
 ): ResponsesFailedEventSummary {
   const response = isRecord(event.response) ? event.response : undefined;
-  const responseId = readResponseFailedString(response, "id") || undefined;
+  const responseId = stringifyUnknown(response?.id) || undefined;
   const error = isRecord(response?.error) ? response.error : undefined;
   if (error) {
-    const code = readResponseFailedString(error, "code").trim();
-    const message = readResponseFailedString(error, "message").trim();
+    const code = stringifyUnknown(error.code).trim();
+    const message = stringifyUnknown(error.message).trim();
     if (code || message) {
       return buildResponsesFailedEventSummary(
         `${code || "unknown"}: ${message || "no message"}`,
@@ -416,7 +404,7 @@ export function normalizeResponsesFailedEvent(
   const incompleteDetails = isRecord(response?.incomplete_details)
     ? response.incomplete_details
     : undefined;
-  const incompleteReason = readResponseFailedString(incompleteDetails, "reason");
+  const incompleteReason = stringifyUnknown(incompleteDetails?.reason);
   if (incompleteReason) {
     return buildResponsesFailedEventSummary(`incomplete: ${incompleteReason}`, responseId);
   }

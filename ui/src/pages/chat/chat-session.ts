@@ -232,7 +232,7 @@ async function applyChatSetting(
 
 export function switchChatFastMode(
   host: ChatModelSettingsHost,
-  nextFastMode: "" | "on" | "off" | "auto",
+  nextFastMode: "" | "on" | "off" | "auto" | "ultrafast",
   targetSessionKey = host.sessionKey,
 ): Promise<boolean> {
   if (!host.client || !host.connected) {
@@ -240,7 +240,11 @@ export function switchChatFastMode(
   }
   const captured = captureChatSettingsTarget(host, targetSessionKey);
   const next: FastMode | undefined =
-    nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
+    nextFastMode === ""
+      ? undefined
+      : nextFastMode === "auto" || nextFastMode === "ultrafast"
+        ? nextFastMode
+        : nextFastMode === "on";
   if (captured.settings.fastMode === next) {
     return Promise.resolve(true);
   }
@@ -490,13 +494,6 @@ export async function switchChatModel(
   }
   setChatError(host, null, true);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
-  const clearPendingSwitch = () => {
-    if (host.chatModelSwitchPromises?.[targetSessionKey] === switchPromiseRef.current) {
-      const nextSwitches = { ...host.chatModelSwitchPromises };
-      delete nextSwitches[targetSessionKey];
-      host.chatModelSwitchPromises = nextSwitches;
-    }
-  };
   const switchPromise: Promise<boolean> = (async () => {
     try {
       const patched = await patchChatSessionSettings(host, targetSessionKey, patch, {
@@ -528,7 +525,11 @@ export async function switchChatModel(
         () => !runtimeSelection || runtimeSelection === restriction.runtimeId,
       );
     } finally {
-      clearPendingSwitch();
+      if (host.chatModelSwitchPromises?.[targetSessionKey] === switchPromiseRef.current) {
+        const nextSwitches = { ...host.chatModelSwitchPromises };
+        delete nextSwitches[targetSessionKey];
+        host.chatModelSwitchPromises = nextSwitches;
+      }
       host.requestUpdate?.();
     }
   })();

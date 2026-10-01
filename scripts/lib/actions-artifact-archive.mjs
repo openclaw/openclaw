@@ -68,7 +68,7 @@ function assertTrimmedString(value, label) {
   return value;
 }
 
-function hasControlCharacters(value) {
+export function hasControlCharacters(value) {
   for (const character of value) {
     const codePoint = character.codePointAt(0);
     if (codePoint <= 0x1f || codePoint === 0x7f) {
@@ -78,7 +78,7 @@ function hasControlCharacters(value) {
   return false;
 }
 
-function boundedLimit(value, fallback, label) {
+export function boundedLimit(value, fallback, label) {
   if (value === undefined) {
     return fallback;
   }
@@ -175,7 +175,7 @@ export function sha256Digest(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
-function compareCodeUnits(left, right) {
+export function compareCodeUnits(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 

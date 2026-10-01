@@ -132,9 +132,9 @@ export function resolveUserTranscriptMessages(
     const context = candidates?.find(
       (candidate) =>
         unusedContexts.has(candidate) &&
-        userMessageMatchesTranscriptContext(
-          message,
-          candidate,
+        userContentMatchesTranscriptContext(
+          message.content,
+          (candidate.runtimeMessage as { content?: unknown }).content,
           index === activeUserMessageIndex ||
             (typeof override?.runtimeTimestamp === "number" &&
               override.runtimeTimestamp === timestamp)
@@ -151,25 +151,11 @@ export function resolveUserTranscriptMessages(
   return resolved;
 }
 
-function userMessageMatchesTranscriptContext(
-  message: AgentMessage,
-  context: UserTranscriptContext,
+function userContentMatchesTranscriptContext(
+  messageContent: unknown,
+  runtimeContent: unknown,
   override: CurrentUserTimestampMatch | undefined,
 ): boolean {
-  if (message === context.runtimeMessage) {
-    return true;
-  }
-  const messageTimestamp = message.timestamp;
-  const runtimeTimestamp = context.runtimeMessage.timestamp;
-  if (
-    typeof messageTimestamp !== "number" ||
-    !Number.isFinite(messageTimestamp) ||
-    messageTimestamp !== runtimeTimestamp
-  ) {
-    return false;
-  }
-  const messageContent = (message as { content?: unknown }).content;
-  const runtimeContent = (context.runtimeMessage as { content?: unknown }).content;
   const messageText = readFirstUserText(messageContent);
   const runtimeText = readFirstUserText(runtimeContent);
   if (messageText !== undefined && messageText === runtimeText) {
@@ -340,37 +326,19 @@ export function findActiveUserMessageIndex(messages: AgentMessage[]): number {
     if (message.role === "user") {
       return index;
     }
-    if (message.role === "assistant" && !isToolCallAssistantMessage(message)) {
+    if (
+      message.role === "assistant" &&
+      (!Array.isArray(message.content) || !message.content.some(isRunnerToolCallBlock))
+    ) {
       return -1;
     }
   }
   return -1;
 }
 
-function isToolCallAssistantMessage(message: AgentMessage): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(isRunnerToolCallBlock);
-}
-
 type AttemptRuntimeModelContext = NonNullable<
   Parameters<AgentRuntimePlan["transcript"]["resolvePolicy"]>[0]
 >;
-
-/**
- * Adapts the RuntimePlan model context to the legacy provider-runtime model
- * shape used by transcript-policy fallbacks.
- */
-function asProviderRuntimeModel(
-  model: AttemptRuntimeModelContext["model"],
-): ProviderRuntimeModel | undefined {
-  return typeof model?.id === "string" ? (model as ProviderRuntimeModel) : undefined;
-}
 
 /**
  * Resolves the transcript policy for an embedded attempt. RuntimePlan owns the
@@ -394,7 +362,10 @@ export function resolveAttemptTranscriptPolicy(params: {
       config: params.config,
       workspaceDir: params.runtimePlanModelContext.workspaceDir,
       env: params.env ?? process.env,
-      model: asProviderRuntimeModel(params.runtimePlanModelContext.model),
+      model:
+        typeof params.runtimePlanModelContext.model?.id === "string"
+          ? (params.runtimePlanModelContext.model as ProviderRuntimeModel)
+          : undefined,
     })
   );
 }

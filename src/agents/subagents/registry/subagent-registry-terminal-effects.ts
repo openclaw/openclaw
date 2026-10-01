@@ -18,10 +18,10 @@ import {
   buildSafeLifecycleErrorMeta,
   maskLifecycleIdentifier,
 } from "./subagent-registry-lifecycle-delivery.js";
+import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import {
-  captureSubagentRunMutationSnapshot,
-  publishSubagentRunPostimages,
   SubagentRegistryWriteError,
+  waitForPendingSubagentRegistryWrites,
 } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -79,6 +79,19 @@ export async function completeTerminalEffects(
     isCurrentTerminalCallback() &&
     !context.newerGenerationOwnsSession(entry) &&
     context.sessionEffectsHostCurrent(entry);
+  const persistSessionEffectsSuppression = () =>
+    commitSubagentLifecycleMutation(context, {
+      entry,
+      stateContext: args.stateContext,
+      assertCurrent: () => {
+        if (!isCurrentTerminalCallback()) {
+          throw new Error("Subagent terminal effects lost their original generation");
+        }
+      },
+      mutate: () => {
+        entry.execution = { ...entry.execution, suppressSessionEffects: true };
+      },
+    });
   const refreshSessionEffectsSuppression = async () => {
     const suppressed = await context.shouldSuppressSessionEffects(entry);
     if (!isCurrentTerminalCallback()) {
@@ -89,27 +102,7 @@ export async function completeTerminalEffects(
     }
     suppressSessionEffects = true;
     if (entry.execution.suppressSessionEffects !== true) {
-      const previous = captureSubagentRunMutationSnapshot(entry);
-      entry.execution = { ...entry.execution, suppressSessionEffects: true };
-      const result = await publishSubagentRunPostimages({
-        runs: params.runs,
-        previous: new Map([[entry, previous]]),
-        context: args.stateContext,
-        persist: params.persistAsyncOrThrow,
-        assertCurrent: () => {
-          args.assertCurrent();
-          if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
-            throw new Error("Subagent terminal effects lost their original generation");
-          }
-        },
-      });
-      if (result.publication !== "published") {
-        throw new SubagentRegistryWriteError(
-          "committed",
-          new Error("Subagent terminal effects publication superseded"),
-          result.publication,
-        );
-      }
+      await persistSessionEffectsSuppression();
     }
     return true;
   };
@@ -278,58 +271,11 @@ export async function completeTerminalEffects(
   }
 
   await refreshSessionEffectsSuppression();
-  await completeTerminalCleanup(context, {
-    completeParams,
-    entry,
-    isProvisionalKill,
-    retireSupersededSession,
-    suppressedForSteerRestart,
-    suppressSessionEffects,
-    terminalGeneration,
-    stateContext: args.stateContext,
-    assertCurrent: args.assertCurrent,
-    loadCleanupBrowserSessionsForLifecycleEnd: () =>
-      args.loadCleanupBrowserSessionsForLifecycleEnd(),
-  });
-}
-
-async function completeTerminalCleanup(
-  context: SubagentLifecycleCompletionContext,
-  args: {
-    completeParams: SubagentCompletionRequest;
-    entry: SubagentRunRecord;
-    isProvisionalKill: boolean;
-    retireSupersededSession: (entry: SubagentRunRecord) => Promise<void>;
-    suppressedForSteerRestart: boolean;
-    suppressSessionEffects: boolean;
-    terminalGeneration: number;
-    stateContext: OpenClawStateWorkerContext;
-    assertCurrent: () => void;
-    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserCleanup>;
-  },
-): Promise<void> {
-  const params = context.options;
-  const {
-    completeParams,
-    entry,
-    isProvisionalKill,
-    retireSupersededSession,
-    suppressedForSteerRestart,
-    terminalGeneration,
-  } = args;
-  let { suppressSessionEffects } = args;
-  // Session cleanup belongs to the exact registry row and child generation.
-  // A replacement may reuse either the run id or the child session key.
-  const isCurrentTerminalCallback = () => {
-    if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
-      return false;
-    }
-    args.assertCurrent();
-    return true;
-  };
+  // Cleanup also rejects newer session generations, but host custody is checked
+  // at each resource dispatch rather than shared with terminal-signal admission.
   const isSessionEffectsOwnerCurrent = () =>
     isCurrentTerminalCallback() && !context.newerGenerationOwnsSession(entry);
-  const refreshSessionEffectsSuppression = async () => {
+  const refreshCleanupSuppression = async () => {
     if (
       suppressSessionEffects ||
       !isSessionEffectsOwnerCurrent() ||
@@ -338,27 +284,7 @@ async function completeTerminalCleanup(
     ) {
       return suppressSessionEffects;
     }
-    const previous = captureSubagentRunMutationSnapshot(entry);
-    entry.execution = { ...entry.execution, suppressSessionEffects: true };
-    const result = await publishSubagentRunPostimages({
-      runs: params.runs,
-      previous: new Map([[entry, previous]]),
-      context: args.stateContext,
-      persist: params.persistAsyncOrThrow,
-      assertCurrent: () => {
-        args.assertCurrent();
-        if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
-          throw new Error("Subagent terminal effects lost their original generation");
-        }
-      },
-    });
-    if (result.publication !== "published") {
-      throw new SubagentRegistryWriteError(
-        "committed",
-        new Error("Subagent terminal effects publication superseded"),
-        result.publication,
-      );
-    }
+    await persistSessionEffectsSuppression();
     suppressSessionEffects = true;
     return true;
   };
@@ -366,7 +292,7 @@ async function completeTerminalCleanup(
     return;
   }
 
-  await refreshSessionEffectsSuppression();
+  await refreshCleanupSuppression();
   if (!isCurrentTerminalCallback()) {
     return;
   }
@@ -405,29 +331,68 @@ async function completeTerminalCleanup(
       // Claim only when this caller is about to dispatch. A concurrent caller
       // may have claimed while the lazy browser module was loading.
       if (
-        !(await refreshSessionEffectsSuppression()) &&
+        !(await refreshCleanupSuppression()) &&
         isSessionEffectsOwnerCurrent() &&
         entry.browserCleanupDispatchedAt === undefined
       ) {
-        entry.browserCleanupDispatchedAt = Date.now();
-        dispatchedBrowserCleanup = true;
-        try {
-          await cleanupBrowserSessions({
-            sessionKeys: [entry.childSessionKey],
-            isCurrent: () =>
-              isSessionEffectsOwnerCurrent() && context.sessionEffectsHostCurrent(entry),
-            prepareCurrent: async () =>
-              !(await context.shouldSuppressSessionEffects(entry)) &&
-              isSessionEffectsOwnerCurrent(),
-            sessionEntryCurrent: context.getSessionEffects(entry)?.nativeCheck,
-            onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
-          });
-        } catch (error) {
-          params.warn("failed to cleanup browser sessions for completed subagent", {
-            error: buildSafeLifecycleErrorMeta(error),
-            runId: maskLifecycleIdentifier(completeParams.runId, "run"),
-            childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
-          });
+        while (isSessionEffectsOwnerCurrent() && entry.browserCleanupDispatchedAt === undefined) {
+          const pending = waitForPendingSubagentRegistryWrites(
+            [entry.runId],
+            args.stateContext.admission,
+          );
+          if (pending) {
+            await pending;
+            continue;
+          }
+          // Claim and admit persistence together: a follow-up must never compare
+          // an untracked cleanup marker against the exact durable source row.
+          const dispatchedAt = Date.now();
+          entry.browserCleanupDispatchedAt = dispatchedAt;
+          try {
+            await params.persistAsyncOrThrow(
+              args.stateContext,
+              {
+                assertCurrent: () => {
+                  if (!isSessionEffectsOwnerCurrent()) {
+                    throw new Error("Subagent browser cleanup lost its original owner");
+                  }
+                },
+              },
+              entry.runId,
+            );
+          } catch (error) {
+            if (
+              error instanceof SubagentRegistryWriteError &&
+              error.outcome === "not-committed" &&
+              entry.browserCleanupDispatchedAt === dispatchedAt
+            ) {
+              delete entry.browserCleanupDispatchedAt;
+            }
+            throw error;
+          }
+          if (!isSessionEffectsOwnerCurrent() || !context.sessionEffectsHostCurrent(entry)) {
+            return;
+          }
+          dispatchedBrowserCleanup = true;
+          try {
+            await cleanupBrowserSessions({
+              sessionKeys: [entry.childSessionKey],
+              isCurrent: () =>
+                isSessionEffectsOwnerCurrent() && context.sessionEffectsHostCurrent(entry),
+              prepareCurrent: async () =>
+                !(await context.shouldSuppressSessionEffects(entry)) &&
+                isSessionEffectsOwnerCurrent(),
+              sessionEntryCurrent: context.getSessionEffects(entry)?.nativeCheck,
+              onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+            });
+          } catch (error) {
+            params.warn("failed to cleanup browser sessions for completed subagent", {
+              error: buildSafeLifecycleErrorMeta(error),
+              runId: maskLifecycleIdentifier(completeParams.runId, "run"),
+              childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
+            });
+          }
+          break;
         }
       }
     }
@@ -435,7 +400,7 @@ async function completeTerminalCleanup(
       if (!isCurrentTerminalCallback()) {
         return;
       }
-      await refreshSessionEffectsSuppression();
+      await refreshCleanupSuppression();
       if (context.newerGenerationOwnsSession(entry)) {
         await retireSupersededSession(entry);
         return;
@@ -467,7 +432,7 @@ async function completeTerminalCleanup(
     if (!isCurrentTerminalCallback()) {
       return;
     }
-    await refreshSessionEffectsSuppression();
+    await refreshCleanupSuppression();
     if (context.newerGenerationOwnsSession(entry)) {
       await retireSupersededSession(entry);
       return;
@@ -480,7 +445,7 @@ async function completeTerminalCleanup(
     return;
   }
 
-  await refreshSessionEffectsSuppression();
+  await refreshCleanupSuppression();
   if (isCurrentTerminalCallback()) {
     context.startSubagentAnnounceCleanupFlow(completeParams.runId, entry);
   }

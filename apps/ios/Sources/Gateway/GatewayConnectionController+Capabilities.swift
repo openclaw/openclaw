@@ -194,7 +194,7 @@ extension GatewayConnectionController {
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
         let locationStatus = self.locationAuthorizationSnapshot.authorizationStatus
-        let locationServicesEnabled = await Self.locationServicesEnabled()
+        let locationServicesEnabled = await LocationService.servicesEnabled()
         permissions["location"] = Self.isLocationAvailable(
             servicesEnabled: locationServicesEnabled,
             status: locationStatus)
@@ -215,12 +215,6 @@ extension GatewayConnectionController {
             motionStatus == .authorized || pedometerStatus == .authorized
 
         return permissions
-    }
-
-    private static func locationServicesEnabled() async -> Bool {
-        await Task.detached(priority: .utility) {
-            CLLocationManager.locationServicesEnabled()
-        }.value
     }
 
     private static func isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {

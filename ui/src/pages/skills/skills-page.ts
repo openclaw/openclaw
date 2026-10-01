@@ -147,10 +147,7 @@ class SkillsPage extends OpenClawLightDomElement {
       client ? searchClawHub(client, query, signal) : initialState,
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    )
+    .watchStore(() => this.context?.config)
     .effect(
       () => this.context?.agents,
       (agents) => {
@@ -164,9 +161,8 @@ class SkillsPage extends OpenClawLightDomElement {
         return cleanup;
       },
     )
-    .watch(
+    .watchStore(
       () => this.context && this.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => {
         const previous = this.skillsAgentId;
         this.reconcileAgentState();

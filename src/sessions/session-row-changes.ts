@@ -37,8 +37,8 @@ export type SessionRowChange =
       agentId?: string;
       storePath?: string;
       scope?: "automation" | "runtime" | "session-entry";
-      /** Stored row facts require worker reconciliation before they can be reused. */
-      factsInvalidated?: true;
+      /** Category uncertainty cannot change identity or lineage; other storage outcomes can. */
+      factsInvalidated?: true | "category";
       /** Omission is a metadata notification; storage owners publish their changed facts. */
       facts?: SessionRowFacts;
     }

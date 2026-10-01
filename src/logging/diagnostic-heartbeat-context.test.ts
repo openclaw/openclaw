@@ -80,6 +80,37 @@ async function tick() {
   await clock.advanceBy(30_000);
 }
 
+it("checks memory pressure every tick without recording idle samples", async () => {
+  const emitMemorySample = vi.fn(() => ({
+    rssBytes: 100,
+    heapTotalBytes: 80,
+    heapUsedBytes: 40,
+    externalBytes: 10,
+    arrayBuffersBytes: 5,
+  }));
+  const options = {
+    testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+    recoverStuckSession: () => undefined,
+    emitMemorySample,
+    sampleLiveness: () => null,
+  };
+  startGatewayDiagnosticHeartbeat(scheduler, { diagnostics: { enabled: true } }, options);
+
+  await tick();
+  expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: false });
+  expect(emitMemorySample.mock.contexts.at(-1)).toBe(options);
+
+  logSessionStateChange({
+    sessionId: "heartbeat-samples",
+    sessionKey: "agent:heartbeat:samples",
+    state: "processing",
+  });
+  await tick();
+
+  expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
+  expect(emitMemorySample.mock.contexts.at(-1)).toBe(options);
+});
+
 it.each([true, false])(
   "keeps heartbeat enrichment off the main thread with its sink enabled=%s",
   async (enabled) => {

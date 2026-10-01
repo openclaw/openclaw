@@ -1,4 +1,3 @@
-// Defines Signal channel configuration types.
 import type { ReplyToMode } from "./types.base.js";
 import type {
   ChannelReactionConfig,

@@ -343,57 +343,38 @@ describe("createDiscordDraftStream", () => {
     expect(stream.messageId()).toBe("1002");
   });
 
-  it("preserves an in-flight block while starting the next block", async () => {
-    let finishFirstCreate: ((value: { id: string }) => void) | undefined;
-    const firstCreate = new Promise<{ id: string }>((resolve) => {
-      finishFirstCreate = resolve;
-    });
+  it.each([
+    { modes: ["preserve"] as const, discarded: false },
+    { modes: ["discard"] as const, discarded: true },
+    { modes: ["discard", "preserve"] as const, discarded: true },
+    { modes: ["preserve", "discard"] as const, discarded: true },
+  ])("settles an in-flight create after $modes rotations", async ({ modes, discarded }) => {
+    const firstCreate = createDeferred<{ id: string }>();
     const rest = {
-      post: vi.fn().mockReturnValueOnce(firstCreate).mockResolvedValueOnce({ id: "1002" }),
+      post: vi.fn().mockReturnValueOnce(firstCreate.promise).mockResolvedValueOnce({ id: "1002" }),
       patch: vi.fn(async () => undefined),
       delete: vi.fn(async () => undefined),
     };
     const stream = createDraftStream(rest);
 
     stream.update("old turn draft");
-    await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
-    stream.forceNewMessage();
+    expect(rest.post).toHaveBeenCalledTimes(1);
+    for (const mode of modes) {
+      stream.forceNewMessage(mode);
+    }
     stream.update("queued turn draft");
-    finishFirstCreate?.({ id: "1001" });
+    firstCreate.resolve({ id: "1001" });
     await stream.flush();
 
     expect(rest.post).toHaveBeenCalledTimes(2);
     expect(rest.post.mock.calls[1]?.[1]).toMatchObject({
       body: { content: "queued turn draft" },
     });
-    expect(rest.delete).not.toHaveBeenCalled();
-    expect(stream.messageId()).toBe("1002");
-  });
-
-  it("discards an in-flight progress draft while starting the queued turn", async () => {
-    let finishFirstCreate: ((value: { id: string }) => void) | undefined;
-    const firstCreate = new Promise<{ id: string }>((resolve) => {
-      finishFirstCreate = resolve;
-    });
-    const rest = {
-      post: vi.fn().mockReturnValueOnce(firstCreate).mockResolvedValueOnce({ id: "1002" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDraftStream(rest);
-
-    stream.update("old progress draft");
-    await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
-    stream.forceNewMessage("discard");
-    stream.update("queued turn draft");
-    finishFirstCreate?.({ id: "1001" });
-    await stream.flush();
-
-    expect(rest.post).toHaveBeenCalledTimes(2);
-    expect(rest.post.mock.calls[1]?.[1]).toMatchObject({
-      body: { content: "queued turn draft" },
-    });
-    expect(rest.delete).toHaveBeenCalledWith(Routes.channelMessage("c1", "1001"));
+    if (discarded) {
+      expect(rest.delete).toHaveBeenCalledExactlyOnceWith(Routes.channelMessage("c1", "1001"));
+    } else {
+      expect(rest.delete).not.toHaveBeenCalled();
+    }
     expect(stream.messageId()).toBe("1002");
   });
 

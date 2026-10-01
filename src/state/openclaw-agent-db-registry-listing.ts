@@ -24,7 +24,7 @@ import {
   withExistingOpenClawStateDatabaseReadOnly,
   executeExistingOpenClawStateRead,
 } from "./openclaw-state-db-readonly.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 // Registry metadata is process-stable: registry writes invalidate after each commit;
 // other-process changes take effect on restart. Polling here puts schema probes back on hot reads.
@@ -41,14 +41,10 @@ const registry = resolveGlobalSingleton<{ memo?: AgentDatabaseRegistryMemo }>(
   () => ({}),
 );
 
-function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions): string {
-  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
-}
-
 function activateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
 ): AgentDatabaseRegistryMemo {
-  const pathname = resolveAgentDatabaseRegistryPath(options);
+  const pathname = resolveDatabasePath(options);
   if (registry.memo?.pathname !== pathname) {
     // One active pathname keeps registry metadata process-stable without retaining
     // an unbounded generation map. Switching back creates a fresh generation.
@@ -70,7 +66,7 @@ export type AgentDatabaseRegistryChange = Readonly<{ previous: symbol; current: 
 export function invalidateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
 ): AgentDatabaseRegistryChange | undefined {
-  const pathname = resolveAgentDatabaseRegistryPath(options);
+  const pathname = resolveDatabasePath(options);
   if (registry.memo?.pathname === pathname) {
     const previous = registry.memo.token;
     registry.memo = { pathname, token: Symbol(pathname) };
@@ -213,7 +209,7 @@ export function readRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions,
   artifactPreserving: boolean,
 ): OpenClawRegisteredAgentDatabase[] | Promise<OpenClawRegisteredAgentDatabase[]> {
-  const pathname = resolveAgentDatabaseRegistryPath(options);
+  const pathname = resolveDatabasePath(options);
   const read = ({ db }: { db: DatabaseSync }) =>
     readRegisteredAgentDatabaseRows(db, pathname, artifactPreserving);
   const finish = (entries: OpenClawRegisteredAgentDatabase[] | undefined) => {
@@ -270,7 +266,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
     const options = {
       ...inputOptions,
       env,
-      path: resolveAgentDatabaseRegistryPath({ ...inputOptions, env }),
+      path: resolveDatabasePath({ ...inputOptions, env }),
     };
     const context = captureOpenClawStateWorkerContext(options);
     const inCapturedScope = AsyncLocalStorage.snapshot();

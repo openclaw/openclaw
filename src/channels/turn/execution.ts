@@ -14,7 +14,6 @@ import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
   hasVisibleChannelTurnDispatch,
   type ChannelTurnDispatchResultLike,
-  type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";
 import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 import type {
@@ -26,7 +25,6 @@ import type {
   PreparedChannelTurn,
 } from "./types.js";
 
-const NO_ADDITIONAL_DELIVERY_SIGNALS: ChannelTurnVisibleDeliverySignals = {};
 const log = createSubsystemLogger("channels/turn/execution");
 
 function emit(
@@ -55,15 +53,6 @@ function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions
     historyKey: params.historyKey,
     limit: params.limit,
   });
-}
-
-function resolveObserveOnlyDispatchResult<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): TDispatchResult {
-  return (params.observeOnlyDispatchResult ?? {
-    queuedFinal: false,
-    counts: EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
-  }) as TDispatchResult;
 }
 
 function resolveRecordSessionKey<TDispatchResult>(
@@ -104,7 +93,7 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
     return;
   }
   // The canonical visible signal includes observed delivery paths with zero queued counts.
-  if (hasVisibleChannelTurnDispatch(dispatchResult, NO_ADDITIONAL_DELIVERY_SIGNALS)) {
+  if (hasVisibleChannelTurnDispatch(dispatchResult)) {
     return;
   }
   // The processed outcome names the dispatch branch that produced the silence,
@@ -300,14 +289,17 @@ async function runPreparedChannelTurnCoreInTrace<
     });
     let dispatchResult: TDispatchResult;
     try {
-      if (admission.kind === "observeOnly" && !options.suppressObserveOnlyDispatch) {
-        await params.runDispatch();
-      } else if (admission.kind === "observeOnly") {
-        await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
-      }
       let processedOutcome: DispatchProcessedNote | undefined;
       if (admission.kind === "observeOnly") {
-        dispatchResult = resolveObserveOnlyDispatchResult(params);
+        if (options.suppressObserveOnlyDispatch) {
+          await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
+        } else {
+          await params.runDispatch();
+        }
+        dispatchResult = (params.observeOnlyDispatchResult ?? {
+          queuedFinal: false,
+          counts: EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
+        }) as TDispatchResult;
       } else {
         // The sink carries the dispatch's terminal outcome to the warning below
         // without widening the plugin-visible dispatch result contract.

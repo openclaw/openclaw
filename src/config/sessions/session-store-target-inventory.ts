@@ -11,7 +11,7 @@ import {
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
-import { resolveSqliteAgentId } from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteAgentId } from "./session-accessor.sqlite-scope-helpers.js";
 import {
   listSqliteTargetCandidatePathsForSessionStorePath,
   resolveUnsuffixedSqliteTargetFromSessionStorePath,

@@ -19,7 +19,7 @@ import { isSidebarSlotVisible, type SidebarLayout } from "./sidebar-layout.ts";
 
 type DashboardPane = TestChatPane & {
   visuallyPresented: boolean;
-  fullscreenBoardWidgetMenu: (
+  pageBoardWidgetMenu: (
     layout: SidebarLayout,
     board?: ResolvedBoardView,
   ) => BoardWidgetPageMenu | undefined;

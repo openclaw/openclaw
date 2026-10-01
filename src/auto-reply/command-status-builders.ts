@@ -52,16 +52,10 @@ function groupCommandsByCategory(
 
 /** Builds the compact slash-command help text shown by `/help`. */
 export function buildHelpMessage(cfg?: OpenClawConfig): string {
-  const lines = ["ℹ️ Help", ""];
-
-  lines.push("Session");
-  lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
-  lines.push("");
-
   const optionParts = [
     "/think <level|default>",
     "/model <id>",
-    "/fast status|auto|on|off|default",
+    "/fast status|auto|on|off|ultrafast|default",
     "/verbose on|off|full",
     "/trace on|off|raw",
   ];
@@ -71,21 +65,23 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   if (isCommandFlagEnabled(cfg, "debug")) {
     optionParts.push("/debug");
   }
-  lines.push("Options");
-  lines.push(`  ${optionParts.join("  |  ")}`);
-  lines.push("");
-
-  lines.push("Status");
-  lines.push("  /status  |  /whoami  |  /context");
-  lines.push("");
-
-  lines.push("Skills");
-  lines.push("  /skill <name> [input]");
-
-  lines.push("");
-  lines.push("More: /commands for full list, /tools for available capabilities");
-
-  return lines.join("\n");
+  return [
+    "ℹ️ Help",
+    "",
+    "Session",
+    "  /new  |  /reset  |  /compact [instructions]  |  /stop",
+    "",
+    "Options",
+    `  ${optionParts.join("  |  ")}`,
+    "",
+    "Status",
+    "  /status  |  /whoami  |  /context",
+    "",
+    "Skills",
+    "  /skill <name> [input]",
+    "",
+    "More: /commands for full list, /tools for available capabilities",
+  ].join("\n");
 }
 
 const COMMANDS_PER_PAGE = 8;

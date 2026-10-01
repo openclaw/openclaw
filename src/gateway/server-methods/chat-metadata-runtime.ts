@@ -1,3 +1,4 @@
+import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
@@ -27,6 +28,7 @@ import {
   type PreparedAgentFacts,
   type PreparedGenerationFacts,
 } from "./chat-metadata-facts.js";
+import { createChatMetadataModelList } from "./chat-metadata-model-list.js";
 import {
   hasSessionCatalogContext,
   prepareChatMetadataModelProjection,
@@ -38,7 +40,10 @@ import type {
   ChatStartupProjectionReadParams,
   ChatStartupProjectionResult,
 } from "./chat-startup-projection-contract.js";
-import type { GatewayModelCatalogContext } from "./models-list-context.js";
+import type {
+  GatewayModelCatalogContext,
+  PreparedModelsListRequest,
+} from "./models-list-context.js";
 
 type PreparedAgentMetadata = PreparedAgentFacts & {
   commands?: unknown[];
@@ -60,6 +65,7 @@ type AgentProjectionEntry =
 type PreparedMetadataGeneration = {
   epoch: number;
   facts: PreparedGenerationFacts;
+  modelLists: ReturnType<typeof createChatMetadataModelList>;
   agentsById: Map<string, Promise<PreparedAgentMetadata>>;
   neutralProjectionByAgentId: Map<string, AgentProjectionEntry>;
   sessionProjectionByKey: Map<string, AgentProjectionEntry>;
@@ -108,6 +114,7 @@ export function createGatewayChatMetadataRuntime(params: {
   refresh: (options?: ChatMetadataRefreshOptions) => Promise<void>;
   stop: () => Promise<void>;
   read: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
+  readModelsList: (params: PreparedModelsListRequest) => Promise<ModelsListResult | undefined>;
   readStartup: (
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
@@ -127,6 +134,8 @@ export function createGatewayChatMetadataRuntime(params: {
     buildProjection: prepareChatMetadataModelProjection,
     ...params.deps,
   };
+  const requestedModelLists: Parameters<typeof createChatMetadataModelList>[0]["requested"] =
+    new Map();
   let current: PreparedMetadataGeneration | undefined;
   let lastError: Error | undefined;
   let replacement: Deferred | undefined;
@@ -311,14 +320,22 @@ export function createGatewayChatMetadataRuntime(params: {
       if (current && generationFactsMatch(current.facts, facts)) {
         return;
       }
-      // Publication carries owner facts only. Commands and model projections belong to reads.
+      // Commands and session-specific projections stay on demand within the published owner facts.
       current = {
         epoch: invalidationEpoch,
         facts,
+        modelLists: createChatMetadataModelList({
+          facts,
+          context: deps.getContext(),
+          requested: requestedModelLists,
+          maxEntries: CHAT_METADATA_CACHE_MAX_ENTRIES,
+        }),
         agentsById: new Map(),
         neutralProjectionByAgentId: new Map(),
         sessionProjectionByKey: new Map(),
       };
+      // Rebuild only variants clients already use, before the replacement becomes readable.
+      await Promise.allSettled([...requestedModelLists.values()].map(current.modelLists.prepare));
     } catch (error) {
       // Invalidation and stop revoke old preparation, including its failures.
       // Only the current refresh may settle the replacement's readers.
@@ -489,6 +506,16 @@ export function createGatewayChatMetadataRuntime(params: {
         }
       }
     }
+  };
+
+  const readModelsList = async (
+    request: PreparedModelsListRequest,
+  ): Promise<ModelsListResult | undefined> => {
+    assertAgentDatabaseAdmitted(request.agentId);
+    return readCurrent(async (generation) => {
+      const prepared = await generation.modelLists.read(request);
+      return prepared ?? { isCurrent: () => true, read: () => undefined };
+    });
   };
 
   const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> => {
@@ -679,6 +706,7 @@ export function createGatewayChatMetadataRuntime(params: {
       );
       invalidationEpoch += 1;
       fail(stoppedError);
+      requestedModelLists.clear();
     }
     // Retain preparation and readers through shutdown, including evicted projections
     // and superseded refreshes no longer reachable from the current generation.
@@ -691,6 +719,7 @@ export function createGatewayChatMetadataRuntime(params: {
     fail,
     invalidate,
     read: (readParams) => trackWork(read(readParams)),
+    readModelsList: (request) => trackWork(readModelsList(request)),
     readStartup: (startupParams) => trackWork(readStartup(startupParams)),
     refresh: (options) => trackWork(refresh(options)),
     stop,

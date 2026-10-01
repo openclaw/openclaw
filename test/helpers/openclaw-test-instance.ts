@@ -19,6 +19,7 @@ import {
   loadManagedChildSpawner,
   terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mts";
+import { formatCliCommand } from "../../src/cli/command-format.js";
 import { hasErrnoCode } from "../../src/infra/errno.js";
 import {
   appendCapturedOutput,
@@ -1093,13 +1094,15 @@ export async function createOpenClawTestInstance(
             if (closed && !signal?.aborted && exitCode === 78 && signalCode === null) {
               // Admission after a checkpoint and a refused migration step have
               // different reports; both must name the source and its repair.
+              const admissionRefusal = completedStderr.match(
+                /^(?:Gateway failed to start: )?Legacy session store requires migration: (.+)\. Run "([^"\r\n]+)" against the same state\/config before starting OpenClaw\.\r?$/mu,
+              );
               const legacyStorePath =
-                completedStderr.match(
-                  /^(?:Gateway failed to start: )?Legacy session store requires migration: (.+)\. Run "openclaw doctor --fix" against the same state\/config before starting OpenClaw\.\r?$/mu,
-                )?.[1] ??
-                completedStderr.match(
-                  /^OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready\.\r?\n- Legacy sessions store unreadable; left in place at ([^\r\n]+)\r?\n(?:- [^\r\n]+\r?\n)*Run "openclaw doctor --fix" against the same state\/config, then restart the gateway\.\r?$/mu,
-                )?.[1];
+                admissionRefusal?.[2] === formatCliCommand("openclaw doctor --fix", env)
+                  ? admissionRefusal[1]
+                  : completedStderr.match(
+                      /^OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready\.\r?\n- Legacy sessions store unreadable; left in place at ([^\r\n]+)\r?\n(?:- [^\r\n]+\r?\n)*Run "openclaw doctor --fix" against the same state\/config, then restart the gateway\.\r?$/mu,
+                    )?.[1];
               if (legacyStorePath) {
                 throw new GatewayStartupRefusedError(
                   legacyStorePath,

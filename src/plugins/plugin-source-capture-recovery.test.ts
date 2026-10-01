@@ -9,6 +9,7 @@ import { noteLegacyPluginSourceCaptures } from "../commands/doctor-plugin-source
 import * as temporaryDirectories from "../commands/doctor/shared/temporary-directories.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as census from "../infra/openclaw-process-census.js";
+import * as sqliteDiagnostics from "../infra/sqlite-error-diagnostics.js";
 import * as stagingToken from "../infra/sqlite-staging-token.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -49,6 +50,121 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
+
+it.each(["failed removal", "maintenance failed removal", "identity-change return"] as const)(
+  "preserves reclamation errors and closes the original token after %s",
+  async (mode) => {
+    const stateDir = temp.make("capture-reclaim-close-");
+    const root = path.join(stateDir, "tmp", "plugin-captures", "released-producer");
+    const captures = path.join(root, "captures");
+    const payload = path.join(captures, "source.js");
+    const tokenPath = path.join(root, stagingToken.SQLITE_STAGING_TOKEN_FILES[0]);
+    const extraLink = path.join(stateDir, "token-hardlink.sqlite");
+    fs.mkdirSync(captures, { recursive: true });
+    fs.writeFileSync(payload, "retained source bytes");
+    stagingToken.acquireSqliteStagingToken(root, "create")();
+    const old = new Date(Date.now() - 2 * hour);
+    fs.utimesSync(root, old, old);
+    const primary = Object.assign(new Error("Fixture capture removal refused"), { code: "EACCES" });
+    const cleanup = Object.assign(new Error("Fixture token close refused once"), {
+      code: mode === "identity-change return" ? "EACCES" : "SQLITE_BUSY",
+    });
+    let closeRefused = false;
+    let original: ReturnType<typeof stagingToken.acquireSqliteStagingToken> | undefined;
+    const acquire = stagingToken.acquireSqliteStagingToken;
+    const acquiring = vi
+      .spyOn(stagingToken, "acquireSqliteStagingToken")
+      .mockImplementation((...args) => {
+        const token = acquire(...args);
+        if (args[0] !== root || args[1] !== "reclaim") {
+          return token;
+        }
+        original = token;
+        if (mode === "identity-change return") {
+          // A second link invalidates destructive custody without opening or closing the held inode.
+          fs.linkSync(tokenPath, extraLink);
+        }
+        return Object.assign((retiring?: boolean) => {
+          if (!retiring && !closeRefused) {
+            closeRefused = true;
+            throw cleanup;
+          }
+          token(retiring);
+        }, token);
+      });
+    const remove = fsPromises.rm.bind(fsPromises);
+    const removal = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+      if (mode !== "identity-change return" && target === captures) {
+        throw primary;
+      }
+      await remove(target, options);
+    });
+    const classification = vi.spyOn(sqliteDiagnostics, "isSqliteLockError");
+    const warning = vi.spyOn(process, "emitWarning");
+    warning.mockClear();
+    const collectWarnings = async () => {
+      if (mode !== "maintenance failed removal") {
+        await sweepPluginSourceCapturesForTest(stateDir);
+        return warning.mock.calls.map(([message]) => String(message));
+      }
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const lease = acquireGatewayStateOwner({ databasePath: resolveOpenClawStateSqlitePath(env) });
+      const scope = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: lease.assertCurrent,
+        assertDatabaseAccess: lease.assertDatabaseAccess,
+      });
+      try {
+        const result = await scope.run(() =>
+          captureDirectory.prunePluginNativeCaptureDirectories(stateDir, new Set(), () =>
+            scope.assertAdmission(),
+          ),
+        );
+        return result.warnings;
+      } finally {
+        try {
+          await scope.close();
+        } finally {
+          lease.release();
+        }
+      }
+    };
+    try {
+      const messages = await collectWarnings();
+      expect(closeRefused).toBe(true);
+      expect(messages.length).toBe(1);
+      expect(messages[0]?.includes(cleanup.message)).toBe(true);
+      if (mode !== "identity-change return") {
+        expect(messages[0]?.includes(primary.message)).toBe(true);
+        const failure = classification.mock.calls.find(
+          ([error]) => error instanceof AggregateError && error.cause === primary,
+        )?.[0];
+        if (!(failure instanceof AggregateError)) {
+          throw new Error("Expected the original reclamation and cleanup failures");
+        }
+        expect(failure.cause === primary).toBe(true);
+        expect(failure.errors.length).toBe(2);
+        expect(failure.errors[0] === primary).toBe(true);
+        expect(failure.errors[1] === cleanup).toBe(true);
+      } else {
+        expect(classification.mock.calls.some(([error]) => error === cleanup)).toBe(true);
+        expect(fs.lstatSync(tokenPath).nlink).toBe(2);
+      }
+      expect(fs.readFileSync(payload, "utf8")).toBe("retained source bytes");
+      expect(fs.existsSync(tokenPath)).toBe(true);
+    } finally {
+      removal.mockRestore();
+      acquiring.mockRestore();
+      classification.mockRestore();
+      original?.();
+      fs.rmSync(extraLink, { force: true });
+    }
+    fs.utimesSync(root, old, old);
+    const after = await collectWarnings();
+    expect(fs.existsSync(root)).toBe(false);
+    expect(after.length).toBe(mode === "maintenance failed removal" ? 0 : 1);
+  },
+);
 
 it("preserves the preparation cause when synchronous token cleanup also fails", async () => {
   const stateDir = temp.make("capture-error-cause-");

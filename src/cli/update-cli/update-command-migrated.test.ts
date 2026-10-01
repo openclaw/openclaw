@@ -43,6 +43,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   MIGRATED_FIXTURE_NO_SERVICE,
@@ -495,11 +496,12 @@ it.each([
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.useFakeTimers();
     presentation = createUpdateProgress(!json, run);
-    const progress = createUpdateRunProgress(run, presentation.progress);
+    const guards = createUpdateCommandExecutionGuards({ run }, root);
+    const progress = createUpdateRunProgress(run, presentation.progress, guards.recordStep);
     presentation.suspend();
     progress.deferLedgerWrites();
     const migrationStep = { name: "core migrations", command: "doctor --fix", index: 0, total: 1 };
-    progress.onStepStart?.(migrationStep);
+    await progress.onStepStart?.(migrationStep);
     const database = openOpenClawStateDatabase({ env });
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -528,9 +530,9 @@ it.each([
       reason: "state-migrated-no-rollback",
     };
     expect(() => progress.onRollbackOutcome?.(rollbackOutcome)).not.toThrow();
-    expect(() =>
+    await expect(
       progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     expect(() => vi.advanceTimersByTime(500)).not.toThrow();
     expect(() => presentation?.dispose()).not.toThrow();
     presentation = undefined;

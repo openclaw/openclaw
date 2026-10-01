@@ -87,20 +87,9 @@ function requireLaunchReady(
   } catch {
     throw new Error("Worker environment node desktop launcher returned malformed JSON");
   }
-  if (
-    !payload ||
-    typeof payload !== "object" ||
-    Array.isArray(payload) ||
-    Object.keys(payload).length !== 1 ||
-    !("status" in payload) ||
-    payload.status !== "ready"
-  ) {
+  if (!isDeepStrictEqual(payload, { status: "ready" })) {
     throw new Error("Worker environment node desktop launcher returned an invalid result");
   }
-}
-
-function launchKey(binding: NodeDesktopBinding, app: WorkerDesktopApp): string {
-  return `${binding.environmentId}\0${app.id}`;
 }
 
 /** Carries one durable worker environment's desktop over its private node connection. */
@@ -328,7 +317,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
       );
     }
     const app = structuredClone(advertisedApp);
-    const key = launchKey(binding, app);
+    const key = `${binding.environmentId}\0${app.id}`;
     const previous = activeLaunches.get(key);
     if (
       previous?.binding.ownerEpoch === binding.ownerEpoch &&

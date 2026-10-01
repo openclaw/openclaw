@@ -83,6 +83,32 @@ describe("Control UI doctor repair owner", () => {
     expect(mocks.note).toHaveBeenCalledWith("UI build complete.", "UI");
   });
 
+  it("routes missing app-owned assets to the host without package or git commands", async () => {
+    await fs.writeFile(
+      path.join(mocks.root, "openclaw-install-owner.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      }),
+    );
+    const prompter = createPrompter();
+
+    await maybeRepairUiProtocolFreshness(runtime, prompter);
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+      ),
+      "UI",
+    );
+    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+    expect(prompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
+    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
   it("repairs an existing dashboard whose startup JavaScript is missing", async () => {
     const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
     await fs.mkdir(path.dirname(indexPath), { recursive: true });

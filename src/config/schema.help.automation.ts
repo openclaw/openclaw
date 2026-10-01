@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   session:
     "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.",

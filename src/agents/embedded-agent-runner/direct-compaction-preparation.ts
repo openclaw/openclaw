@@ -48,6 +48,7 @@ export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSess
   requestedRouteResolution?: "resolved";
   transcriptBytePreflightAuthority?: true;
   transcriptByteCompactionPersistence?: TranscriptByteCompactionPersistence;
+  sandbox?: SandboxContext | null;
 };
 
 export async function prepareDirectCompactionAttempt(
@@ -70,13 +71,12 @@ export async function prepareDirectCompactionAttempt(
   const diagnosticCompactionRunId = `${runId}:compaction:${diagId}`;
   let diagnosticModelCallSeq = 0;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
-  const earlyAgentIds = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
   });
-  const agentDir =
-    params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const {
     runtimePolicySessionKey,
     runtimePolicyAgentId,
@@ -183,8 +183,9 @@ export async function prepareDirectCompactionAttempt(
     providerUsesProfileScopedModelMetadata,
   } = harnessAuth;
   const preparedHarnessRuntime = selectedPreparedHarness.id;
-  const resolveRuntimeAuthAttempt = () =>
-    resolvePreparedRuntimeAuthAttempts({
+  let resolvedAuthAttempt;
+  try {
+    resolvedAuthAttempt = await resolvePreparedRuntimeAuthAttempts({
       attempts: runtimeAuthPreparation.attempts,
       store: runtimeAuthProfileStore,
       modelId,
@@ -227,9 +228,6 @@ export async function prepareDirectCompactionAttempt(
         }),
       errorMessage: `Prepared compaction auth attempts could not be resolved for ${provider}/${modelId}.`,
     });
-  let resolvedAuthAttempt: Awaited<ReturnType<typeof resolveRuntimeAuthAttempt>>;
-  try {
-    resolvedAuthAttempt = await resolveRuntimeAuthAttempt();
     params.abortSignal?.throwIfAborted();
   } catch (err) {
     return { ok: false as const, result: fail(formatErrorMessage(err), err) };
@@ -308,11 +306,9 @@ export async function prepareDirectCompactionAttempt(
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
   const sandboxAgentId =
-    params.sandboxAgentId ??
-    (sandboxSessionKey === sessionKey ? earlyAgentIds.sessionAgentId : undefined);
-  const placementParams = params as typeof params & { sandbox?: SandboxContext | null };
+    params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined);
   const sandbox =
-    placementParams.sandbox === undefined
+    params.sandbox === undefined
       ? await resolveSandboxContext({
           config: params.config,
           agentId: sandboxAgentId,
@@ -320,7 +316,7 @@ export async function prepareDirectCompactionAttempt(
           sessionKey: sandboxSessionKey,
           workspaceDir: resolvedWorkspace,
         })
-      : placementParams.sandbox;
+      : params.sandbox;
   if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
     throw new Error("sandbox workspace is not read-write; collection review skipped");
   }
@@ -337,8 +333,6 @@ export async function prepareDirectCompactionAttempt(
   }
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const { sessionAgentId: effectiveSkillAgentId } = earlyAgentIds;
-
   return {
     ok: true as const,
     value: {
@@ -352,7 +346,6 @@ export async function prepareDirectCompactionAttempt(
       diagnosticCompactionRunId,
       nextDiagnosticModelCallId: () =>
         `${diagnosticCompactionRunId}:model:${(diagnosticModelCallSeq += 1)}`,
-      earlyAgentIds,
       agentDir,
       provider,
       contextConfigProvider,
@@ -373,7 +366,7 @@ export async function prepareDirectCompactionAttempt(
       sandbox,
       effectiveWorkspace,
       effectiveCwd,
-      effectiveSkillAgentId,
+      sessionAgentId,
     },
   };
 }

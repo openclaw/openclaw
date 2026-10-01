@@ -24,11 +24,11 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import {
-  ensureProfileForEmail,
   linkEmail,
   setDisplayName,
   setUserProfileRole,
-} from "../state/user-profiles.js";
+} from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import {

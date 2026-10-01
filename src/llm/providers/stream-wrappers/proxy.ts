@@ -1,5 +1,9 @@
 import { resolveOpenAIModelReasoningEfforts } from "@openclaw/ai/internal/openai";
-import { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";
+import {
+  applyAnthropicEphemeralCacheControlMarkers,
+  applyCompletionsAnthropicCacheControl,
+  resolveAnthropicEphemeralCacheControl,
+} from "@openclaw/ai/transports";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -15,10 +19,6 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { normalizeOpenAICompatibleReasoningPayload } from "../../../plugin-sdk/provider-stream-shared.js";
 import { parseBooleanValue } from "../../../utils/boolean.js";
 import { streamSimple } from "../../stream.js";
-import {
-  applyAnthropicEphemeralCacheControlMarkers,
-  resolveAnthropicEphemeralCacheControl,
-} from "./anthropic-cache-control-payload.js";
 import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";

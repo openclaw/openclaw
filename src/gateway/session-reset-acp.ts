@@ -306,14 +306,11 @@ async function ensureFreshAcpResetState(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
-  reason: "session-reset" | "session-delete";
+  reason: "session-reset";
   acpMeta: SessionAcpMeta;
   assertCurrent?: () => void;
   shouldApply?: () => boolean;
 }): Promise<SessionAcpMeta | undefined> {
-  if (params.reason !== "session-reset") {
-    return undefined;
-  }
   const latestMeta =
     (await readAcpSessionMetaAsync({
       sessionKey: params.sessionKey,

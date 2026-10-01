@@ -1,4 +1,3 @@
-// Normalizes payloads and applies post-send presentation/media effects.
 import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelOutboundTargetRef } from "../../channels/plugins/types.adapters.js";

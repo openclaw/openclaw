@@ -126,6 +126,7 @@ async function handleChatSendWithOptions(
     restartSafeAdmission,
   } = admitted.value;
   const preparedAttachments = await prepareChatSendAttachments({
+    client,
     request: normalizedRequest.value,
     session: preparedSession.value,
     admission: admitted.value,

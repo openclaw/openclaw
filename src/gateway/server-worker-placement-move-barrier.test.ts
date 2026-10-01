@@ -4,14 +4,44 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 
 // Install the shared module mocks before any source imports can load the runtime.
-const { runtimeFactoryMocks } = getWorkerPlacementStartupMocks();
+const { runtimeFactoryMocks, moveDestinationMocks } = getWorkerPlacementStartupMocks();
 
+vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
+  preflightWorkerWorkspace: vi.fn(async () => {}),
+}));
+
+vi.mock("../agents/model-thinking-default.js", () => ({
+  resolveThinkingSelection: () => {
+    throw new Error("Queue settlement must not refresh model selection");
+  },
+}));
+vi.mock("../auto-reply/thinking.js", async () => {
+  const { normalizeThinkLevel } = await import("../auto-reply/thinking.shared.js");
+  return { normalizeThinkLevel };
+});
+
+vi.mock("../auto-reply/reply/queue/drain.js", () => {
+  const unexpectedDrain = () => {
+    throw new Error("worker barrier queue fixtures must remain pending");
+  };
+  return {
+    clearFollowupDrainCallback: () => {},
+    rememberFollowupDrainCallback: unexpectedDrain,
+    kickFollowupDrainIfIdle: unexpectedDrain,
+    prepareStaleFollowupDrainRetirement: unexpectedDrain,
+    dropAbortedFollowups: unexpectedDrain,
+    scheduleFollowupDrain: unexpectedDrain,
+  };
+});
+
+import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import { clearCommandLane, enqueueCommandInLane } from "../process/command-queue.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createGatewayWorkerPlacementLocalDispatchBarrier } from "./server-worker-placement-local-dispatch.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
-import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
@@ -21,7 +51,7 @@ import {
   type WorkerPlacementMoveBarrier,
 } from "./worker-environments/placement-move-service.js";
 
-function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string) {
+function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string, agentId = "main") {
   const source = { generation: 4, environmentId: "environment-source", ownerEpoch: 2 };
   return {
     intent: {
@@ -37,7 +67,7 @@ function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string) {
     placement: {
       sessionId,
       sessionKey,
-      agentId: "main",
+      agentId,
       executionMode: "worker-turn",
       state: "draining",
       generation: 5,
@@ -61,6 +91,139 @@ function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string) {
 }
 
 describe("worker placement move destination", () => {
+  it.each(
+    (["dispatch", "reconcile", "abandon"] as const).flatMap((action) =>
+      (["current", "revoked after commit"] as const).map((authority) => ({ action, authority })),
+    ),
+  )(
+    "$action preserves another agent's lane commands under the global key ($authority authority)",
+    async ({ action, authority }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "global";
+        const sessionId = "research-global";
+        const agentId = "research";
+        let committed = false;
+        const assertAuthority = () => {
+          if (committed && authority === "revoked after commit") {
+            throw new Error("placement authority revoked after commit");
+          }
+        };
+        const target = {
+          agentId,
+          canonicalKey: sessionKey,
+          store: {},
+          storeKeys: [sessionKey],
+          storePath: "/tmp/openclaw-worker-placement-research.sqlite",
+        };
+        moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValueOnce(target);
+        moveDestinationMocks.resolveSessionTarget.mockResolvedValueOnce({
+          assertCurrent: assertAuthority,
+          assertBindingCurrent: assertAuthority,
+          config: {},
+          entry: { sessionId },
+          target,
+          worktree: { id: "research-worktree", path: "/gateway/research" },
+          workspace: { kind: "local", path: "/gateway/research" },
+        });
+        const entered = createDeferred();
+        const release = createDeferred();
+        const lane = resolveEmbeddedSessionLane(sessionKey);
+        const blocker = enqueueCommandInLane(lane, async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        await entered.promise;
+        const queued = [
+          enqueueCommandInLane(lane, async () => "main", {
+            sessionTarget: { agentId: "main", sessionKey, sessionId: "main-global" },
+          }),
+          enqueueCommandInLane(lane, async () => "legacy-main"),
+          enqueueCommandInLane(lane, async () => "research", {
+            sessionTarget: { agentId, sessionKey, sessionId },
+          }),
+        ];
+        const results = Promise.allSettled(queued);
+        const effects: string[] = [];
+        let releaseAdmission = () => {};
+        const admission = await beginSessionWorkAdmission({
+          scope: target.storePath,
+          identities: [sessionKey, sessionId],
+          assertAllowed: () => {},
+          onInterrupt: () => {
+            effects.push("interrupt");
+            releaseAdmission();
+          },
+        });
+        releaseAdmission = admission.release;
+        const commit = () => {
+          committed = true;
+          effects.push("commit");
+          return createMoveBarrierBeginFixture(sessionId, sessionKey, agentId);
+        };
+        const options = {
+          placements: {
+            waitForTurnClaimRelease: async () => {
+              effects.push("claims released");
+            },
+          },
+          awaitTurnClaimRelease: async (_sessionId: string, wait: () => Promise<void>) => wait(),
+          revokeSessionAuthority: () => {
+            effects.push("revoke");
+          },
+        };
+        try {
+          if (action === "dispatch") {
+            await createGatewayWorkerPlacementLocalDispatchBarrier(options)({
+              sessionId,
+              sessionKey,
+              agentId,
+              executionMode: "remote-exec",
+              authorize: assertAuthority,
+              startDispatch: async () => commit().placement,
+            });
+          } else {
+            await createGatewayWorkerPlacementMoveBarrier({
+              ...options,
+              loadSessionRuntime: async () => ({
+                managedWorktrees: { findLiveByOwner: () => undefined },
+                resolveCanonicalSessionEntryFromStoreKeys,
+                resolveGatewaySessionStoreTargetWithStore,
+              }),
+            })({
+              sessionId,
+              sessionKey,
+              agentId,
+              sourceDisposition: action,
+              authorize: assertAuthority,
+              begin: async () => commit(),
+            });
+          }
+          expect(effects).toEqual([
+            "commit",
+            "revoke",
+            "interrupt",
+            ...(action === "abandon" ? [] : ["claims released"]),
+          ]);
+          release.resolve();
+          await blocker;
+          expect(await results).toEqual([
+            { status: "fulfilled", value: "main" },
+            { status: "fulfilled", value: "legacy-main" },
+            {
+              status: "rejected",
+              reason: expect.objectContaining({ name: "CommandLaneClearedError" }),
+            },
+          ]);
+        } finally {
+          admission.release();
+          release.resolve();
+          clearCommandLane(lane);
+          await Promise.allSettled([blocker, results]);
+        }
+      });
+    },
+  );
+
   it("joins an accepted keyed store write before completing a reconciled move", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionId = "session-move-source";
@@ -210,7 +373,6 @@ describe("worker placement move destination", () => {
         },
         begin,
       });
-
       try {
         if (scenario.outcome === "persist-error") {
           await expect(operation).rejects.toThrow("transcript append failed");
@@ -323,6 +485,8 @@ describe("worker placement move destination", () => {
           reconcile: vi.fn(),
           reconcileActive: vi.fn(),
         });
+        const { createGatewayWorkerPlacementRuntime } =
+          await import("./server-worker-placement-startup.js");
         createGatewayWorkerPlacementRuntime({
           scheduler: createTestGatewayScheduler(),
           getCommittedRuntimeConfig: getRuntimeConfig,
@@ -333,8 +497,8 @@ describe("worker placement move destination", () => {
             list: () => [],
             waitForTurnClaimRelease,
             retireSessionPlacement: vi.fn(),
-            pruneOrphanedWorkspaceReconciliations: () => [],
-            listWorkspaceReconciliationOwners: () => [],
+            pruneOrphanedWorkspaceReconciliations: async () => [],
+            listWorkspaceReconciliationOwners: async () => [],
             listPendingWorkspaceResults: () => [],
           } as never,
           environments: {} as never,

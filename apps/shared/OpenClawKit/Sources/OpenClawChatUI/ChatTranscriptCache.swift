@@ -217,7 +217,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             cacheLogger.error("gateway session cache rejected a mixed-agent snapshot")
             return
         }
-        let bounded = Self.boundedSessions(owned)
+        let bounded = Self.boundedSessions(owned).map(Self.sessionCacheProjection)
         let gatewayID = self.gatewayID
         do {
             let encoded = try bounded.map(Self.encodeJSON)

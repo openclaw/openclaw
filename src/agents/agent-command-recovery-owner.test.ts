@@ -1,7 +1,6 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -10,6 +9,7 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import type { AgentCommandOpts } from "./command/types.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery/main-session-recovery-admission.js";
@@ -24,7 +24,7 @@ vi.mock("./main-session-recovery/main-session-recovery-owner-release.js", () => 
     recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget,
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-agent-command-owner-");
 const sessionKey = "agent:main:main";
 
 afterEach(() => {
@@ -35,7 +35,7 @@ afterEach(() => {
 
 describe("agent command restart recovery ownership", () => {
   function createTarget() {
-    const storePath = path.join(tempDirs.make("openclaw-agent-command-owner-"), "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
     return {
       sessionAgentId: "main",
       isNewSession: false,

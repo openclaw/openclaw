@@ -2,8 +2,6 @@ import {
   assertSubagentRegistryWriteSourceCurrent,
   waitForPendingSubagentRegistryWrites,
 } from "../agents/subagents/registry/subagent-registry-persistence.js";
-// Subagent session reactivation helper.
-// Continues yielded or completed subagent work when a user messages the child session.
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
@@ -11,16 +9,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
-/**
- * Reactivates a yielded or completed subagent session under its next run id.
- *
- * `task` is the canonical user-supplied prompt text that just dispatched the
- * follow-up. When provided, it is persisted on the new run record so a later
- * orphan recovery / gateway restart rewraps the follow-up prompt rather than
- * the stale original task. Without this, sessions.send and agent.run callers
- * could reactivate a completed run with the new run id but lose the new
- * prompt text from restart redispatch.
- */
+/** Persist the dispatched follow-up prompt so restart recovery cannot reuse the original task. */
 export async function reactivateCompletedSubagentSession(params: {
   sessionKey: string;
   runId?: string;
@@ -67,33 +56,18 @@ export async function reactivateCompletedSubagentSession(params: {
     params.assertCurrent?.();
     return !params.gatewayContextResolver || Boolean(params.gatewayContextResolver());
   };
-  const runtime = await import("../agents/subagents/registry/subagent-registry-runtime.js");
-  if (!isOriginalOwnerCurrent()) {
-    return false;
-  }
-  const endedHookStamp = source.endedHookEmittedAt;
-  const pending = waitForPendingSubagentRegistryWrites([source.runId], stateContext.admission);
-  if (pending) {
-    // Hook delivery records its emitted fact before its asynchronous stamp commits.
-    // Join that finite write before comparing the replacement's exact durable source.
-    await pending;
+  const runtime = await import("../agents/subagents/registry/subagent-registry.js");
+  for (;;) {
     if (!isOriginalOwnerCurrent()) {
       return false;
     }
-    if (source.endedHookEmittedAt !== endedHookStamp) {
-      // A hook stamp can enter after the first snapshot. Join it once; the
-      // exact replacement comparison still rejects other concurrent changes.
-      const stampWrite = waitForPendingSubagentRegistryWrites(
-        [source.runId],
-        stateContext.admission,
-      );
-      if (stampWrite) {
-        await stampWrite;
-        if (!isOriginalOwnerCurrent()) {
-          return false;
-        }
-      }
+    const pending = waitForPendingSubagentRegistryWrites([source.runId], stateContext.admission);
+    if (!pending) {
+      break;
     }
+    // Completion cleanup can admit another write while the previous one settles.
+    // Join its publication before comparing the replacement's exact durable source.
+    await pending;
   }
   const task = params.task;
   const hasTask = typeof task === "string" && task.trim().length > 0;
@@ -109,12 +83,11 @@ export async function reactivateCompletedSubagentSession(params: {
         task: hasTask ? task : paused.task,
         ...gatewayBinding,
       })
-    : runtime.replaceSubagentRunAfterSteer({
+    : runtime.replaceSubagentRunAfterSteerCore({
         previousRunId: source.runId,
         nextRunId: runId,
         fallback: source,
         runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
-        persistenceFailure: "throw",
         ...(hasTask ? { task } : {}),
         ...gatewayBinding,
       });

@@ -20,11 +20,7 @@ export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
     ensureColumn(db, "operator_approvals", "resolution_ref TEXT");
     const rows = db
       .prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals")
-      .all() as Array<{
-      approval_id?: unknown;
-      kind?: unknown;
-      resolution_ref?: unknown;
-    }>;
+      .all();
     const update = db.prepare(
       "UPDATE operator_approvals SET resolution_ref = ? WHERE approval_id = ?",
     );

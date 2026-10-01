@@ -88,12 +88,7 @@ async function readExaSearchResults(response: Response): Promise<ExaSearchResult
 
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  return EXA_FRESHNESS_VALUES.includes(trimmed as ExaFreshness)
-    ? (trimmed as ExaFreshness)
-    : undefined;
+  return EXA_FRESHNESS_VALUES.find((freshness) => freshness === trimmed);
 }
 
 function resolveExaApiKey(exa?: ExaConfig): string | undefined {
@@ -142,18 +137,12 @@ function resolveExaSearchEndpoint(
 }
 
 function resolveExaDescription(result: ExaSearchResult): string {
-  const highlights = result.highlights;
-  if (Array.isArray(highlights)) {
-    const highlightText = normalizeTrimmedStringList(highlights).join("\n");
-    if (highlightText) {
-      return highlightText;
-    }
-  }
-  const summary = normalizeOptionalString(result.summary);
-  if (summary) {
-    return summary;
-  }
-  return normalizeOptionalString(result.text) ?? "";
+  return (
+    normalizeTrimmedStringList(result.highlights).join("\n") ||
+    normalizeOptionalString(result.summary) ||
+    normalizeOptionalString(result.text) ||
+    ""
+  );
 }
 
 function parsePositiveInteger(value: unknown): number | undefined {
@@ -390,9 +379,7 @@ export async function executeExaWebSearchProviderTool(
 
   const query = readStringParam(args, "query", { required: true });
   const rawType = readStringParam(args, "type");
-  const type: ExaSearchType = EXA_SEARCH_TYPES.includes(rawType as ExaSearchType)
-    ? (rawType as ExaSearchType)
-    : "auto";
+  const type = EXA_SEARCH_TYPES.find((candidate) => candidate === rawType) ?? "auto";
   const count =
     readPositiveIntegerParam(args, "count", {
       max: EXA_MAX_SEARCH_COUNT,

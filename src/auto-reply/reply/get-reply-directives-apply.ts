@@ -1,10 +1,10 @@
-// Applies parsed directives to session state, config overrides, and run options.
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
@@ -28,6 +28,7 @@ import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { ReplyPreRunRejectionCode } from "./reply-operation-run-state.js";
+import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -106,6 +107,7 @@ const directiveRejection = (
 
 export async function applyInlineDirectiveOverrides(params: {
   ctx: MsgContext;
+  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
@@ -172,36 +174,6 @@ export async function applyInlineDirectiveOverrides(params: {
   let { directives } = params;
   let { provider, model } = params;
   let { contextTokens } = params;
-  const directiveModelState = {
-    modelPolicy: modelState.modelPolicy,
-    operatorAuthority: modelState.operatorAuthority,
-    allowedModelKeys: modelState.allowedModelKeys,
-    allowedModelCatalog: modelState.allowedModelCatalog,
-    resetModelOverride: modelState.resetModelOverride,
-  };
-  const createDirectiveHandlingBase = () => ({
-    cfg,
-    agentId,
-    directives,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    elevatedEnabled,
-    elevatedAllowed,
-    elevatedFailures,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    ...directiveModelState,
-    provider,
-    model,
-    initialModelLabel,
-    formatModelSwitchEvent,
-    canPersistStickyModelSelection,
-    ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
-  });
-
   let directiveAck: ReplyPayload | undefined;
   let selectionCatalog = modelState.allowedModelCatalog;
 
@@ -329,6 +301,7 @@ export async function applyInlineDirectiveOverrides(params: {
     persistenceState?: NonNullable<HandleDirectiveOnlyParams["persistenceState"]>,
   ) => {
     let rejected = false;
+    assertReplyPreprocessingActive(params.abortSignal);
     const currentLevels = await (
       await directiveLevelsLoader.load()
     ).resolveCurrentDirectiveLevels({
@@ -337,14 +310,48 @@ export async function applyInlineDirectiveOverrides(params: {
       agentCfg,
       resolveDefaultThinkingLevel:
         !persistenceState || directives.hasThinkDirective
-          ? () => modelState.resolveDefaultThinkingLevel()
+          ? () => {
+              assertReplyPreprocessingActive(params.abortSignal);
+              return racePromiseWithAbortSignal(
+                modelState.resolveDefaultThinkingLevel(),
+                params.abortSignal,
+              );
+            }
           : async () => undefined,
     });
-    const thinkingCatalog = await modelState.resolveThinkingCatalog();
+    assertReplyPreprocessingActive(params.abortSignal);
+    const thinkingCatalog = await racePromiseWithAbortSignal(
+      modelState.resolveThinkingCatalog(),
+      params.abortSignal,
+    );
+    assertReplyPreprocessingActive(params.abortSignal);
     const reply = await (
       await directiveImplLoader.load()
     ).handleDirectiveOnly({
-      ...createDirectiveHandlingBase(),
+      cfg,
+      agentId,
+      directives,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled,
+      elevatedAllowed,
+      elevatedFailures,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      modelPolicy: modelState.modelPolicy,
+      operatorAuthority: modelState.operatorAuthority,
+      allowedModelKeys: modelState.allowedModelKeys,
+      allowedModelCatalog: modelState.allowedModelCatalog,
+      resetModelOverride: modelState.resetModelOverride,
+      provider,
+      model,
+      initialModelLabel,
+      formatModelSwitchEvent,
+      canPersistStickyModelSelection,
+      ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
       ...currentLevels,
       thinkingCatalog,
       ctx,

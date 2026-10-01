@@ -11,6 +11,7 @@ import {
   renderRunInspectorPagination,
   renderRunInspectorRemediation,
   renderRunInspectorSafeRef,
+  renderRunInspectorValues,
   runInspectorCoverageKey,
   runInspectorCoverageLabel,
 } from "./run-inspector-evidence-view.ts";
@@ -47,16 +48,6 @@ type IdentityFact = {
   reason?: string;
 };
 
-function evidenceStateLabel(state: EvidenceState): string {
-  return t(`activity.runInspector.evidenceState.${state}`);
-}
-
-function stateReason(label: string, state: EvidenceState): string | undefined {
-  return state === "present"
-    ? undefined
-    : t(`activity.runInspector.reasons.${state}`, { label: label.toLowerCase() });
-}
-
 function principalValues(principal: PrincipalRefV1 | undefined): FactValue[] {
   if (!principal) {
     return [];
@@ -79,7 +70,12 @@ function optionalReferenceValue(
 
 function renderFact(fact: IdentityFact) {
   const values = fact.values ?? [];
-  const reason = fact.reason ?? stateReason(fact.label, fact.state);
+  const stateLabel = t(`activity.runInspector.evidenceState.${fact.state}`);
+  const reason =
+    fact.reason ??
+    (fact.state === "present"
+      ? undefined
+      : t(`activity.runInspector.reasons.${fact.state}`, { label: fact.label.toLowerCase() }));
   return html`
     <div class="run-inspector__fact" data-state=${fact.state}>
       <dt>
@@ -88,25 +84,22 @@ function renderFact(fact: IdentityFact) {
           class="run-inspector__state run-inspector__state--${fact.state}"
           role="img"
           aria-label=${t("activity.runInspector.evidenceStateLabel", {
-            state: evidenceStateLabel(fact.state),
+            state: stateLabel,
           })}
         >
-          ${evidenceStateLabel(fact.state)}
+          ${stateLabel}
         </span>
       </dt>
       <dd>
         ${
           values.length > 0
-            ? html`<dl class="run-inspector__values">
-                ${values.map(
-                  ([labelKey, value, mono, href]) => html`
-                    <div>
-                      <dt>${t(`activity.runInspector.values.${labelKey}`)}</dt>
-                      <dd>${renderRunInspectorSafeRef(value, mono, href)}</dd>
-                    </div>
-                  `,
-                )}
-              </dl>`
+            ? renderRunInspectorValues(
+                "values",
+                values.map(([labelKey, value, mono, href]) => [
+                  labelKey,
+                  renderRunInspectorSafeRef(value, mono, href),
+                ]),
+              )
             : nothing
         }
         ${reason ? html`<p class="run-inspector__reason">${reason}</p>` : nothing}
@@ -310,13 +303,10 @@ function renderUnavailableResult(
 }
 
 function renderReady(
+  props: RunInspectorProps,
   state: Extract<RunInspectorState, { status: "ready" }>,
-  basePath: string,
-  selector: RunInspectorSelector | null,
-  selectorId: string | null,
-  onLoadMoreDecisions: () => void,
-  onLoadMoreExecutions: () => void,
 ) {
+  const { basePath, selector, selectorId, onLoadMoreDecisions, onLoadMoreExecutions } = props;
   const result = state.result;
   const currentCoverageLabel = runInspectorCoverageLabel(result.coverage.state);
   return html`
@@ -391,17 +381,7 @@ export function renderRunInspector(props: RunInspectorProps) {
     state.status === "ready" && state.result.identity.state === "present"
       ? state.result.identity.context
       : null;
-  const content =
-    state.status === "ready"
-      ? renderReady(
-          state,
-          props.basePath,
-          props.selector,
-          props.selectorId,
-          props.onLoadMoreDecisions,
-          props.onLoadMoreExecutions,
-        )
-      : renderPanel(props, state);
+  const content = state.status === "ready" ? renderReady(props, state) : renderPanel(props, state);
 
   return html`
     <section

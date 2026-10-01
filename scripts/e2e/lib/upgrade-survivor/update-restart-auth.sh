@@ -232,8 +232,11 @@ const drainProcessGroup = (pid, onStopped) => {
   };
   // Read at stop, not launch: daemon-reload can repair a running unit's policy.
   let stopTimeoutMs;
+  let controlGroup;
   try {
-    stopTimeoutMs = Number(execFileSync(process.execPath, [managerScript, "stop-timeout-ms"], { encoding: "utf8" }));
+    const policy = JSON.parse(execFileSync(process.execPath, [managerScript, "stop-context"], { encoding: "utf8" }));
+    stopTimeoutMs = Number(policy.stopTimeoutMs);
+    if (policy.killMode === "mixed") controlGroup = policy.controlGroup;
   } catch (error) {
     // Broken fixture policy is fatal, not a new stop-budget default. Keep the
     // supervisor alive until its owned group is gone, then report the policy failure.
@@ -242,15 +245,77 @@ const drainProcessGroup = (pid, onStopped) => {
     fs.writeSync(output, `[systemctl-shim] stop policy read failed; cleaning up process group: ${String(error)}\n`);
     publishRuntime(child?.pid ?? 0);
   }
-  signalProcessGroup(pid, "SIGTERM");
-  if (stopFailed) signalProcessGroup(pid, "SIGKILL");
-  const forceKill = stopFailed || stopTimeoutMs === Infinity ? undefined : setTimeout(() => {
-    signalProcessGroup(pid, "SIGKILL");
-    // Signal delivery is not settlement; the existing observer must confirm exit.
-  }, stopTimeoutMs);
+  let cgroupFailed = false;
+  const failControlGroup = (error) => {
+    if (cgroupFailed) return;
+    cgroupFailed = true;
+    stopFailed = true;
+    stopping = true;
+    fs.writeSync(output, `[systemctl-shim] service cgroup cleanup failed; retaining custody: ${String(error)}\n`);
+    publishRuntime(child?.pid ?? 0);
+  };
+  let forced = false;
+  const signalledMembers = new Set();
+  const killRemaining = () => {
+    if (forced && !controlGroup) return;
+    forced = true;
+    if (!controlGroup) return signalProcessGroup(pid, "SIGKILL");
+    try {
+      const members = fs.readFileSync(`/sys/fs/cgroup${controlGroup}/cgroup.procs`, "utf8");
+      for (const member of members.trim().split(/\s+/).filter(Boolean)) {
+        const memberPid = Number(member);
+        try {
+          const stat = fs.readFileSync(`/proc/${memberPid}/stat`, "utf8");
+          const startTime = stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[19];
+          if (!/^\d+$/.test(startTime ?? "")) throw new Error("Missing cgroup process identity");
+          const identity = `${memberPid}:${startTime}`;
+          if (signalledMembers.has(identity)) continue;
+          // Revalidate membership immediately before signalling: detached children
+          // remain owned, while an exited/reused PID outside this cgroup does not.
+          const membership = fs.readFileSync(`/proc/${memberPid}/cgroup`, "utf8");
+          if (membership.split("\n").includes(`0::${controlGroup}`)) {
+            signalledMembers.add(identity);
+            process.kill(memberPid, "SIGKILL");
+          }
+        } catch (error) {
+          if (!["ENOENT", "ESRCH"].includes(error?.code)) failControlGroup(error);
+        }
+      }
+    } catch (error) {
+      failControlGroup(error);
+    }
+  };
+  if (controlGroup) {
+    if (child?.pid === pid) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch (error) {
+        if (error?.code !== "ESRCH") failControlGroup(error);
+      }
+    }
+  } else {
+    signalProcessGroup(pid, "SIGTERM");
+  }
+  if (stopFailed) killRemaining();
+  const forceKill = stopFailed || stopTimeoutMs === Infinity ? undefined : setTimeout(killRemaining, stopTimeoutMs);
   const finishWhenStopped = () => {
     if (completed) return;
-    if (isProcessGroupRunning(pid)) {
+    // KillMode=mixed lets the main process drain before killing the remainder,
+    // including detached or newly discovered descendants. Signal each observed
+    // native identity once while the existing observer joins their settlement.
+    if (controlGroup && (forced || child?.pid !== pid)) killRemaining();
+    let populated = false;
+    if (controlGroup) {
+      try {
+        const events = fs.readFileSync(`/sys/fs/cgroup${controlGroup}/cgroup.events`, "utf8");
+        if (!/^populated [01]$/m.test(events)) throw new Error("Missing cgroup population state");
+        populated = /^populated 1$/m.test(events);
+      } catch (error) {
+        failControlGroup(error);
+        populated = true;
+      }
+    }
+    if (isProcessGroupRunning(pid) || populated) {
       setTimeout(finishWhenStopped, 25);
       return;
     }

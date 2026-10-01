@@ -62,18 +62,7 @@ export function isGoogleTextGenerationModelId(id: string): boolean {
   if (GOOGLE_NON_TEXT_MODEL_ID_MARKERS.some((marker) => lower.includes(marker))) {
     return false;
   }
-  return (
-    lower.startsWith(GEMINI_2_5_PRO_PREFIX) ||
-    lower.startsWith(GEMINI_2_5_FLASH_LITE_PREFIX) ||
-    lower.startsWith(GEMINI_2_5_FLASH_PREFIX) ||
-    GEMINI_3_PRO_RE.test(lower) ||
-    GEMINI_3_FLASH_LITE_RE.test(lower) ||
-    GEMINI_3_FLASH_RE.test(lower) ||
-    lower === GEMINI_PRO_LATEST_ID ||
-    lower === GEMINI_FLASH_LATEST_ID ||
-    lower === GEMINI_FLASH_LITE_LATEST_ID ||
-    lower.startsWith(GEMMA_PREFIX)
-  );
+  return GOOGLE_FORWARD_COMPAT_CASES.some((entry) => entry.match(lower));
 }
 
 export function isGoogleNativeVideoModelId(id: string): boolean {

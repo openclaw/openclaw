@@ -81,7 +81,7 @@ const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
 };
 
-export const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
+const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
   "agents.enabled": false,
   "features.multi_agent": false,
   "features.multi_agent_v2": false,
@@ -165,6 +165,7 @@ export type CodexThreadConfigurationContext = CodexThreadPromptContext &
     | "authoredContextTokenCap"
     | "bootstrapContextMode"
     | "scheduledRuntimeAuthority"
+    | "requireWorkspaceOnly"
   >;
 
 /** Common deterministic start/resume/fork fields; no run resources or unsupported setters. */
@@ -188,12 +189,12 @@ export function buildCodexThreadConfiguration(
       directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
     }),
     // Catalog-owned collaboration messages replace caller collaboration instructions
-    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so the skill
-    // catalog rides the thread developer carrier after the immutable generic policy.
+    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so refreshable
+    // workspace instructions ride the thread developer carrier after the immutable generic policy.
     developerInstructions: joinPresentSections(
       options.developerInstructions ??
         buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
-      options.skillsInstructions,
+      options.refreshableInstructions,
     ),
   };
 }
@@ -223,7 +224,9 @@ export function buildThreadStartParams(
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     threadSource: "openclaw",
-    ...resolveCodexThreadEnvironmentSelection(options),
+    ...resolveCodexThreadEnvironmentSelection(
+      params.requireWorkspaceOnly === true ? { nativeCodeModeEnabled: false } : options,
+    ),
     // Codex 0.146 accepts canonical typed function and namespace specs natively.
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
@@ -359,6 +362,21 @@ function resolveDirectOnlyToolNamespaces(
     .map((tool) => tool.name);
 }
 
+export function isCodexNativeDelegationDisabledForRun(
+  params: CodexThreadConfigurationContext,
+  hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
+): boolean {
+  // Disabling only multi_agent still permits Codex's model-selected or explicit V2 tools.
+  return (
+    isCodexResponsesOAuthRun(params) ||
+    params.delegationCapability === "report_only" ||
+    params.requireWorkspaceOnly === true ||
+    params.pluginHarnessToolPolicyRestricted === true ||
+    isMessageOnlyCodexSourceReply(params) ||
+    (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))
+  );
+}
+
 export function buildCodexRuntimeThreadConfigForRun(
   params: CodexThreadConfigurationContext,
   config: JsonObject | undefined,
@@ -381,7 +399,10 @@ export function buildCodexRuntimeThreadConfigForRun(
     isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params);
   const restrictedToolSurface =
-    ringZeroActive || messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true;
+    ringZeroActive ||
+    messageOnlySourceReply ||
+    params.pluginHarnessToolPolicyRestricted === true ||
+    params.requireWorkspaceOnly === true;
   const restrictedTurnDisablesProjectDocs =
     ringZeroActive ||
     messageOnlySourceReply ||
@@ -411,9 +432,11 @@ export function buildCodexRuntimeThreadConfigForRun(
     mergeCodexThreadConfigs(
       baseConfig,
       options.appServer?.networkProxy?.configPatch,
+      isCodexNativeDelegationDisabledForRun(params, options.hostSystemAgentActive)
+        ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
+        : undefined,
       isCodexResponsesOAuthRun(params)
         ? {
-            ...CODEX_DELEGATION_DISABLED_THREAD_CONFIG,
             "features.apps": false,
             "features.plugins": false,
             "features.image_generation": false,
@@ -430,13 +453,14 @@ export function buildCodexRuntimeThreadConfigForRun(
       shouldDisableCodexToolSearchForModel(params.modelId)
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
         : undefined,
-      params.delegationCapability === "report_only"
-        ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
-        : undefined,
-      messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
+      messageOnlySourceReply ||
+        params.pluginHarnessToolPolicyRestricted === true ||
+        params.requireWorkspaceOnly === true
         ? buildRestrictedToolConfigPatch(
             restrictedToolSurfaceMcpServerNames,
-            Boolean(params.scheduledRuntimeAuthority) && !isCodexResponsesOAuthRun(params),
+            Boolean(params.scheduledRuntimeAuthority) &&
+              !isCodexResponsesOAuthRun(params) &&
+              params.requireWorkspaceOnly !== true,
           )
         : buildCodexRingZeroThreadConfigPatch(
             params,

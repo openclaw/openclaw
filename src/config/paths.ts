@@ -424,10 +424,8 @@ export function resolveGatewayPort(
     return envPort;
   }
   const configPort = cfg?.gateway?.port;
-  if (typeof configPort === "number" && Number.isFinite(configPort)) {
-    if (configPort > 0) {
-      return configPort;
-    }
+  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
+    return configPort;
   }
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
   if (!profile) {

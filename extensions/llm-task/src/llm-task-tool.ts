@@ -125,13 +125,11 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       }
 
       const thinkingRaw = readNonBlankString(params.thinking);
-      let thinkLevel: ReturnType<OpenClawPluginApi["runtime"]["agent"]["normalizeThinkingLevel"]> =
-        undefined;
-      if (thinkingRaw) {
-        thinkLevel = api.runtime.agent.normalizeThinkingLevel(thinkingRaw);
-        if (!thinkLevel) {
-          throw new Error(`Invalid thinking level "${thinkingRaw}".`);
-        }
+      const thinkLevel = thinkingRaw
+        ? api.runtime.agent.normalizeThinkingLevel(thinkingRaw)
+        : undefined;
+      if (thinkingRaw && !thinkLevel) {
+        throw new Error(`Invalid thinking level "${thinkingRaw}".`);
       }
 
       const timeoutMs =
@@ -139,12 +137,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         asPositiveSafeInteger(pluginCfg.timeoutMs) ??
         30_000;
 
-      const streamParams = {
-        temperature: readFiniteNumberParam(params, "temperature"),
-        maxTokens:
-          readPositiveIntegerParam(params, "maxTokens") ??
-          asPositiveSafeInteger(pluginCfg.maxTokens),
-      };
+      const temperature = readFiniteNumberParam(params, "temperature");
+      const maxTokens =
+        readPositiveIntegerParam(params, "maxTokens") ?? asPositiveSafeInteger(pluginCfg.maxTokens);
 
       const input = params.input;
       let inputJson: string;
@@ -172,8 +167,8 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         systemPrompt: system,
         model: hasModelOverride ? modelKey : undefined,
         reasoning: thinkLevel,
-        maxTokens: streamParams.maxTokens,
-        temperature: streamParams.temperature,
+        maxTokens,
+        temperature,
         signal,
         purpose: "llm-task",
         execution: {

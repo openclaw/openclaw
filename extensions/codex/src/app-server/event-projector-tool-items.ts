@@ -4,10 +4,7 @@ import {
   projectAgentToolActivity,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  normalizeOptionalString,
-  normalizeTrimmedStringList,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   itemName,
   itemStatus,
@@ -21,6 +18,7 @@ import {
   sanitizeCodexAgentEventRecord,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
+import { projectCodexWebSearchItem } from "./web-search-item.js";
 
 const CODE_MODE_NATIVE_PATCH_SOURCE_RE =
   /^\s*(?:\/\/[^\r\n]*\r?\n\s*)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.apply_patch\(\s*("(?:\\[\s\S]|[^"\\])*")\s*\)\s*;?\s*text\(\s*\1\s*\)\s*;?\s*$/u;
@@ -157,33 +155,8 @@ export function isCommandBearingToolItem(
 }
 
 function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
-  const action = isJsonObject(item.action) ? item.action : undefined;
-  const actionType = normalizeOptionalString(action?.type);
-  const queries =
-    action && actionType === "search" ? normalizeTrimmedStringList(action.queries) : [];
-  const query =
-    normalizeOptionalString(item.query) ??
-    (actionType === "search" ? normalizeOptionalString(action?.query) : undefined) ??
-    queries[0];
-  const url = normalizeOptionalString(action?.url);
-  const pattern = normalizeOptionalString(action?.pattern);
-  const args: Record<string, unknown> = {};
-  if (query) {
-    args.query = query;
-  }
-  if (queries.length > 0) {
-    args.queries = queries;
-  }
-  if (actionType && actionType !== "search") {
-    args.action = actionType;
-  }
-  if (url) {
-    args.url = url;
-  }
-  if (pattern) {
-    args.pattern = pattern;
-  }
-  if (!query && !url && !pattern) {
+  const args = projectCodexWebSearchItem(item);
+  if (!args.query && !args.url && !args.pattern) {
     args.queryUnavailable = true;
   }
   return sanitizeCodexAgentEventRecord(args);

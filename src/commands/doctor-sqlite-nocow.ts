@@ -16,6 +16,9 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
 const TOOL_TIMEOUT_MS = 2_000;
+const FUSER_MAX_PATHS = 2_000;
+// Leave room for the inherited environment and argv pointers under Linux ARG_MAX.
+const FUSER_MAX_PATH_BYTES = 64 * 1024;
 
 function hasNoCow(pathname: string): boolean {
   const result = spawnSync("lsattr", ["-d", "--", pathname], {
@@ -147,17 +150,55 @@ async function quickCheck(pathname: string) {
 }
 
 function assertNoOpenFiles(paths: readonly string[]) {
-  const result = spawnSync(
-    "fuser",
-    paths.map((pathname) => path.resolve(pathname)),
-    {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let batchBytes = 0;
+  for (const pathname of paths) {
+    const absolute = path.resolve(pathname);
+    const bytes = Buffer.byteLength(absolute, "utf8") + 1;
+    if (
+      batch.length > 0 &&
+      (batch.length >= FUSER_MAX_PATHS || batchBytes + bytes > FUSER_MAX_PATH_BYTES)
+    ) {
+      batches.push(batch);
+      batch = [];
+      batchBytes = 0;
+    }
+    batch.push(absolute);
+    batchBytes += bytes;
+  }
+  if (batch.length > 0) {
+    batches.push(batch);
+  }
+
+  const pids = new Set<string>();
+  let inspectionError: string | undefined;
+  for (const args of batches) {
+    const result = spawnSync("fuser", args, {
       encoding: "utf8",
       timeout: TOOL_TIMEOUT_MS,
-    },
-  );
-  if (result.error || result.status !== 1 || result.stdout.trim() || result.stderr.trim()) {
+    });
+    const stdout = result.stdout?.trim() ?? "";
+    const stderr = result.stderr?.trim() ?? "";
+    if (result.status === 0 && /^\d+(?:\s+\d+)*$/u.test(stdout)) {
+      for (const pid of stdout.split(/\s+/u)) {
+        pids.add(pid);
+      }
+    } else if (result.error || result.status !== 1 || stdout || stderr) {
+      inspectionError ??=
+        stderr ||
+        result.error?.message ||
+        (result.signal ? `signal ${result.signal}` : stdout || `exit status ${result.status}`);
+    }
+  }
+  if (pids.size > 0) {
     throw new Error(
-      "store files are open, or fuser could not establish that all handles are closed; stop processes using this store and ensure fuser is installed",
+      `store files are open (pids: ${[...pids].join(", ")}); stop processes using this store before retrying`,
+    );
+  }
+  if (inspectionError) {
+    throw new Error(
+      `fuser could not establish that all handles are closed: ${inspectionError}; ensure fuser is installed and can inspect processes using this store`,
     );
   }
 }
@@ -307,12 +348,30 @@ export async function repairDoctorSqliteNoCow(params: {
         );
       }
       params.assertCurrent();
-      assertNoOpenFiles(regularPaths);
+      const observedFiles = fs
+        .readdirSync(directory, { recursive: true, withFileTypes: true })
+        .map((entry) => path.join(entry.parentPath, entry.name));
+      assertNoOpenFiles(observedFiles.filter((pathname) => fs.lstatSync(pathname).isFile()));
+      // A file can appear while fuser checks the previously observed inventory.
       const currentIdentity = fs.statSync(directory, { bigint: true });
       const currentFiles = fs
         .readdirSync(directory, { recursive: true, withFileTypes: true })
         .map((entry) => path.join(entry.parentPath, entry.name))
-        .filter((pathname) => !sharedMemoryPaths.has(pathname));
+        .filter((pathname) => {
+          if (sharedMemoryPaths.has(pathname)) {
+            return false;
+          }
+          // Reading a cleanly closed WAL database can create an empty WAL beside the source.
+          if (
+            pathname.endsWith("-wal") &&
+            sqlitePaths.has(pathname.slice(0, -4)) &&
+            !sourceFiles.has(pathname)
+          ) {
+            const stat = fs.lstatSync(pathname);
+            return !stat.isFile() || stat.size !== 0;
+          }
+          return true;
+        });
       if (
         currentIdentity.dev !== sourceIdentity.dev ||
         currentIdentity.ino !== sourceIdentity.ino ||
@@ -343,6 +402,7 @@ export async function repairDoctorSqliteNoCow(params: {
       }
       const original = fs.statSync(directory);
       const replacement = fs.statSync(backup);
+      params.assertCurrent();
       exchangeAttempted = true;
       const exchange = spawnSync("mv", ["--exchange", "--no-copy", "-T", "--", backup, directory], {
         encoding: "utf8",

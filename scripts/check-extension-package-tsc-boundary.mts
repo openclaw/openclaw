@@ -4,6 +4,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -34,6 +35,10 @@ import {
 import { toErrorObject } from "./lib/error-format.mts";
 import { BOUNDARY_CACHE_ROOT, BoundaryInputSnapshot } from "./lib/extension-boundary-inputs.mts";
 import { prepareExtensionBoundaryProjects } from "./lib/extension-boundary-projects.mts";
+import {
+  formatBoundarySelection,
+  resolveExtensionBoundarySelection,
+} from "./lib/extension-boundary-selection.mts";
 import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
 import {
   runManagedCommand,
@@ -496,6 +501,15 @@ function resolveBoundaryTsStampPath(extensionId: string, rootDir = repoRoot) {
   return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.json`);
 }
 async function runCompileCheck(extensionIds: string[]) {
+  if (extensionIds.length === 0) {
+    return {
+      prepElapsedMs: 0,
+      compileCount: 0,
+      skippedCompileCount: 0,
+      compileElapsedMs: 0,
+      compileTimings: [],
+    };
+  }
   const prepStartedAt = Date.now();
   process.stdout.write(
     `preparing plugin-sdk boundary artifacts for ${extensionIds.length} plugins\n`,
@@ -552,9 +566,13 @@ async function runCompileCheck(extensionIds: string[]) {
       const recordPath = resolveBoundaryTsStampPath(extensionId);
       mkdirSync(dirname(inputReceipt), { recursive: true });
       if (
-        before.matches(readArtifactRecord(recordPath), config, args, [
-          portableRelativePath(repoRoot, inputReceipt),
-        ])
+        before.matchesReceipt(
+          readArtifactRecord(recordPath),
+          config,
+          args,
+          [portableRelativePath(repoRoot, inputReceipt)],
+          inputReceipt,
+        )
       ) {
         skippedCompileCount += 1;
         if (verboseFreshLogs) {
@@ -725,8 +743,14 @@ async function runBoundaryCheck(argv: string[]) {
   try {
     cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
     if (mode === "all" || mode === "compile") {
+      const selection = resolveExtensionBoundarySelection(repoRoot, optInExtensionIds);
+      const summary = formatBoundarySelection(selection);
+      process.stdout.write(summary);
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+      }
       ({ prepElapsedMs, compileCount, skippedCompileCount, compileElapsedMs, compileTimings } =
-        await runCompileCheck(optInExtensionIds));
+        await runCompileCheck(selection.selected.map((row) => row.package)));
     }
     if (shouldRunCanary) {
       ({ canaryElapsedMs } = await runCanaryCheck(canaryExtensionIds));

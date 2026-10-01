@@ -89,9 +89,7 @@ export function renderGatewayServiceCleanupHints(
   for (const service of services) {
     switch (service.platform) {
       case "darwin": {
-        const plistPath = service.detail.startsWith("plist:")
-          ? service.detail.slice("plist:".length).trim()
-          : undefined;
+        const plistPath = service.sourcePath;
         // Global LaunchAgents still run in a GUI domain; only LaunchDaemons
         // belong to the system domain regardless of their shared file scope.
         const domain =
@@ -184,6 +182,7 @@ async function scanLaunchdDir(params: {
       platform: "darwin",
       label,
       detail: `plist: ${fullPath}`,
+      sourcePath: fullPath,
       scope: params.scope,
       marker,
       legacy: marker !== "openclaw" || isLegacyLabel(label),
@@ -506,6 +505,7 @@ async function scanGatewayServices(
                 platform: "linux",
                 label: unit.name,
                 detail: `unit: ${unit.fragmentPath}`,
+                sourcePath: unit.fragmentPath,
                 scope,
                 marker: marker ?? "openclaw",
                 legacy: marker === "clawdbot",
@@ -513,7 +513,10 @@ async function scanGatewayServices(
                 managedGateway: marker !== "clawdbot",
               });
             }
-          } catch {
+          } catch (error) {
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
             errors.push({
               source: scope === "user" ? "systemctl --user" : "systemctl --system",
               message: "Loaded systemd services could not be inspected.",
@@ -521,7 +524,10 @@ async function scanGatewayServices(
           }
         }
       }
-    } catch {
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
       errors.push({ source: "systemd", message: "Gateway service discovery could not finish." });
     }
     return inventory;
@@ -578,14 +584,11 @@ async function scanGatewayServices(
       const selected =
         normalizeWindowsTaskIdentity(name) === normalizeWindowsTaskIdentity(resolveTaskName(env));
       const knownTask = selected || isOpenClawGatewayTaskName(name) || isLegacyLabel(name);
-      // A stopped unrelated task cannot hold the checkout's live dist. Keep unknown,
-      // queued, and running tasks fail-closed when their command cannot be read.
-      const mayHoldLiveGateway = task.state !== 1 && task.state !== 3;
       const launcherReference = actionArgv.some((argv) =>
         argv.some((arg) => /\.(?:bat|cmd|vbs)$/i.test(arg) && detectLauncherGatewayMarker(arg)),
       );
       if (!task.actions?.length) {
-        if ((requireComplete && mayHoldLiveGateway) || knownTask) {
+        if (knownTask) {
           errors.push({ source: name, message: "Scheduled Task action could not be inspected." });
         }
         continue;
@@ -602,7 +605,7 @@ async function scanGatewayServices(
       if (
         requireComplete &&
         task.actions.length > 1 &&
-        (hasGatewayAction || (hasLauncherAction && (mayHoldLiveGateway || knownTask)))
+        (hasGatewayAction || (hasLauncherAction && (knownTask || launcherReference)))
       ) {
         errors.push({
           source: name,
@@ -611,9 +614,7 @@ async function scanGatewayServices(
         continue;
       }
       let marker = hasGatewayAction ? "openclaw" : (actionMarkers.find(Boolean) ?? null);
-      let gateway = actionArgv.some(
-        (argv, index) => actionMarkers[index] === "openclaw" && hasGatewaySubcommandArg(argv),
-      );
+      let gateway = hasGatewayAction;
       let profile =
         actionArgv.length === 1
           ? resolveWindowsServiceCommandProfile({ programArguments: actionArgv[0]! })
@@ -633,7 +634,7 @@ async function scanGatewayServices(
               },
             },
           );
-          if (requireComplete && mayHoldLiveGateway && !command) {
+          if (!command && (knownTask || recognizableLauncher)) {
             throw new Error("Registered launcher disappeared during inspection.");
           }
           profile = command ? resolveWindowsServiceCommandProfile(command) : undefined;
@@ -658,7 +659,8 @@ async function scanGatewayServices(
             recordDeadline();
             break;
           }
-          if ((requireComplete && mayHoldLiveGateway) || knownTask || recognizableLauncher) {
+          // Native liveness alone does not make a foreign task an OpenClaw owner.
+          if (knownTask || recognizableLauncher) {
             errors.push({
               source: name,
               message: "Scheduled Task launcher could not be inspected.",

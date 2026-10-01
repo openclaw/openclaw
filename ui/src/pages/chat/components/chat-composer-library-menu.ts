@@ -51,30 +51,16 @@ export function renderComposerLibraryMenu(library?: ComposerLibraryProps, skillI
                   >
                 </span>
               </div>
-              <wa-dropdown-item
-                class="agent-chat__capability-menu-item"
-                value=${`library-read:${pin.skillId}`}
-                ?disabled=${busy}
-                >${t("skillLibrary.session.read")}</wa-dropdown-item
-              >
-              ${
-                library.canWrite
-                  ? html`
-                      <wa-dropdown-item
-                        class="agent-chat__capability-menu-item"
-                        value=${`library-refresh:${pin.skillId}`}
-                        ?disabled=${busy}
-                        >${t("skillLibrary.session.refresh")}</wa-dropdown-item
-                      >
-                      <wa-dropdown-item
-                        class="agent-chat__capability-menu-item"
-                        value=${`library-detach:${pin.skillId}`}
-                        ?disabled=${busy}
-                        >${t("skillLibrary.session.detach")}</wa-dropdown-item
-                      >
-                    `
-                  : nothing
-              }
+              ${(["read", "refresh", "detach"] as const).map((action) =>
+                action === "read" || library.canWrite
+                  ? html`<wa-dropdown-item
+                      class="agent-chat__capability-menu-item"
+                      value=${`library-${action}:${pin.skillId}`}
+                      ?disabled=${busy}
+                      >${t(`skillLibrary.session.${action}`)}</wa-dropdown-item
+                    >`
+                  : nothing,
+              )}
             `
           : library.result && !busy
             ? renderCapabilityMenuState(t("skillsPage.notFound"))

@@ -72,8 +72,9 @@ describe("DirectoryCache", () => {
     expect(cache.get("c", cfg)).toBeUndefined();
     expect(cache.get("c", otherCfg)).toBe("other-C");
 
-    cache.clear(cfg);
+    cache.clear();
     expect(cache.get("a", cfg)).toBeUndefined();
+    expect(cache.get("c", otherCfg)).toBeUndefined();
   });
 
   it("uses the default max size when maxSize is non-finite", () => {

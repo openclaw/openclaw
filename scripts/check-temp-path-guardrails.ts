@@ -1,4 +1,3 @@
-// Check Temp Path Guardrails script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
 import pMap, { pMapSkip } from "p-map";
@@ -45,17 +44,12 @@ function stripCommentsForScan(input: string): string {
   return input.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
-function beginQuotedSection(state: QuoteScanState, ch: string): boolean {
-  if (ch !== "'" && ch !== '"' && ch !== "`") {
-    return false;
-  }
-  state.quote = ch;
-  return true;
-}
-
 function consumeQuotedChar(state: QuoteScanState, ch: string): boolean {
   if (!state.quote) {
-    return false;
+    if (ch === "'" || ch === '"' || ch === "`") {
+      state.quote = ch;
+    }
+    return state.quote !== null;
   }
   if (state.escaped) {
     state.escaped = false;
@@ -77,9 +71,6 @@ function findMatchingParen(source: string, openIndex: number): number {
   for (let i = openIndex + 1; i < source.length; i += 1) {
     const ch = source.charAt(i);
     if (consumeQuotedChar(quoteState, ch)) {
-      continue;
-    }
-    if (beginQuotedSection(quoteState, ch)) {
       continue;
     }
     if (ch === "(") {
@@ -104,12 +95,7 @@ function splitTopLevelArguments(source: string): string[] {
   let braceDepth = 0;
   const quoteState: QuoteScanState = { quote: null, escaped: false };
   for (const ch of source) {
-    if (quoteState.quote) {
-      current += ch;
-      consumeQuotedChar(quoteState, ch);
-      continue;
-    }
-    if (beginQuotedSection(quoteState, ch)) {
+    if (consumeQuotedChar(quoteState, ch)) {
       current += ch;
       continue;
     }

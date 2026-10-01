@@ -70,6 +70,62 @@ describe("Memory observation lifecycle", () => {
     return { watcher, onChange, onDirty, onUnavailable };
   }
 
+  it.each([
+    ["false", undefined, 30_000],
+    ["false", "100", 30_000],
+    ["true", "100", 30_000],
+    ["true", "60000", 60_000],
+  ] as const)(
+    "bounds background polling with polling=%s interval=%s",
+    async (poll, interval, expected) => {
+      vi.stubEnv("CHOKIDAR_USEPOLLING", poll);
+      vi.stubEnv("CHOKIDAR_INTERVAL", interval);
+      const { watcher } = owner();
+      await watcher.start();
+      expect(observer.observations.length).toBeGreaterThan(0);
+      for (const entry of observer.observations) {
+        expect(entry.options.pollIntervalMs).toBe(expected);
+      }
+    },
+  );
+
+  it.each([undefined, "ENOTSUP"])("reports fallback polling once with reason %s", async (code) => {
+    const { watcher, onUnavailable } = owner();
+    await watcher.start();
+    const entry = observer.observations[0]!;
+    const failure = code
+      ? { operation: "watch" as const, code, error: new Error("native backend unsupported") }
+      : undefined;
+    entry.health({ state: "ready", mode: "poll", failure });
+    entry.health({ state: "reconciling" });
+    entry.health({ state: "ready" });
+    expect(warnings).toHaveBeenCalledOnce();
+    expect(warnings).toHaveBeenCalledWith(
+      expect.stringContaining("fallback polling every 30000 ms"),
+    );
+    expect(warnings).toHaveBeenCalledWith(
+      expect.stringContaining(code ?? "fs-safe did not report a reason"),
+    );
+    expect(watcher.health()).toEqual([
+      expect.objectContaining({ mode: "poll", pollingFallback: true, pollIntervalMs: 30_000 }),
+    ]);
+    expect(onUnavailable).not.toHaveBeenCalled();
+    if (failure) {
+      expect(watcher.health()[0]?.failure?.error).toBe(String(failure.error));
+    }
+  });
+
+  it("reports explicit polling without a fallback warning", async () => {
+    vi.stubEnv("CHOKIDAR_USEPOLLING", "true");
+    const { watcher } = owner();
+    await watcher.start();
+    observer.observations[0]!.health({ state: "ready", mode: "poll" });
+    expect(warnings).not.toHaveBeenCalled();
+    expect(watcher.health()).toEqual([
+      expect.objectContaining({ mode: "poll", pollingFallback: false, pollIntervalMs: 30_000 }),
+    ]);
+  });
+
   it("retains new dirty facts behind slow indexing without a zero-delay timer spin", async () => {
     const first = createDeferred<void>();
     const entered = createDeferred<void>();

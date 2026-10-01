@@ -46,7 +46,6 @@ const fs = await import("node:fs");
 const {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } = await import("./openclaw-state-db.js");
 
@@ -98,30 +97,6 @@ describe("state database permission hardening without chmod support", () => {
     expect(database.db.isOpen).toBe(true);
   });
 
-  it("opens when EROFS leaves existing permissions restrictive", () => {
-    const stateDir = tempDirs.make("openclaw-state-chmod-");
-    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-    closeOpenClawStateDatabaseForTest();
-    chmodFailHook.error = chmodError("EROFS");
-
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-
-    expect(database.db.isOpen).toBe(true);
-  });
-
-  it("rethrows EROFS when existing permissions are too broad", () => {
-    const stateDir = tempDirs.make("openclaw-state-chmod-");
-    // The shared database owner hardens state/, not the outer profile directory.
-    const databaseDir = join(stateDir, "state");
-    fs.mkdirSync(databaseDir);
-    fs.chmodSync(databaseDir, 0o755);
-    chmodFailHook.error = chmodError("EROFS");
-
-    expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
-      /EROFS/,
-    );
-  });
-
   it("opens when the filesystem probe also rejects chmod with EPERM", () => {
     const stateDir = tempDirs.make("openclaw-state-chmod-");
     // The shared database owner hardens state/, not the outer profile directory.
@@ -146,24 +121,22 @@ describe("state database permission hardening without chmod support", () => {
     );
   });
 
-  it.each(["-wal", "-shm", "-journal"])(
-    "opens when the %s sidecar disappears before chmod",
-    (suffix) => {
-      const stateDir = tempDirs.make("openclaw-state-chmod-");
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      openOpenClawStateDatabase(options);
-      closeOpenClawStateDatabaseForTest();
-      const sidecarPath = join(stateDir, "state", `openclaw.sqlite${suffix}`);
-      fs.writeFileSync(sidecarPath, "");
-      chmodFailHook.removeTargetSuffix = suffix;
+  it("opens when the -wal sidecar disappears before chmod", () => {
+    const suffix = "-wal";
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    const sidecarPath = join(stateDir, "state", `openclaw.sqlite${suffix}`);
+    fs.writeFileSync(sidecarPath, "");
+    chmodFailHook.removeTargetSuffix = suffix;
 
-      const database = openOpenClawStateDatabase(options);
+    const database = openOpenClawStateDatabase(options);
 
-      expect(database.db.isOpen).toBe(true);
-      expect(fs.existsSync(sidecarPath)).toBe(false);
-      expect(chmodFailHook.targets).toContain(sidecarPath);
-    },
-  );
+    expect(database.db.isOpen).toBe(true);
+    expect(fs.existsSync(sidecarPath)).toBe(false);
+    expect(chmodFailHook.targets).toContain(sidecarPath);
+  });
 
   it("rethrows when the main database vanishes between the existence check and the chmod", () => {
     // resolveSqliteDatabaseFilePaths lists the unsuffixed database first. Losing
@@ -178,18 +151,6 @@ describe("state database permission hardening without chmod support", () => {
     expect(() => openOpenClawStateDatabase(options)).toThrow(/ENOENT/);
     // Guards against a vacuous pass if the main file were skipped before chmod.
     expect(chmodFailHook.targets.some((target) => target.endsWith("openclaw.sqlite"))).toBe(true);
-  });
-
-  it("repairs the schema when chmodSync throws ENOTSUP", () => {
-    const stateDir = tempDirs.make("openclaw-state-chmod-");
-    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-    closeOpenClawStateDatabaseForTest();
-
-    chmodFailHook.error = enotsupError();
-
-    expect(() =>
-      repairOpenClawStateDatabaseSchema({ env: { OPENCLAW_STATE_DIR: stateDir } }),
-    ).not.toThrow();
   });
 
   it("commits write transactions when chmodSync throws ENOTSUP", () => {

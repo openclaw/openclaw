@@ -1,6 +1,5 @@
 /** Database-backed per-job scratch storage, kept outside public cron job state. */
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -16,48 +15,15 @@ import {
   type CronJobScratchState,
   type CronJobScratchWriteResult,
 } from "./scratch-contract.js";
+import {
+  readHeartbeatMonitorScratchFromDatabase,
+  readScratchStateFromDatabase,
+} from "./scratch-read.kernel.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
 import { cronStoreKey } from "./store/key.js";
 import { getCronStoreKysely } from "./store/schema.js";
 
-function rowToState(row: {
-  content: string | null;
-  revision: number;
-  source_sha256: string | null;
-  updated_at_ms: number;
-}): CronJobScratchState {
-  if (row.content === null) {
-    return { currentRevision: row.revision };
-  }
-  return {
-    currentRevision: row.revision,
-    scratch: {
-      content: row.content,
-      revision: row.revision,
-      ...(row.source_sha256 ? { sourceSha256: row.source_sha256 } : {}),
-      updatedAtMs: row.updated_at_ms,
-    },
-  };
-}
-
-function readScratchStateFromDatabase(
-  db: DatabaseSync,
-  storeKey: string,
-  jobId: string,
-): CronJobScratchState {
-  const cronDb = getCronStoreKysely(db);
-  const row = executeSqliteQuerySync(
-    db,
-    cronDb
-      .selectFrom("cron_job_scratch")
-      .select(["content", "revision", "source_sha256", "updated_at_ms"])
-      .where("store_key", "=", storeKey)
-      .where("job_id", "=", jobId),
-  ).rows[0];
-  return row ? rowToState(row) : { currentRevision: 0 };
-}
-
-/** Reads one job's scratch state without exposing it through cron list/history surfaces. */
+/** Doctor's synchronous transaction reads stay with the maintenance owner. */
 export function readCronJobScratchState(
   storePath: string,
   jobId: string,
@@ -67,68 +33,23 @@ export function readCronJobScratchState(
   return readScratchStateFromDatabase(db, cronStoreKey(storePath), jobId);
 }
 
-function readHeartbeatMonitorScratchFromDatabase(
-  db: DatabaseSync,
-  storePath: string,
-  agentId: string,
-): { jobId: string; state: CronJobScratchState } | undefined {
-  const storeKey = cronStoreKey(storePath);
-  const cronDb = getCronStoreKysely(db);
-  const row = executeSqliteQuerySync(
-    db,
-    cronDb
-      .selectFrom("cron_jobs")
-      .leftJoin("cron_job_scratch", (join) =>
-        join
-          .onRef("cron_job_scratch.store_key", "=", "cron_jobs.store_key")
-          .onRef("cron_job_scratch.job_id", "=", "cron_jobs.job_id"),
-      )
-      .select([
-        "cron_jobs.job_id as job_id",
-        "cron_job_scratch.content as content",
-        "cron_job_scratch.revision as revision",
-        "cron_job_scratch.source_sha256 as source_sha256",
-        "cron_job_scratch.updated_at_ms as updated_at_ms",
-      ])
-      .where("cron_jobs.store_key", "=", storeKey)
-      .where("cron_jobs.declaration_key", "=", `heartbeat:${agentId}`)
-      .where("cron_jobs.payload_kind", "=", "heartbeat"),
-  ).rows[0];
-  if (!row) {
-    return undefined;
-  }
-  if (row.revision === null || row.updated_at_ms === null) {
-    return { jobId: row.job_id, state: { currentRevision: 0 } };
-  }
-  return {
-    jobId: row.job_id,
-    state: rowToState({
-      content: row.content,
-      revision: row.revision,
-      source_sha256: row.source_sha256,
-      updated_at_ms: row.updated_at_ms,
-    }),
-  };
-}
-
-/** Resolves the current heartbeat monitor and its scratch with one narrow SQLite query. */
 export function readHeartbeatMonitorScratch(
   storePath: string,
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
-): { jobId: string; state: CronJobScratchState } | undefined {
+) {
   const { db } = openOpenClawStateDatabase(options);
-  return readHeartbeatMonitorScratchFromDatabase(db, storePath, agentId);
+  return readHeartbeatMonitorScratchFromDatabase(db, cronStoreKey(storePath), agentId);
 }
 
-/** Reads heartbeat scratch from existing shared state without creating or migrating it. */
+/** Doctor inventory does not create or migrate its inspected source. */
 export function readHeartbeatMonitorScratchReadOnly(
   storePath: string,
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
-): { jobId: string; state: CronJobScratchState } | undefined {
+) {
   return withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) => readHeartbeatMonitorScratchFromDatabase(db, storePath, agentId),
+    ({ db }) => readHeartbeatMonitorScratchFromDatabase(db, cronStoreKey(storePath), agentId),
     options,
   );
 }
@@ -148,6 +69,7 @@ export async function writeCronJobScratch(
     context?: OpenClawStateWorkerContext;
     assertCurrent?: () => void;
     assertJobCurrent?: (configRevision: string | undefined) => void;
+    createdAtMsFallback?: number;
   },
 ): Promise<CronJobScratchWriteResult> {
   if (params.content !== null) {
@@ -166,6 +88,7 @@ export async function writeCronJobScratch(
       expectedRevision: params.expectedRevision,
       sourceSha256: params.sourceSha256,
       nowMs: params.nowMs ?? Date.now(),
+      createdAtMsFallback: admission?.createdAtMsFallback,
     },
     assertCurrent: () => admission?.assertCurrent?.(),
     prepare({ configRevision }) {

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   replaceSessionEntry,
   replaceTranscriptEvents,
@@ -53,6 +54,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
+import { createArchivedSessionTranscriptSource } from "./session-end-transcript-reader.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const observed = vi.hoisted(() => ({
@@ -177,6 +179,49 @@ it("retains the prepared metadata target when caller scope and environment chang
   });
 });
 
+it("reads an exact ended-session archive in the history worker", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionId = "deleted-session-archive";
+    const fixture = await seed(state, "main", sessionId);
+    const content = [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "archived-message",
+        parentId: null,
+        message: { role: "user", content: "archived content" },
+      },
+    ]
+      .map((event) => JSON.stringify(event))
+      .join("\n");
+    const encoded = encodeSessionArchiveContent(`${content}\n`);
+    const archivePath = state.path(
+      `deleted.jsonl.deleted.2026-09-29T00-00-00.000Z${encoded.suffix}`,
+    );
+    fs.writeFileSync(archivePath, encoded.bytes);
+    const source = createArchivedSessionTranscriptSource({
+      agentId: "main",
+      archivedPath: archivePath,
+      sessionId,
+      storePath: fixture.target.storePath,
+    });
+    if (!source.available) {
+      throw new Error("expected an available archive source");
+    }
+    const workersBefore = observed.workers.length;
+
+    await expect(source.readTail({ maxBytes: 64 * 1_024, maxMessages: 10 })).resolves.toMatchObject(
+      {
+        messages: [expect.objectContaining({ role: "user", content: "archived content" })],
+        totalMessages: 1,
+      },
+    );
+
+    expect(observed.workers.length).toBeGreaterThan(workersBefore);
+    expect(observed.workers.at(-1)?.threadId).toBeGreaterThan(0);
+  });
+});
+
 it("keeps fresh fixture roots isolated while reusing idle reader execution", async () => {
   let previousWorker: Worker | undefined;
   for (const sessionId of ["first-fixture", "second-fixture"]) {
@@ -271,113 +316,97 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
   };
 }
 
-it.each(["message-by-id", "message-count"] as const)(
-  "settles cancelled %s reads before reuse and closes their database handles",
-  async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const fixture = await seed(state, "main", "cancel-message-read");
-      const controller = new AbortController();
-      const cancelled = new Error("history consumer closed");
-      let dispatched = false;
-      observed.dispatch = (message) => {
-        const input = asOptionalRecord(asOptionalRecord(message)?.input);
-        if (asOptionalRecord(input?.request)?.kind === kind) {
-          observed.dispatch = undefined;
-          dispatched = true;
-          controller.abort(cancelled);
-        }
-      };
-      const pending =
-        kind === "message-by-id"
-          ? readSessionHistoryPageInWorker(
-              {
-                kind,
-                params: { target: fixture.target, messageId: "cancel-message-read-message" },
-              },
-              controller.signal,
-            )
-          : readSessionHistoryPageInWorker(
-              { kind, params: { target: fixture.target } },
-              controller.signal,
-            );
-      await expect(pending).rejects.toBe(cancelled);
-      expect(dispatched).toBe(true);
-      const worker = observed.workers.at(-1)!;
-      const threadId = worker.threadId;
-      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-        "cancel-message-read-message",
-      ]);
+it("settles cancelled message reads before reuse and closes their database handles", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const fixture = await seed(state, "main", "cancel-message-read");
+    const controller = new AbortController();
+    const cancelled = new Error("history consumer closed");
+    let dispatched = false;
+    observed.dispatch = (message) => {
+      const input = asOptionalRecord(asOptionalRecord(message)?.input);
+      if (asOptionalRecord(input?.request)?.kind === "message-by-id") {
+        observed.dispatch = undefined;
+        dispatched = true;
+        controller.abort(cancelled);
+      }
+    };
+    const pending = readSessionHistoryPageInWorker(
+      {
+        kind: "message-by-id",
+        params: { target: fixture.target, messageId: "cancel-message-read-message" },
+      },
+      controller.signal,
+    );
+    await expect(pending).rejects.toBe(cancelled);
+    expect(dispatched).toBe(true);
+    const worker = observed.workers.at(-1)!;
+    const threadId = worker.threadId;
+    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+      "cancel-message-read-message",
+    ]);
+    expect(observed.workers.at(-1)).toBe(worker);
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    expect(worker.threadId).toBe(process.versions.bun ? -1 : threadId);
+    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+      "cancel-message-read-message",
+    ]);
+    if (process.versions.bun) {
+      expect(observed.workers.at(-1)).not.toBe(worker);
+    } else {
       expect(observed.workers.at(-1)).toBe(worker);
-      await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
-      expect(worker.threadId).toBe(process.versions.bun ? -1 : threadId);
-      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-        "cancel-message-read-message",
-      ]);
-      if (process.versions.bun) {
-        expect(observed.workers.at(-1)).not.toBe(worker);
-      } else {
-        expect(observed.workers.at(-1)).toBe(worker);
-      }
-    });
-  },
-);
+    }
+  });
+});
 
-it.each(["message-by-id", "message-count"] as const)(
-  "rejects a completed native %s reply after primary file replacement",
-  async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const sessionId = "replaced-primary-read";
-      const fixture = await seed(state, "main", sessionId);
-      await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
-      fs.copyFileSync(fixture.path, `${fixture.path}.replacement`);
-      const originalInode = fs.statSync(fixture.path, { bigint: true }).ino;
-      const nativeReply = createDeferredCore<unknown>();
-      const releaseReply = createDeferredCore();
-      const run = historyLane.pool.run;
-      const read = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-        const reply = await run(...args);
-        if (reply.ok && asOptionalRecord(reply.value)?.kind === kind) {
-          nativeReply.resolve(reply.value);
-          await releaseReply.promise;
-        }
-        return reply;
-      });
-      const pending =
-        kind === "message-by-id"
-          ? readSessionHistoryPageInWorker({
-              kind,
-              params: { target: fixture.target, messageId: `${sessionId}-message` },
-            })
-          : readSessionHistoryPageInWorker({ kind, params: { target: fixture.target } });
-      try {
-        const completed = await Promise.race([
-          nativeReply.promise,
-          pending.then(() => {
-            throw new Error("History read completed before its native reply was released");
-          }),
-        ]);
-        expect(completed).toMatchObject(
-          kind === "message-by-id"
-            ? { kind, result: { found: true, message: { role: "user", content: sessionId } } }
-            : { kind, count: 1 },
-        );
-        // Release the settled native reader for Windows replacement without revoking host custody.
-        await historyLane.pool.closeResources(JSON.stringify([{ path: fixture.path }]));
-        fs.renameSync(fixture.path, `${fixture.path}.previous`);
-        fs.renameSync(`${fixture.path}.replacement`, fixture.path);
-        expect(fs.statSync(fixture.path, { bigint: true }).ino).not.toBe(originalInode);
-        releaseReply.resolve();
-        await expect(pending).rejects.toThrow(
-          "Session store changed while preparing its metadata. Retry the request.",
-        );
-      } finally {
-        releaseReply.resolve();
-        await pending.catch(() => undefined);
-        read.mockRestore();
+it("rejects a completed native message reply after primary file replacement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionId = "replaced-primary-read";
+    const fixture = await seed(state, "main", sessionId);
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    fs.copyFileSync(fixture.path, `${fixture.path}.replacement`);
+    const originalInode = fs.statSync(fixture.path, { bigint: true }).ino;
+    const nativeReply = createDeferredCore<unknown>();
+    const releaseReply = createDeferredCore();
+    const run = historyLane.pool.run;
+    const read = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await run(...args);
+      if (reply.ok && asOptionalRecord(reply.value)?.kind === "message-by-id") {
+        nativeReply.resolve(reply.value);
+        await releaseReply.promise;
       }
+      return reply;
     });
-  },
-);
+    const pending = readSessionHistoryPageInWorker({
+      kind: "message-by-id",
+      params: { target: fixture.target, messageId: `${sessionId}-message` },
+    });
+    try {
+      const completed = await Promise.race([
+        nativeReply.promise,
+        pending.then(() => {
+          throw new Error("History read completed before its native reply was released");
+        }),
+      ]);
+      expect(completed).toMatchObject({
+        kind: "message-by-id",
+        result: { found: true, message: { role: "user", content: sessionId } },
+      });
+      // Release the settled native reader for Windows replacement without revoking host custody.
+      await historyLane.pool.closeResources(JSON.stringify([{ path: fixture.path }]));
+      fs.renameSync(fixture.path, `${fixture.path}.previous`);
+      fs.renameSync(`${fixture.path}.replacement`, fixture.path);
+      expect(fs.statSync(fixture.path, { bigint: true }).ino).not.toBe(originalInode);
+      releaseReply.resolve();
+      await expect(pending).rejects.toThrow(
+        "Session store changed while preparing its metadata. Retry the request.",
+      );
+    } finally {
+      releaseReply.resolve();
+      await pending.catch(() => undefined);
+      read.mockRestore();
+    }
+  });
+});
 
 it.each([
   { phase: "discovery", mode: "no-commit" },

@@ -1,4 +1,3 @@
-// Policy plugin exec approval evidence.
 import {
   asNonArrayRecord,
   isRecord,
@@ -208,10 +207,6 @@ function withExecApprovalAllowlistSource(
   }));
 }
 
-function readExecApprovalAllowlistEntrySource(value: unknown): "allow-always" | undefined {
-  return readString(value) === "allow-always" ? "allow-always" : undefined;
-}
-
 function execApprovalAllowlistEntries(value: unknown): readonly {
   readonly index: number;
   readonly pattern: string;
@@ -243,7 +238,7 @@ function execApprovalAllowlistEntries(value: unknown): readonly {
       continue;
     }
     const argPattern = readString(entry.argPattern);
-    const entrySource = readExecApprovalAllowlistEntrySource(entry.source);
+    const entrySource = readString(entry.source) === "allow-always" ? "allow-always" : undefined;
     entries.push({
       index,
       pattern,

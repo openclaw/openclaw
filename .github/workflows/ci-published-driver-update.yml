@@ -1,0 +1,84 @@
+name: Published driver update
+
+on:
+  workflow_call:
+    inputs:
+      candidate_artifact_id:
+        required: true
+        type: string
+      candidate_sha256:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    name: Published driver update
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Start cell budget
+        run: |
+          # Hosted updates took 401 seconds, with up to 300 seconds of backup cleanup.
+          # Reserve 15 seconds for termination and one minute for diagnostics.
+          echo "CELL_DEADLINE_EPOCH_SECONDS=$(( $(date +%s) + 1125 ))" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        timeout-minutes: 2
+        with:
+          install-bun: "false"
+          install-deps: "false"
+          cache-mode: "off"
+      - name: Download candidate package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        timeout-minutes: 2
+        with:
+          artifact-ids: ${{ inputs.candidate_artifact_id }}
+          path: .artifacts/published-driver-package
+          merge-multiple: true
+      - name: Update published driver to candidate
+        timeout-minutes: 20
+        env:
+          CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+        run: |
+          set -euo pipefail
+          package=.artifacts/published-driver-package/openclaw-candidate.tgz
+          artifacts=.artifacts/published-driver-update
+          mkdir -p "$artifacts"
+          actual_sha256=$(sha256sum "$package")
+          actual_sha256=${actual_sha256%% *}
+          printf 'Candidate SHA-256: expected=%s actual=%s\n' "$CANDIDATE_SHA256" "$actual_sha256"
+          if [ "$actual_sha256" != "$CANDIDATE_SHA256" ]; then
+            echo '::error title=Candidate checksum mismatch::Downloaded candidate package does not match its expected SHA-256.'
+            exit 1
+          fi
+          remaining=$((CELL_DEADLINE_EPOCH_SECONDS - $(date +%s)))
+          if [ "$remaining" -le 0 ]; then
+            echo '::error title=Published-driver cell timed out::Candidate preparation exhausted the cell budget.'
+            echo 'Published-driver cell failed: candidate preparation exhausted the cell budget.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cell_exit=0
+          timeout --signal=TERM --kill-after=15s "${remaining}s" \
+            bash scripts/e2e/published-driver-update-docker.sh "$package" "$artifacts" || cell_exit=$?
+          if [ "$cell_exit" -eq 124 ] || [ "$cell_exit" -eq 137 ]; then
+            phase="$(cat "$artifacts/phase.txt" 2>/dev/null || printf 'prepare-container')"
+            reason="Published-driver cell timed out or was killed during ${phase} (exit ${cell_exit})."
+            echo "::error title=Published-driver cell stopped::${reason}"
+            printf '%s\n' "$reason" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          exit "$cell_exit"
+      - name: Preserve synthetic update diagnostics
+        if: always()
+        timeout-minutes: 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: published-driver-update
+          path: .artifacts/published-driver-update
+          retention-days: 7

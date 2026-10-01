@@ -81,7 +81,27 @@ export function createSessionHistoryWorkerReaders(
       "historical-eviction-candidates",
       "eviction candidates",
       (input) => ({ kind: "historical-eviction-candidates", ...input }),
-      (value) => value.sessionIds,
+      (value) => {
+        if (!("sessionIds" in value)) {
+          throw new Error(
+            "Session history worker returned archived instead of historical candidates",
+          );
+        }
+        return value.sessionIds;
+      },
+    ),
+    readArchivedEvictionCandidates: reader(
+      "historical-eviction-candidates",
+      "archived eviction candidates",
+      (input) => ({ kind: "historical-eviction-candidates", ...input }),
+      (value) => {
+        if (!("batch" in value)) {
+          throw new Error(
+            "Session history worker returned historical instead of archived candidates",
+          );
+        }
+        return value.batch;
+      },
     ),
     readArchivePruning: reader(
       "session-archive-pruning",
@@ -113,6 +133,18 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-title-fields", ...input }),
       (value) => value.fields,
     ),
+    readWatermark: reader(
+      "transcript-watermark",
+      "a transcript watermark",
+      (input) => ({ kind: "transcript-watermark", ...input }),
+      (value) => value.watermark,
+    ),
+    readActivitySummarySource: reader(
+      "session-activity-summary-source",
+      "an Activity recap source",
+      (input) => ({ kind: "session-activity-summary-source", ...input }),
+      (value) => value.source,
+    ),
     readRowBackfill: reader(
       "session-row-backfill",
       "transcript fields",
@@ -124,7 +156,9 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "transcript-binding" &&
+          (value.kind !== "reactions" &&
+            value.kind !== "conversation-binding" &&
+            value.kind !== "transcript-binding" &&
             value.kind !== "artifacts" &&
             value.kind !== "message-page" &&
             value.kind !== "around-id" &&
@@ -295,11 +329,20 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-diagnostic-text", ...input }),
       (value) => value.text,
     ),
-    readEntries: reader(
-      "session-entry-list",
-      "entries",
-      (scope) => ({ kind: "session-entry-list", scope }),
-      (value) => value.entries,
+    readEntries: async (scope, continuation) =>
+      runRequest(
+        () => ({ kind: "session-entry-list", scope, continuation }),
+        JSON.stringify({ scope, continuation }).length * 2,
+        (value) => {
+          assertResultKind(value, "session-entry-list", "entries");
+          return value.entries;
+        },
+      ),
+    readStoreSummary: reader(
+      "session-store-summary",
+      "a store summary",
+      (input) => ({ kind: "session-store-summary", ...input }),
+      (value) => value.summary,
     ),
     readIdentityEvidence: reader(
       "session-identity-evidence",

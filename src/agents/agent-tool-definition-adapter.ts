@@ -32,6 +32,7 @@ import {
 } from "./code-mode-control-tools.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import {
   attachInternalToolExecutionPreparer,
@@ -347,14 +348,8 @@ export function toToolDefinitions(
     const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
     const sourcePreparer = getInternalToolExecutionPreparer(tool);
     const definition = {
-      name,
-      label: tool.label ?? name,
-      ...(tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-      ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
-      description: tool.description ?? "",
-      parameters: tool.parameters,
+      ...projectAgentToolDefinition(tool),
       prepareArguments: tool.prepareArguments,
-      executionMode: tool.executionMode,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const [toolCallId, params, callSignal, onUpdate] = args;
         const signal = resolveAbortSignal(callSignal);

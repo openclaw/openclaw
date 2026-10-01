@@ -37,13 +37,10 @@ import {
   resolveSystemdUnitPathForName,
 } from "./systemd-service-files.js";
 import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
-import { resolveSystemdUnitLoadPaths } from "./systemd-unit-load-paths.js";
-
-const SYSTEM_SYSTEMD_UNIT_DIRS = [
-  "/etc/systemd/system",
-  "/usr/lib/systemd/system",
-  "/lib/systemd/system",
-] as const;
+import {
+  DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS,
+  resolveSystemdUnitLoadPaths,
+} from "./systemd-unit-load-paths.js";
 
 type SystemdDiscoveryOptions = Pick<
   GatewayServiceReadOptions,
@@ -130,10 +127,6 @@ export async function isSystemdServiceAbsent(
   return (await findInstalledSystemdGatewayScope(env)) === null;
 }
 
-function unitBaseName(label: string): string {
-  return label.endsWith(".service") ? label.slice(0, -".service".length) : label;
-}
-
 function systemdTemplatePrefix(base: string): { template: string; instance: string } | null {
   const cut = base.indexOf("@");
   if (cut <= 0) {
@@ -158,7 +151,7 @@ function systemdUnitMatchesIdentity(
   allowedNames: Set<string>,
   explicit: boolean,
 ): boolean {
-  const base = unitBaseName(label);
+  const base = label.endsWith(".service") ? label.slice(0, -".service".length) : label;
   if (allowedNames.has(base)) {
     return true;
   }
@@ -208,7 +201,7 @@ async function findSystemSystemdUnitPath(
   const candidates = systemdInstalledNameProbes(resolveInstalledSystemdServiceNameCandidates(env));
   for (const name of candidates) {
     const serviceFile = `${name}.service`;
-    for (const dir of SYSTEM_SYSTEMD_UNIT_DIRS) {
+    for (const dir of DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS) {
       const candidate = path.posix.join(dir, serviceFile);
       try {
         await fs.access(candidate);
@@ -467,8 +460,7 @@ async function findMarkerOwnedSystemSystemdUnit(
     ) {
       continue;
     }
-    const match = /^unit:\s*(.+)$/.exec(svc.detail.trim());
-    const unitPath = match?.[1]?.trim();
+    const unitPath = svc.sourcePath;
     if (unitPath) {
       const target: SystemdServiceReadTarget = {
         scope: "system",

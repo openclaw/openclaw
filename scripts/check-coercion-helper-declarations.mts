@@ -7,6 +7,7 @@ import * as ts from "typescript/unstable/ast";
 import { isCodeFile, listRepoFilesSync } from "./check-file-utils.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import { writeLine } from "./lib/guard-inventory-utils.mjs";
 import {
   createNativeTypeScriptParser,
   type NativeTypeScriptParser,
@@ -617,10 +618,6 @@ export function auditCoercionHelperDeclarations(
     invalidCarveOuts,
     staleCarveOuts,
   };
-}
-
-function writeLine(stream: ScriptIo["stdout"] | ScriptIo["stderr"], value: string) {
-  stream.write(`${value}\n`);
 }
 
 function auditDefaultCanonicalExports(

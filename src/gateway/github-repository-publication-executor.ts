@@ -182,27 +182,23 @@ export async function executeRepositoryGitHubPublication(params: {
       throw new Error("GitHub publication workspace base branch could not be verified.");
     }
     const remoteBase = objectSha(baseRef.object);
-    assertCurrent();
-    const lineage = await requirePublicationCommand(
-      [
-        ...githubPublicationApiArgs(
-          "repos/" +
-            repository +
-            "/compare/" +
-            snapshot.baseCommit +
-            "..." +
-            remoteBase +
-            "?per_page=1",
-        ),
-        "--jq",
-        "{sha: .merge_base_commit.sha}",
-      ],
-      { env: identity.env },
-    );
-    assertCurrent();
+    const readMergeBase = async (source: string) => {
+      const lineage = await requirePublicationCommand(
+        [
+          ...githubPublicationApiArgs(
+            "repos/" + repository + "/compare/" + source + "..." + remoteBase + "?per_page=1",
+          ),
+          "--jq",
+          "{sha: .merge_base_commit.sha}",
+        ],
+        { env: identity.env, beforeRun: assertCurrent },
+      );
+      assertCurrent();
+      return objectSha(JSON.parse(lineage));
+    };
     // A requested topic/tag/commit may be ahead of or diverged from the PR base.
     // GitHub's merge-base proves shared history without changing the accepted source.
-    const mergeBase = objectSha(JSON.parse(lineage));
+    const mergeBase = await readMergeBase(snapshot.baseCommit);
     let headCommit = row.head_commit;
     let preparedCommitMessage: string | undefined;
     const verifyCommit = (value: unknown) => {
@@ -296,6 +292,34 @@ export async function executeRepositoryGitHubPublication(params: {
           sourceRepository: pushRepository,
           comparisonRepository,
           comparisonTree: objectSha(comparison.tree),
+          readUpstream: async () => {
+            // REST exposes one merge-base, not all of them. A source base on the
+            // target's history (or containing it), followed only by our linear
+            // checkpoint commits, has a unique best common ancestor. A diverged
+            // source base cannot provide that proof without fetching its graph.
+            if (mergeBase !== snapshot.baseCommit && mergeBase !== remoteBase) {
+              return undefined;
+            }
+            const ancestor = row.previous_head_commit
+              ? await readMergeBase(row.previous_head_commit)
+              : mergeBase;
+            const readTreeSha = async (commit: string) => {
+              const value = await api(
+                "repos/" + repository + "/git/commits/" + commit,
+                identity,
+                assertCurrent,
+              );
+              if (!isRecord(value) || objectSha(value) !== commit) {
+                throw new Error("GitHub publication workflow commit changed.");
+              }
+              return objectSha(value.tree);
+            };
+            const [ancestorTree, targetTree] = await Promise.all([
+              readTreeSha(ancestor),
+              readTreeSha(remoteBase),
+            ]);
+            return { repository, ancestorTree, targetTree };
+          },
           readTree: (owner, sha) =>
             api("repos/" + owner + "/git/trees/" + sha, identity, assertCurrent),
         }),

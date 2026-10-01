@@ -4,6 +4,7 @@ import {
   resolveProviderSystemPromptContribution,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
+import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -232,14 +233,11 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const projectMemoryWriteInstruction = buildProjectMemoryWriteInstruction(
     attempt.preparedModelRuntime?.projectKey,
   );
-  const extraSystemPrompt =
-    [
-      attempt.extraSystemPrompt,
-      projectMemoryWriteInstruction,
-      buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
-    ]
-      .filter((value): value is string => Boolean(value))
-      .join("\n\n") || undefined;
+  const extraSystemPrompt = joinPresentTextSegments([
+    attempt.extraSystemPrompt,
+    projectMemoryWriteInstruction,
+    buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
+  ]);
 
   const promptInputs: Parameters<typeof buildAttemptSystemPrompt>[0] = {
     isRawModelRun: params.isRawModelRun,

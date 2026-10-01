@@ -470,6 +470,25 @@ describe("cron tool", () => {
     expect(readGatewayCall().params).toEqual({
       id: "job-primary",
       mode: "force",
+      waitTimeoutMs: 60_000,
+    });
+  });
+
+  it("caps the run wait so one call cannot hold the turn past ten minutes", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true, enqueued: true, runId: "manual:job:1" });
+    const result = await executeCron({
+      action: "run",
+      jobId: "job",
+      runMode: "force",
+      timeoutMs: 3_600_000,
+    });
+
+    expect(readGatewayCall().params).toMatchObject({ waitTimeoutMs: 600_000 });
+    expect(readGatewayOpts()).toMatchObject({ timeoutMs: 660_000 });
+    // A run still going when the wait ends points at runs, not a scheduled check.
+    expect(result.details).toMatchObject({
+      runId: "manual:job:1",
+      note: expect.stringContaining("runs jobId runId"),
     });
   });
 
@@ -776,7 +795,7 @@ describe("cron tool", () => {
     expect(materializations).toBe(2);
     expect(callGatewayMock).toHaveBeenCalledOnce();
     expect(readGatewayCall().params).toMatchObject({
-      payload: { toolsAllow: ["read", "configured__lookup"], toolsAllowIsDefault: true },
+      payload: { toolsAllow: ["*"] },
     });
   });
 
@@ -1466,7 +1485,7 @@ describe("cron tool", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(0);
   });
 
-  it("keeps the creator tool surface when an agentTurn update clears toolsAllow", async () => {
+  it("restores the wildcard cap when an agentTurn update clears toolsAllow", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
         id: "job-8",
@@ -1493,8 +1512,7 @@ describe("cron tool", () => {
     const params = readGatewayCall(1).params;
     expect(params).toHaveProperty("patch.payload", {
       kind: "agentTurn",
-      toolsAllow: ["read", "automations"],
-      toolsAllowIsDefault: true,
+      toolsAllow: ["*"],
     });
   });
 
@@ -1615,8 +1633,7 @@ describe("cron tool", () => {
       patch: {
         payload: {
           kind: "agentTurn",
-          toolsAllow: ["read", "configured__lookup"],
-          toolsAllowIsDefault: true,
+          toolsAllow: ["*"],
         },
       },
     });
@@ -1625,8 +1642,7 @@ describe("cron tool", () => {
       patch: {
         payload: {
           kind: "agentTurn",
-          toolsAllow: ["read", "configured__lookup"],
-          toolsAllowIsDefault: true,
+          toolsAllow: ["*"],
         },
       },
     });
@@ -1718,7 +1734,7 @@ describe("cron tool", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
-  it("adds the creator tool surface when converting an existing job to agentTurn", async () => {
+  it("adds a wildcard cap when converting an existing job to agentTurn", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
         id: "job-12",
@@ -1752,8 +1768,7 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             message: "run later",
-            toolsAllow: ["read", "automations"],
-            toolsAllowIsDefault: true,
+            toolsAllow: ["*"],
           },
         },
       },

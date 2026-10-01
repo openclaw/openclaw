@@ -89,7 +89,7 @@ const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
 const E2E_TEST_PROCESS_COUNT = 4;
-export const TOOLING_EXCLUDED_TESTS = new Set([
+const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/docker-build-helper.test.ts",
   ...toolingIsolatedTestFiles,
@@ -234,7 +234,7 @@ export function shouldSuppressVitestStderrLine(line: string): boolean {
 /**
  * Detects pnpm exec node invocations so the wrapper can spawn Node directly.
  */
-export function resolveDirectNodeVitestArgs(pnpmArgs: string[]): string[] | null {
+function resolveDirectNodeVitestArgs(pnpmArgs: string[]): string[] | null {
   return pnpmArgs[0] === "exec" && pnpmArgs[1] === "node" ? pnpmArgs.slice(2) : null;
 }
 

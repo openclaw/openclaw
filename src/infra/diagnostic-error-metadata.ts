@@ -1,4 +1,3 @@
-// Extracts provider diagnostic metadata from error objects and text.
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 
 const HTTP_STATUS_MIN = 100;

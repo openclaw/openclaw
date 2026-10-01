@@ -1,11 +1,11 @@
 import { html, render } from "lit";
 import type { MarkdownIt } from "markdown-it";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { toolIcons } from "./icons-tools.ts";
 import { icons } from "./icons.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
@@ -39,7 +39,7 @@ export function installMarkdownTables(markdownParser: MarkdownIt): void {
     if (!tableInteractionsEnabled(env)) {
       return defaultTableClose?.(tokens, index, options, env, renderer) ?? "</table>\n";
     }
-    return `</table></div><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeMarkdownHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeMarkdownHtml(t("common.copyTable"))}"></button></div></div>`;
+    return `</table></div><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeHtml(t("common.copyTable"))}"></button></div></div>`;
   };
 }
 

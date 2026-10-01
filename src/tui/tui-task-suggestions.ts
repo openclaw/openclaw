@@ -46,22 +46,18 @@ const TASK_DETAIL_PAGE_LINES = TASK_DETAIL_VIEWPORT_LINES - 1;
 const PAGE_UP_INPUT = "\u001b[5~";
 const PAGE_DOWN_INPUT = "\u001b[6~";
 
-type TaskAction = SelectItem & {
-  kind: "accept" | "dismiss";
-};
+type TaskAction = SelectItem & { value: "accept" | "dismiss" };
 
 const TASK_ACTIONS = [
   {
     value: "accept",
     label: "Start in a new session",
     description: "Open a new session to address this task",
-    kind: "accept",
   },
   {
     value: "dismiss",
     label: "Dismiss",
     description: "Dismiss this suggestion without starting work",
-    kind: "dismiss",
   },
 ] as const satisfies readonly TaskAction[];
 
@@ -241,7 +237,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       canDismiss: Boolean(deps.client.dismissTaskSuggestion),
     };
     return TASK_ACTIONS.filter((action) =>
-      action.kind === "accept" ? capabilities.canAccept : capabilities.canDismiss,
+      action.value === "accept" ? capabilities.canAccept : capabilities.canDismiss,
     );
   };
 
@@ -289,7 +285,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       deps.requestRender();
       try {
         let acceptedKey: string | undefined;
-        if (action.kind === "accept") {
+        if (action.value === "accept") {
           if (!deps.client.acceptTaskSuggestion) {
             throw new Error("task suggestion acceptance is unavailable");
           }
@@ -350,7 +346,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
         deps.requestRender();
         return;
       }
-      if (selectedAction.kind === "dismiss") {
+      if (selectedAction.value === "dismiss") {
         void resolve(selectedAction);
         return;
       }

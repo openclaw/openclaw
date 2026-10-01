@@ -42,6 +42,8 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
+  queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
   extractedFileImages?: ExtractedFileImage[];

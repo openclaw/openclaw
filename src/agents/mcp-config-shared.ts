@@ -98,12 +98,3 @@ export function toMcpEnvRecord(
     shouldDropKey: (key) => isDangerousMcpStdioEnvVarName(key),
   });
 }
-
-/** Coerces an MCP string-array config value, dropping non-string entries. */
-export function toMcpStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const entries = value.filter((entry): entry is string => typeof entry === "string");
-  return entries.length > 0 ? entries : [];
-}

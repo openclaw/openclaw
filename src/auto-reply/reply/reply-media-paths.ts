@@ -1,4 +1,3 @@
-// Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
 import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
@@ -430,8 +429,8 @@ export function applyPreparedReplyMedia(
     for (const source of previousSourceUrls?.get(sourceKey) ?? []) {
       sourceUrls.add(source);
     }
-    if (normalized.mediaUrl !== media.trim()) {
-      sourceUrls.add(media.trim());
+    if (normalized.mediaUrl !== media) {
+      sourceUrls.add(media);
     }
     if (sourceUrls.size > 0) {
       sourcesByReference.set(normalizedKey, sourceUrls);

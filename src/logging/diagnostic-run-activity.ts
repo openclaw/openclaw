@@ -127,7 +127,6 @@ function recordToolStarted(
     toolName: event.toolName,
     toolCallId: event.toolCallId,
     startedAt: now,
-    lastProgressAt: now,
     // Start delivery is asynchronous; retain the owner's live reference across preparation.
     get deadlineAtMs() {
       return resolveToolExecutionRecoveryDeadlineAtMs(liveness?.deadlineAtMs) ?? event.deadlineAtMs;

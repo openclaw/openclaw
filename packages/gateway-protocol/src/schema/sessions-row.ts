@@ -148,6 +148,8 @@ export const SessionRowSchema = Type.Object(
     archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
+    snoozedUntil: Type.Optional(Type.Number()),
+    snoozedAt: Type.Optional(Type.Number()),
     unread: Type.Optional(Type.Boolean()),
     lastReadAt: Type.Optional(Type.Number()),
     markedUnreadAt: Type.Optional(Type.Number()),

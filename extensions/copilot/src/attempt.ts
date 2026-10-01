@@ -1,6 +1,5 @@
 import { finalizeCopilotAttempt } from "./attempt-cleanup.js";
 import {
-  createPromptError,
   createResult,
   readNonEmptyString,
   resolvePoolAcquire,
@@ -13,6 +12,7 @@ import type {
   CopilotAttemptDeps,
   CopilotAttemptParams,
 } from "./attempt-types.js";
+import { createPromptError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
 export type { CopilotSessionConfig } from "./attempt-types.js";
 export { resolvePoolAcquire };

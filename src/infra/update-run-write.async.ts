@@ -9,7 +9,8 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./update-run-codec.js";
-import type { UpdateRunRecord, UpdateRunStep } from "./update-run-record.js";
+import type { UpdateRunPhasePatch, UpdateRunWriteCommand } from "./update-run-mutation.types.js";
+import type { UpdateRunPhase, UpdateRunRecord, UpdateRunStep } from "./update-run-record.js";
 import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
 
 export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
@@ -24,9 +25,11 @@ export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
 };
 
 /** Capture the receipt before yielding and join its writer through native settlement. */
-export async function recordUpdateRunStepAsync(
+async function recordUpdateRunMutationAsync(
   runId: string,
-  step: UpdateRunStep & { reason?: string },
+  mutation:
+    | { kind: "step"; step: UpdateRunStep & { reason?: string } }
+    | { kind: "phase"; phase: UpdateRunPhase; patch: UpdateRunPhasePatch },
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
   options.assertAccepting?.();
@@ -45,25 +48,28 @@ export async function recordUpdateRunStepAsync(
     captured.assertCurrent?.();
   };
   assertCurrent();
-  const input = structuredClone({
+  const input = {
     runId,
-    step,
     redactionFacts: captureUpdateRunRedactionFacts(captured.env),
     requireNoRecovery: captured.requireNoRecovery,
     busyTimeoutMs: captured.busyTimeoutMs,
     redactPaths: captured.redactPaths,
-  });
-  const pending = runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "updateRuns.recordStep", input }),
-    {
-      existingOnly: true,
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
-    },
+  };
+  const command = structuredClone<UpdateRunWriteCommand>(
+    mutation.kind === "step"
+      ? { type: "updateRuns.recordStep", input: { ...input, step: mutation.step } }
+      : {
+          type: "updateRuns.recordPhase",
+          input: { ...input, phase: mutation.phase, patch: mutation.patch },
+        },
   );
+  const pending = runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
+    existingOnly: true,
+    assertCurrent,
+    createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+      context.admission.databasePath,
+    ]),
+  });
   const completion = pending.catch((error: unknown) => {
     if (hasSqliteWorkerOutcomeUnknown(error) && !hasCommandProcessCleanupError(error)) {
       throw new CommandProcessCleanupError({ cause: error });
@@ -80,4 +86,21 @@ export async function recordUpdateRunStepAsync(
     throw new UpdateRecoveryRequiredError(reply.recovery);
   }
   return reply.record;
+}
+
+export function recordUpdateRunStepAsync(
+  runId: string,
+  step: UpdateRunStep & { reason?: string },
+  options: UpdateRunWriteOptions = {},
+): Promise<UpdateRunRecord> {
+  return recordUpdateRunMutationAsync(runId, { kind: "step", step }, options);
+}
+
+export function recordUpdateRunPhaseAsync(
+  runId: string,
+  phase: UpdateRunPhase,
+  patch: UpdateRunPhasePatch = {},
+  options: UpdateRunWriteOptions = {},
+): Promise<UpdateRunRecord> {
+  return recordUpdateRunMutationAsync(runId, { kind: "phase", phase, patch }, options);
 }

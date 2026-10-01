@@ -4,6 +4,7 @@ import type {
   PluginStateCompareIntent,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { IMessageAccountConfig } from "../account-types.js";
 import { getIMessageRuntime } from "../runtime.js";
 import {
   IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
@@ -25,13 +26,7 @@ const DEFAULT_MAX_FAILURE_RETRIES = 10;
 const MAX_MAX_FAILURE_RETRIES = 1_000;
 const cursorWriteQueue = new KeyedAsyncQueue();
 
-type IMessageCatchupConfig = {
-  enabled?: boolean;
-  maxAgeMinutes?: number;
-  perRunLimit?: number;
-  firstRunLookbackMinutes?: number;
-  maxFailureRetries?: number;
-};
+type IMessageCatchupConfig = NonNullable<IMessageAccountConfig["catchup"]>;
 
 export type IMessageCatchupRow = {
   guid: string;
@@ -190,13 +185,7 @@ async function updateIMessageCatchupCursor(
   }
 }
 
-export type ResolvedCatchupConfig = {
-  enabled: boolean;
-  maxAgeMinutes: number;
-  perRunLimit: number;
-  firstRunLookbackMinutes: number;
-  maxFailureRetries: number;
-};
+export type ResolvedCatchupConfig = Required<IMessageCatchupConfig>;
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
   return resolveIntegerOption(value, fallback, { min, max });

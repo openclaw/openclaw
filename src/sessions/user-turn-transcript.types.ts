@@ -1,4 +1,3 @@
-// User-turn transcript type contracts shared by runtime and queue option types.
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";

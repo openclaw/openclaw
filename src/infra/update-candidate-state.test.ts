@@ -23,11 +23,15 @@ import {
   readUpdateStateSchemaVersions,
   updateStateSchemaVersionsMatch,
 } from "./update-candidate-state.js";
-import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
+import {
+  materializeUpdateCandidateStateWorker,
+  runUpdateCandidateSnapshotWorker,
+} from "./update-candidate-state.test-support.js";
 
 let root: string;
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "candidate-state-")));
+  await materializeUpdateCandidateStateWorker(root);
 });
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
@@ -802,6 +806,7 @@ it.each([
     if (shared) {
       expect((await readPlugin(sharedOwner)).value).toBe("owner");
     }
+    await materializeUpdateCandidateStateWorker(candidateHost);
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config: { plugins: { load: { paths } } },
       stateDir: path.join(root, "source-state"),
@@ -942,6 +947,7 @@ it("rejects an ordinary link that would repeatedly copy an immutable host packag
   });
   expect(source.code, source.stderr.toString()).toBe(0);
   expect(source.stdout.toString().trim()).toBe("serving");
+  await materializeUpdateCandidateStateWorker(candidate);
   await expect(
     prepareUpdateCandidateRehearsal({
       config: { plugins: { load: { paths: [plugin] } } },

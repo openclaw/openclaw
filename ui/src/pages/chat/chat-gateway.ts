@@ -123,6 +123,12 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     incoming.state === "aborted" && incoming.stopReason === "auth-revoked"
       ? { ...incoming, errorMessage: t("chat.providerAccessRemoved") }
       : incoming;
+  const errorKind =
+    payload.state === "error" && payload.errorKind === "state_contention"
+      ? "state_contention"
+      : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+        ? "auth_refresh"
+        : undefined;
   const normalizedFinalMessage =
     payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
@@ -247,16 +253,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       ) {
         // Late diagnostics belong to the active, pending, or latest locally terminal run;
         // publishing them over a newer response falsely marks the new run failed.
-        setChatRunError(
-          state,
-          resolveGatewayErrorText(payload, null),
-          payload.runId,
-          payload.state === "error" && payload.errorKind === "state_contention"
-            ? "state_contention"
-            : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
-              ? "auth_refresh"
-              : undefined,
-        );
+        setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId, errorKind);
       }
       if (payload.state === "error") {
         reconcileOwnedTerminalRun();
@@ -439,14 +436,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       publishInterruptedStream();
     }
     if (payload.errorMessage?.trim()) {
-      setChatRunError(
-        state,
-        resolveGatewayErrorText(payload, null),
-        payload.runId,
-        payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
-          ? "auth_refresh"
-          : undefined,
-      );
+      setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId, errorKind);
     }
     reconcileOwnedTerminalRun();
   } else if (payload.state === "error") {
@@ -494,11 +484,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       state,
       resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),
       payload.runId,
-      payload.state === "error" && payload.errorKind === "state_contention"
-        ? "state_contention"
-        : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
-          ? "auth_refresh"
-          : undefined,
+      errorKind,
     );
   }
   if (payload.state !== "delta") {

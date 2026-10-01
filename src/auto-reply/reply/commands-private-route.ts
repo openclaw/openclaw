@@ -169,8 +169,8 @@ function readCommandDeliveryTarget(params: HandleCommandsParams): string | undef
 /**
  * Resolves where an exec approval prompt for a command should be delivered:
  * the private owner-DM target when one was resolved, else the originating
- * command surface. Keeps the fallback ternaries in one place so private and
- * origin routing cannot drift between command handlers.
+ * command surface. The originating reviewer device stays separate from a
+ * private delivery target so command handlers cannot drop approval custody.
  */
 export function resolveCommandExecApprovalRoute(params: {
   commandParams: HandleCommandsParams;
@@ -180,6 +180,7 @@ export function resolveCommandExecApprovalRoute(params: {
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   accountId: string | undefined;
+  approvalReviewerDeviceId: string | undefined;
 } {
   const target = params.privateApprovalTarget;
   return {
@@ -193,6 +194,9 @@ export function resolveCommandExecApprovalRoute(params: {
     accountId: target
       ? (target.accountId ?? undefined)
       : (params.commandParams.ctx.AccountId ?? undefined),
+    approvalReviewerDeviceId: normalizeOptionalString(
+      params.commandParams.ctx.ApprovalReviewerDeviceId,
+    ),
   };
 }
 
@@ -250,21 +254,14 @@ function sortPrivateCommandRouteTargets(params: {
   targets: PrivateCommandRouteTarget[];
 }): PrivateCommandRouteTarget[] {
   return params.targets
-    .map((target, index) => ({
+    .map((target) => ({
       target,
-      index,
       ownerPreference: resolveOwnerPreferenceIndex({ cfg: params.cfg, target }),
       originPreference: target.channel === params.originChannel ? 0 : 1,
     }))
     .filter((entry) => entry.ownerPreference !== Number.MAX_SAFE_INTEGER)
-    .toSorted((a, b) => {
-      if (a.originPreference !== b.originPreference) {
-        return a.originPreference - b.originPreference;
-      }
-      if (a.ownerPreference !== b.ownerPreference) {
-        return a.ownerPreference - b.ownerPreference;
-      }
-      return a.index - b.index;
-    })
+    .toSorted(
+      (a, b) => a.originPreference - b.originPreference || a.ownerPreference - b.ownerPreference,
+    )
     .map((entry) => entry.target);
 }

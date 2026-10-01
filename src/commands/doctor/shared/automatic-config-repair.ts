@@ -15,7 +15,7 @@ import { resolveConfigWidePluginMetadataSnapshot } from "../../../config/io.plug
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
 import { prepareConfigWriteTopology } from "../../../config/io.write-topology.js";
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
-import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import { findLegacyConfigIssues, findLegacyConfigRuleIssues } from "../../../config/legacy.js";
 import { inspectShippedPluginInstallConfigRecords } from "../../../config/plugin-install-config-migration.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
@@ -37,6 +37,7 @@ import {
 } from "./config-flow-steps.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { findDoctorLegacyConfigIssues } from "./legacy-config-issues.js";
+import { LEGACY_TALK_VOICE_CALL_INHERITANCE } from "./legacy-talk-config-normalizer.js";
 import {
   assertShippedPluginInstallConfigImportCurrent,
   importShippedPluginInstallConfigForDoctor,
@@ -51,13 +52,19 @@ type AutomaticConfigRepairPlan = {
   writeConfig: OpenClawConfig;
 };
 
-function admitAutomaticConfigRepairSnapshot(snapshot: ConfigFileSnapshot): boolean {
+export function canPlanAutomaticConfigRepair(snapshot: ConfigFileSnapshot): boolean {
   return (
-    !snapshot.valid &&
     snapshot.exists &&
     snapshot.raw !== null &&
     (snapshot.includedPaths?.length ?? 0) === 0 &&
-    !containsConfigIncludeDirective(snapshot.parsed)
+    !containsConfigIncludeDirective(snapshot.parsed) &&
+    // Voice Call remains valid telephony config after its runtime Talk inheritance retires.
+    (!snapshot.valid ||
+      findLegacyConfigRuleIssues(
+        snapshot.sourceConfig,
+        LEGACY_TALK_VOICE_CALL_INHERITANCE.legacyRules ?? [],
+        snapshot.parsed,
+      ).length > 0)
   );
 }
 
@@ -85,7 +92,7 @@ function planConfigRepair(
   pluginContracts: boolean,
   installRecordOverride?: Record<string, PluginInstallRecord>,
 ): AutomaticConfigRepairPlan | null {
-  if (!admitAutomaticConfigRepairSnapshot(snapshot)) {
+  if (!canPlanAutomaticConfigRepair(snapshot)) {
     return null;
   }
   const deferredPluginMigrations = getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig);
@@ -239,11 +246,22 @@ async function writeAutomaticConfigRepair(
     baseHash: resolveConfigSnapshotHash(snapshot) ?? undefined,
     // Preflight can commit before the later Doctor health write. Preserve moved
     // references here, under the same snapshot/hash and read-time environment.
-    transform: (_current, { snapshot: currentSnapshot }) => {
+    transform: async (_current, { snapshot: currentSnapshot }) => {
+      options.assertCurrent?.();
       assertShippedPluginInstallConfigImportCurrent(
         currentSnapshot,
         options.pluginInstallConfigImport,
       );
+      const { repairLegacyCronOwnersBeforeConfigWrite } = await import("../cron/legacy-owner.js");
+      const changes = await repairLegacyCronOwnersBeforeConfigWrite({
+        snapshot: currentSnapshot,
+        nextConfig: plan.writeConfig,
+        assertCurrent: options.assertCurrent,
+      });
+      if (changes.length > 0) {
+        const { note } = await import("../../../../packages/terminal-core/src/note.js");
+        note(changes.join("\n"), "Doctor changes");
+      }
       return {
         nextConfig: plan.writeConfig,
       };

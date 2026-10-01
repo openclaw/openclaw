@@ -14,9 +14,11 @@ import {
   validateSecretsStoreMutationResult,
   validateSecretsStoreSetParams,
   type SecretStoreEntry,
+  type SecretsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import type { resolveCommandSecretsFromActiveRuntimeSnapshot } from "../../secrets/runtime-command-secrets.js";
 import {
   collectSecretStoreRefKeysInSnapshot,
   getActiveSecretsRuntimeSnapshotState,
@@ -125,13 +127,7 @@ export type SecretStoreWriteService = ReturnType<typeof createSecretStoreWriteSe
 
 function invalidSecretsResolveField(
   errors: ValidationError[] | null | undefined,
-):
-  | "allowedPaths"
-  | "commandName"
-  | "forcedActivePaths"
-  | "optionalActivePaths"
-  | "providerOverrides"
-  | "targetIds" {
+): keyof SecretsResolveParams {
   // Return the offending top-level field only. Detailed validator output can
   // include paths and schema internals that are not useful for callers here.
   for (const issue of errors ?? []) {
@@ -145,17 +141,15 @@ function invalidSecretsResolveField(
     ) {
       return "commandName";
     }
-    if (instancePath.startsWith("/allowedPaths")) {
-      return "allowedPaths";
-    }
-    if (instancePath.startsWith("/forcedActivePaths")) {
-      return "forcedActivePaths";
-    }
-    if (instancePath.startsWith("/optionalActivePaths")) {
-      return "optionalActivePaths";
-    }
-    if (instancePath.startsWith("/providerOverrides")) {
-      return "providerOverrides";
+    for (const field of [
+      "allowedPaths",
+      "forcedActivePaths",
+      "optionalActivePaths",
+      "providerOverrides",
+    ] as const) {
+      if (instancePath.startsWith(`/${field}`)) {
+        return field;
+      }
     }
   }
   return "targetIds";
@@ -164,25 +158,9 @@ function invalidSecretsResolveField(
 export function createSecretsHandlers(params: {
   reloadSecrets: SecretStoreReload;
   storeWriteService: SecretStoreWriteService;
-  resolveSecrets: (params: {
-    commandName: string;
-    targetIds: string[];
-    allowedPaths?: string[];
-    forcedActivePaths?: string[];
-    optionalActivePaths?: string[];
-    providerOverrides?: {
-      webSearch?: string;
-      webFetch?: string;
-    };
-  }) => Promise<{
-    assignments: Array<{
-      path: string;
-      pathSegments: string[];
-      value: unknown;
-    }>;
-    diagnostics: string[];
-    inactiveRefPaths: string[];
-  }>;
+  resolveSecrets: (
+    params: SecretsResolveParams,
+  ) => ReturnType<typeof resolveCommandSecretsFromActiveRuntimeSnapshot>;
   log?: SecretStoreLogger;
 }): GatewayRequestHandlers {
   return {

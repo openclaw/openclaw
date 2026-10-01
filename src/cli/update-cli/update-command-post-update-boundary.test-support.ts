@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import * as gatewayOwner from "../../infra/gateway-owner-lease.js";
@@ -8,7 +9,10 @@ import type { PackageLauncherFingerprint } from "../../infra/package-update-inte
 import { stopSupervisedPredecessorGateway } from "../../infra/update-candidate-predecessor-stop.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import * as updateWriter from "../../infra/update-run-write.async.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import * as postUpdateMaintenance from "./update-command-post-update-maintenance.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
@@ -34,6 +38,101 @@ export function registerBoundaryFinalizationControls({
     restartService: Mock<typeof import("./update-command-service.js").maybeRestartService>;
   };
 }) {
+  it.each(["confirmed", "unknown", "refused", "revoked", "replaced"] as const)(
+    "settles progress before finalization and retains its failure (%s)",
+    async (outcome) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const receiptFailure =
+        outcome === "unknown"
+          ? new CommandProcessCleanupError({ cause: new Error("receipt reply lost") })
+          : new Error("progress receipt refused");
+      const env = { OPENCLAW_STATE_DIR: makeTempDir("finalizer-progress-") };
+      const record = createUpdateRun({ trigger: "cli" }, { env });
+      let current = true;
+      const run = {
+        runId: record.runId,
+        env,
+        executorFence: { assertCurrent() {} },
+        ...(outcome === "revoked"
+          ? { requesterAuthority: { requester: {}, isCurrent: () => current } }
+          : {}),
+      };
+      const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
+      const prepareService = vi.spyOn(postUpdateMaintenance, "preparePostUpdateService");
+      const finishing = finishSuccessfulPackageSwitch(
+        outcome === "revoked" || outcome === "replaced" ? { run } : {},
+        {},
+        {
+          beforeFinalization: async () => {
+            entered.resolve();
+            await release.promise;
+            if (outcome !== "confirmed") {
+              throw receiptFailure;
+            }
+          },
+        },
+      );
+      try {
+        await Promise.race([
+          entered.promise,
+          finishing.then(() => {
+            throw new Error("Finalization completed before progress settlement entered.");
+          }),
+        ]);
+        expect(mocks.readServiceState).not.toHaveBeenCalled();
+        expect(prepareService).not.toHaveBeenCalled();
+        expect(mocks.restartService).not.toHaveBeenCalled();
+        expect(rollback).not.toHaveBeenCalled();
+        current = outcome !== "revoked";
+        if (outcome === "replaced") {
+          run.executorFence = { assertCurrent() {} };
+        }
+        release.resolve();
+        if (outcome === "confirmed") {
+          await finishing;
+          expect(prepareService).toHaveBeenCalledOnce();
+          expect(mocks.restartService).toHaveBeenCalledOnce();
+        } else if (outcome === "unknown") {
+          await expect(finishing).rejects.toBe(receiptFailure);
+        } else if (outcome === "refused") {
+          await expect(finishing).rejects.toMatchObject({
+            result: {
+              status: "error",
+              steps: expect.arrayContaining([
+                expect.objectContaining({ stderrTail: receiptFailure.message }),
+              ]),
+            },
+            cause: receiptFailure,
+          });
+        } else {
+          await expect(finishing).rejects.toMatchObject({
+            errors: [
+              outcome === "revoked"
+                ? expect.objectContaining({ message: "requester-revoked" })
+                : expect.objectContaining({
+                    cause: expect.objectContaining({
+                      message: "Package finalization lost its original executor.",
+                    }),
+                  }),
+              receiptFailure,
+            ],
+          });
+          expect(getUpdateRun(record.runId, { env })?.status).toBe("running");
+        }
+        if (outcome !== "confirmed") {
+          expect(prepareService).not.toHaveBeenCalled();
+          expect(mocks.readServiceState).not.toHaveBeenCalled();
+          expect(mocks.restartService).not.toHaveBeenCalled();
+          expect(rollback).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        await finishing.catch(() => undefined);
+      }
+    },
+  );
+
   it
     .runIf(process.platform !== "win32")
     .each([
@@ -43,6 +142,9 @@ export function registerBoundaryFinalizationControls({
       "cleanup-uncertain",
       "native-unsafe",
       "receipt-write-failed",
+      "receipt-pending",
+      "receipt-pending-native-error",
+      "receipt-and-stop-failed",
       "run-finished",
     ] as const)("settles the POSIX predecessor stop before Doctor: %s", async (scenario) => {
     const home = makeTempDir("predecessor-stop-receipt-");
@@ -81,13 +183,25 @@ export function registerBoundaryFinalizationControls({
         : scenario === "native-unsafe"
           ? new GatewayServiceStopUnsafeError("native stop custody is uncertain")
           : new Error("stop receipt or joined verification failed");
-    const write = updateLedger.recordUpdateRunStep;
-    const writer = vi.spyOn(updateLedger, "recordUpdateRunStep").mockImplementation((...args) => {
-      if (scenario === "receipt-write-failed") {
-        throw failure;
-      }
-      return write(...args);
-    });
+    const receiptFailure = new Error("receipt persistence failed independently");
+    const receiptEntered = createDeferred();
+    const releaseReceipt = createDeferred();
+    const write = updateWriter.recordUpdateRunStepAsync;
+    const writer = vi
+      .spyOn(updateWriter, "recordUpdateRunStepAsync")
+      .mockImplementation(async (...args) => {
+        if (scenario.startsWith("receipt-pending")) {
+          receiptEntered.resolve();
+          await releaseReceipt.promise;
+        }
+        if (scenario === "receipt-write-failed") {
+          throw failure;
+        }
+        if (scenario === "receipt-and-stop-failed") {
+          throw receiptFailure;
+        }
+        return write(...args);
+      });
     vi.spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate").mockImplementation(
       async (params) => {
         params.assertCurrent?.();
@@ -101,19 +215,55 @@ export function registerBoundaryFinalizationControls({
           throw failure;
         }
         params.onStopped?.(stopped);
-        if (["joined-error", "cleanup-uncertain"].includes(scenario)) {
+        if (
+          [
+            "joined-error",
+            "cleanup-uncertain",
+            "receipt-pending-native-error",
+            "receipt-and-stop-failed",
+          ].includes(scenario)
+        ) {
           throw failure;
         }
         return stopped;
       },
     );
     const warn = vi.fn();
+    const hostSql = scenario === "stopped" ? observeMainThreadSql() : undefined;
+    hostSql?.calibrate();
     const stopping = stopSupervisedPredecessorGateway(
       { runId: run.runId, repair: true },
       { root: home, assertCurrent: vi.fn(), warn },
     );
+    let settled = false;
+    void stopping.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    if (scenario.startsWith("receipt-pending")) {
+      try {
+        await receiptEntered.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        expect(getUpdateRun(run.runId, { env })?.steps).toEqual(run.steps);
+      } finally {
+        releaseReceipt.resolve();
+        await stopping.catch(() => undefined);
+      }
+    }
     if (["cleanup-uncertain", "native-unsafe", "receipt-write-failed"].includes(scenario)) {
       await expect(stopping).rejects.toBe(failure);
+    } else if (scenario === "receipt-and-stop-failed") {
+      await expect(stopping).rejects.toMatchObject({
+        errors: [failure, receiptFailure],
+        cause: failure,
+      });
     } else if (scenario === "run-finished") {
       await expect(stopping).rejects.toBeInstanceOf(UpdateCommandRecoveryPendingError);
     } else {
@@ -122,12 +272,25 @@ export function registerBoundaryFinalizationControls({
     expect(writer).toHaveBeenCalledTimes(
       ["not-stopped", "native-unsafe"].includes(scenario) ? 0 : 1,
     );
-    expect(warn).toHaveBeenCalledTimes(scenario === "joined-error" ? 1 : 0);
+    expect(warn).toHaveBeenCalledTimes(
+      ["joined-error", "receipt-pending-native-error"].includes(scenario) ? 1 : 0,
+    );
+    try {
+      hostSql?.expectIdle();
+    } finally {
+      hostSql?.restore();
+    }
     const receipts = getUpdateRun(run.runId, { env })?.steps.filter((step) =>
       step.step.startsWith("finalize:predecessor-stop:"),
     );
     expect(receipts).toEqual(
-      ["receipt-write-failed", "run-finished", "not-stopped", "native-unsafe"].includes(scenario)
+      [
+        "receipt-write-failed",
+        "receipt-and-stop-failed",
+        "run-finished",
+        "not-stopped",
+        "native-unsafe",
+      ].includes(scenario)
         ? []
         : [
             expect.objectContaining({

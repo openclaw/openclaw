@@ -12,27 +12,52 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 
 import { clearRecoveredAutoFallbackPrimaryProbeSelection } from "./agent-runner-auto-fallback.js";
 
+const probe = {
+  provider: "anthropic",
+  model: "claude-sonnet-4-6",
+  fallbackProvider: "openai",
+  fallbackModel: "gpt-5.4",
+};
+
+function createAutoEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    sessionId: "session",
+    updatedAt: 1,
+    providerOverride: probe.fallbackProvider,
+    modelOverride: probe.fallbackModel,
+    modelOverrideSource: "auto",
+    modelOverrideFallbackOriginProvider: probe.provider,
+    modelOverrideFallbackOriginModel: probe.model,
+    ...overrides,
+  };
+}
+
+async function clearProbe(
+  activeSessionStore: Record<string, SessionEntry>,
+  staleAutoEntry: SessionEntry,
+) {
+  await clearRecoveredAutoFallbackPrimaryProbeSelection({
+    run: {
+      provider: probe.provider,
+      model: probe.model,
+      autoFallbackPrimaryProbe: probe,
+    } as FollowupRun["run"],
+    provider: probe.provider,
+    model: probe.model,
+    sessionKey: "main",
+    activeSessionStore,
+    getActiveSessionEntry: () => staleAutoEntry,
+    storePath: "/tmp/sessions.sqlite",
+  });
+}
+
 describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
   beforeEach(() => {
     state.updateSessionEntryMock.mockReset();
   });
 
   it("refreshes the local selection when the persisted comparison rejects the probe", async () => {
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "openai",
-      fallbackModel: "gpt-5.4",
-    };
-    const staleAutoEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      providerOverride: probe.fallbackProvider,
-      modelOverride: probe.fallbackModel,
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: probe.provider,
-      modelOverrideFallbackOriginModel: probe.model,
-    };
+    const staleAutoEntry = createAutoEntry();
     const newerUserEntry: SessionEntry = {
       sessionId: "newer-session",
       updatedAt: 2,
@@ -48,19 +73,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       },
     );
 
-    await clearRecoveredAutoFallbackPrimaryProbeSelection({
-      run: {
-        provider: probe.provider,
-        model: probe.model,
-        autoFallbackPrimaryProbe: probe,
-      } as FollowupRun["run"],
-      provider: probe.provider,
-      model: probe.model,
-      sessionKey: "main",
-      activeSessionStore,
-      getActiveSessionEntry: () => staleAutoEntry,
-      storePath: "/tmp/sessions.sqlite",
-    });
+    await clearProbe(activeSessionStore, staleAutoEntry);
 
     expect(activeSessionStore.main).toBe(newerUserEntry);
     expect(activeSessionStore.main).toMatchObject({
@@ -72,21 +85,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
   });
 
   it("preserves an identically reselected persisted fallback generation", async () => {
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "openai",
-      fallbackModel: "gpt-5.4",
-    };
-    const staleAutoEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      providerOverride: probe.fallbackProvider,
-      modelOverride: probe.fallbackModel,
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: probe.provider,
-      modelOverrideFallbackOriginModel: probe.model,
-    };
+    const staleAutoEntry = createAutoEntry();
     const newerAutoEntry: SessionEntry = {
       ...staleAutoEntry,
       updatedAt: 2,
@@ -99,19 +98,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       },
     );
 
-    await clearRecoveredAutoFallbackPrimaryProbeSelection({
-      run: {
-        provider: probe.provider,
-        model: probe.model,
-        autoFallbackPrimaryProbe: probe,
-      } as FollowupRun["run"],
-      provider: probe.provider,
-      model: probe.model,
-      sessionKey: "main",
-      activeSessionStore,
-      getActiveSessionEntry: () => staleAutoEntry,
-      storePath: "/tmp/sessions.sqlite",
-    });
+    await clearProbe(activeSessionStore, staleAutoEntry);
 
     expect(activeSessionStore.main).toBe(newerAutoEntry);
     expect(activeSessionStore.main).toMatchObject({
@@ -123,21 +110,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
   });
 
   it("keeps a newer local selection installed while persistence is pending", async () => {
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "openai",
-      fallbackModel: "gpt-5.4",
-    };
-    const staleAutoEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      providerOverride: probe.fallbackProvider,
-      modelOverride: probe.fallbackModel,
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: probe.provider,
-      modelOverrideFallbackOriginModel: probe.model,
-    };
+    const staleAutoEntry = createAutoEntry();
     const newerUserEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 2,
@@ -155,41 +128,16 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       },
     );
 
-    await clearRecoveredAutoFallbackPrimaryProbeSelection({
-      run: {
-        provider: probe.provider,
-        model: probe.model,
-        autoFallbackPrimaryProbe: probe,
-      } as FollowupRun["run"],
-      provider: probe.provider,
-      model: probe.model,
-      sessionKey: "main",
-      activeSessionStore,
-      getActiveSessionEntry: () => staleAutoEntry,
-      storePath: "/tmp/sessions.sqlite",
-    });
+    await clearProbe(activeSessionStore, staleAutoEntry);
 
     expect(activeSessionStore.main).toBe(newerUserEntry);
   });
 
   it("preserves an in-place auth selection while applying persisted probe cleanup", async () => {
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "openai",
-      fallbackModel: "gpt-5.4",
-    };
-    const staleAutoEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      providerOverride: probe.fallbackProvider,
-      modelOverride: probe.fallbackModel,
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: probe.provider,
-      modelOverrideFallbackOriginModel: probe.model,
+    const staleAutoEntry = createAutoEntry({
       authProfileOverride: "openai:fallback",
       authProfileOverrideSource: "auto",
-    };
+    });
     const activeSessionStore = { main: staleAutoEntry };
     state.updateSessionEntryMock.mockImplementationOnce(
       async (_scope: unknown, update: (entry: SessionEntry) => unknown) => {
@@ -203,19 +151,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       },
     );
 
-    await clearRecoveredAutoFallbackPrimaryProbeSelection({
-      run: {
-        provider: probe.provider,
-        model: probe.model,
-        autoFallbackPrimaryProbe: probe,
-      } as FollowupRun["run"],
-      provider: probe.provider,
-      model: probe.model,
-      sessionKey: "main",
-      activeSessionStore,
-      getActiveSessionEntry: () => staleAutoEntry,
-      storePath: "/tmp/sessions.sqlite",
-    });
+    await clearProbe(activeSessionStore, staleAutoEntry);
 
     expect(activeSessionStore.main).not.toBe(staleAutoEntry);
     expect(activeSessionStore.main).toMatchObject({
@@ -228,23 +164,10 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
   });
 
   it("preserves a value-identical same-session cache replacement", async () => {
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "openai",
-      fallbackModel: "gpt-5.4",
-    };
-    const staleAutoEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      providerOverride: probe.fallbackProvider,
-      modelOverride: probe.fallbackModel,
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: probe.provider,
-      modelOverrideFallbackOriginModel: probe.model,
+    const staleAutoEntry = createAutoEntry({
       authProfileOverride: "openai:fallback",
       authProfileOverrideSource: "auto",
-    };
+    });
     const replacementEntry: SessionEntry = {
       ...staleAutoEntry,
       updatedAt: 3,
@@ -259,19 +182,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       },
     );
 
-    await clearRecoveredAutoFallbackPrimaryProbeSelection({
-      run: {
-        provider: probe.provider,
-        model: probe.model,
-        autoFallbackPrimaryProbe: probe,
-      } as FollowupRun["run"],
-      provider: probe.provider,
-      model: probe.model,
-      sessionKey: "main",
-      activeSessionStore,
-      getActiveSessionEntry: () => staleAutoEntry,
-      storePath: "/tmp/sessions.sqlite",
-    });
+    await clearProbe(activeSessionStore, staleAutoEntry);
 
     expect(activeSessionStore.main).toBe(replacementEntry);
     expect(activeSessionStore.main).toMatchObject({
@@ -284,21 +195,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
   });
 
   it("preserves a same-session cache replacement when persistence has no row", async () => {
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "openai",
-      fallbackModel: "gpt-5.4",
-    };
-    const staleAutoEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      providerOverride: probe.fallbackProvider,
-      modelOverride: probe.fallbackModel,
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: probe.provider,
-      modelOverrideFallbackOriginModel: probe.model,
-    };
+    const staleAutoEntry = createAutoEntry();
     const replacementEntry: SessionEntry = {
       ...staleAutoEntry,
       updatedAt: 2,
@@ -309,41 +206,16 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       return undefined;
     });
 
-    await clearRecoveredAutoFallbackPrimaryProbeSelection({
-      run: {
-        provider: probe.provider,
-        model: probe.model,
-        autoFallbackPrimaryProbe: probe,
-      } as FollowupRun["run"],
-      provider: probe.provider,
-      model: probe.model,
-      sessionKey: "main",
-      activeSessionStore,
-      getActiveSessionEntry: () => staleAutoEntry,
-      storePath: "/tmp/sessions.sqlite",
-    });
+    await clearProbe(activeSessionStore, staleAutoEntry);
 
     expect(activeSessionStore.main).toBe(replacementEntry);
   });
 
   it("preserves an in-place cache update when persistence has no row", async () => {
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "openai",
-      fallbackModel: "gpt-5.4",
-    };
-    const staleAutoEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      providerOverride: probe.fallbackProvider,
-      modelOverride: probe.fallbackModel,
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: probe.provider,
-      modelOverrideFallbackOriginModel: probe.model,
+    const staleAutoEntry = createAutoEntry({
       authProfileOverride: "openai:fallback",
       authProfileOverrideSource: "auto",
-    };
+    });
     const activeSessionStore = { main: staleAutoEntry };
     state.updateSessionEntryMock.mockImplementationOnce(async () => {
       Object.assign(staleAutoEntry, {
@@ -353,19 +225,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       return undefined;
     });
 
-    await clearRecoveredAutoFallbackPrimaryProbeSelection({
-      run: {
-        provider: probe.provider,
-        model: probe.model,
-        autoFallbackPrimaryProbe: probe,
-      } as FollowupRun["run"],
-      provider: probe.provider,
-      model: probe.model,
-      sessionKey: "main",
-      activeSessionStore,
-      getActiveSessionEntry: () => staleAutoEntry,
-      storePath: "/tmp/sessions.sqlite",
-    });
+    await clearProbe(activeSessionStore, staleAutoEntry);
 
     expect(activeSessionStore.main).toBe(staleAutoEntry);
     expect(activeSessionStore.main).toMatchObject({
@@ -376,24 +236,11 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
   });
 
   it("preserves an in-place nested cache update", async () => {
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "openai",
-      fallbackModel: "gpt-5.4",
-    };
-    const staleAutoEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      providerOverride: probe.fallbackProvider,
-      modelOverride: probe.fallbackModel,
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: probe.provider,
-      modelOverrideFallbackOriginModel: probe.model,
+    const staleAutoEntry = createAutoEntry({
       cliSessionBindings: {
         codex: { sessionId: "old-cli-session" },
       },
-    };
+    });
     const activeSessionStore = { main: staleAutoEntry };
     state.updateSessionEntryMock.mockImplementationOnce(
       async (_scope: unknown, update: (entry: SessionEntry) => unknown) => {
@@ -405,19 +252,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       },
     );
 
-    await clearRecoveredAutoFallbackPrimaryProbeSelection({
-      run: {
-        provider: probe.provider,
-        model: probe.model,
-        autoFallbackPrimaryProbe: probe,
-      } as FollowupRun["run"],
-      provider: probe.provider,
-      model: probe.model,
-      sessionKey: "main",
-      activeSessionStore,
-      getActiveSessionEntry: () => staleAutoEntry,
-      storePath: "/tmp/sessions.sqlite",
-    });
+    await clearProbe(activeSessionStore, staleAutoEntry);
 
     expect(activeSessionStore.main).not.toBe(staleAutoEntry);
     expect(activeSessionStore.main.cliSessionBindings?.codex?.sessionId).toBe("new-cli-session");

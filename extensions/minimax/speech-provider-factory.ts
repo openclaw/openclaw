@@ -53,29 +53,17 @@ function resolveConfiguredPortalTtsBaseUrl(cfg: OpenClawConfig | undefined): str
   return portalBaseUrl ? normalizeMinimaxTtsBaseUrl(portalBaseUrl) : undefined;
 }
 
-function resolveMinimaxTokenPlanEnvKey(): string | undefined {
-  return resolveSpeechProviderApiKey(
-    ...MINIMAX_TOKEN_PLAN_ENV_VARS.map((envVar) => process.env[envVar]),
-  );
-}
-
-async function resolveMinimaxPortalProfileToken(
-  cfg: OpenClawConfig | undefined,
-): Promise<string | undefined> {
-  const { resolveProviderAuthProfileApiKey } = await import("openclaw/plugin-sdk/provider-auth");
-  return await resolveProviderAuthProfileApiKey({
-    cfg,
-    provider: MINIMAX_PORTAL_PROVIDER_ID,
-  });
-}
-
 async function resolveMinimaxTtsApiKey(params: {
   cfg: OpenClawConfig | undefined;
   configApiKey?: string;
 }): Promise<string | undefined> {
+  const { resolveProviderAuthProfileApiKey } = await import("openclaw/plugin-sdk/provider-auth");
   return resolveSpeechProviderApiKey(
     params.configApiKey,
-    await resolveMinimaxPortalProfileToken(params.cfg),
+    await resolveProviderAuthProfileApiKey({
+      cfg: params.cfg,
+      provider: MINIMAX_PORTAL_PROVIDER_ID,
+    }),
     resolveMinimaxDirectTtsApiKey(),
   );
 }
@@ -83,7 +71,7 @@ async function resolveMinimaxTtsApiKey(params: {
 function resolveMinimaxDirectTtsApiKey(configApiKey?: string): string | undefined {
   return resolveSpeechProviderApiKey(
     configApiKey,
-    resolveMinimaxTokenPlanEnvKey(),
+    ...MINIMAX_TOKEN_PLAN_ENV_VARS.map((envVar) => process.env[envVar]),
     process.env.MINIMAX_API_KEY,
   );
 }

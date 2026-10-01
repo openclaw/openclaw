@@ -1,4 +1,3 @@
-// Parses inline reply directives into typed execution and routing options.
 import { extractModelDirective } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.shared.js";
 import {

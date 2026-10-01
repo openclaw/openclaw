@@ -175,6 +175,28 @@ describe("tool access diagnostics", () => {
     });
   });
 
+  it("reports the prepared profile that actually constrains the inventory", () => {
+    const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+      config: messagingAgentConfig(),
+      agentId: "assistant",
+      sessionKey: "agent:assistant:main",
+    });
+    const result = resolveEffectiveToolInventory({
+      cfg: { tools: { profile: "full" } },
+      agentId: "assistant",
+      sessionKey: "agent:assistant:main",
+      workspaceDir: "/tmp/tool-access-workspace",
+      agentDir: "/tmp/tool-access-agent",
+      modelApi: null,
+      conversationCapabilityProfile,
+    });
+
+    expect(result.profile).toBe("messaging");
+    expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).not.toContain(
+      "exec",
+    );
+  });
+
   it("preserves the prepared session ceiling when explaining a profile exclusion", () => {
     const cfg = messagingAgentConfig();
     const sessionKey = "agent:assistant:subagent:diagnostics";

@@ -18,12 +18,12 @@ import {
   type CopilotSessionConfig,
   type ModelRef,
   type ModelRefInputObject,
-  type PromptErrorWithCode,
 } from "./attempt-types.js";
 import { createCopilotByokAuth, resolveCopilotAuth } from "./auth-bridge.js";
 import type { AssistantMessage, AssistantUsageSnapshot } from "./event-bridge.js";
 import { createHooksBridge } from "./hooks-bridge.js";
 import { createPermissionBridge, rejectAllPolicy } from "./permission-bridge.js";
+import type { PromptErrorWithCode } from "./prompt-error.js";
 import { resolveCopilotProvider, type ResolvedCopilotProvider } from "./provider-bridge.js";
 import { computeReplayMetadata, copilotToolMetasHavePotentialSideEffects } from "./replay-shim.js";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
@@ -143,18 +143,6 @@ export function createResult(
     yieldDetected: state.yieldDetected === true,
     ...(state.yieldAcknowledgment ? { yieldAcknowledgment: state.yieldAcknowledgment } : {}),
   };
-}
-export function createPromptError(
-  code: string,
-  message: string,
-  cause?: unknown,
-): PromptErrorWithCode {
-  const error = new Error(message) as PromptErrorWithCode;
-  error.code = code;
-  if (cause !== undefined) {
-    error.cause = cause;
-  }
-  return error;
 }
 export function createSessionConfig(
   params: AttemptParamsLike,
@@ -363,21 +351,21 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
     resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
     authProfileId: readNonEmptyString(params.authProfileId),
   });
+  const authContext = {
+    agentId: readNonEmptyString(params.agentId),
+    agentDir: readNonEmptyString(params.agentDir),
+    workspaceDir: readNonEmptyString(params.workspaceDir),
+    copilotHome: readNonEmptyString(params.copilotHome),
+  };
   const auth =
     provider.mode === "byok"
       ? createCopilotByokAuth({
-          agentId: readNonEmptyString(params.agentId),
-          agentDir: readNonEmptyString(params.agentDir),
-          workspaceDir: readNonEmptyString(params.workspaceDir),
-          copilotHome: readNonEmptyString(params.copilotHome),
+          ...authContext,
           authProfileId: provider.authProfileId,
           authProfileVersion: provider.authProfileVersion,
         })
       : resolveCopilotAuth({
-          agentId: readNonEmptyString(params.agentId),
-          agentDir: readNonEmptyString(params.agentDir),
-          workspaceDir: readNonEmptyString(params.workspaceDir),
-          copilotHome: readNonEmptyString(params.copilotHome),
+          ...authContext,
           auth: params.auth,
           resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
           authProfileId: readNonEmptyString(params.authProfileId),

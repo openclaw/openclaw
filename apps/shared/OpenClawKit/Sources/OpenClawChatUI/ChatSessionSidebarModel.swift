@@ -299,25 +299,6 @@ public enum ChatSessionSidebarModel {
                 hasUnread: session.unread == true || children.contains { $0.badges.hasUnread }))
     }
 
-    public static func displayName(for session: OpenClawChatSessionEntry) -> String {
-        ChatPayloadDecoding.trimmedNonEmptyString(session.label) ??
-            ChatPayloadDecoding.trimmedNonEmptyString(session.displayName) ??
-            ChatPayloadDecoding.trimmedNonEmptyString(session.autoLabel) ??
-            self.displayName(forKey: session.key)
-    }
-
-    /// Compact "repo \u{2387} branch" line for worktree/work sessions; mirrors the
-    /// web sidebar row subtitle (ui/src/lib/session-display.ts).
-    public static func workSubtitle(for session: OpenClawChatSessionEntry) -> String? {
-        let repoRoot = session.worktree?.repoRoot?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let branch = session.worktree?.branch?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let repoName = repoRoot?.split(separator: "/").last.map(String.init)
-        let shortBranch = branch.map { $0.hasPrefix("openclaw/") ? String($0.dropFirst("openclaw/".count)) : $0 }
-        guard let repoName, !repoName.isEmpty else { return nil }
-        guard let shortBranch, !shortBranch.isEmpty else { return repoName }
-        return "\(repoName) \u{2387} \(shortBranch)"
-    }
-
     /// Resolves the single session-list subtitle slot with the same ownership
     /// order as the web sidebar. Gateway-supplied text stays verbatim.
     public static func subtitle(
@@ -573,12 +554,12 @@ public enum ChatSessionSidebarModel {
         return ChatPayloadDecoding.trimmedNonEmptyString(session.lastRunError)
     }
 
-    private static func isRunning(_ session: OpenClawChatSessionEntry) -> Bool {
+    static func isRunning(_ session: OpenClawChatSessionEntry) -> Bool {
         session.hasActiveRun == true ||
             session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "running"
     }
 
-    private static func isNewer(
+    static func isNewer(
         _ candidate: OpenClawChatSessionObserverDigest,
         than previous: OpenClawChatSessionObserverDigest) -> Bool
     {
@@ -656,20 +637,6 @@ public enum ChatSessionSidebarModel {
         })?.key ?? currentSessionKey
     }
 
-    /// Session keys read as routing ids ("agent:main:main"); show the human
-    /// part and keep the owning agent as a suffix only when it disambiguates.
-    public static func displayName(forKey key: String) -> String {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parts = trimmed.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-        guard parts.count == 3, parts[0] == "agent" else {
-            return trimmed.isEmpty ? key : trimmed
-        }
-        let agent = String(parts[1])
-        let session = String(parts[2])
-        if session.isEmpty { return trimmed }
-        return agent == "main" || agent.isEmpty ? session : "\(session) (\(agent))"
-    }
-
     @MainActor
     private static func visibleSessions(
         sessions: [OpenClawChatSessionEntry],
@@ -722,7 +689,7 @@ public enum ChatSessionSidebarModel {
         {
             // Sessions can lag behind a fresh switch/new-session; keep the
             // active row selectable instead of showing an empty selection.
-            entries.append(OpenClawChatSessionEntry.placeholder(key: currentSessionKey))
+            entries.append(OpenClawChatSessionEntry(key: currentSessionKey))
         }
         return entries
     }

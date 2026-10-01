@@ -79,6 +79,7 @@ export function createRequesterDescendantReader(params: {
           ),
         };
       },
+      { sessionKeys: [params.requesterSessionKey], descendants: true },
     );
     return isCurrent() ? result : undefined;
   };

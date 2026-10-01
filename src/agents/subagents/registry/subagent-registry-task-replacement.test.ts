@@ -32,7 +32,7 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
@@ -332,7 +332,6 @@ it.each(["successor", "source retirement"] as const)(
             expected: previous,
             allowEndedSource: true,
             lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            persistenceFailure: "return-false",
           }),
         )
         .toBe(false);
@@ -381,7 +380,7 @@ it("rearms native execution for an interrupted run's successor", async () => {
   expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toEqual(previous);
 
   const observerSnapshots: Array<{ run?: string }> = [];
-  const unsubscribe = onSubagentRegistryPersisted(() => {
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
     observerSnapshots.push({
       run: subagentRuns.get("interrupted-task-new")?.execution.status,
     });
@@ -393,7 +392,6 @@ it("rearms native execution for an interrupted run's successor", async () => {
         nextRunId: "interrupted-task-new",
         expected: previous,
         allowEndedSource: true,
-        persistenceFailure: "throw",
       }),
     ).toBe(true);
   } finally {
@@ -422,9 +420,72 @@ it("rearms native execution for an interrupted run's successor", async () => {
       previousRunId: successor.runId,
       nextRunId: "interrupted-task-newer",
       expected: successor,
-      persistenceFailure: "throw",
     }),
   ).toBe(true);
+});
+
+it("admits a child follow-up while its predecessor's browser cleanup is still pending", async () => {
+  const { persistSubagentRunsToDiskAsyncOrThrow } = await vi.importActual<
+    typeof import("./subagent-registry-state.js")
+  >("./subagent-registry-state.js");
+  const registryState = await import("./subagent-registry-state.js");
+  vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
+    persistSubagentRunsToDiskAsyncOrThrow,
+  );
+  const predecessorWait = createDeferred<AgentWaitResult>();
+  const cleanupEntered = createDeferred();
+  const releaseCleanup = createDeferred();
+  fixture.gateway.mockImplementationOnce(async () => predecessorWait.promise);
+  fixture.cleanup.mockImplementationOnce(async () => {
+    cleanupEntered.resolve();
+    await releaseCleanup.promise;
+  });
+  fixture.announce.mockResolvedValue("delivered");
+  const childSessionKey = "agent:main:subagent:held-browser-cleanup";
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: childSessionKey,
+    defaultSessionId: "held-browser-cleanup-session",
+  });
+  try {
+    await registerSubagentRun({
+      runId: "browser-cleanup-predecessor",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Finish browser work",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+    predecessorWait.resolve({
+      status: "ok",
+      endedAt: Date.now(),
+      terminalReply: { disposition: "visible", text: "Browser work completed" },
+    });
+    await cleanupEntered.promise;
+    await expect(
+      reactivateCompletedSubagentSession({
+        sessionKey: childSessionKey,
+        runId: "browser-cleanup-successor",
+        task: "Continue with the next task",
+      }),
+    ).resolves.toBe(true);
+    const stored = loadSubagentRegistryFromSqlite();
+    expect(stored.has("browser-cleanup-predecessor")).toBe(false);
+    expect(stored.get("browser-cleanup-successor")).toMatchObject({
+      task: "Continue with the next task",
+      execution: { status: "running" },
+    });
+  } finally {
+    releaseCleanup.resolve();
+    await fixture.settle();
+  }
+  expect(fixture.cleanup).toHaveBeenCalledOnce();
+  expect(subagentRuns.get("browser-cleanup-successor")?.execution.status).toBe("running");
+  expect(loadSubagentRegistryFromSqlite().get("browser-cleanup-successor")?.execution.status).toBe(
+    "running",
+  );
 });
 
 it.each([
@@ -434,8 +495,9 @@ it.each([
   "stamp admitted during wait",
   "caller retired during late stamp",
   "source replaced during late stamp",
+  "cleanup admitted during wait",
 ] as const)(
-  "settles the predecessor's pending ended-hook stamp before follow-up admission (%s)",
+  "settles the predecessor's pending writes before follow-up admission (%s)",
   async (transition) => {
     const { persistSubagentRunsToDiskAsyncOrThrow } = await vi.importActual<
       typeof import("./subagent-registry-state.js")
@@ -476,6 +538,8 @@ it.each([
       transition === "stamp admitted during wait" ||
       transition === "caller retired during late stamp" ||
       transition === "source replaced during late stamp";
+    const lateCleanup = transition === "cleanup admitted during wait";
+    const lateWrite = lateStamp || lateCleanup;
     const callerRetired =
       transition === "caller retired" || transition === "caller retired during late stamp";
     const sourceReplaced =
@@ -484,9 +548,10 @@ it.each([
     const releaseFirst = createDeferred();
     const producerWait = createDeferred();
     const capturedWait = createDeferred();
+    const additionalWait = createDeferred();
     const entered = createDeferred();
     const release = createDeferred();
-    let holdFirst = lateStamp;
+    let holdFirst = lateWrite;
     let holdStamp = true;
     vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
       async (context, operation, options) => {
@@ -494,6 +559,22 @@ it.each([
           holdFirst = false;
           firstEntered.resolve();
           await releaseFirst.promise;
+        } else if (holdStamp && lateCleanup) {
+          holdStamp = false;
+          return runWorker(
+            context,
+            (scope) =>
+              operation({
+                async execute(command, executeOptions) {
+                  const receipt = await scope.execute(command, executeOptions);
+                  // The native cleanup commit precedes its live-row publication.
+                  entered.resolve();
+                  await release.promise;
+                  return receipt;
+                },
+              }),
+            options,
+          );
         } else if (holdStamp && original.endedHookEmittedAt !== undefined) {
           holdStamp = false;
           entered.resolve();
@@ -502,8 +583,8 @@ it.each([
         return runWorker(context, operation, options);
       },
     );
-    await import("./subagent-registry-runtime.js");
-    let hook = lateStamp ? undefined : cleanup.emitSubagentEndedHookForRun({ entry: original });
+    await import("./subagent-registry.js");
+    let hook = lateWrite ? undefined : cleanup.emitSubagentEndedHookForRun({ entry: original });
     let firstWrite: Promise<void> | undefined;
     let restoreWaitObserver: (() => void) | undefined;
     let capturedPending = false;
@@ -511,7 +592,7 @@ it.each([
     let followup: Promise<unknown> | undefined;
     let callerCurrent = true;
     try {
-      if (lateStamp) {
+      if (lateWrite) {
         const persistence = await import("./subagent-registry-persistence.js");
         const { captureOpenClawStateWorkerContext } =
           await import("../../../state/openclaw-state-worker-context.js");
@@ -528,22 +609,53 @@ it.each([
               } else {
                 capturedWait.resolve();
               }
+              if (lateCleanup && observedWaits === 2 && pending) {
+                // Resume the first follow-up wait after the next write commits,
+                // while that write still owns its unpublished receipt.
+                return pending.then(() => entered.promise);
+              }
+              if (lateCleanup && observedWaits > 2) {
+                additionalWait.resolve();
+              }
             }
             return pending;
           });
         restoreWaitObserver = () => observation.mockRestore();
-        // Let the real hook and follow-up capture the same earlier write, in that order.
+        // Let the next writer and follow-up capture the same earlier write, in that order.
         firstWrite = persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, [original.runId], {
           context: captureOpenClawStateWorkerContext(),
         });
         void firstWrite.catch(() => {});
         await firstEntered.promise;
-        hook = cleanup.emitSubagentEndedHookForRun({ entry: original });
+        hook = lateCleanup
+          ? (async () => {
+              const context = captureOpenClawStateWorkerContext();
+              await persistence.waitForPendingSubagentRegistryWrites(
+                [original.runId],
+                context.admission,
+              );
+              const previous = persistence.captureSubagentRunMutationSnapshot(original);
+              original.cleanupCompletedAt = 3;
+              await persistence.publishSubagentRunPostimages({
+                runs: subagentRuns,
+                previous: new Map([[original, previous]]),
+                context,
+                assertCurrent: () => context.admission.assertCurrent(),
+                persist: (writeContext, callbacks, ...ids) =>
+                  persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, ids, {
+                    context: writeContext,
+                    ...callbacks,
+                  }),
+              });
+            })()
+          : cleanup.emitSubagentEndedHookForRun({ entry: original });
         void hook.catch(() => {});
         await Promise.race([
           producerWait.promise,
           hook.then(() => {
-            throw new Error("Ended hook settled before observing its pending-write snapshot");
+            throw new Error(
+              "Predecessor writer settled before observing its pending-write snapshot",
+            );
           }),
         ]);
       } else {
@@ -572,7 +684,7 @@ it.each([
           return { error };
         },
       );
-      if (lateStamp) {
+      if (lateWrite) {
         await Promise.race([
           capturedWait.promise,
           followup.then(() => {
@@ -583,16 +695,23 @@ it.each([
         releaseFirst.resolve();
         await firstWrite;
         if (!hook) {
-          throw new Error("Ended hook did not enter before the follow-up");
+          throw new Error("Predecessor writer did not enter before the follow-up");
         }
         await Promise.race([
           entered.promise,
           hook.then(() => {
-            throw new Error("Ended hook settled before its held stamp write");
+            throw new Error("Predecessor writer settled before its held write");
           }),
         ]);
       }
-      await setImmediate();
+      if (lateCleanup) {
+        expect(original.cleanupCompletedAt).toBeUndefined();
+        expect(loadSubagentRegistryFromSqlite().get(original.runId)?.cleanupCompletedAt).toBe(3);
+        expect(original.endedHookEmittedAt).toBeUndefined();
+        await Promise.race([additionalWait.promise, followup]);
+      } else {
+        await setImmediate();
+      }
       expect.soft(settled).toBe(false);
       if (callerRetired) {
         callerCurrent = false;
@@ -633,6 +752,7 @@ it.each([
       expect(loadSubagentRegistryFromSqlite().has(original.runId)).toBe(false);
     } finally {
       releaseFirst.resolve();
+      entered.resolve();
       release.resolve();
       await Promise.allSettled([firstWrite, hook, followup]);
       restoreWaitObserver?.();

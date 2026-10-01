@@ -58,13 +58,11 @@ export function resolveDoctorSessionSqliteConfig(
 export function resolveDoctorSessionSqliteMaintenancePaths(
   targets: readonly SessionStoreTarget[],
 ): string[] {
-  const protectedPaths = new Set<string>();
-  for (const target of targets) {
-    for (const databasePath of resolveSqliteDatabaseFilePaths(resolveTargetSqlitePath(target))) {
-      protectedPaths.add(databasePath);
-    }
-  }
-  return [...protectedPaths];
+  return [
+    ...new Set(
+      targets.flatMap((target) => resolveSqliteDatabaseFilePaths(resolveTargetSqlitePath(target))),
+    ),
+  ];
 }
 
 export function resolveDoctorSessionSqliteMaintenanceRoots(

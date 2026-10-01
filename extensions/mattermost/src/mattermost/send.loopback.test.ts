@@ -5,6 +5,7 @@ import { sendMessageMattermost } from "./send.js";
 
 vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => createPluginRuntimeMock(),
+  getOptionalMattermostRuntime: () => createPluginRuntimeMock(),
 }));
 
 const USER_ID = "abcdefghijklmnopqrstuvwxyz";

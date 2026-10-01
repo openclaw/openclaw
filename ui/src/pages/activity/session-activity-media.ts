@@ -105,9 +105,8 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
   private imageRequest = 0;
   private observedPending?: Promise<void>;
   private readonly refresh = () => this.requestUpdate();
-  private readonly subscriptions = new SubscriptionsController(this).watch(
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
   );
 
   override connectedCallback() {

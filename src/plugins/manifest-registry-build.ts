@@ -1,4 +1,3 @@
-// Maintains plugin manifest lookup tables for discovery and runtime planning.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";

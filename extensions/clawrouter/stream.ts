@@ -90,12 +90,7 @@ function sanitizeBoundedId(value: string | undefined, policy: BoundedIdPolicy): 
 
 function findHeader(headers: Record<string, string>, target: string): string | undefined {
   const normalizedTarget = target.toLowerCase();
-  for (const [name, value] of Object.entries(headers)) {
-    if (name.toLowerCase() === normalizedTarget) {
-      return value;
-    }
-  }
-  return undefined;
+  return Object.entries(headers).find(([name]) => name.toLowerCase() === normalizedTarget)?.[1];
 }
 
 function setHeaderDefault(

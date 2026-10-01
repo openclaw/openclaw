@@ -29,6 +29,7 @@ import {
   allocateWorkerOwnedSqliteSnapshotDirectory,
   captureSqliteSnapshotStagingOwner,
 } from "./sqlite-snapshot-staging-owner.js";
+import { holdNativeStop, waitForGate } from "./sqlite-snapshot-staging-owner.test-support.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import type { RetainedNativeWorker } from "./worker-native-lifecycle.types.js";
 import type {
@@ -264,18 +265,6 @@ function releaseReplyGate(gate: ReplyGate | undefined): void {
     gate.deliver = undefined;
     deliver?.();
   }
-}
-
-async function waitForGate(
-  gate: { entered: ReturnType<typeof createDeferredCore<void>> },
-  request: Promise<unknown>,
-): Promise<void> {
-  await Promise.race([
-    gate.entered.promise,
-    request.then(() => {
-      throw new Error("Snapshot request settled before its retained release barrier");
-    }),
-  ]);
 }
 
 beforeEach(() => {
@@ -686,6 +675,7 @@ it("keeps failed preparation custody retryable without requesting a sibling snap
   );
   let releaseReader: (() => void) | undefined;
   let native: RetainedNativeWorker | undefined;
+  let recoveryStop: ReturnType<typeof holdNativeStop> | undefined;
   try {
     await waitForGate(gate, first.result);
     if (!gate.directory) {
@@ -718,9 +708,14 @@ it("keeps failed preparation custody retryable without requesting a sibling snap
     }
     releaseReader();
     releaseReader = undefined;
+    // Native cleanup fences every sibling after VM loss. Admit both requests before
+    // starting the shared stop, then prove sibling servicing alone can finish it.
+    recoveryStop = holdNativeStop(native);
     const firstClose = first.startClose();
     const siblingClose = sibling.startClose();
     expect(firstClose.read().status).toBe("pending");
+    expect(siblingClose.read().status).toBe("pending");
+    recoveryStop.release();
     let microtaskRan = false;
     queueMicrotask(() => {
       microtaskRan = true;
@@ -750,6 +745,7 @@ it("keeps failed preparation custody retryable without requesting a sibling snap
     releaseReader?.();
     releaseReplyGate(gate);
     await Promise.allSettled([first.result, sibling.result]);
+    recoveryStop?.restore();
     // Preserve the failing result while explicitly retrying canonical custody cleanup on RED.
     await Promise.allSettled([first.startClose().result, sibling.startClose().result]);
     await Promise.all([first.startClose().result, sibling.startClose().result]);

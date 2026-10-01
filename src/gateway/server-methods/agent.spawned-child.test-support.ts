@@ -3,10 +3,8 @@ import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
-import {
-  onSubagentRegistryPersisted,
-  persistSubagentRunsToDiskOrThrow,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { persistSubagentRunsToDiskOrThrow } from "../../agents/subagents/registry/subagent-registry-state.js";
 import {
   createCanonicalSubagentRunFixture,
   settleSubagentRegistryPersistenceWork,
@@ -43,6 +41,20 @@ export function nativeSubagentClient(): AgentHandlerArgs["client"] {
   };
 }
 
+export function observeAgentSubagentCleanup(params: { runId: string; childSessionKey: string }) {
+  const cleanupCompleted = createDeferred();
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
+    const entry = getSubagentRunByChildSessionKey(params.childSessionKey);
+    if (entry?.runId === params.runId && entry.cleanupCompletedAt) {
+      cleanupCompleted.resolve();
+    }
+  });
+  return {
+    cleanupCompleted: cleanupCompleted.promise,
+    [Symbol.dispose]: unsubscribe,
+  };
+}
+
 export function createPluginSubagentTestLifetime(params: {
   root: string;
   runId: string;
@@ -54,18 +66,12 @@ export function createPluginSubagentTestLifetime(params: {
     endedAt: Date.now(),
   }));
   const work = new AsyncWorkScope();
-  const cleanupCompleted = createDeferred();
-  const unsubscribe = onSubagentRegistryPersisted(() => {
-    const entry = getSubagentRunByChildSessionKey(params.childSessionKey);
-    if (entry?.runId === params.runId && entry.cleanupCompletedAt) {
-      cleanupCompleted.resolve();
-    }
-  });
+  const cleanup = observeAgentSubagentCleanup(params);
   return {
     work,
-    cleanupCompleted: cleanupCompleted.promise,
+    cleanupCompleted: cleanup.cleanupCompleted,
     async [Symbol.asyncDispose]() {
-      unsubscribe();
+      cleanup[Symbol.dispose]();
       await work.drain();
       resetSubagentRegistryForTests({ persist: false });
       await cleanupSessionStateForTest({ stateDir: params.root });

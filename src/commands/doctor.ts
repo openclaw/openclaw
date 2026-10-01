@@ -1,4 +1,3 @@
-/** Top-level doctor command wrapper, including post-upgrade probe mode. */
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -46,7 +45,6 @@ async function resolveExplicitSessionSqliteMaintenancePaths(
   return [...new Set(protectedPaths)];
 }
 
-/** Runs doctor or the post-upgrade probe submode using the provided runtime. */
 export async function doctorCommand(
   runtime?: RuntimeEnv,
   options?: DoctorOptions,

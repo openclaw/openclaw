@@ -232,6 +232,23 @@ describe("package dist inventory", () => {
     },
   );
 
+  it("omits interrupted Control UI build siblings through the root package files list", async () => {
+    const { files } = JSON.parse(await fs.readFile(path.resolve("package.json"), "utf8"));
+    await withTestDir({ prefix: "openclaw-dist-inventory-ui-staging-" }, async (packageRoot) => {
+      await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ files }), "utf8");
+      await writeFiles(packageRoot, [
+        "dist/control-ui/index.html",
+        "dist/control-ui.build-123-AbCdEf/assets/index.js",
+        "dist/control-ui.build-123-AbCdEf.retired/index.html",
+      ]);
+
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/control-ui/index.html",
+        "dist/postinstall-content-inventory.json",
+      ]);
+    });
+  });
+
   it("omits packaged extension node_modules while keeping extension runtime files", async () => {
     await withTestDir(
       { prefix: "openclaw-dist-inventory-extension-node-modules-" },

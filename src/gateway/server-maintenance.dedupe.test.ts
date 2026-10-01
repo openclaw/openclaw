@@ -1,10 +1,11 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 // Dedupe-record maintenance: TTL retention for active runs/queued sends and
 // overflow eviction ordering. Split from server-maintenance.test.ts, which
 // sits at the max-lines cap; mocks are hoisted per file, so the module-mock
 // preamble is repeated while pure fixtures stay local to each block.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
+import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
@@ -12,7 +13,7 @@ const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   deletedFileCount: 0,
   retainedCount: 0,
 }));
-const pruneExpiredDevicePairSetupCompletionsMock = vi.fn(async () => 0);
+const pruneExpiredDevicePairSetupCompletionsMock = vi.hoisted(() => vi.fn(async () => 0));
 
 vi.mock("../infra/device-bootstrap.js", () => ({
   pruneExpiredDevicePairSetupCompletions: pruneExpiredDevicePairSetupCompletionsMock,
@@ -79,9 +80,8 @@ function seedStableDedupeEntries(deps: MaintenanceTimerDeps, now: number): void 
 async function createTimedMaintenanceScenario() {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
-  const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
   const deps = createMaintenanceTimerDeps();
-  return { startGatewayMaintenanceTimers, deps, now: Date.now() };
+  return { deps, now: Date.now() };
 }
 
 async function stopMaintenanceTimers(
@@ -101,7 +101,7 @@ describe("gateway dedupe maintenance", () => {
   });
 
   it("keeps active exec approval dedupe aliases past the normal ttl", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    const { deps, now } = await createTimedMaintenanceScenario();
     const runId = "exec-approval-followup:req-active:nonce:retry-1";
     deps.chatAbortControllers.set(runId, createActiveRun("agent:main:main", "agent"));
     deps.dedupe.set("agent:exec-approval-followup:req-active", {
@@ -126,7 +126,7 @@ describe("gateway dedupe maintenance", () => {
   });
 
   it("keeps queued chat dedupe entries past the normal ttl", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    const { deps, now } = await createTimedMaintenanceScenario();
     const runId = "queued-chat";
     deps.chatQueuedTurns.set(runId, {
       controller: new AbortController(),
@@ -147,7 +147,7 @@ describe("gateway dedupe maintenance", () => {
   });
 
   it("keeps queued chat dedupe entries while trimming overflow", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    const { deps, now } = await createTimedMaintenanceScenario();
     const runId = "queued-oldest";
     seedStableDedupeEntries(deps, now);
     deps.chatQueuedTurns.set(runId, {
@@ -172,7 +172,7 @@ describe("gateway dedupe maintenance", () => {
   });
 
   it("evicts multiple dedupe overflows by oldest timestamp with interleaved reinsertions", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    const { deps, now } = await createTimedMaintenanceScenario();
 
     for (let index = 0; index < DEDUPE_MAX; index += 1) {
       deps.dedupe.set(`item-${index}`, { ts: now - 10_000 + index, ok: true });
@@ -207,7 +207,7 @@ describe("gateway dedupe maintenance", () => {
   });
 
   it("does not evict active agent dedupe entries while trimming overflow", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    const { deps, now } = await createTimedMaintenanceScenario();
 
     seedStableDedupeEntries(deps, now);
     deps.chatAbortControllers.set("active-oldest", createActiveRun("agent:main:main", "agent"));

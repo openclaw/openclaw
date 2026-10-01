@@ -7,6 +7,7 @@ import {
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import {
   discoverManagedGatewayBindings,
+  describeManagedGatewayBinding,
   readManagedGatewayBindingState,
   type ManagedGatewayBinding,
 } from "../../daemon/managed-gateway-bindings.js";
@@ -75,6 +76,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
   updateInstallKind: "git" | "package" | "unknown";
   shouldRestart: boolean;
   phase?: "before-stop" | "publication";
+  inspectOverlap?: typeof gatewayServiceCommandOverlapsPhysicalInstallation;
 }): Promise<void> {
   params.assertCurrent();
   const serving = params.selected;
@@ -92,12 +94,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
       `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
     );
   }
-  const bindings = await discoverManagedGatewayBindings(params.env).catch((error: unknown) => {
-    if (hasCommandProcessCleanupError(error)) {
-      throw error;
-    }
-    return [];
-  });
+  const bindings = await discoverManagedGatewayBindings(params.env);
   params.assertCurrent();
   const readBinding = async (binding: ManagedGatewayBinding) => {
     const state = await readManagedGatewayBindingState(binding, {
@@ -126,6 +123,15 @@ export async function assertManagedGatewayArtifactPublication(params: {
       return false;
     }
     let observed = state;
+    if (process.platform === "linux") {
+      observed = {
+        ...state,
+        env: mergeGatewayServiceEnv(
+          { ...state.env, OPENCLAW_PROFILE: before.serviceEnv.OPENCLAW_PROFILE },
+          state.command,
+        ),
+      };
+    }
     if (process.platform === "darwin") {
       if (
         !state.launchAgent ||
@@ -150,7 +156,6 @@ export async function assertManagedGatewayArtifactPublication(params: {
     if (startupEntry !== undefined) {
       // Only the selected Task's proven absence can select its Startup fallback.
       selectedState ??= await readBinding({
-        profile: before.serviceEnv.OPENCLAW_PROFILE ?? "default",
         env: before.serviceEnv,
       });
       const normalize = (value: string) => path.win32.normalize(value).toLowerCase();
@@ -198,14 +203,14 @@ export async function assertManagedGatewayArtifactPublication(params: {
       continue;
     }
     for (const root of params.roots) {
-      const overlaps = await gatewayServiceCommandOverlapsPhysicalInstallation(root, state.command);
+      const overlaps = await (
+        params.inspectOverlap ?? gatewayServiceCommandOverlapsPhysicalInstallation
+      )(root, state.command);
       params.assertCurrent();
       if (overlaps !== true || (await selectedConsumer(binding, state))) {
         continue;
       }
-      const owner = state.launchAgent
-        ? `launchd job ${JSON.stringify(state.launchAgent.target)} loaded from ${JSON.stringify(state.launchAgent.sourcePath)}`
-        : `profile ${binding.profile}${binding.windowsStartupEntry ? `, Startup entry ${JSON.stringify(binding.windowsStartupEntry)}` : ""}`;
+      const owner = describeManagedGatewayBinding(binding, state);
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
         `Cannot replace ${root}: another managed Gateway (${owner}) is still using this installation. Stop that Gateway through its own service manager or Startup process, then retry the update. Its files and service were left unchanged.`,

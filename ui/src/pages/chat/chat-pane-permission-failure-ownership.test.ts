@@ -133,8 +133,10 @@ describe("chat permission failure ownership", () => {
         const trigger = container.querySelector<HTMLButtonElement>(
           "[data-chat-permission-select]",
         )!;
-        expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
-        expect(trigger.textContent).not.toContain("Applying permissions");
+        expect(trigger.getAttribute("aria-label")).toContain(
+          t("chat.permissionControls.modes.full.label"),
+        );
+        expect(trigger.getAttribute("aria-label")).not.toContain("Applying permissions");
         expect(trigger.disabled).toBe(true);
         void controls.permissionPicker.onSelect("guarded");
         expect(
@@ -159,7 +161,9 @@ describe("chat permission failure ownership", () => {
         expect(state.chatError).toContain("Failed to update permissions");
         if (recovery !== "immediate") {
           draw();
-          expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
+          expect(trigger.getAttribute("aria-label")).toContain(
+            t("chat.permissionControls.modes.full.label"),
+          );
           expect(trigger.disabled).toBe(false);
           recoveryUnavailable = false;
           if (recovery === "affected") {
@@ -178,7 +182,7 @@ describe("chat permission failure ownership", () => {
           foregroundAgent === "main" ? selectedSession.key : otherSession.key,
         ]);
         draw();
-        expect(trigger.textContent).toContain(
+        expect(trigger.getAttribute("aria-label")).toContain(
           t(
             `chat.permissionControls.modes.${recovery === "unrelated" ? "full" : persistedMode}.label`,
           ),

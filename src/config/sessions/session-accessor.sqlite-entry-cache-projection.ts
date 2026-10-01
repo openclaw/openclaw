@@ -28,7 +28,6 @@ export function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
   projection: "full" | "list" = "list",
   prepared?: ValidatedSessionMetadata,
-  retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean,
   deferParticipants = false,
 ): SessionEntryCacheSnapshot {
   // Validation lends complete parsed facts only within this read. A concurrent external commit
@@ -46,11 +45,6 @@ export function loadSessionEntrySnapshot(
       keys.push(row.session_key);
       const entry = parseSessionEntryJson(row, projection);
       if (entry) {
-        if (retainFullEntry && !retainFullEntry(row.session_key, entry)) {
-          delete entry.sessionDiffBaseline;
-          delete entry.skillsSnapshot;
-          delete entry.systemPromptReport;
-        }
         parsedEntries.set(row.session_key, entry);
       }
     }

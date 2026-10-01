@@ -41,12 +41,7 @@ describe("SubscriptionsController", () => {
     );
     const cancelFrame = vi.fn();
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-    controller.watch(
-      () => source,
-      (next, notify) => next.subscribe(notify),
-      synchronize,
-      commit,
-    );
+    controller.watchStore(() => source, synchronize, commit);
     host.connect();
     host.requestUpdate.mockClear();
     synchronize.mockClear();
@@ -72,11 +67,7 @@ describe("SubscriptionsController", () => {
     const controller = new SubscriptionsController(host);
     const synchronize = vi.fn<(source: TestSource) => void>();
     const source: { current?: TestSource } = {};
-    controller.watch(
-      () => source.current,
-      (next, notify) => next.subscribe(notify),
-      synchronize,
-    );
+    controller.watchStore(() => source.current, synchronize);
 
     host.connect();
     host.update();
@@ -180,9 +171,8 @@ describe("SubscriptionsController", () => {
     const host = new TestHost();
     const controller = new SubscriptionsController(host);
     const source = new TestSource();
-    controller.watch(
+    controller.watchStore(
       () => source,
-      (next, notify) => next.subscribe(notify),
       () => {
         throw new Error("synchronize failed");
       },

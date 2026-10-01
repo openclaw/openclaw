@@ -252,6 +252,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
         <header class="workboard-heading">
           ${props.heading}
           <div class="workboard-heading__actions settings-section__actions">
+            ${writable && props.onNewBoard ? html`<button class="btn workboard-new-board" type="button" @click=${props.onNewBoard}>${icons.plus}${t("workboard.newBoard")}</button>` : nothing}
             <span class="workboard-refresh-control" title=${refreshStatus || t("common.refresh")}>
               <button
                 class="btn btn--icon btn--ghost workboard-refresh ${

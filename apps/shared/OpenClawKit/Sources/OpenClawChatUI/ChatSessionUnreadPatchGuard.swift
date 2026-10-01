@@ -85,6 +85,11 @@ struct ChatSessionUnreadPatchGuard {
         return true
     }
 
+    mutating func confirmReceipt(key: String, unread: Bool) {
+        self.confirmedUnreadByKey[key] = unread
+        if key == self.activeSessionKey, self.activeExplicitUnread != nil { self.activeExplicitUnread = unread }
+    }
+
     func confirmedUnread(key: String) -> Bool? {
         self.confirmedUnreadByKey[key]
     }
@@ -120,7 +125,8 @@ final class ChatSessionUnreadMutationQueue {
         routeKey: String,
         agentID: String? = nil,
         expectedMarkedUnreadAt: Double?? = nil,
-        unread: Bool) -> Task<Void, Error>
+        expectedSessionID: String? = nil,
+        unread: Bool) -> Task<OpenClawChatSessionPatchReceipt?, Error>
     {
         let previous = self.tails[queueKey]?.task
         self.nextID += 1
@@ -131,14 +137,11 @@ final class ChatSessionUnreadMutationQueue {
             guard let resolvedRouteLease else {
                 throw OpenClawChatTransportSendError.notDispatched
             }
-            try await resolvedRouteLease.patchSession(
+            return try await resolvedRouteLease.patchSession(
                 key: routeKey,
                 agentID: agentID,
+                expectedSessionID: expectedSessionID,
                 expectedMarkedUnreadAt: expectedMarkedUnreadAt,
-                label: nil,
-                category: nil,
-                pinned: nil,
-                archived: nil,
                 unread: unread)
         }
         let tail = Task { @MainActor in

@@ -85,6 +85,7 @@ function fixture(
     {
       pluginMetadataSnapshot: metadataSnapshot,
       inlineProviderModels: [],
+      remoteCatalog: null,
       configuredCatalogEntries: [],
     },
     {

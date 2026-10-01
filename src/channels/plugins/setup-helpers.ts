@@ -19,7 +19,7 @@ type ChannelSectionBase = Record<string, unknown> & {
   accounts?: Record<string, Record<string, unknown>>;
 };
 
-function getChannelSection(
+export function readChannelConfigSection(
   cfg: OpenClawConfig,
   channelKey: string,
 ): ChannelSectionBase | undefined {
@@ -40,7 +40,7 @@ export function applyAccountNameToChannelSection(params: {
     return params.cfg;
   }
   const accountId = normalizeAccountId(params.accountId);
-  const base = getChannelSection(params.cfg, params.channelKey);
+  const base = readChannelConfigSection(params.cfg, params.channelKey);
   const accounts = base?.accounts ?? {};
   const accountKey =
     resolveChannelAccountKey(
@@ -77,7 +77,7 @@ export function migrateBaseNameToDefaultAccount(params: {
   if (params.alwaysUseAccounts) {
     return params.cfg;
   }
-  const base = getChannelSection(params.cfg, params.channelKey);
+  const base = readChannelConfigSection(params.cfg, params.channelKey);
   const baseName = base?.name?.trim();
   if (!baseName) {
     return params.cfg;
@@ -257,7 +257,7 @@ export function patchScopedAccountConfig(params: {
   scopeDefaultToAccounts?: boolean;
 }): OpenClawConfig {
   const accountId = normalizeAccountId(params.accountId);
-  const base = getChannelSection(params.cfg, params.channelKey);
+  const base = readChannelConfigSection(params.cfg, params.channelKey);
   const ensureChannelEnabled = params.ensureChannelEnabled ?? true;
   const ensureAccountEnabled = params.ensureAccountEnabled ?? ensureChannelEnabled;
   const patch = params.patch;
@@ -353,7 +353,7 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   channelKey: string;
   setupSurface?: ChannelSetupAdapter | ChannelSetupPromotionSurface;
 }): OpenClawConfig {
-  const base = getChannelSection(params.cfg, params.channelKey);
+  const base = readChannelConfigSection(params.cfg, params.channelKey);
   if (!base) {
     return params.cfg;
   }

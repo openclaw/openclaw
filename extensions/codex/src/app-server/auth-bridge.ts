@@ -776,9 +776,8 @@ async function assertNativeCodexAccountMatchesRoute(
   }
 }
 
-function createCodexAppServerAuthError(message: string, cause?: unknown): Error & { status: 401 } {
-  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
-  return Object.assign(error, { status: 401 as const });
+function createCodexAppServerAuthError(message: string): Error & { status: 401 } {
+  return Object.assign(new Error(message), { status: 401 as const });
 }
 
 export async function refreshCodexAppServerAuthTokens(params: {

@@ -1,6 +1,9 @@
 import { channel } from "node:diagnostics_channel";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+} from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import {
@@ -25,6 +28,7 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { runOutsideOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   sessionHistoryCleanupError,
@@ -63,9 +67,6 @@ function createHistoryPool() {
     },
   });
 }
-
-const historyPages = createHistoryPool();
-const maintenancePages = createHistoryPool();
 
 function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
@@ -107,6 +108,11 @@ export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
 
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
 
+/** Physical path for work; the caller's lexical requestedPath selects the owner for cleanup. */
+export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
+  requestedPath?: string;
+};
+
 export type HistoryDatabaseResource = {
   database: { agentId: string; path: string };
   generation: number;
@@ -118,49 +124,33 @@ export type HistoryDatabaseResource = {
   aborters: Set<() => void>;
   closing?: Promise<void>;
   unregister: () => void;
+  retainAlias: (alias: string) => void;
 };
 
 const historyDatabases = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
 let historyGeneration = 0;
-export const historyLane: SessionHistoryWorkerLane = {
-  name: "Session history",
-  pool: historyPages,
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
+function createDatabaseWorkerLane<Pool extends SessionDatabaseWorkerLane["pool"]>(
+  name: string,
+  pool: Pool,
+): SessionDatabaseWorkerLane & { pool: Pool } {
+  return { name, pool, nativeSequence: 0, retiredSequence: 0, pending: 0 };
+}
+
+export const historyLane = createDatabaseWorkerLane("Session history", createHistoryPool());
 // Keep list materialization independent of large history pages, with one extra reader per store.
-export const projectionLane: SessionHistoryWorkerLane = {
-  name: "Session projection",
-  pool: createHistoryPool(),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
+export const projectionLane = createDatabaseWorkerLane("Session projection", createHistoryPool());
 // Full-store validation cannot yield its snapshot to a foreground history read.
-export const maintenanceLane: SessionHistoryWorkerLane = {
-  name: "Session maintenance",
-  pool: maintenancePages,
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-export const costReadLane: SessionCostWorkerLane = {
-  name: "Session usage read",
-  pool: createUsageCostPool("read"),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-export const costRefreshLane: SessionCostWorkerLane = {
-  name: "Session usage refresh",
-  pool: createUsageCostPool("refresh"),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
+export const maintenanceLane = createDatabaseWorkerLane("Session maintenance", createHistoryPool());
+export const costReadLane = createDatabaseWorkerLane(
+  "Session usage read",
+  createUsageCostPool("read"),
+);
+export const costRefreshLane = createDatabaseWorkerLane(
+  "Session usage refresh",
+  createUsageCostPool("refresh"),
+);
 
 const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane];
 const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
@@ -295,9 +285,12 @@ async function closeDatabaseWorkerResource(
   idle: boolean,
 ): Promise<void> {
   const pool = historyWorkerLanes.find((candidate) => candidate === lane)?.pool;
-  // Active reads and Bun retain native-exit custody. Idle Node readers can
-  // release the exact database while retaining the worker's loaded code.
-  if (!idle || process.versions.bun || !pool) {
+  // Active reads retain native-exit custody even when ordinary close releases handles.
+  if (
+    !idle ||
+    !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources ||
+    !pool
+  ) {
     await rotateDatabaseWorkers(lane);
     return;
   }
@@ -319,7 +312,7 @@ async function closeDatabaseWorkerResource(
 }
 
 export function acquireHistoryDatabaseResource(
-  options: OpenClawAgentDatabaseOptions,
+  options: SessionHistoryDatabaseTarget,
 ): HistoryDatabaseResource {
   const database = {
     agentId: normalizeAgentId(options.agentId),
@@ -327,7 +320,9 @@ export function acquireHistoryDatabaseResource(
   };
   const key = JSON.stringify(database);
   let resource = historyDatabases.get(key);
+  let created = false;
   if (!resource || resource.revoked) {
+    const aliases = new Map<string, () => void>();
     const owned: HistoryDatabaseResource = {
       database,
       generation: ++historyGeneration,
@@ -338,6 +333,21 @@ export function acquireHistoryDatabaseResource(
       cleanups: new Set(),
       aborters: new Set(),
       unregister: () => {},
+      retainAlias(alias) {
+        if (!aliases.has(alias)) {
+          aliases.set(
+            alias,
+            runOutsideOpenClawDatabaseMaintenanceScope(() =>
+              registerOpenClawAgentDatabaseAsyncResource({
+                ...database,
+                path: alias,
+                revoke,
+                close,
+              }),
+            ),
+          );
+        }
+      },
     };
     const close = () => {
       if (!owned.closing) {
@@ -352,6 +362,9 @@ export function acquireHistoryDatabaseResource(
           for (const cleanup of owned.cleanups) {
             await cleanup.run();
           }
+          if (owned.revoked) {
+            owned.unregister();
+          }
         })().finally(() => {
           owned.closing = undefined;
           pruneHistoryDatabases();
@@ -363,19 +376,45 @@ export function acquireHistoryDatabaseResource(
       }
       return owned.closing;
     };
-    owned.unregister = registerOpenClawAgentDatabaseAsyncResource({
+    const revoke = () => {
+      owned.revoked = true;
+      for (const abort of owned.aborters) {
+        abort();
+      }
+      void close();
+    };
+    let unregister: (() => void) | undefined = registerOpenClawAgentDatabaseAsyncResource({
       ...database,
-      revoke: () => {
-        owned.revoked = true;
-        for (const abort of owned.aborters) {
-          abort();
-        }
-        void close();
-      },
+      revoke,
       close,
     });
-    historyDatabases.set(key, owned);
+    // A revoked close and a later prune can both retire this owner; release custody once.
+    owned.unregister = () => {
+      unregister?.();
+      unregister = undefined;
+      for (const release of aliases.values()) {
+        release();
+      }
+      aliases.clear();
+    };
     resource = owned;
+    created = true;
+  }
+  try {
+    if (options.requestedPath !== undefined) {
+      const alias = resolveOpenClawAgentSqlitePath({ ...options, path: options.requestedPath });
+      if (alias !== database.path) {
+        resource.retainAlias(alias);
+      }
+    }
+  } catch (error) {
+    if (created) {
+      resource.unregister();
+    }
+    throw error;
+  }
+  if (created) {
+    historyDatabases.set(key, resource);
   }
   return resource;
 }
@@ -441,8 +480,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       return closing;
     };
     const settleCandidates = async () => {
-      // Bun and failed discovery can retain native handles outside candidate custody.
-      if (discoveryFailed || process.versions.bun) {
+      // Failed discovery can retain native handles outside candidate custody.
+      if (
+        discoveryFailed ||
+        !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+      ) {
         await retire();
         return;
       }

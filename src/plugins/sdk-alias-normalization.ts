@@ -5,10 +5,6 @@ const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
 const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefined]);
 const JITI_CONCRETE_ALIAS_TARGET_PATTERN = /^(?:[A-Za-z]:[/\\]|[/\\])/;
 
-function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
-  return Boolean(Reflect.get(aliasMap, JITI_NORMALIZED_ALIAS_SYMBOL));
-}
-
 export function createJitiAliasContentCacheKey(aliasMap: Record<string, string>) {
   return Object.entries(aliasMap)
     .toSorted(([left], [right]) => left.localeCompare(right))
@@ -58,7 +54,7 @@ function resolveJitiAliasTarget(
 export function normalizePluginLoaderAliasMapForJiti(
   aliasMap: Record<string, string>,
 ): Record<string, string> {
-  if (hasJitiNormalizedAliasMarker(aliasMap)) {
+  if (Reflect.get(aliasMap, JITI_NORMALIZED_ALIAS_SYMBOL)) {
     return aliasMap;
   }
   const facts = getPluginSdkAliasFacts(getPluginCache().sdk, aliasMap);
@@ -73,20 +69,11 @@ export function normalizePluginLoaderAliasMapForJiti(
     facts.normalizedJiti = cached;
     return cached;
   }
-  const aliasDepth = new Map<string, number>();
-  const getAliasDepth = (key: string) => {
-    const cachedDepth = aliasDepth.get(key);
-    if (cachedDepth !== undefined) {
-      return cachedDepth;
-    }
-    const depth = key.split("/").length;
-    aliasDepth.set(key, depth);
-    return depth;
-  };
   const normalizedAliasMap = Object.fromEntries(
-    Object.entries(aliasMap).toSorted(
-      ([left], [right]) => getAliasDepth(right) - getAliasDepth(left),
-    ),
+    Object.entries(aliasMap)
+      .map((entry) => ({ entry, depth: entry[0].split("/").length }))
+      .toSorted((left, right) => right.depth - left.depth)
+      .map(({ entry }) => entry),
   );
   const aliasKeys = Object.keys(normalizedAliasMap);
   for (const aliasKey of aliasKeys) {

@@ -33,7 +33,7 @@ function authority(overrides: Partial<SessionPlacementTurnParams> = {}, portalAv
     modelRef: { provider: "openai", model: "gpt-test" },
     turn: turn(overrides),
     portalAvailable,
-  }).allowedToolNames;
+  }).toolAuthority.allowedToolNames;
 }
 
 function resolvedAuthority(overrides: Partial<SessionPlacementTurnParams> = {}) {
@@ -41,7 +41,7 @@ function resolvedAuthority(overrides: Partial<SessionPlacementTurnParams> = {}) 
     launchToolNames: WORKER_TOOL_NAMES,
     modelRef: { provider: "openai", model: "gpt-test" },
     turn: turn(overrides),
-  });
+  }).toolAuthority;
 }
 
 afterEach(() => {
@@ -55,7 +55,7 @@ describe("resolveWorkerToolAuthority", () => {
       modelRef: { provider: "openai", model: "gpt-test" },
       turn: turn({ modelHasVision: false, toolsAllow: ["computer", "browser"] }),
       availableOptionalToolNames: ["computer", "browser"],
-    }).allowedToolNames;
+    }).toolAuthority.allowedToolNames;
     expect(tools).not.toContain("computer");
     expect(tools).toContain("browser");
   });
@@ -89,12 +89,14 @@ describe("resolveWorkerToolAuthority", () => {
       modelRef: { provider: "openai", model: "gpt-test" },
       turn: turnParams,
     };
-    expect(resolveWorkerToolAuthority(params).allowedToolNames).not.toContain("computer");
+    expect(resolveWorkerToolAuthority(params).toolAuthority.allowedToolNames).not.toContain(
+      "computer",
+    );
     expect(
       resolveWorkerToolAuthority({
         ...params,
         availableOptionalToolNames: ["computer"],
-      }).allowedToolNames.includes("computer"),
+      }).toolAuthority.allowedToolNames.includes("computer"),
     ).toBe(allowed);
   });
 
@@ -267,7 +269,7 @@ describe("resolveWorkerToolAuthority", () => {
         modelRef: { provider: "openai", model: "gpt-test" },
         turn: turn(),
         availableOptionalToolNames: ["browser"],
-      }).allowedToolNames,
+      }).toolAuthority.allowedToolNames,
     ).toEqual([
       "read",
       "write",
@@ -286,7 +288,7 @@ describe("resolveWorkerToolAuthority", () => {
         modelRef: { provider: "openai", model: "gpt-test" },
         turn: turn({ toolsAllow: ["browser"] }),
         availableOptionalToolNames: ["browser"],
-      }).allowedToolNames,
+      }).toolAuthority.allowedToolNames,
     ).toEqual(["browser"]);
     expect(authority({ toolsAllow: ["browser"] })).toEqual([]);
   });

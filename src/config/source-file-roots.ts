@@ -7,6 +7,7 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import type { Root } from "@openclaw/fs-safe/root";
 import { admitObservationRoot, observationPrefixKind } from "../infra/fs-observation-root.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 type ConfigObservationRoot = {
   authority: Root;
@@ -43,17 +44,12 @@ export async function admitConfigObservationRoots(
   let unresolvedRootFailure: { error: unknown } | undefined;
   // Configured directory aliases admit targets; arbitrary include symlinks do not.
   for (const boundary of lexicalBoundaries) {
-    let canonical = cache.canonicalBoundaries.get(boundary);
-    if (!canonical) {
-      canonical = canonicalPathFromExistingAncestor(boundary);
-      cache.canonicalBoundaries.set(boundary, canonical);
-      const attempted = canonical;
-      void canonical.catch(() => {
-        if (cache.canonicalBoundaries.get(boundary) === attempted) {
-          cache.canonicalBoundaries.delete(boundary);
-        }
-      });
-    }
+    const canonical = getOrCreatePromise(
+      cache.canonicalBoundaries,
+      boundary,
+      () => canonicalPathFromExistingAncestor(boundary),
+      { cacheRejections: false },
+    );
     try {
       // Retargeting an alias cannot admit a new boundary on retry.
       const target = await canonical;
@@ -88,18 +84,13 @@ export async function admitConfigObservationRoots(
   const admitted = new Map<string, ConfigObservationRoot>();
   for (const boundary of new Set([...boundaries, primaryBoundary])) {
     const stableParent = path.dirname(boundary);
-    let pinned = cache.roots.get(stableParent);
-    if (!pinned) {
-      pinned = admitObservationRoot(stableParent);
-      cache.roots.set(stableParent, pinned);
-      const attempted = pinned;
-      // Retry failed admission, never replace a successfully pinned Root.
-      void pinned.catch(() => {
-        if (cache.roots.get(stableParent) === attempted) {
-          cache.roots.delete(stableParent);
-        }
-      });
-    }
+    // Retry failed admission, never replace a successfully pinned Root.
+    const pinned = getOrCreatePromise(
+      cache.roots,
+      stableParent,
+      () => admitObservationRoot(stableParent),
+      { cacheRejections: false },
+    );
     let authority: Root;
     try {
       authority = await pinned;

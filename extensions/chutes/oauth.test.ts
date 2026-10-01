@@ -1,11 +1,22 @@
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { jsonResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { loginChutes, refreshChutesOAuthCredential } from "./oauth.js";
 
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 const REDIRECT_URI = "http://127.0.0.1:1456/oauth-callback";
+
+const waitForLocalOAuthCallbackMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
+  waitForLocalOAuthCallback: waitForLocalOAuthCallbackMock,
+}));
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
+  vi.resetModules();
+});
 
 function boundedErrorResponse(body: string, status = 500) {
   const encoded = new TextEncoder().encode(body);
@@ -123,11 +134,36 @@ function createStoredCredential(overrides: Partial<OAuthCredential> = {}): OAuth
 }
 
 afterEach(() => {
+  waitForLocalOAuthCallbackMock.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
 describe("chutes plugin OAuth", () => {
+  it("uses an IPv6 loopback callback without changing the OAuth redirect URI", async () => {
+    const redirectUri = "http://[::1]:1456/oauth-callback";
+    waitForLocalOAuthCallbackMock.mockResolvedValue({ code: "code_test", state: "state_test" });
+    const fetchFn = oauthFetch({});
+
+    await expect(
+      loginChutes({
+        app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
+        createState: () => "state_test",
+        onAuth: vi.fn(async () => {}),
+        onPrompt: vi.fn(async () => {
+          throw new Error("IPv6 callback must not require manual fallback");
+        }),
+        fetchFn,
+      }),
+    ).resolves.toMatchObject({ access: "at_123", refresh: "rt_123" });
+    expect(waitForLocalOAuthCallbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hostname: "::1", port: 1456, redirectUri }),
+    );
+    const tokenRequest = fetchFn.mock.calls[0]?.[1]?.body;
+    expect(tokenRequest).toBeInstanceOf(URLSearchParams);
+    expect((tokenRequest as URLSearchParams).get("redirect_uri")).toBe(redirectUri);
+  });
+
   it("rejects unsafe token lifetimes before storing credentials", async () => {
     const fetchFn = oauthFetch({
       token: new Response(

@@ -29,13 +29,17 @@ GitHub-hosted runners.
 First-attempt PR Node matrices let the scoped monitor classify failures before
 cancelling eligible same-repository work. Fork monitoring is read-only. Exact
 known hourly-main test and supported static failures can remain advisory when the PR leaves their
-subjects unchanged and all remaining checks finish. Retries retain native matrix
-fail-fast. Main and manual runs retain complete matrices. See
+subjects unchanged and all remaining checks finish. Canonical PR reruns let every
+Node matrix leg finish so inherited failures do not cancel the remaining proof
+needed for an explicit admin landing. Native matrix fail-fast applies only to PRs
+in other repositories. Main and manual runs retain complete matrices. See
 [failure cancellation](/ci/pipeline#fail-fast-order).
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
-self-upgrade job allows 130 minutes for two waves of six source versions plus setup.
+self-upgrade job gives first-hop lanes weight two at npm limit five, admitting at
+most two concurrently. It allows 210 minutes for three waves of six source versions,
+the survivor, and setup.
 Authenticated update restart uses a 2,280-second container budget, a 43-minute lane
 budget, and a lane-specific 1,500-second command timeout. Its OpenAI/recovery chunk
 allows 160 minutes for the npm-serialized lanes plus setup; see
@@ -43,9 +47,11 @@ allows 160 minutes for the npm-serialized lanes plus setup; see
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
+Updater, state-lease, SQLite identity, native-plugin, startup-trace, and updater-tooling PRs also require the [published-driver update cell](/ci/scope-and-routing/selection#published-driver-update-cell). One GitHub-hosted Linux job runs the latest stable npm updater against the candidate package with two synthetic agents. Its ten-minute budget and result are included in `openclaw/ci-gate`; the broader main/release Docker survivor remains separate.
+
 Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible canonical groups can exceed that target; setup, builds, and queues are separate from test time. Node shards selecting sandbox container E2E cases prepare the Docker sandbox image when the runner does not already have it. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
 
-Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
+Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Debug builds select their simulator before compiling, overlap its boot and SimSlim preparation with compilation, and join preparation before either focused simulator test group. Preparation failures or a timed-out join fail the job with its log; test selection and build settings stay unchanged. Current smoke builds prepare testing products once with `build-for-testing`; the voice cleanup and lifecycle groups separately reuse those products with `test-without-building`. Historical targets and other phases retain their existing build actions. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
 
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
@@ -58,9 +64,21 @@ output contract. Missing or invalid inputs still reject current PR Node planning
 
 The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Blacksmith 32-class for dispatched proof and defaults to a four-hour outer job budget. PR hydration checks stay on hosted Ubuntu; individual test deadlines remain unchanged.
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
-Additional checks start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+Additional checks and narrow-PR dependency scans start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+
+The extension package boundary row has a 30-minute job budget for SDK preparation,
+all selected plugin compiles, input-receipt validation, the required negative
+canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
+command alone; one completed compile and canary but exceeded the former
+20-minute whole-job deadline. Other additional-check rows retain 20 minutes.
+Optional hybrid hosted overflow retains this row on Blacksmith: compiled receipt
+archives include checkout-specific paths and links, and hosted cold runs exceeded
+22 minutes. Explicit hosted overrides, retry and trust fallbacks remain available.
+Other jobs keep their existing admission thresholds; the hosted row total counts
+only the rows actually offloaded. Compiler concurrency, coverage and cache guards
+are unchanged.
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
@@ -68,7 +86,7 @@ Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proo
 
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
-Android phone tests use up to two isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows keep third-party phone lint with its unit tests so they reuse compilation and build metadata. Wear owns Wear tests and lint, and Kotlin lint owns Play/shared lint. Normal same-repository Blacksmith runs overlap all four rows; other routes retain two. All test and lint tasks remain selected.
+Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Normal same-repository Blacksmith runs overlap all four rows; other routes retain two. All test and lint tasks remain selected.
 
 macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency and timeout limits.
 
@@ -76,7 +94,7 @@ Native test builds retain coverage and source-line backtraces while omitting IDE
 
 Short hybrid jobs use a [40-row base threshold and 45-row hosted admission limit](/ci/capacity#bounded-hybrid-hosted-offload), with unchanged coverage and Blacksmith fallback when optional work does not fit.
 
-Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/runners#hybrid-hosted-assignment-guard). Eligible PRs can move five measured checks; main pushes can also move lint and central types within the same hosted row limit. Artifact builds retain Blacksmith because their measured hosted tail leaves no room for the [15-minute routing objective](/ci/routing-costs).
+Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/runners#hybrid-hosted-assignment-guard). Eligible PRs can move dependency, core type and topology checks; main pushes can also move lint and central types within the same hosted row limit. Artifact builds retain Blacksmith because their measured hosted tail leaves no room for the [15-minute routing objective](/ci/routing-costs).
 
 Windows keeps its complete explicit test inventory in five [measured project-aligned shards](/ci/runners#runner-backend-modes) for main and release validation. Windows-owner PRs retain the complete family; unrelated PRs omit it.
 
@@ -210,9 +228,9 @@ jobs or Blacksmith registrations and falls back to fresh work on a miss.
 
 Auto-reply reply tests run files in parallel with two workers per compact group. Their planner uses separate parallel timing identities; until those have measurements, serial group costs are divided by the effective worker count, with single-file groups retaining their full cost.
 
-The measured Gateway isolated/database-worker cohort uses at most eight workers
-on those hosts with at least 28 GiB total memory; other packed groups retain
-their existing caps.
+The Gateway isolated/database-worker cohort keeps its two-worker budget, including
+roomy serial Blacksmith and hybrid jobs, to leave cold startup headroom within
+existing test deadlines. Other packed groups retain their existing caps.
 
 Commands tests share the existing worker budget across independent files. The
 Doctor session SQLite cases are split by operation while preserving the complete
@@ -290,3 +308,5 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Maturity scorecard](/maturity/scorecard)
 - [Install overview](/install)
 - [Release channels](/install/development-channels)
+
+Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.

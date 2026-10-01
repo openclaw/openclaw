@@ -1,4 +1,3 @@
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -25,9 +24,9 @@ import {
 import { createCronOwnerExecutionIdentityAdmission, createCronRunHandle } from "./run-history.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import { markServiceCronJobActive } from "./run-receipts.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { type CronServiceState, emit } from "./state.js";
-import { ensureLoaded } from "./store.js";
+import { captureCronServiceMutationSource, ensureLoaded } from "./store.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 import { isRunnableJob } from "./timer-runnable.js";
@@ -195,6 +194,7 @@ export async function supersedeActivatedCronRun(params: {
  */
 export async function persistQueuedCronRunReservations(params: {
   state: CronServiceState;
+  source?: ReturnType<typeof captureCronServiceMutationSource>;
   candidates: readonly CronJob[];
   immediateJobIds?: ReadonlySet<string>;
   reservedAtMs: number;
@@ -218,12 +218,14 @@ export async function persistQueuedCronRunReservations(params: {
   if (params.state.stopped) {
     return [];
   }
+  const source = params.source ?? captureCronServiceMutationSource(params.state);
   // Manual runs reach reservations without the scheduler's earlier owner filter.
   const candidates = await skipCronJobsWithoutOwners(
     params.state,
     [...params.candidates],
     params.reservedAtMs,
     {
+      source,
       ...(params.scheduleMode ? { scheduleMode: params.scheduleMode } : {}),
       ...(params.manualRun ? { manualRun: params.manualRun } : {}),
     },
@@ -231,13 +233,14 @@ export async function persistQueuedCronRunReservations(params: {
   if (params.state.stopped || params.state.lifecycleGeneration !== generation) {
     return [];
   }
+  source.assertCurrent();
   const pendingJobs = new Map(candidates.map((job) => [job.id, structuredClone(job)]));
   if (pendingJobs.size === 0) {
     await ensureLoaded(params.state, { forceReload: true });
     return [];
   }
-  const context = captureOpenClawStateWorkerContext();
-  const storeKey = cronStoreKey(params.state.deps.storePath);
+  const context = source.context;
+  const storeKey = source.storeKey;
   const retired = () => params.state.stopped || params.state.lifecycleGeneration !== generation;
   const retiredError = new Error("Cron service stopped before run reservation");
   const assertCurrent = () => {
@@ -541,6 +544,7 @@ export async function executeQueuedCronRun(params: {
       delete runnableJob.state.queuedAtMs;
       if (
         !isRunnableJob({
+          legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
           job: runnableJob,
           nowMs: state.deps.nowMs(),
           ...params.runnableOptions,
@@ -605,6 +609,7 @@ export async function executeQueuedCronRun(params: {
         runId: taskRunId,
         activeJobMarker,
         runReceipt: started.runReceipt,
+        runReceiptContext: started.runReceiptContext,
         executionIdentity: createCronOwnerExecutionIdentityAdmission({
           state,
           runReceipt: started.runReceipt,

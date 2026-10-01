@@ -125,8 +125,6 @@ interface CreateAgentSessionResult {
   modelFallbackMessage?: string;
 }
 
-// Helper Functions
-
 function createSessionPrepareNextTurnWithContext(
   getAgent: () => Agent,
 ): NonNullable<AgentOptions["prepareNextTurnWithContext"]> {
@@ -273,7 +271,6 @@ async function createAgentSessionImpl(
   }
   let resourceLoader = options.resourceLoader;
 
-  // Use provided or create AuthStorage and ModelRegistry
   const config = options.authStorage && options.modelRegistry ? undefined : install.config;
   const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, config);
   const modelRegistry =
@@ -303,7 +300,6 @@ async function createAgentSessionImpl(
     modelRegistry.refresh();
   }
 
-  // Check if session has existing data to restore
   const existingSession = await sessionManager[sessionManagerReadInitialContext]();
   assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
@@ -314,7 +310,6 @@ async function createAgentSessionImpl(
   let model = options.model;
   let modelFallbackMessage: string | undefined;
 
-  // If session has data, try to restore model from it
   if (!model && hasExistingSession && existingSession.model) {
     const restoredModel = modelRegistry.find(
       existingSession.model.provider,
@@ -379,7 +374,6 @@ async function createAgentSessionImpl(
     settingsManager.getDefaultThinkingLevel() ??
     modelThinkingDefault;
 
-  // Clamp to model capabilities
   if (!model) {
     thinkingLevel = "off";
   } else {
@@ -405,7 +399,6 @@ async function createAgentSessionImpl(
     if (!settingsManager.getBlockImages()) {
       return converted;
     }
-    // Filter out ImageContent from all messages, replacing with text placeholder
     return converted.map((msg) => {
       if (msg.role === "user" || msg.role === "toolResult") {
         const content = msg.content;
@@ -420,7 +413,6 @@ async function createAgentSessionImpl(
               )
               .filter((c, i, arr) => {
                 const previous = arr.at(i - 1);
-                // Dedupe consecutive "Image reading is disabled." texts
                 return !(
                   c.type === "text" &&
                   c.text === "Image reading is disabled." &&

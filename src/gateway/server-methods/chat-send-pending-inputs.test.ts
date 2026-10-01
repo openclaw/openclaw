@@ -31,7 +31,8 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
-import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
+import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createMentionInbox } from "../mention-inbox.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";

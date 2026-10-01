@@ -1,6 +1,16 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { readBackupRunFreshness, type BackupRunFreshness } from "../state/backup-run-records.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { summarizeBackupSchedules, type BackupScheduleSummary } from "../cron/backup-command.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
+import { loadCronJobsStoreWithConfigJobsReadOnly } from "../cron/store/read-only.js";
+import {
+  readBackupRuns,
+  summarizeBackupFreshness,
+  summarizeBackupTargets,
+  type BackupRunRecord,
+  type BackupRunFreshness,
+} from "../state/backup-run-records.js";
 
 // Backups older than two weeks no longer provide a useful routine recovery point.
 const BACKUP_STALE_AFTER_MS = 14 * 24 * 60 * 60 * 1_000;
@@ -47,10 +57,61 @@ function buildBackupDoctorHint(params: {
   ].join("\n");
 }
 
-/** Emit the non-repairing backup freshness hint when it applies. */
-export async function noteBackupDoctorHint(env: NodeJS.ProcessEnv): Promise<void> {
-  const hint = buildBackupDoctorHint({ freshness: await readBackupRunFreshness(env) });
-  if (hint) {
-    note(hint, "Backups");
+/** Report each scheduled destination independently of other successful backups. */
+function buildOffsiteBackupDoctorHints(params: {
+  runs: readonly BackupRunRecord[];
+  schedules: readonly BackupScheduleSummary[];
+  now?: number;
+}): string[] {
+  const targets = summarizeBackupTargets(params.runs);
+  const now = params.now ?? Date.now();
+  return params.schedules.flatMap((schedule) => {
+    if (schedule.mode !== "offsite" || !schedule.enabled) {
+      return [];
+    }
+    const target = targets.find(
+      (entry) =>
+        entry.kind === "archive" &&
+        entry.target === schedule.target &&
+        entry.namespace === schedule.namespace,
+    );
+    const failed = target?.latest.status === "failed";
+    const stale = !target?.latestOk || now - target.latestOk.createdAt > 3 * schedule.everyMs;
+    if (!failed && !stale) {
+      return [];
+    }
+    const reason = failed
+      ? `The newest offsite backup attempt to ${schedule.target} failed${target.latest.error ? `: ${target.latest.error}` : "."}`
+      : target?.latestOk
+        ? `The newest successful offsite backup to ${schedule.target} is older than three scheduled intervals.`
+        : `No successful offsite backup to ${schedule.target} is recorded.`;
+    return [
+      `${reason}\nCheck the destination with ${formatCliCommand(`openclaw storage test ${schedule.target}`)}.`,
+    ];
+  });
+}
+
+/** Emit non-repairing freshness hints; configuration and ledger reads never probe destinations. */
+export async function noteBackupDoctorHint(
+  env: NodeJS.ProcessEnv,
+  cfg?: OpenClawConfig,
+): Promise<void> {
+  const runs = await readBackupRuns(env);
+  const hint = buildBackupDoctorHint({ freshness: summarizeBackupFreshness(runs) });
+  const hints = hint ? [hint] : [];
+  if (cfg) {
+    const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(
+      resolveCronJobsStorePathFromConfig(cfg, env),
+      env,
+    );
+    hints.push(
+      ...buildOffsiteBackupDoctorHints({
+        runs,
+        schedules: summarizeBackupSchedules(loaded.store.jobs),
+      }),
+    );
+  }
+  if (hints.length) {
+    note(hints.join("\n\n"), "Backups");
   }
 }

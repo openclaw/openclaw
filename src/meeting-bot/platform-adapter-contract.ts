@@ -84,7 +84,7 @@ export type MeetingPlatformRuntimeMetadata = {
   };
 };
 
-export type MeetingBrowserAdapter<
+type MeetingBrowserAdapter<
   Mode extends string,
   Health extends MeetingBrowserHealth,
   Transcript extends MeetingTranscriptSnapshot,
@@ -165,3 +165,44 @@ export interface MeetingPlatformAdapter<
     buildPlan(params: DialInParams): DialInPlan;
   };
 }
+
+export type MeetingPlatformAdapterOptions<
+  Session,
+  Mode extends string,
+  Health extends MeetingBrowserHealth,
+  Transcript extends MeetingTranscriptSnapshot,
+  CreateParams = never,
+  CreateResult = never,
+  DialInParams = never,
+  DialInPlan = never,
+> = Omit<
+  MeetingPlatformAdapter<
+    Session,
+    Mode,
+    Health,
+    Transcript,
+    CreateParams,
+    CreateResult,
+    DialInParams,
+    DialInPlan
+  >,
+  "agentConsult" | "browser" | "session"
+> & {
+  agentConsult: MeetingPlatformRuntimeMetadata["agentConsult"];
+  browser: Omit<
+    MeetingBrowserAdapter<Mode, Health, Transcript>,
+    "captions" | "classifyManualAction" | "parseLeaveResult" | "parseStatus" | "permissionNotes"
+  > & {
+    captions: Omit<MeetingBrowserAdapter<Mode, Health, Transcript>["captions"], "parseTranscript">;
+    permissionNotes?: MeetingBrowserAdapter<Mode, Health, Transcript>["permissionNotes"];
+  };
+  parsing: {
+    classifyManualActionReason(reason: string): MeetingManualActionCategory;
+    displayName: string;
+    invalidTranscriptMessage: string;
+    malformedStatusMessage: string;
+    malformedTranscriptMessage: string;
+    statusFields?(parsed: Record<string, unknown>): Partial<Health>;
+  };
+  session: MeetingPlatformRuntimeMetadata["session"];
+};

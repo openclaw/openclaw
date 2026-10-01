@@ -45,35 +45,27 @@ export async function registerNodeApnsEvent(
         );
         return undefined;
       }
-      await registerApnsRegistration({
-        nodeId,
-        transport: "relay",
-        relayHandle: typeof obj.relayHandle === "string" ? obj.relayHandle : "",
-        sendGrant: typeof obj.sendGrant === "string" ? obj.sendGrant : "",
-        installationId: typeof obj.installationId === "string" ? obj.installationId : "",
-        topic,
-        environment,
-        distribution: obj.distribution,
-        relayOrigin: obj.relayOrigin,
-        tokenDebugSuffix: obj.tokenDebugSuffix,
-        expectedPairingGeneration,
-        ...(authority?.assertApnsRegistrationCurrent
-          ? { assertCurrent: authority.assertApnsRegistrationCurrent }
-          : {}),
-      });
-    } else {
-      await registerApnsRegistration({
-        nodeId,
-        transport: "direct",
-        token: typeof obj.token === "string" ? obj.token : "",
-        topic,
-        environment,
-        expectedPairingGeneration,
-        ...(authority?.assertApnsRegistrationCurrent
-          ? { assertCurrent: authority.assertApnsRegistrationCurrent }
-          : {}),
-      });
     }
+    await registerApnsRegistration({
+      nodeId,
+      ...(transport === "relay"
+        ? {
+            transport: "relay",
+            relayHandle: typeof obj.relayHandle === "string" ? obj.relayHandle : "",
+            sendGrant: typeof obj.sendGrant === "string" ? obj.sendGrant : "",
+            installationId: typeof obj.installationId === "string" ? obj.installationId : "",
+            distribution: obj.distribution,
+            relayOrigin: obj.relayOrigin,
+            tokenDebugSuffix: obj.tokenDebugSuffix,
+          }
+        : { transport: "direct", token: typeof obj.token === "string" ? obj.token : "" }),
+      topic,
+      environment,
+      expectedPairingGeneration,
+      ...(authority?.assertApnsRegistrationCurrent
+        ? { assertCurrent: authority.assertApnsRegistrationCurrent }
+        : {}),
+    });
   } catch (err) {
     if (err instanceof ApnsRegistrationPairingChangedError) {
       ctx.logGateway.warn(

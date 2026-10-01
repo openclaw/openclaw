@@ -1,12 +1,33 @@
 import fs from "node:fs/promises";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { formatUpdateCleanupCommand } from "./update-maintenance.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { MAX_LOG_CHARS, runStep } from "./update-runner-command.js";
 import type { StepFactory } from "./update-runner-git-commands.js";
 import type { CommandRunner } from "./update-runner-types.js";
 
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
+
+async function reportCleanupProgress(report: () => void | Promise<void>) {
+  try {
+    await report();
+  } catch (error) {
+    // Closed forward reporting does not revoke this temporary worktree's cleanup.
+    const refusal = error instanceof Error ? error.cause : undefined;
+    if (
+      hasCommandProcessCleanupError(error) ||
+      error instanceof AggregateError ||
+      !(
+        error instanceof UpdateRequesterRevokedError ||
+        refusal instanceof UpdateRequesterRevokedError
+      )
+    ) {
+      throw error;
+    }
+  }
+}
 
 async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string) {
   try {
@@ -48,7 +69,11 @@ export async function cleanupGitPreflight(
   // worktree is owned here, so force twice instead of leaving a stale registration.
   const removeStep = await runStep({
     ...options,
-    progress: { ...options.progress, onStepComplete: undefined },
+    progress: {
+      ...options.progress,
+      onStepStart: (step) => reportCleanupProgress(() => options.progress?.onStepStart?.(step)),
+      onStepComplete: undefined,
+    },
     runCommand: runCleanupCommand,
     timeoutMs: cleanupTimeoutMs,
   });
@@ -63,12 +88,6 @@ export async function cleanupGitPreflight(
       MAX_LOG_CHARS,
     );
   }
-  if (removeStep.exitCode !== 0) {
-    removeStep.advisory = {
-      kind: "recoverable-maintenance",
-      message: `Skipped preflight cleanup. Remove the retained temporary copy with: ${formatUpdateCleanupCommand(preflightRoot)}. Reason: ${removeStep.stderrTail || "temporary worktree removal failed"}`,
-    };
-  }
   await runCleanupCommand(["git", "-C", options.cwd, "worktree", "prune"], {
     cwd: options.cwd,
   }).catch((error: unknown) => {
@@ -77,12 +96,36 @@ export async function cleanupGitPreflight(
     }
     return null;
   });
-  await fs
+  const removed = await fs
     .rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
-    .catch(() => {});
-  options.progress?.onStepComplete?.({
-    ...removeStep,
-    index: options.stepIndex,
-    total: options.totalSteps,
-  });
+    .then(
+      () => true,
+      (error: unknown) => {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
+        if (removeStep.exitCode === 0) {
+          removeStep.exitCode = 1;
+        }
+        removeStep.stderrTail = trimLogTail(
+          [removeStep.stderrTail, formatErrorMessage(error)].filter(Boolean).join("\n"),
+          MAX_LOG_CHARS,
+        );
+        return false;
+      },
+    );
+  if (removeStep.exitCode !== 0) {
+    removeStep.advisory = {
+      kind: "recoverable-maintenance",
+      message: `Skipped preflight cleanup. Remove the retained temporary copy with: ${formatUpdateCleanupCommand(preflightRoot)}. Reason: ${removeStep.stderrTail || "temporary worktree removal failed"}`,
+    };
+  }
+  await reportCleanupProgress(() =>
+    options.progress?.onStepComplete?.({
+      ...removeStep,
+      index: options.stepIndex,
+      total: options.totalSteps,
+    }),
+  );
+  return removed;
 }

@@ -11,7 +11,7 @@ import {
   persistSubagentRunsToDiskOrThrow,
   withSubagentRunReadSnapshot,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -153,6 +153,7 @@ it.each(["existing", "new"] as const)(
               sessionKeys: [],
             }),
             (selection) => selection.runIds,
+            { sessionKeys: [previous.childSessionKey], descendants: true },
           ).then(
             (value) => ({ value }),
             (error: unknown) => ({ error }),
@@ -240,7 +241,7 @@ it.each(["exact", "bulk"] as const)(
           delivery: { status: "not_required" },
         };
         subagentRuns.set(run.runId, run);
-        persistSubagentRunsToDiskOrThrow(subagentRuns);
+        persistSubagentRunsToDiskOrThrow(subagentRuns, [...subagentRuns.keys()]);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         let holdNextRead = false;

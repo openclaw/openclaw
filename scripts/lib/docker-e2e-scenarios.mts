@@ -86,7 +86,8 @@ const updateFirstHopCompatLanes = listRecordedFirstHopSourceVersions().map((vers
       // Run 36506342273 (hosted 4-vCPU): projected 2125s x ~1.5 => 3200s inner;
       // add 300s for host-side fixtures, package preparation, and cleanup.
       timeoutMs: 3500 * 1000,
-      weight: 1,
+      // Limit npm/disk contention to two hops at npm limit 5; a weight-3 survivor can overlap one.
+      weight: 2,
     },
   ),
 );
@@ -234,6 +235,18 @@ function createPackageUpdateMaintenanceLanes() {
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),
+    // Explicit Docker/release regression; the per-PR cell still runs only one real update.
+    lane("published-driver-lifecycle", "pnpm test:docker:published-driver-lifecycle", {
+      e2eImageKind: "bare",
+      resources: ["service"],
+      estimateSeconds: 15,
+      timeoutMs: 10 * 60 * 1000,
+    }),
+    npmLane(
+      "published-driver-update",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-driver-update",
+      { resources: ["service"], stateScenario: "empty", timeoutMs: 10 * 60 * 1000 },
+    ),
     npmLane("dreaming-cron-doctor", dreamingCronDoctorCommand, {
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
