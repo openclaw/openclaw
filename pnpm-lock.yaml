@@ -1490,8 +1490,8 @@ importers:
   extensions/lobster:
     dependencies:
       '@clawdbot/lobster':
-        specifier: 2026.9.13
-        version: 2026.9.13
+        specifier: 2026.9.14
+        version: 2026.9.14
       typebox:
         specifier: 1.3.34
         version: 1.3.34
@@ -3432,8 +3432,8 @@ packages:
     resolution: {integrity: sha512-dlT1m5e/0yUL0kRNcQn7yGLVThkgbB0Ga/1AmfDDC/8ik6AIiSf2QLQO2zPYvefsHP0aFgxO93cVLCCfDp7kzQ==}
     engines: {node: '>= 20.12.0'}
 
-  '@clawdbot/lobster@2026.9.13':
-    resolution: {integrity: sha512-sWbtxWkiN1UWVwhoUiMhrIus7ZjbavSQJc8zO3FUTh9p9AUECJrtR7eMyNZmkLP5zxSG8KhbQRjdlCIK2qkWKA==}
+  '@clawdbot/lobster@2026.9.14':
+    resolution: {integrity: sha512-z8XMcIE+o/O8mUtCuC9cZ8Z9rpfnfVZG1MxQ72gG+eHasmltoofULDekIZjNC2Laa2qwvryXxUvFnnD5jX6cXg==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -11015,7 +11015,7 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
-  '@clawdbot/lobster@2026.9.13':
+  '@clawdbot/lobster@2026.9.14':
     dependencies:
       ajv: 8.20.0
       yaml: 2.9.1
