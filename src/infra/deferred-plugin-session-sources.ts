@@ -24,7 +24,12 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { sha256Hex } from "./crypto-digest.js";
 import type { DeferredPluginMigration } from "./deferred-plugin-migrations.js";
-import { verifyDeferredSessionDatabase } from "./deferred-plugin-session-verification.js";
+import {
+  databaseIdentity,
+  preservesRecordedIndexValue,
+  sameSourceContent,
+  verifyDeferredSessionDatabase,
+} from "./deferred-plugin-session-verification.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   MigrationArtifactSchema,
@@ -154,16 +159,6 @@ function sourceKey(target: SessionImportTarget): string {
   );
 }
 
-function databaseIdentity(sqlitePath: string): string {
-  const file = fs.lstatSync(sqlitePath, { bigint: true, throwIfNoEntry: false });
-  if (!file?.isFile()) {
-    throw new Error(
-      `The imported session database is missing or no longer a regular file: ${sqlitePath}. Run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents")} against the same state/config before retrying repair.`,
-    );
-  }
-  return `${file.dev}:${file.ino}`;
-}
-
 function collectArchivedSources(
   target: SessionImportTarget,
   env: NodeJS.ProcessEnv,
@@ -252,29 +247,6 @@ export function resolveVerifiedSessionSource(
   resolutions.push({ identity: { ...source.identity }, path: resolved });
   cachedTarget.resolved.set(source.path, resolutions);
   return resolved;
-}
-
-function sameSourceContent(left: MigrationArtifactIdentity, right: MigrationArtifactIdentity) {
-  return left.sha256 === right.sha256 && left.size === right.size;
-}
-
-/** Old receipts bind bytes, not row identities; only a proven original JSON value can rebind. */
-function preservesRecordedIndexValue(bytes: Buffer, identity: MigrationArtifactIdentity): boolean {
-  const value: unknown = JSON.parse(bytes.toString("utf8"));
-  const pretty = JSON.stringify(value, null, 2);
-  const candidates = [
-    bytes.subarray(0, identity.size),
-    bytes.subarray(-identity.size),
-    ...[JSON.stringify(value), pretty, pretty.replaceAll("\n", "\r\n")].flatMap((encoded) =>
-      ["", "\n", "\r\n"].map((ending) => Buffer.from(encoded + ending)),
-    ),
-  ];
-  return candidates.some(
-    (original) =>
-      original.length === identity.size &&
-      sha256Hex(original) === identity.sha256 &&
-      isDeepStrictEqual(JSON.parse(original.toString("utf8")), value),
-  );
 }
 
 function assertVerifiedSessionSources(
@@ -493,7 +465,6 @@ export async function rebuildDeferredPluginSessionSourceIndex(
   const index = recorded.sources.find((source) => source.path === path.resolve(target.storePath));
   let verifiedIndex = index;
   const archives = collectArchivedSources(target, params.env);
-  const verification: SessionSourceVerification = new Map();
   const verifiedSourcePaths = new Set(recorded.sources.map((source) => source.path));
   const missingIndex =
     index && existingSessionSourcePaths(index.path, target, params.env, archives).length === 0;
@@ -501,7 +472,10 @@ export async function rebuildDeferredPluginSessionSourceIndex(
     if (
       !isDeepStrictEqual(readSessionImportReceipt(params), receipt) ||
       databaseIdentity(params.sqlitePath) !== currentDatabaseIdentity ||
-      (verifiedIndex && !resolveVerifiedSessionSource(verifiedIndex, target, params.env))
+      (verifiedIndex &&
+        !missingIndex &&
+        !resolveVerifiedSessionSource(verifiedIndex, target, params.env)) ||
+      (missingIndex && existingSessionSourcePaths(index.path, target, params.env).length > 0)
     ) {
       throw new Error(
         "Retained session receipt, index, or database changed during recovery; sources remain protected.",
@@ -529,31 +503,13 @@ export async function rebuildDeferredPluginSessionSourceIndex(
             ) {
               return { path: source.path, identity };
             }
-            if (
-              identity.size === 0 &&
-              isPrimarySessionTranscriptFileName(path.basename(source.path))
-            ) {
-              const indexPath =
-                verifiedIndex &&
-                resolveVerifiedSessionSource(verifiedIndex, target, params.env, verification);
-              await verifyDeferredSessionDatabase({
-                ...params,
-                sources: [
-                  ...(verifiedIndex && indexPath
-                    ? [{ originalPath: verifiedIndex.path, path: indexPath }]
-                    : []),
-                  { originalPath: source.path, path: candidate },
-                ],
-                verifiedSourcePaths,
-                assertCurrent,
-              });
-              return { path: source.path, identity };
-            }
-            if (sameSourceContent(identity, source.identity)) {
+            const emptyTranscript =
+              identity.size === 0 && isPrimarySessionTranscriptFileName(path.basename(source.path));
+            if (!emptyTranscript && sameSourceContent(identity, source.identity)) {
               return { path: source.path, identity };
             }
             if (
-              candidate !== source.path ||
+              (!emptyTranscript && candidate !== source.path) ||
               (source.path !== path.resolve(target.storePath) &&
                 !isPrimarySessionTranscriptFileName(path.basename(source.path)))
             ) {
@@ -563,7 +519,7 @@ export async function rebuildDeferredPluginSessionSourceIndex(
             const indexPath =
               !isIndex &&
               verifiedIndex &&
-              resolveVerifiedSessionSource(verifiedIndex, target, params.env, verification);
+              resolveVerifiedSessionSource(verifiedIndex, target, params.env);
             if (isIndex) {
               const issues: Array<{ code: string; message: string }> = [];
               const current = readLegacySessionStoreEntries(params.target, issues, {
@@ -575,7 +531,7 @@ export async function rebuildDeferredPluginSessionSourceIndex(
                 );
               }
             } else {
-              if (!indexPath || !verifiedIndex) {
+              if (!emptyTranscript && (!indexPath || !verifiedIndex)) {
                 throw new Error(
                   "Changed transcript has no verified retained index to establish its session owner.",
                 );
@@ -583,7 +539,9 @@ export async function rebuildDeferredPluginSessionSourceIndex(
               await verifyDeferredSessionDatabase({
                 ...params,
                 sources: [
-                  { originalPath: verifiedIndex.path, path: indexPath },
+                  ...(verifiedIndex && indexPath
+                    ? [{ originalPath: verifiedIndex.path, path: indexPath }]
+                    : []),
                   { originalPath: source.path, path: candidate },
                 ],
                 requireCompleteTranscript: true,
