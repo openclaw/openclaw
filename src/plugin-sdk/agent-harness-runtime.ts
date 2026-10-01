@@ -658,3 +658,6 @@ export function classifyAgentHarnessTerminalOutcome(
 }
 
 export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });
+
+export { runWithMcpRequestMetadata } from "../agents/mcp-request-context.js";
+export type { McpServerRequestContext } from "../plugins/types.mcp-connection.js";

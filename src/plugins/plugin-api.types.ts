@@ -228,6 +228,10 @@ export type OpenClawPluginApi = {
   /** Bind a declared MCP server's transport to the trusted message requester. */ registerMcpServerConnectionResolver: (
     resolver: import("./types.mcp-connection.js").OpenClawPluginMcpServerConnectionResolver,
   ) => void;
+  /** Resolve volatile MCP HTTP headers for the calling turn without rotating the transport. */
+  registerMcpServerRequestHeaderProvider: (
+    provider: import("./types.mcp-connection.js").OpenClawPluginMcpServerRequestHeaderProvider,
+  ) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   /**
