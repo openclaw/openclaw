@@ -55,7 +55,7 @@ import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
 import {
   createSubagentAnnounceHandoffOptions,
   createSubagentAnnounceSessionStore,
-  SUBAGENT_ANNOUNCE_DELIVERY_CASES,
+  SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES,
   SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES,
   type SubagentAnnounceDeliveryCase,
 } from "./attempt-execution.announce.test-support.js";
@@ -1975,8 +1975,8 @@ describe("CLI attempt execution", () => {
     };
   }
 
-  it.each(SUBAGENT_ANNOUNCE_DELIVERY_CASES)(
-    "bounds CLI subagent completion handoff tools for $name",
+  it.each(SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES)(
+    "bounds Claude CLI subagent completion handoff tools for $name",
     async (testCase) => {
       const {
         sourceReplyDeliveryMode,

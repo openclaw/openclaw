@@ -56,6 +56,7 @@ export function isRestoredQueuedFailureSettlementClaimed(entry: SubagentRunRecor
 export async function recoverSubagentRunGatewayOwner(
   expected: SubagentRunRecord,
   resolver: GatewayContextResolver,
+  onRecovered: (entry: SubagentRunRecord) => void,
 ): Promise<boolean> {
   const previousResolver = getEntryGatewayContextResolver(expected);
   const gateway = resolver();
@@ -79,6 +80,7 @@ export async function recoverSubagentRunGatewayOwner(
         const row = postimages.get(expected.runId);
         if (row) {
           bindGatewayContextResolver(row, resolver);
+          onRecovered(row);
           subagentRuns.commitOwnership(row);
         }
       },
@@ -298,7 +300,13 @@ export function createSubagentRegistryRestorer(config: {
             cleanupLifecycleGeneration,
             cleanupSessionEntry?.sessionId,
             cleanupSessionEntry?.lifecycleRevision,
-          );
+          ).catch((cleanupError: unknown) => {
+            warn("failed to settle restored collector launch failure", {
+              runId,
+              childSessionKey: entry.childSessionKey,
+              error: cleanupError,
+            });
+          });
           continue;
         }
         const groupId = entry.groupId ?? "";
@@ -518,7 +526,7 @@ export function createSubagentRegistryRestorer(config: {
     return throwOnError ? operation : operation.catch(() => {});
   }
 
-  async function failAndCleanupRestoredQueuedRun(
+  function failAndCleanupRestoredQueuedRun(
     runId: string,
     entry: SubagentRunRecord,
     error: string,
@@ -527,186 +535,182 @@ export function createSubagentRegistryRestorer(config: {
     expectedSessionId?: string,
     expectedLifecycleRevision?: string,
   ): Promise<boolean> {
-    // Descriptorless restore failures enter here without onStartFailure; their
-    // provisional session must survive the same pending cancellation receipt.
-    for (
-      let publication = waitForSubagentRetirementPublication(entry);
-      publication;
-      publication = waitForSubagentRetirementPublication(entry)
-    ) {
-      await publication;
-    }
-    const identity = getSubagentRunRuntimeKey(entry);
-    const currentEntry = () => runs.get(runId);
-    if (
-      !isSameSubagentRunOwner(currentEntry(), entry) ||
-      currentEntry()?.execution.status !== "queued"
-    ) {
-      return true;
-    }
-    const claim = {};
-    const launch = JSON.stringify(entry.queuedLaunch);
-    const killIntent = JSON.stringify(entry.killIntent);
-    const killReconciliation = JSON.stringify(entry.killReconciliation);
-    restoredQueuedFailureSettlementClaims.set(identity, claim);
-    const ownsClaim = () => {
-      const current = currentEntry();
-      return (
-        restoredQueuedFailureSettlementClaims.get(identity) === claim &&
-        isSameSubagentRunOwner(current, entry) &&
-        current?.execution.status === "queued" &&
-        JSON.stringify(current.queuedLaunch) === launch &&
-        JSON.stringify(current.killIntent) === killIntent &&
-        JSON.stringify(current.killReconciliation) === killReconciliation
-      );
-    };
-    const ownsSessionEffects = () => {
-      const current = currentEntry();
-      return (
-        current !== undefined &&
-        isSameSubagentRunOwner(current, entry) &&
-        isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
-        !shouldSuppressSubagentRecoverySessionEffects(current) &&
-        isSameSubagentRunOwner(
-          getLatestSubagentRunByChildSessionKeyFromRuns(runs, entry.childSessionKey),
-          entry,
-        )
-      );
-    };
-    const suppressRetiredSessionEffects = () =>
-      mutateSubagentRuns(
-        [runId],
-        (rows) => {
-          const current = rows.get(runId);
-          if (
-            !current ||
-            !isSameSubagentRunOwner(current, entry) ||
-            ownsSessionEffects() ||
-            current.execution.suppressSessionEffects === true
-          ) {
-            return { value: undefined };
+    // Root custody includes the terminal commit and final cleanup publication.
+    return runWithGatewayIndependentRootWorkAdmission(async () => {
+      // Descriptorless restore failures enter here without onStartFailure; their
+      // provisional session must survive the same pending cancellation receipt.
+      for (
+        let publication = waitForSubagentRetirementPublication(entry);
+        publication;
+        publication = waitForSubagentRetirementPublication(entry)
+      ) {
+        await publication;
+      }
+      const identity = getSubagentRunRuntimeKey(entry);
+      const currentEntry = () => runs.get(runId);
+      const ownsQueuedRun = (current = currentEntry()): current is SubagentRunRecord =>
+        isSameSubagentRunOwner(current, entry) && current?.execution.status === "queued";
+      if (!ownsQueuedRun()) {
+        return true;
+      }
+      const claim = {};
+      const launch = JSON.stringify(entry.queuedLaunch);
+      const killIntent = JSON.stringify(entry.killIntent);
+      const killReconciliation = JSON.stringify(entry.killReconciliation);
+      restoredQueuedFailureSettlementClaims.set(identity, claim);
+      const ownsClaim = () => {
+        const current = currentEntry();
+        return (
+          restoredQueuedFailureSettlementClaims.get(identity) === claim &&
+          ownsQueuedRun(current) &&
+          JSON.stringify(current.queuedLaunch) === launch &&
+          JSON.stringify(current.killIntent) === killIntent &&
+          JSON.stringify(current.killReconciliation) === killReconciliation
+        );
+      };
+      const ownsSessionEffects = () => {
+        const current = currentEntry();
+        return (
+          current !== undefined &&
+          isSameSubagentRunOwner(current, entry) &&
+          isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+          !shouldSuppressSubagentRecoverySessionEffects(current) &&
+          isSameSubagentRunOwner(
+            getLatestSubagentRunByChildSessionKeyFromRuns(runs, entry.childSessionKey),
+            entry,
+          )
+        );
+      };
+      const suppressRetiredSessionEffects = () =>
+        mutateSubagentRuns(
+          [runId],
+          (rows) => {
+            const current = rows.get(runId);
+            if (
+              !current ||
+              !isSameSubagentRunOwner(current, entry) ||
+              ownsSessionEffects() ||
+              current.execution.suppressSessionEffects === true
+            ) {
+              return { value: undefined };
+            }
+            return {
+              value: undefined,
+              postimages: new Map([
+                [
+                  runId,
+                  {
+                    ...current,
+                    execution: { ...current.execution, suppressSessionEffects: true },
+                  },
+                ],
+              ]),
+            };
+          },
+          { runs },
+        );
+      const ownsCleanup = () => ownsClaim() && ownsSessionEffects();
+      let sessionOwnershipChanged = false;
+      let sessionDeleted = false;
+      try {
+        const cleanupComplete = await (async () => {
+          if (!ownsCleanup()) {
+            return false;
           }
-          return {
-            value: undefined,
-            postimages: new Map([
-              [
-                runId,
-                {
-                  ...current,
-                  execution: { ...current.execution, suppressSessionEffects: true },
+          if (!expectedSessionId || !expectedLifecycleRevision) {
+            sessionOwnershipChanged = true;
+            return true;
+          }
+          const cleanupSettled = await retrySubagentCleanup(
+            async () => {
+              if (!ownsCleanup()) {
+                return false;
+              }
+              const outcome = await deleteSubagentSessionForCleanup({
+                callGateway: callSubagentRegistryGateway,
+                gatewayBinding: { resolveGatewayContext: getEntryGatewayContextResolver(entry) },
+                isCurrent: ownsCleanup,
+                childSessionKey: entry.childSessionKey,
+                expectedSessionId,
+                expectedLifecycleRevision,
+                onError: (cleanupError) => {
+                  throw cleanupError;
                 },
-              ],
-            ]),
-          };
-        },
-        { runs },
-      );
-    const ownsCleanup = () => ownsClaim() && ownsSessionEffects();
-    let sessionOwnershipChanged = false;
-    let sessionDeleted = false;
-    try {
-      const cleanupComplete = await runWithGatewayIndependentRootWorkAdmission(async () => {
-        if (!ownsCleanup()) {
+              });
+              sessionDeleted = outcome === "deleted";
+              sessionOwnershipChanged = outcome === "changed";
+              return outcome !== "failed";
+            },
+            {
+              shouldRetry: () => !launchTerminationConfirmed && ownsCleanup(),
+              onError: (cleanupError) =>
+                warn("failed to delete restored collector session after launch failure", {
+                  runId,
+                  childSessionKey: entry.childSessionKey,
+                  error: cleanupError,
+                }),
+            },
+          );
+          if (!cleanupSettled || !ownsCleanup() || sessionOwnershipChanged) {
+            return cleanupSettled && ownsCleanup();
+          }
+          return await cleanupCollectorLaunchResources(entry, { isCurrent: ownsCleanup });
+        })().catch((cleanupError: unknown) => {
+          warn("failed to clean restored collector after launch failure", {
+            runId,
+            childSessionKey: entry.childSessionKey,
+            error: cleanupError,
+          });
           return false;
+        });
+
+        if (!ownsClaim()) {
+          return !ownsQueuedRun();
         }
-        if (!expectedSessionId || !expectedLifecycleRevision) {
-          sessionOwnershipChanged = true;
-          return true;
-        }
-        const cleanupSettled = await retrySubagentCleanup(
+        let failureSettled = false;
+        await retrySubagentCleanup(
           async () => {
-            if (!ownsCleanup()) {
+            if (!ownsClaim()) {
+              return !ownsQueuedRun();
+            }
+            await suppressRetiredSessionEffects();
+            if (!ownsClaim()) {
               return false;
             }
-            const outcome = await deleteSubagentSessionForCleanup({
-              callGateway: callSubagentRegistryGateway,
-              gatewayBinding: { resolveGatewayContext: getEntryGatewayContextResolver(entry) },
-              isCurrent: ownsCleanup,
-              childSessionKey: entry.childSessionKey,
-              expectedSessionId,
-              expectedLifecycleRevision,
-              onError: (cleanupError) => {
-                throw cleanupError;
-              },
-            });
-            sessionDeleted = outcome === "deleted";
-            sessionOwnershipChanged = outcome === "changed";
-            return outcome !== "failed";
+            failureSettled = await settleFailedQueuedSubagentLaunch(runId, error);
+            return failureSettled;
           },
           {
-            shouldRetry: () => !launchTerminationConfirmed && ownsCleanup(),
-            onError: (cleanupError) =>
-              warn("failed to delete restored collector session after launch failure", {
+            shouldRetry: ownsClaim,
+            onError: (persistError) =>
+              warn("failed to persist restored collector launch failure", {
                 runId,
                 childSessionKey: entry.childSessionKey,
-                error: cleanupError,
+                error: persistError,
               }),
           },
         );
-        if (!cleanupSettled || !ownsCleanup() || sessionOwnershipChanged) {
-          return cleanupSettled && ownsCleanup();
+        if (!failureSettled) {
+          return !ownsQueuedRun();
         }
-        return await cleanupCollectorLaunchResources(entry, { isCurrent: ownsCleanup });
-      }, "subagents:restore-cleanup").catch((cleanupError: unknown) => {
-        warn("failed to clean restored collector after launch failure", {
-          runId,
-          childSessionKey: entry.childSessionKey,
-          error: cleanupError,
-        });
-        return false;
-      });
-
-      if (!ownsClaim()) {
-        const current = runs.get(runId);
-        return !isSameSubagentRunOwner(current, entry) || current?.execution.status !== "queued";
-      }
-      let failureSettled = false;
-      await retrySubagentCleanup(
-        async () => {
-          if (!ownsClaim()) {
-            const current = runs.get(runId);
-            return (
-              !isSameSubagentRunOwner(current, entry) || current?.execution.status !== "queued"
-            );
+        await suppressRetiredSessionEffects();
+        if (cleanupComplete && isSameSubagentRunOwner(currentEntry(), entry)) {
+          if (sessionDeleted && !sessionOwnershipChanged) {
+            emitSessionLifecycleEvent({
+              sessionKey: entry.childSessionKey,
+              reason: "delete",
+              parentSessionKey: entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
+            });
           }
-          await suppressRetiredSessionEffects();
-          if (!ownsClaim()) {
-            return false;
-          }
-          failureSettled = await settleFailedQueuedSubagentLaunch(runId, error);
-          return failureSettled;
-        },
-        {
-          shouldRetry: ownsClaim,
-          onError: (persistError) =>
-            warn("failed to persist restored collector launch failure", {
-              runId,
-              childSessionKey: entry.childSessionKey,
-              error: persistError,
-            }),
-        },
-      );
-      if (!failureSettled) {
-        const current = runs.get(runId);
-        return !isSameSubagentRunOwner(current, entry) || current?.execution.status !== "queued";
-      }
-      await suppressRetiredSessionEffects();
-      if (cleanupComplete && isSameSubagentRunOwner(currentEntry(), entry)) {
-        if (sessionDeleted && !sessionOwnershipChanged) {
-          emitSessionLifecycleEvent({
-            sessionKey: entry.childSessionKey,
-            reason: "delete",
-            parentSessionKey: entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
-          });
+          await completeCollectorLaunchCleanup(runId);
         }
-        await completeCollectorLaunchCleanup(runId);
+        return true;
+      } finally {
+        if (restoredQueuedFailureSettlementClaims.get(identity) === claim) {
+          restoredQueuedFailureSettlementClaims.delete(identity);
+        }
       }
-      return true;
-    } finally {
-      if (restoredQueuedFailureSettlementClaims.get(identity) === claim) {
-        restoredQueuedFailureSettlementClaims.delete(identity);
-      }
-    }
+    }, "subagents:restore-cleanup");
   }
 
   return {

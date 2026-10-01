@@ -31,7 +31,8 @@ import {
   updateUserModelAuthProfile,
 } from "./user-model-accounts.js";
 import { captureUserProfileModelAccountLinksAuthority } from "./user-profile-events.js";
-import { ensureProfileForEmail, linkEmail, setAvatar } from "./user-profiles.js";
+import { linkEmail, setAvatar } from "./user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 const tempDirs = createTempDirTracker();

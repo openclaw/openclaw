@@ -175,27 +175,30 @@ describe("plugin SDK surface report", () => {
 
   it("keeps default public surface budgets pinned to current source counts", () => {
     expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
-    const channelMessage = surfaceReport.publicStats.byEntrypoint.get("channel-message");
-    expect(channelMessage).toBeDefined();
+    const inboundReplyDispatch =
+      surfaceReport.publicStats.byEntrypoint.get("inbound-reply-dispatch");
+    expect(inboundReplyDispatch).toBeDefined();
     expect(
-      readPluginSdkSurfaceBudgets({}).publicDeprecatedExportsByEntrypointBudget["channel-message"],
-    ).toBe(channelMessage?.deprecatedExports);
+      readPluginSdkSurfaceBudgets({}).publicDeprecatedExportsByEntrypointBudget[
+        "inbound-reply-dispatch"
+      ],
+    ).toBe(inboundReplyDispatch?.deprecatedExports);
   });
 
   it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
     expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
     const report = {
       ...surfaceReport,
-      deprecatedBarrelWithoutReexports: ["channel-message"],
+      deprecatedBarrelWithoutReexports: ["fixture-facade"],
     };
 
     expect(evaluatePluginSdkSurfaceReport(report, readPluginSdkSurfaceBudgets({}))).toContain(
-      "deprecated barrel entrypoints without reexports: channel-message",
+      "deprecated barrel entrypoints without reexports: fixture-facade",
     );
   });
 
-  it("keeps approval store internals out of the deprecated infra barrel", () => {
-    const source = fs.readFileSync("src/plugin-sdk/infra-runtime.ts", "utf8");
+  it("keeps approval store internals out of public approval helpers", () => {
+    const source = fs.readFileSync("src/plugin-sdk/exec-approvals-runtime.ts", "utf8");
     expect(source).not.toMatch(/export\s+(?:type\s+)?\*\s+from\s+["'][^"']*exec-approvals/u);
 
     for (const internalName of [

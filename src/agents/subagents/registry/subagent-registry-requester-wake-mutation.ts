@@ -27,7 +27,9 @@ export const isCurrentRequesterSettleWakeBatch = (
           !context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry)) &&
           isSameSubagentRunOwner(current, entry) &&
           current?.requesterSettleWake !== undefined &&
-          current.requesterSettleWake.rearmGeneration === rearmGeneration
+          current.requesterSettleWake.rearmGeneration === rearmGeneration &&
+          (current.requesterSettleWake.yieldedFinalDeliverable === true) ===
+            (entry.requesterSettleWake?.yieldedFinalDeliverable === true)
         );
       });
     return (
@@ -69,15 +71,12 @@ export function assertRequesterWakeCommitCurrent(
 
 export async function commitRequesterSettleWakeMutation(
   context: SubagentLifecycleWakeContext,
-  observedEntries: readonly SubagentRunRecord[],
+  entries: readonly SubagentRunRecord[],
   operation: RequesterWakeMutation,
   stateContext: OpenClawStateWorkerContext,
   pending: PendingRequesterSettleWakeCommit,
+  onPublished?: (entries: readonly SubagentRunRecord[]) => void,
 ): Promise<boolean> {
-  const entries = observedEntries.map((entry) => {
-    const current = context.options.runs.get(entry.runId);
-    return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-  });
   if (
     !pending.committedWake &&
     !isCurrentRequesterSettleWakeBatch(context, entries, pending.generation)
@@ -96,7 +95,10 @@ export async function commitRequesterSettleWakeMutation(
     onCommitted: (write) => {
       pending.committedWake = write;
     },
-    onPublished: () => pending.adoptPublished(entries),
+    onPublished: () => {
+      const published = pending.adoptPublished(entries);
+      onPublished?.(published);
+    },
   });
   return result.applied === true && result.publication === "published";
 }

@@ -16,12 +16,13 @@ import type * as AgentRunnerExecution from "./agent-runner-execution.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import {
-  clearSessionQueues,
   enqueueFollowupRun,
   getFollowupQueueDepth,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
+import { clearFollowupQueue } from "./queue/state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -93,6 +94,8 @@ function createStalledRun(
     isHeartbeat?: boolean;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     queuedFollowupReplyDisposition?: FollowupRun["queuedFollowupReplyDisposition"];
+    originatingChannel?: string;
+    skillLibraryAuthoring?: FollowupRun["run"]["skillLibraryAuthoring"];
   } = {},
 ): StalledRun {
   const followupRun = createTestFollowupRun({
@@ -101,10 +104,11 @@ function createStalledRun(
     messageProvider: "telegram",
     senderId: "traveler",
   });
-  followupRun.originatingChannel = "telegram";
-  followupRun.originatingTo = "12345";
+  followupRun.originatingChannel = options.originatingChannel ?? "telegram";
+  followupRun.originatingTo = options.originatingChannel ? undefined : "12345";
   followupRun.operatorAuthority = options.operatorAuthority;
   followupRun.queuedFollowupReplyDisposition = options.queuedFollowupReplyDisposition;
+  followupRun.run.skillLibraryAuthoring = options.skillLibraryAuthoring;
   followupRun.images = [{ type: "image", data: "aW1n", mimeType: "image/png" }];
   followupRun.transcriptPrompt = "what is good at the hotel restaurant?";
   const transcriptTarget = createSqliteTranscriptTarget({
@@ -185,7 +189,8 @@ function createQueuedRequest(from: { senderId: string; to: string }): FollowupRu
 describe("runReplyAgent stalled turn continuation", () => {
   beforeEach(() => {
     replyRunTesting.resetReplyRunRegistry();
-    clearSessionQueues([queueKey]);
+    clearFollowupQueue(queueKey);
+    clearFollowupDrainCallback(queueKey);
     drainedRuns.mockClear();
     mocks.executeFollowups = false;
     executionStarted = createDeferred();
@@ -206,7 +211,8 @@ describe("runReplyAgent stalled turn continuation", () => {
   });
 
   afterEach(() => {
-    clearSessionQueues([queueKey]);
+    clearFollowupQueue(queueKey);
+    clearFollowupDrainCallback(queueKey);
     replyRunTesting.resetReplyRunRegistry();
   });
 
@@ -354,8 +360,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(drainedRuns).not.toHaveBeenCalled();
   });
 
-  it("leaves the notice with a Web UI chat.send turn whose reply owner never queued", async () => {
-    // The Gateway's chat.send reply owner delivers only follow-ups it deferred itself.
+  it("delivers a Web UI chat.send recovery through the turn's queued reply owner", async () => {
     const gatewayDeliver = vi.fn(async () => ({ kind: "delivered" as const }));
     const chatSendOwner = createChatSendLateFollowupDisposition({
       runId: "chat-send-run",
@@ -368,9 +373,106 @@ describe("runReplyAgent stalled turn continuation", () => {
     });
     await stallBeforeOutput(stalled);
 
+    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
+    await settleStalledOwner(stalled);
+    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
+    const recovery = drainedRuns.mock.calls[0]?.[0];
+    if (recovery?.queuedFollowupReplyDisposition?.kind !== "deliver") {
+      throw new Error("Recovery lost its chat.send reply owner");
+    }
+    await recovery.queuedFollowupReplyDisposition.deliver({
+      kind: "queued-followup",
+      runId: "recovery-run",
+      originatingChannel: "webchat",
+      payloads: [{ text: "recovered answer" }],
+      completion: { kind: "completed" },
+    });
+    expect(gatewayDeliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        runId: "recovery-run",
+        payloads: [{ text: "recovered answer" }],
+      }),
+    );
+  });
+
+  it("sends the Web UI notice, not a second recovery, when the recovery also stalls", async () => {
+    mocks.executeFollowups = true;
+    const settled = createDeferred();
+    mocks.followupSettled = settled.resolve;
+    const gatewayDeliver = vi.fn(async () => ({ kind: "delivered" as const }));
+    const chatSendOwner = createChatSendLateFollowupDisposition({
+      runId: "chat-send-run",
+      originatingChannel: "webchat",
+      logGateway: { info: vi.fn() } as never,
+      deliver: gatewayDeliver,
+    });
+    const stalled = createStalledRun({
+      originatingChannel: "webchat",
+      queuedFollowupReplyDisposition: { kind: "deliver", deliver: chatSendOwner.deliver },
+    });
+    await stallBeforeOutput(stalled);
+    executeAgentTurnMock.mockImplementationOnce(async ({ replyOperation }) => {
+      expireStaleReplyOperation(replyOperation, "stuck_recovery");
+      return { runId: "recovery-run", outcome: { kind: "aborted", reason: "user" } };
+    });
+
+    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
+    await settleStalledOwner(stalled);
+    await settled.promise;
+
+    expect(drainedRuns).toHaveBeenCalledOnce();
+    expect(executeAgentTurnMock).toHaveBeenCalledTimes(2);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    expect(gatewayDeliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it.each(["personal", "workspace"] as const)(
+    "never lets a %s-target recovery author skills while keeping its other tools",
+    async (defaultTarget) => {
+      const stalled = createStalledRun({
+        skillLibraryAuthoring: {
+          target: "personal",
+          defaultTarget,
+          multipleProfiles: true,
+          bind: () => {
+            throw new Error("Personal authoring cannot move to a replacement run.");
+          },
+          invoke: vi.fn(),
+        },
+      });
+      await stallBeforeOutput(stalled);
+
+      expect(stalled.runState.continueStalledTurn?.()).toBe(true);
+      await settleStalledOwner(stalled);
+      await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
+      const recovery = drainedRuns.mock.calls[0]?.[0];
+      expect(recovery?.disableTools).toBeUndefined();
+      const authoring = recovery?.run.skillLibraryAuthoring;
+      // Personal-only means the Workshop cannot fall back to the workspace tool.
+      expect(authoring?.defaultTarget).toBe("personal");
+      expect(() => authoring?.bind({} as never)).not.toThrow();
+      await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
+        code: "AUTHORITY_EXPIRED",
+      });
+    },
+  );
+
+  it("leaves the notice with a group-thread participant whose source declares no reply owner", async () => {
+    const stalled = createStalledRun({
+      queuedFollowupReplyDisposition: { kind: "drop", reason: "source-unavailable" },
+    });
+    await stallBeforeOutput(stalled);
+
     expect(stalled.runState.continueStalledTurn?.()).toBe(false);
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
-
     await settleStalledOwner(stalled);
     expect(drainedRuns).not.toHaveBeenCalled();
   });

@@ -9,6 +9,7 @@ type GenerationalSubagentRun = ComparableSubagentRun & {
 };
 
 export type SubagentRunIdentity = GenerationalSubagentRun & {
+  childAgentId?: string;
   collect?: boolean;
   swarmRunId?: string;
   schedulerSlotId?: string;
@@ -26,6 +27,7 @@ export function getSubagentRunIdentity(entry: SubagentRunIdentity): string {
     normalizeGeneration(entry),
     entry.createdAt,
     entry.childSessionKey,
+    entry.childAgentId,
     entry.requesterSessionKey,
     entry.requesterAgentId,
     entry.requesterStorePath,
@@ -87,6 +89,7 @@ export function isQueuedSubagentRunRekey(
     normalizeGeneration(previous) === normalizeGeneration(next) &&
     previous.createdAt === next.createdAt &&
     previous.childSessionKey === next.childSessionKey &&
+    previous.childAgentId === next.childAgentId &&
     previous.requesterSessionKey === next.requesterSessionKey &&
     previous.requesterAgentId === next.requesterAgentId &&
     previous.requesterStorePath === next.requesterStorePath

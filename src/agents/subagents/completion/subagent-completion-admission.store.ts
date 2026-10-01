@@ -4,7 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
-import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker-contract.js";
+import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -35,7 +35,10 @@ import {
   type SubagentRunSqliteRow,
 } from "../registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { captureRequesterSettleRunIdentity } from "../registry/subagent-requester-settle-identity.js";
+import {
+  captureRequesterSettleRunIdentity,
+  captureRequesterSettleWakeProgress,
+} from "../registry/subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   isSameSubagentRunOwner,
@@ -607,21 +610,9 @@ function currentRequesterEntries(
     if (
       !committed &&
       (current.delivery?.generation !== expected.delivery?.generation ||
-        current.requesterSettleWake?.status !== expected.requesterSettleWake?.status ||
-        current.requesterSettleWake?.attemptCount !== expected.requesterSettleWake?.attemptCount ||
-        (current.requesterSettleWake?.replayCount ?? 0) !==
-          (expected.requesterSettleWake?.replayCount ?? 0) ||
-        (current.requesterSettleWake?.deferralCount ?? 0) !==
-          (expected.requesterSettleWake?.deferralCount ?? 0) ||
-        current.requesterSettleWake?.rearmGeneration !==
-          expected.requesterSettleWake?.rearmGeneration ||
         !isDeepStrictEqual(
-          current.requesterSettleWake?.batchRunIds?.toSorted(),
-          expected.requesterSettleWake?.batchRunIds?.toSorted(),
-        ) ||
-        !isDeepStrictEqual(
-          current.requesterSettleWake?.pauseNotice,
-          expected.requesterSettleWake?.pauseNotice,
+          captureRequesterSettleWakeProgress(current),
+          captureRequesterSettleWakeProgress(expected),
         ))
     ) {
       throw new SubagentCompletionSourceChangedError(

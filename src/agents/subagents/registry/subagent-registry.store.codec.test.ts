@@ -18,8 +18,10 @@ function createRun(): SubagentRunRecord {
   };
 }
 
-it("persists the child identity independently of a redirected transcript", () => {
+it("persists the child owner and identity independently of a redirected transcript", () => {
   const entry = createRun();
+  entry.childSessionKey = "global";
+  entry.childAgentId = "research";
   entry.childSessionIdentity = { sessionId: "original-child", lifecycleRevision: "original" };
   entry.execution.transcriptTarget = { sessionId: "hidden-transcript" };
   const stored = bindSubagentRunRecord(entry);
@@ -37,6 +39,8 @@ it("persists the child identity independently of a redirected transcript", () =>
     payload_json: stored.payload_json,
   });
   expect(restored).toMatchObject({
+    childSessionKey: "global",
+    childAgentId: "research",
     childSessionIdentity: { sessionId: "original-child", lifecycleRevision: "original" },
     execution: { transcriptTarget: { sessionId: "hidden-transcript" } },
   });

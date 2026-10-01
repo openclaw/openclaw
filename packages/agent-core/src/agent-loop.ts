@@ -816,14 +816,8 @@ async function launchParallelToolCalls(
   const result: ParallelToolCallLaunches = { started: [], completed: [] };
   let cursor = 0;
   let finish!: () => void;
-  let finished = false;
   const done = new Promise<void>((resolve) => {
-    finish = () => {
-      if (!finished) {
-        finished = true;
-        resolve();
-      }
-    };
+    finish = resolve;
   });
   const launchNext = () => {
     const current = ready[cursor++];

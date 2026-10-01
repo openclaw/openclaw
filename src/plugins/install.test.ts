@@ -8,11 +8,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-  type DiagnosticSecurityEvent,
+  type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 import {
@@ -77,10 +79,10 @@ function writeJson(file: string, value: unknown) {
 }
 
 function captureSecurityEvents(): {
-  events: DiagnosticSecurityEvent[];
+  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
   stop: () => void;
 } {
-  const events: DiagnosticSecurityEvent[] = [];
+  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
       events.push(event);
@@ -249,9 +251,10 @@ async function runActualInstallPolicyCommandIfNeeded(
   return await actualExecModule.runCommandWithTimeout(args, options);
 }
 
-function countMockedCommands(executable: string): number {
-  return vi.mocked(runCommandWithTimeout).mock.calls.filter(([args]) => args[0] === executable)
-    .length;
+function countNpmCommands(): number {
+  return vi
+    .mocked(runCommandWithTimeout)
+    .mock.calls.filter(([args]) => npmCommandArgs(args) !== undefined).length;
 }
 
 function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?: string }) {
@@ -260,7 +263,7 @@ function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?
     if (policyResult) {
       return policyResult;
     }
-    if (args[0] !== "npm" || args[1] !== "install") {
+    if (npmCommandArgs(args)?.[0] !== "install") {
       throw new Error(`unexpected command: ${args.join(" ")}`);
     }
     if (!args.includes("--package-lock-only")) {
@@ -404,16 +407,7 @@ function expectHookRequest(
 function mockSuccessfulCommandRun(run: ReturnType<typeof vi.mocked<typeof runCommandWithTimeout>>) {
   run.mockImplementation(async (args, options) => {
     const policyResult = await runActualInstallPolicyCommandIfNeeded(args, options);
-    return (
-      policyResult ?? {
-        code: 0,
-        stdout: "",
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      }
-    );
+    return policyResult ?? createCommandResult();
   });
 }
 
@@ -975,9 +969,8 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("npm installs are disabled by policy");
     }
-    expect(countMockedCommands("npm")).toBe(1);
-    expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual([
-      "npm",
+    expect(countNpmCommands()).toBe(1);
+    expect(npmCommandArgs(vi.mocked(runCommandWithTimeout).mock.calls[0]![0])).toEqual([
       "view",
       `${packageName}@1.0.0`,
       "name",
@@ -1225,7 +1218,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("npm installs are disabled by policy");
     }
-    expect(countMockedCommands("npm")).toBe(1);
+    expect(countNpmCommands()).toBe(1);
     await expect(fsPromises.stat(npmDir)).rejects.toThrow();
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);

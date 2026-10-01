@@ -13,7 +13,13 @@ export function buildRequesterSettleWakeIdentity(params: {
   batchRunIds: readonly string[];
   rearmGeneration?: number;
   attemptIndex?: number;
-  parentOnly?: boolean;
+  /**
+   * Private completion turns reuse one key across attempts: a retry must not republish
+   * private input under a new identity. Deliverable turns suffix each retry so a
+   * cached terminal failure cannot replay in place of a new delivery attempt.
+   * Pause notices also use fresh attempts, even when their completion stays private.
+   */
+  sharedAttemptKey?: boolean;
   pause?: boolean;
 }): { batchKey: string; runId: string } {
   const batchKey = [
@@ -27,7 +33,7 @@ export function buildRequesterSettleWakeIdentity(params: {
   return {
     batchKey,
     runId: buildAnnounceIdempotencyKey(
-      (params.parentOnly && !params.pause) || attemptIndex === 0
+      (params.sharedAttemptKey && !params.pause) || attemptIndex === 0
         ? batchKey
         : `${batchKey}:retry-${attemptIndex}`,
     ),
@@ -55,16 +61,20 @@ export function isRequesterSettleWakeForRun(params: {
   ) {
     return false;
   }
-  const parentOnly = batchRunIds.some((runId) => {
-    const member = params.runsById.get(runId);
-    return (
-      member?.requesterSessionKey === requesterSessionKey &&
-      (!member.requesterAgentId || member.requesterAgentId === requesterAgentId) &&
-      member.requesterSettleWake !== undefined &&
-      member.requesterSettleWake.rearmGeneration === wake.rearmGeneration &&
-      member.completionTarget === "parent"
-    );
-  });
+  // Mirrors the frozen admission policy: a yielded private batch that was
+  // admitted as deliverable retries under fresh keys like any public batch.
+  const sharedAttemptKey =
+    wake.yieldedFinalDeliverable !== true &&
+    batchRunIds.some((runId) => {
+      const member = params.runsById.get(runId);
+      return (
+        member?.requesterSessionKey === requesterSessionKey &&
+        (!member.requesterAgentId || member.requesterAgentId === requesterAgentId) &&
+        member.requesterSettleWake !== undefined &&
+        member.requesterSettleWake.rearmGeneration === wake.rearmGeneration &&
+        member.completionTarget === "parent"
+      );
+    });
   // Pending backoff still belongs to the last admitted attempt, not its next retry.
   return (
     params.runId ===
@@ -74,13 +84,13 @@ export function isRequesterSettleWakeForRun(params: {
       batchRunIds,
       rearmGeneration: wake.rearmGeneration,
       attemptIndex: wake.attemptCount - 1,
-      parentOnly,
+      sharedAttemptKey,
       pause: Boolean(pauseNotice),
     }).runId
   );
 }
 
-/** Immutable run and requester bindings, distinct from mutable wake progress. */
+/** Run, requester, and frozen delivery-policy bindings, distinct from wake progress. */
 export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
   return {
     runId: entry.runId,
@@ -88,6 +98,8 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
     generation: entry.generation,
     taskRunId: entry.taskRunId,
     childSessionKey: entry.childSessionKey,
+    childAgentId: entry.childAgentId,
+    completionTarget: entry.completionTarget,
     requesterSessionKey: entry.requesterSessionKey,
     requesterAgentId: entry.requesterAgentId,
     requesterStorePath: entry.requesterStorePath,
@@ -97,6 +109,43 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
     completionRequesterSessionId: entry.completionRequesterSessionId,
     completionRequesterLifecycleRevision: entry.completionRequesterLifecycleRevision,
   };
+}
+
+/** Wake decisions retain their observed progress; retirement/presentation metadata is carried forward. */
+export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
+  const wake = entry.requesterSettleWake;
+  return (
+    wake && {
+      status: wake.status,
+      attemptCount: wake.attemptCount,
+      replayCount: wake.replayCount ?? 0,
+      deferralCount: wake.deferralCount ?? 0,
+      nextAttemptAt: wake.nextAttemptAt,
+      lastError: wake.lastError,
+      batchRunIds: wake.batchRunIds?.toSorted(),
+      rearmGeneration: wake.rearmGeneration,
+      requesterYieldBatch: wake.requesterYieldBatch === true,
+      afterRequesterYield: wake.afterRequesterYield === true,
+      yieldedFinalDeliverable: wake.yieldedFinalDeliverable === true,
+      pauseNotice: wake.pauseNotice,
+    }
+  );
+}
+
+/** A retained delivery callback cannot adopt another requester claim or frozen reply policy. */
+export function isRequesterSettleRunBindingCurrent(
+  current: SubagentRunRecord,
+  expected: SubagentRunRecord,
+): boolean {
+  return (
+    isSameSubagentRunOwner(current, expected) &&
+    isDeepStrictEqual(
+      captureRequesterSettleRunIdentity(current),
+      captureRequesterSettleRunIdentity(expected),
+    ) &&
+    (current.requesterSettleWake?.yieldedFinalDeliverable === true) ===
+      (expected.requesterSettleWake?.yieldedFinalDeliverable === true)
+  );
 }
 
 /** Completion custody can outlive a requester that finished without explicitly yielding. */
@@ -168,6 +217,7 @@ const requesterRetirementCustody = (current: SubagentRunRecord) => ({
   batchRunIds: current.requesterSettleWake?.batchRunIds?.toSorted(),
   rearmGeneration: current.requesterSettleWake?.rearmGeneration,
   requesterYieldBatch: current.requesterSettleWake?.requesterYieldBatch === true,
+  yieldedFinalDeliverable: current.requesterSettleWake?.yieldedFinalDeliverable === true,
 });
 
 /** Async retirement cannot consume a newly rebound requester or cancellation obligation. */

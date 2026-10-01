@@ -7,8 +7,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
-import { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
-import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
   runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
@@ -77,6 +75,7 @@ import {
   makeQueuedRun,
   makeSuspendedDeliveryRun,
 } from "./subagent-registry.run-fixtures.test-support.js";
+import { resetSubagentRegistrySessionMocks } from "./subagent-registry.session-mocks.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
@@ -124,17 +123,11 @@ vi.mock("../../../config/sessions.js", () => ({
 
 vi.mock("../../../config/sessions/session-accessor.js", () => mocks.sessionAccessors);
 vi.mock("../../../config/sessions/session-entry-read-runtime.js", { spy: true });
-const { withSessionEntryReadOnlyInWorker: readCanonicalSessionEntry } = await vi.importActual<
-  typeof import("../../../config/sessions/session-entry-read-runtime.js")
->("../../../config/sessions/session-entry-read-runtime.js");
+vi.mock("../../../config/sessions/session-delivery-generation.js", { spy: true });
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
   applySessionEntryExactReplacements: mocks.applySessionEntryExactReplacements,
 }));
 vi.mock("../../../config/sessions/session-entry-current-runtime.js", { spy: true });
-const { captureSessionEntryCurrentRead: captureCanonicalSessionEntryCurrent } =
-  await vi.importActual<typeof import("../../../config/sessions/session-entry-current-runtime.js")>(
-    "../../../config/sessions/session-entry-current-runtime.js",
-  );
 
 vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: mocks.emitSessionLifecycleEvent,
@@ -235,7 +228,7 @@ describe("subagent registry seam flow", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-      session: { mainKey: "main", scope: "per-sender" as const },
+      session: { mainKey: "main", scope: "per-sender" as const, store: mocks.resolveStorePath() },
     });
   const getLifecycleHandler = () => {
     const handler = mocks.onAgentEvent.mock.calls.at(-1)?.[0] as unknown as
@@ -292,20 +285,7 @@ describe("subagent registry seam flow", () => {
     await configureMockSubagentRegistryPersistence(mocks);
     mocks.restoreSubagentRunsFromDisk.mockReset().mockResolvedValue(0);
     mocks.loadSessionEntry.mockReset();
-    vi.mocked(withSessionEntryReadOnlyInWorker)
-      .mockReset()
-      .mockImplementation((...args) =>
-        args[0].storePath === mocks.resolveStorePath()
-          ? mocks.withSessionEntryReadOnlyInWorker(...args)
-          : readCanonicalSessionEntry(...args),
-      );
-    vi.mocked(captureSessionEntryCurrentRead)
-      .mockReset()
-      .mockImplementation((scope, owner) =>
-        scope.storePath === mocks.resolveStorePath()
-          ? mocks.captureSessionEntryCurrentRead(scope, owner)
-          : captureCanonicalSessionEntryCurrent(scope, owner),
-      );
+    resetSubagentRegistrySessionMocks(mocks);
     mocks.listSessionEntriesCore.mockReset();
     mocks.patchSessionEntryCore.mockReset();
     mocks.readSessionCurrent.mockReset();
@@ -322,14 +302,14 @@ describe("subagent registry seam flow", () => {
     mocks.lifecycleGeneration = "test-generation";
     mocks.onAgentEvent.mockReturnValue(noop);
     mocks.getAgentRunContext.mockReturnValue(undefined);
+    mocks.resolveStorePath.mockReturnValue("/tmp/test-session-store.json");
     mocks.getRuntimeConfig.mockReturnValue({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-      session: { mainKey: "main", scope: "per-sender" as const },
+      session: { mainKey: "main", scope: "per-sender" as const, store: mocks.resolveStorePath() },
     });
     mocks.resolveAgentIdFromSessionKey.mockImplementation((sessionKey: string) => {
       return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
     });
-    mocks.resolveStorePath.mockReturnValue("/tmp/test-session-store.json");
     mocks.entries = {
       "agent:main:subagent:child": createSessionEntry({ lifecycleRevision: "revision-child" }),
     };
@@ -4014,7 +3994,7 @@ describe("subagent registry seam flow", () => {
 
     const expectedConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-      session: { mainKey: "main", scope: "per-sender" },
+      session: { mainKey: "main", scope: "per-sender", store: mocks.resolveStorePath() },
     };
     await waitForFast(() => {
       findRecordCallArg(

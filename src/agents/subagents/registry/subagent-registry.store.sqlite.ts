@@ -62,6 +62,7 @@ type SubagentRunReadSqliteRow = Pick<
   delivery_disposition: string | null;
   delivery_suspended_at: number | null;
   requester_agent_id: string | null;
+  child_agent_id: string | null;
   collect: number | null;
   group_id: string | null;
   swarm_requester_session_key: string | null;
@@ -280,6 +281,7 @@ function readSubagentSessionListRows(
           "delivery_disposition",
         ),
         subagentPayloadJsonValue<string | null>("$.requesterAgentId").as("requester_agent_id"),
+        subagentPayloadJsonValue<string | null>("$.childAgentId").as("child_agent_id"),
         subagentPayloadJsonValue<number | null>("$.delivery.suspendedAt").as(
           "delivery_suspended_at",
         ),
@@ -317,6 +319,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       taskRunId: row.task_run_id ?? undefined,
       swarmRunId: row.swarm_run_id || undefined,
       childSessionKey,
+      childAgentId: row.child_agent_id?.trim() || undefined,
       controllerSessionKey: row.controller_session_key?.trim() || undefined,
       requesterSessionKey,
       requesterStorePath: row.requester_store_path ?? undefined,

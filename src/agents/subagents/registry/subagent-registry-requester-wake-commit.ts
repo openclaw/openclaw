@@ -14,9 +14,11 @@ import {
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
 import type { RequesterInitialTransfer } from "./subagent-registry-requester-yield.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   captureRequesterSettleRunIdentity,
+  captureRequesterSettleWakeProgress,
   isRequesterCompletionCohortCurrent,
 } from "./subagent-requester-settle-identity.js";
 import {
@@ -292,6 +294,7 @@ export function commitRequesterInitialTransfer(
       identities.set(entry.runId, captureRequesterSettleRunIdentity(entry));
     }
     initialTransfer.published = true;
+    return entries;
   }
   async function write(
     mutate: (drafts: SubagentRunRecord[]) => ReadonlySet<string> | void,
@@ -517,19 +520,14 @@ export function commitRequesterWake(
       );
     });
   }
-  const entries = observedEntries.map((entry) => {
-    const current = context.options.runs.get(entry.runId);
-    return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-  });
+  const entries = observedEntries;
   const owners = new Map(
     entries.map((entry) => [
       getSubagentRunRuntimeKey(entry),
       {
         identity: captureRequesterSettleRunIdentity(entry),
-        batchRunIds: entry.requesterSettleWake?.batchRunIds,
         generation,
-        hasWake: entry.requesterSettleWake !== undefined,
-        pause: Boolean(entry.requesterSettleWake?.pauseNotice),
+        progress: captureRequesterSettleWakeProgress(entry),
         killIntent: entry.killIntent,
         killReconciliation: entry.killReconciliation,
         published: false,
@@ -537,6 +535,11 @@ export function commitRequesterWake(
       },
     ]),
   );
+  let acknowledgedReceipt: PendingRequesterSettleWakeCommit["committedWake"];
+  const acknowledgedProgress = new Map<
+    string,
+    ReturnType<typeof captureRequesterSettleWakeProgress>
+  >();
   const pending: PendingRequesterSettleWakeCommit = {
     entries: [...entries],
     generation,
@@ -550,10 +553,7 @@ export function commitRequesterWake(
       return owner?.published === true && owner.retired;
     },
     adoptPublished(members) {
-      pending.entries = pending.entries.map((entry) => {
-        const current = context.options.runs.get(entry.runId);
-        return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-      });
+      const published = new Map<string, SubagentRunRecord>();
       for (const entry of members) {
         const owner = owners.get(getSubagentRunRuntimeKey(entry));
         if (!owner) {
@@ -567,11 +567,12 @@ export function commitRequesterWake(
         }
         owner.published = true;
         owner.generation = current?.requesterSettleWake?.rearmGeneration;
-        owner.batchRunIds = current?.requesterSettleWake?.batchRunIds;
-        owner.hasWake = current?.requesterSettleWake !== undefined;
-        owner.pause = Boolean(current?.requesterSettleWake?.pauseNotice);
+        owner.progress = current && captureRequesterSettleWakeProgress(current);
         owner.retired = pending.committedWake?.result.retiredRunIds.includes(entry.runId) === true;
+        published.set(entry.runId, current ?? entry);
       }
+      pending.entries = pending.entries.map((entry) => published.get(entry.runId) ?? entry);
+      return [...published.values()];
     },
     isCurrent: (entry) => {
       const owner = owners.get(getSubagentRunRuntimeKey(entry));
@@ -594,15 +595,38 @@ export function commitRequesterWake(
       ) {
         return false;
       }
+      const progress = captureRequesterSettleWakeProgress(live);
+      // Canonical refresh can expose our committed state before its publication retry.
+      // A different wake must leave this episode, even when a native receipt is retained.
+      if (pending.committedWake && !owner.published) {
+        if (acknowledgedReceipt !== pending.committedWake) {
+          acknowledgedReceipt = pending.committedWake;
+          acknowledgedProgress.clear();
+          for (const { row } of acknowledgedReceipt.result.records) {
+            const intended = rowToSubagentRunRecord(row);
+            if (intended) {
+              acknowledgedProgress.set(
+                intended.runId,
+                captureRequesterSettleWakeProgress(intended),
+              );
+            }
+          }
+        }
+        if (
+          acknowledgedProgress.has(entry.runId) &&
+          isDeepStrictEqual(progress, acknowledgedProgress.get(entry.runId))
+        ) {
+          return true;
+        }
+      }
       const wake = live.requesterSettleWake;
-      if (owner.published && !owner.hasWake) {
+      if (owner.published && !owner.progress) {
         return wake === undefined;
       }
       return Boolean(
         wake &&
         wake.rearmGeneration === owner.generation &&
-        isDeepStrictEqual(wake.batchRunIds, owner.batchRunIds) &&
-        Boolean(wake.pauseNotice) === owner.pause,
+        isDeepStrictEqual(progress, owner.progress),
       );
     },
   };
@@ -673,12 +697,9 @@ function runPendingWakeCommit(
   const operation = Promise.resolve()
     .then(async () => {
       try {
-        const members = pending.entries
-          .map((entry) => {
-            const current = context.options.runs.get(entry.runId);
-            return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-          })
-          .filter((member) => getPendingWakeCommit(context, member) === pending);
+        const members = pending.entries.filter(
+          (member) => getPendingWakeCommit(context, member) === pending,
+        );
         // A no-wake decision belongs to its complete original batch. Storage may
         // retry it unchanged; changed membership needs a fresh sweeper decision.
         if (

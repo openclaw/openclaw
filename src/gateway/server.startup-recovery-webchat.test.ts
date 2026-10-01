@@ -444,16 +444,16 @@ it(
           isSourceCurrent: () => true,
           requesterSessionKey: sessionKey,
           settledEntry: entry,
-          transitionBatch: async (batch, next) => {
+          transitionBatch: async (batch, next, onPublished) => {
             const result = await mutateRequesterSettleWakeBatch({
-              entries: currentBatch(batch),
+              entries: batch,
               operation: { kind: "transition", state: next },
               context: captureOpenClawStateWorkerContext(),
               assertCurrent: () => {
                 currentBatch(batch);
               },
               onCommitted: () => {},
-              onPublished: () => {},
+              onPublished: () => onPublished(currentBatch(batch)),
             });
             expect(result.publication).toBe("published");
           },
@@ -462,7 +462,7 @@ it(
               throw new Error("Saved batch did not produce a delivery outcome");
             }
             const result = await settleRequesterCompletionBatch({
-              entries: currentBatch(batch).map((subagent) => ({ subagent })),
+              entries: batch.map((subagent) => ({ subagent })),
               outcome,
               isCurrent: () =>
                 batch.every((member) => {

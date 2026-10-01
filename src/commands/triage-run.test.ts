@@ -662,7 +662,7 @@ describe("triage --run", () => {
     expect(mocks.runUtf8CommandWithTimeout).toHaveBeenCalledTimes(2);
     expect(mocks.runUtf8CommandWithTimeout).toHaveBeenCalledWith(
       [
-        process.execPath,
+        process.versions.bun ? "node" : process.execPath,
         path.resolve(import.meta.dirname, "../../dist/index.js"),
         "doctor",
         "--lint",

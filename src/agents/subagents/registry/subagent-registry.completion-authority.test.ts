@@ -108,9 +108,8 @@ describe("registered completion source custody", () => {
     "publishes accepted-run registration only after a current worker commit (caller revoked: %s)",
     async (revoke) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        vi.mocked(config.getRuntimeConfig).mockReturnValue({
-          session: { store: state.path("sessions.json") },
-        });
+        const cfg = { session: { store: state.path("sessions.json") } };
+        vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
         const runId = "worker-registration";
         const entered = createDeferredCore();
         const release = createDeferredCore();
@@ -162,8 +161,16 @@ describe("registered completion source custody", () => {
               }),
             );
             const accepted = subagentRuns.get(runId);
-            await registerSubagentRun(registration(runId), { acceptedRunReplay: true });
+            expect(accepted?.childAgentId).toBeUndefined();
+            await registerSubagentRun(registration(runId, { childAgentId: "MAIN" }), {
+              acceptedRunReplay: true,
+            });
             expect(subagentRuns.get(runId)).toBe(accepted);
+            await expect(
+              registerSubagentRun(registration(runId, { childAgentId: "research" }), {
+                acceptedRunReplay: true,
+              }),
+            ).rejects.toThrow("Subagent registration child agent disagrees with its session key.");
             expect(callGateway).toHaveBeenCalledTimes(1);
           }
         } finally {
@@ -278,6 +285,29 @@ describe("registered completion source custody", () => {
         held.mockRestore();
         competingRegistration.release();
         source.release();
+      }
+    });
+  });
+
+  it("retains raw child ownership, including unknown legacy ownership, on registration replay", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const originalConfig = { session: { store: state.path("original.sqlite") } };
+      for (const childAgentId of [undefined, "research"]) {
+        vi.mocked(config.getRuntimeConfig).mockReturnValue(originalConfig);
+        const runId = childAgentId ?? "legacy";
+        const params = registration(runId, { childSessionKey: "global", childAgentId });
+        await registerSubagentRun(params);
+        expect(subagentRuns.get(runId)?.childAgentId).toBe(childAgentId);
+        vi.mocked(config.getRuntimeConfig).mockReturnValue({
+          session: { store: state.path("replacement.sqlite") },
+        });
+        await registerSubagentRun(
+          { ...params, childAgentId: "main" },
+          {
+            acceptedRunReplay: true,
+          },
+        );
+        expect(subagentRuns.get(runId)?.childAgentId).toBe(childAgentId);
       }
     });
   });
@@ -405,6 +435,7 @@ describe("registered completion source custody", () => {
             await pending;
             expect(subagentRuns.get(runId)?.requesterStorePath).toBe(originalPath);
             expect(subagentRuns.get(runId)?.controllerStorePath).toBe(originalPath);
+            expect(subagentRuns.get(runId)?.childAgentId).toBeUndefined();
             await releaseSubagentRun(runId);
           } else {
             await expect(pending).rejects.toThrow(
@@ -465,7 +496,13 @@ describe("registered completion source custody", () => {
             },
             () =>
               registerSubagentRun(
-                registration(runId, { requesterAgentId: "main", requesterTurnRunId: "parent" }),
+                registration(runId, {
+                  requesterAgentId: "main",
+                  requesterTurnRunId: "parent",
+                  ...(ending === "replace"
+                    ? { childSessionKey: "global", childAgentId: "research" }
+                    : {}),
+                }),
               ),
           );
         if (ending === "registration-rejected") {
@@ -577,6 +614,7 @@ describe("registered completion source custody", () => {
               preserveRequesterSettleWake: true,
             }),
           ).toBe(true);
+          expect(subagentRuns.get("successor")?.childAgentId).toBe("research");
           expect(source.authority.assertCurrent).not.toThrow();
           expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
             /authority/,

@@ -35,7 +35,6 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
   requesterAgentId: string;
   requesterTurnRunId: string;
   assertCurrent: () => void;
-  assertPublicationCurrent?: () => void;
   runs: Map<string, SubagentRunRecord>;
 }): Promise<AcceptedSessionSpawn | undefined> {
   const requesterTurnRunId = params.requesterTurnRunId.trim();
@@ -357,6 +356,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   const batchRunIds = [...childRunIds].toSorted();
   let rearmGeneration: number | undefined;
   let needsCohortRelease = false;
+  let yieldedFinalDeliverable = false;
   const ownsRequester = (
     requester: SubagentRunRecord | undefined,
   ): requester is SubagentRunRecord =>
@@ -418,6 +418,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             entry.requesterTurnYielded !== true ||
             wake?.status !== "pending" ||
             wake.attemptCount !== 0 ||
+            (wake.yieldedFinalDeliverable === true) !== yieldedFinalDeliverable ||
             !isRequesterYieldCohortMember(entry, batchRunIds, rearmGeneration)
           );
         })
@@ -479,6 +480,9 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
         });
       rearmGeneration = preparedCohort ? preparedWake.rearmGeneration : undefined;
       needsCohortRelease = params.requesterYielded && !requesterAlreadyDeliveredFinal;
+      yieldedFinalDeliverable = preparedCohort
+        ? preparedWake.yieldedFinalDeliverable === true
+        : needsCohortRelease;
       if (
         needsCohortRelease &&
         ((entries.some((entry) => entry.requesterSettleWake?.requesterYieldBatch === true) &&
@@ -516,6 +520,9 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             attemptCount: 0,
             batchRunIds,
             requesterYieldBatch: true,
+            // Written only by builds that let a yielded requester answer; released
+            // markerless private batches keep their admitted private policy.
+            yieldedFinalDeliverable: true,
             ...(completionEnded ? { afterRequesterYield: true } : {}),
             rearmGeneration,
             progressOperationId,

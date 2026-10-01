@@ -160,6 +160,41 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     },
   };
 }
+
+export async function observeRequesterOutcomePublication(
+  cut: "rejected" | "committed",
+  originalStateDir: string,
+) {
+  const completionStore = await import("./subagent-completion-admission.store.js");
+  const settle = completionStore.settleRequesterCompletionBatch;
+  const reconciledBatches: string[][] = [];
+  let retainedBeforePublication = false;
+  const observed = vi
+    .spyOn(completionStore, "settleRequesterCompletionBatch")
+    .mockImplementation((params) => {
+      if (params.committed) {
+        reconciledBatches.push(params.entries.map(({ subagent }) => subagent.runId));
+      }
+      return settle({
+        ...params,
+        onCommitted(receipt) {
+          params.onCommitted?.(receipt);
+          if (cut === "committed" && !retainedBeforePublication) {
+            retainedBeforePublication = true;
+            process.env.OPENCLAW_STATE_DIR = `${originalStateDir}/replacement-source`;
+          }
+        },
+      });
+    });
+  return {
+    reconciledBatches,
+    get retainedBeforePublication() {
+      return retainedBeforePublication;
+    },
+    restore: () => observed.mockRestore(),
+  };
+}
+
 export function armRequesterWake(
   input: ReturnType<typeof records>,
   batchRunIds = [input.subagent.runId],

@@ -487,11 +487,11 @@ it("retains a committed wake with unreadable facts until canonical restore", asy
       });
     driver.wake.mockImplementation(async (params) => {
       try {
-        await params.transitionBatch([input.subagent], {
-          status: "dispatching",
-          attemptCount: 1,
-          rearmGeneration: 1,
-        });
+        await params.transitionBatch(
+          [input.subagent],
+          { status: "dispatching", attemptCount: 1, rearmGeneration: 1 },
+          () => {},
+        );
       } catch (error) {
         observedError = error;
         throw error;

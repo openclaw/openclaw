@@ -270,6 +270,8 @@ class SubagentRunManager extends SubagentLaunchManager {
             this.options.getRuntimeConfig(),
             entry.childSessionKey,
             assertCurrent,
+            entry.execution.transcriptTarget,
+            entry.childAgentId,
           );
           sessions.set(entry.runId, session);
         }

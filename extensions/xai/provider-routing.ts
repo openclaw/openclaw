@@ -5,11 +5,7 @@ import { isXaiProviderId } from "./provider-id.js";
 const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai"]);
 
 function resolveHostname(value: string): string | undefined {
-  try {
-    return new URL(value).hostname.toLowerCase();
-  } catch {
-    return undefined;
-  }
+  return URL.parse(value)?.hostname.toLowerCase();
 }
 
 function isXaiNativeEndpoint(baseUrl: unknown): boolean {

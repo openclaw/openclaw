@@ -63,7 +63,7 @@ describe("registered catalog list phase diagnostics", () => {
     config = { agents: { list: [{ id: "main" }] } };
     projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
     Object.defineProperty(projection, "needsMaterialization", { get: () => dirty });
-    vi.spyOn(projectionAccess, "getSessionRowProjection").mockReturnValue(projection);
+    vi.spyOn(projectionAccess, "requireSessionRowProjection").mockReturnValue(projection);
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     vi.spyOn(Date, "now").mockImplementation(() => 1_700_000_000_000 + clock);
     threadCpuUsage = vi.spyOn(process, "threadCpuUsage").mockImplementation((previous) => ({

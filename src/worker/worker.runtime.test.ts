@@ -69,7 +69,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { prepareSkillBundle } from "../skills/library/bundle.js";
@@ -171,7 +171,7 @@ type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
   backgroundCommand?: string;
   execCommand?: string;
-  execApprovals?: ExecApprovalsFile;
+  execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
   ignoreFirstAdmission?: boolean;

@@ -2,6 +2,7 @@ import {
   AllowFromListSchema,
   ChannelBotLoopProtectionSchema,
   ChannelDeliveryStreamingConfigSchema,
+  ChannelStreamingProgressSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildNestedDmConfigSchema,
@@ -69,17 +70,7 @@ export const matrixStreamingSchema = z
   .object({
     mode: z.enum(["partial", "quiet", "progress", "off"]).optional(),
     ...ChannelDeliveryStreamingConfigSchema.shape,
-    progress: z
-      .object({
-        label: z.union([z.string(), z.literal(false)]).optional(),
-        labels: z.array(z.string()).optional(),
-        maxLines: z.number().int().positive().optional(),
-        maxLineChars: z.number().int().positive().optional(),
-        toolProgress: z.boolean().optional(),
-        commandText: z.enum(["raw", "status"]).optional(),
-      })
-      .strict()
-      .optional(),
+    progress: ChannelStreamingProgressSchema.omit({ commentary: true, narration: true }).optional(),
     preview: z
       .object({
         toolProgress: z.boolean().optional(),

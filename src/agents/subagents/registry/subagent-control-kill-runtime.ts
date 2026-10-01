@@ -172,32 +172,45 @@ export async function killSubagentRun(params: {
   let admission: "ready" | "declined" | "busy" = "ready";
   let killClaim: Awaited<ReturnType<typeof claimSubagentRunKill>>;
   const claimSelectedRunKill = async () => {
-    let selected = currentEntry();
-    for (let attempt = 0; selected && attempt < 2; attempt++) {
-      const claim = await claimSubagentRunKill({
-        runId: selected.runId,
-        expected: params.entry,
-        sessionId,
-        sessionLifecycleRevision,
-        suppressTaskDelivery: params.suppressTaskDelivery,
-        context: stateContext,
-        assertCurrent: () => {
-          assertState();
-          params.cancellationControl?.assertCurrent();
+    try {
+      let selected = currentEntry();
+      for (let attempt = 0; selected && attempt < 2; attempt++) {
+        const claim = await claimSubagentRunKill({
+          runId: selected.runId,
+          expected: params.entry,
+          sessionId,
+          sessionLifecycleRevision,
+          suppressTaskDelivery: params.suppressTaskDelivery,
+          context: stateContext,
+          assertCurrent: () => {
+            assertState();
+            params.cancellationControl?.assertCurrent();
+          },
+          assertPublicationCurrent: assertSelectedNativeRun,
+        });
+        if (claim) {
+          return { claim };
+        }
+        const accepted = currentEntry();
+        if (!accepted || accepted.runId === selected.runId) {
+          return { claim: undefined };
+        }
+        // Only the same owner's acknowledged queued-to-running rekey can reselect admission.
+        selected = accepted;
+      }
+      return { claim: undefined };
+    } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
+      return {
+        failure: {
+          killed: false,
+          sessionId,
+          error: `Failed to persist subagent kill intent: ${formatKillPersistenceError(error)}`,
         },
-        assertPublicationCurrent: assertSelectedNativeRun,
-      });
-      if (claim) {
-        return claim;
-      }
-      const accepted = currentEntry();
-      if (!accepted || accepted.runId === selected.runId) {
-        return undefined;
-      }
-      // Only the same owner's acknowledged queued-to-running rekey can reselect admission.
-      selected = accepted;
+      };
     }
-    return undefined;
   };
   let stopAccepted = false;
   let preparationResult: Awaited<ReturnType<typeof killSubagentRun>> | undefined;
@@ -352,21 +365,14 @@ export async function killSubagentRun(params: {
         beforeInterruption.execution.restartRecovery === undefined &&
         !resolveSubagentKillTargetState(beforeInterruption)
       ) {
-        try {
-          // Active completion must see cancellation before admission interruption.
-          // Pending launch/recovery owners first need the drain to commit their identity.
-          killClaim = await claimSelectedRunKill();
-        } catch (error) {
-          if (hasSqliteWorkerOutcomeUnknown(error)) {
-            throw error;
-          }
-          preparationResult = {
-            killed: false,
-            sessionId,
-            error: `Failed to persist subagent kill intent: ${formatKillPersistenceError(error)}`,
-          };
+        // Active completion must see cancellation before admission interruption.
+        // Pending launch/recovery owners first need the drain to commit their identity.
+        const claimed = await claimSelectedRunKill();
+        if (claimed.failure) {
+          preparationResult = claimed.failure;
           return;
         }
+        killClaim = claimed.claim;
         if (killClaim) {
           if (!ownsSessionIncarnation()) {
             preparationResult = await releaseChangedSessionKill(killClaim);
@@ -422,17 +428,11 @@ export async function killSubagentRun(params: {
         !resolveSubagentKillTargetState(afterInterruption) &&
         isCurrent()
       ) {
-        try {
-          killClaim = await claimSelectedRunKill();
-        } catch (error) {
-          if (hasSqliteWorkerOutcomeUnknown(error)) {
-            throw error;
-          }
-          preparationResult = {
-            killed: false,
-            sessionId,
-            error: `Failed to persist subagent kill intent: ${formatKillPersistenceError(error)}`,
-          };
+        const claimed = await claimSelectedRunKill();
+        if (claimed.failure) {
+          preparationResult = claimed.failure;
+        } else {
+          killClaim = claimed.claim;
         }
       }
     },
@@ -520,18 +520,11 @@ export async function killSubagentRun(params: {
         return declined;
       }
       if (!killClaim) {
-        try {
-          killClaim = await claimSelectedRunKill();
-        } catch (error) {
-          if (hasSqliteWorkerOutcomeUnknown(error)) {
-            throw error;
-          }
-          return {
-            killed: false,
-            sessionId,
-            error: `Failed to persist subagent kill intent: ${formatKillPersistenceError(error)}`,
-          };
+        const claimed = await claimSelectedRunKill();
+        if (claimed.failure) {
+          return claimed.failure;
         }
+        killClaim = claimed.claim;
       }
       if (!killClaim) {
         return {
@@ -649,7 +642,19 @@ export async function killSubagentRun(params: {
         if (!killOwnerCurrent()) {
           return { killed: false, sessionId, superseded: true };
         }
-        const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
+        const cleared = runtime.clearSessionLifecycleQueues({
+          keys: [childSessionKey, sessionId],
+          agentId: resolved.agentId,
+          sessionKey: childSessionKey,
+          sessionId,
+          assertCurrent: () => {
+            assertState();
+            params.cancellationControl?.assertCurrent();
+            if (!killOwnerCurrent()) {
+              throw new Error("Subagent queue cleanup lost its original kill claim.");
+            }
+          },
+        });
         if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
           logVerbose(
             `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,

@@ -31,6 +31,7 @@ function hostCpu(user: number, idle: number) {
 }
 
 beforeEach(() => {
+  vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: undefined } });
   now = 10_000;
   clock = createGatewaySchedulerClock(now);
   revision = 0;

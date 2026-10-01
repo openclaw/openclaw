@@ -516,7 +516,7 @@ function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): 
   return mediaUrls[0];
 }
 
-async function sendMattermostMedia(
+async function sendMattermostContent(
   ctx: ChannelOutboundContext,
   content: { text: string; mediaUrl?: string; buttons?: unknown[]; attachmentText?: string } = ctx,
 ) {
@@ -599,7 +599,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       })
         .map((url) => url.trim())
         .find(Boolean);
-      const result = await sendMattermostMedia(ctx, {
+      const result = await sendMattermostContent(ctx, {
         text: ctx.payload.text ?? ctx.text,
         mediaUrl,
         buttons,
@@ -623,20 +623,8 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "mattermost",
-    sendText: async (ctx) =>
-      toMattermostOutboundResult(
-        await (
-          await loadMattermostChannelRuntime()
-        ).sendMessageMattermost(ctx.to, ctx.text, {
-          cfg: ctx.cfg,
-          accountId: ctx.accountId ?? undefined,
-          replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
-          assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-          onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-          onDeliveryResult: createMattermostDeliveryProgressReporter(ctx.onDeliveryResult),
-        }),
-      ),
-    sendMedia: sendMattermostMedia,
+    sendText: (ctx) => sendMattermostContent(ctx, { text: ctx.text }),
+    sendMedia: sendMattermostContent,
   }),
 };
 

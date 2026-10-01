@@ -626,7 +626,9 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   gatewayOpen = false;
   const replacementGateway = createGatewayContext();
   const replacementResolver = () => replacementGateway;
-  await expect(recoverSubagentRunGatewayOwner(published, replacementResolver)).resolves.toBe(true);
+  await expect(
+    recoverSubagentRunGatewayOwner(published, replacementResolver, () => {}),
+  ).resolves.toBe(true);
   const recovered = subagentRuns.get(child.runId)!;
   expect(isSameSubagentRunOwner(recovered, alias)).toBe(false);
   expect(getGatewayContextResolver(initial)?.()).toBeUndefined();

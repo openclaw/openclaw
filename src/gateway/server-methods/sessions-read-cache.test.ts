@@ -38,7 +38,8 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
@@ -900,16 +901,16 @@ describe("resident sessions.list", () => {
         const client = identifiedClient("viewer@example.com");
         await initializeSessionReadContext(context);
         const projection = getSessionRowProjection(context)!;
-        const ensure = projection.ensureMaterialized.bind(projection);
+        const ensure = projection.prepareSelection.bind(projection);
         let releaseRows!: () => void;
         const gate = new Promise<void>((resolve) => {
           releaseRows = resolve;
         });
         const readiness = vi
-          .spyOn(projection, "ensureMaterialized")
-          .mockImplementationOnce(async () => {
+          .spyOn(projection, "prepareSelection")
+          .mockImplementationOnce(async (...args) => {
             await gate;
-            await ensure();
+            await ensure(...args);
           });
 
         const firstPage = listSessions({
@@ -954,13 +955,14 @@ describe("resident sessions.list", () => {
       const request = { archived: "all" as const, limit: 100 };
       await initializeSessionReadContext(context);
       const projection = getSessionRowProjection(context)!;
-      vi.spyOn(projection, "ensureMaterialized").mockRejectedValueOnce(
-        new Error("synthetic materialization failure"),
-      );
+      const readiness = vi
+        .spyOn(projection, "prepareSelection")
+        .mockRejectedValueOnce(new Error("synthetic materialization failure"));
 
       await expect(listSessions({ client, context, request })).rejects.toThrow(
         "synthetic materialization failure",
       );
+      expect(readiness).toHaveBeenCalledOnce();
       await expect(listSessions({ client, context, request })).resolves.toMatchObject({
         sessions: expect.any(Array),
       });

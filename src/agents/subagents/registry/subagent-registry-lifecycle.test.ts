@@ -4100,8 +4100,8 @@ describe("subagent registry lifecycle hardening", () => {
         runSubagentAnnounceFlow,
         maybeWakeRequesterAfterAllChildrenSettled: async (params) => {
           await params.completeBatch(
-            [entry],
-            readLifecycleRun(entry).requesterSettleWake?.rearmGeneration,
+            [params.settledEntry],
+            params.settledEntry.requesterSettleWake?.rearmGeneration,
             {
               delivered: true,
               path: "direct",
@@ -4804,7 +4804,9 @@ describe("requester settle wake trigger", () => {
   it("retains delete-cleanup rows until the settle wake resolves", async () => {
     const entry = createRunEntry({ endedAt: 4_000, cleanup: "delete" });
     const runs = new Map([[entry.runId, entry]]);
-    const settleWake = vi.fn(async () => false);
+    const settleWake = vi.fn<
+      LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+    >(async () => false);
     const controller = createLifecycleController({
       entry,
       runs,
@@ -4834,9 +4836,11 @@ describe("requester settle wake trigger", () => {
         }),
       }),
     );
-    const completeBatch = firstCallArg(settleWake)
-      .completeBatch as RequesterSettleWakeParams["completeBatch"];
-    await completeBatch([entry]);
+    const [settleParams] = settleWake.mock.calls[0]!;
+    await settleParams.completeBatch(
+      [settleParams.settledEntry],
+      settleParams.settledEntry.requesterSettleWake?.rearmGeneration,
+    );
     expect(runs.has(entry.runId)).toBe(false);
   });
 
@@ -4940,7 +4944,10 @@ describe("requester settle wake trigger", () => {
         >[0],
       ) => {
         if (params.settledEntry.runId === first.runId) {
-          await params.completeBatch([first]);
+          await params.completeBatch(
+            [params.settledEntry],
+            params.settledEntry.requesterSettleWake?.rearmGeneration,
+          );
         }
         return false;
       },
@@ -5006,8 +5013,8 @@ describe("requester settle wake trigger", () => {
         >[0],
       ) => {
         await params.completeBatch(
-          [entry],
-          readLifecycleRun(entry).requesterSettleWake?.rearmGeneration,
+          [params.settledEntry],
+          params.settledEntry.requesterSettleWake?.rearmGeneration,
         );
         return true;
       },
@@ -5445,17 +5452,19 @@ describe("requester settle wake trigger", () => {
         });
         controller.resumeRequesterSettleWake(entry.runId, entry);
         await waitForLifecycleState(() => expect(settleParams).toBeDefined());
+        const admitted = settleParams!;
+        const admittedGeneration = admitted.settledEntry.requesterSettleWake?.rearmGeneration;
         if (mode === "failed persistence") {
           beforeWrite.mockImplementationOnce(() => {
             throw new Error("write failed");
           });
-          await expect(settleParams!.completeBatch([entry], wake.rearmGeneration)).rejects.toThrow(
-            "write failed",
-          );
+          await expect(
+            admitted.completeBatch([admitted.settledEntry], admittedGeneration),
+          ).rejects.toThrow("write failed");
         } else {
-          await settleParams!.completeBatch(
-            [entry],
-            mode === "stale generation" ? 0 : wake.rearmGeneration,
+          await admitted.completeBatch(
+            [admitted.settledEntry],
+            mode === "stale generation" ? 0 : admittedGeneration,
           );
         }
         // The immutable pre-settlement value cannot resurrect committed outbox custody.
@@ -5546,7 +5555,10 @@ describe("requester settle wake trigger", () => {
           LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
         >[0],
       ) => {
-        await params.completeBatch([entry]);
+        await params.completeBatch(
+          [params.settledEntry],
+          params.settledEntry.requesterSettleWake?.rearmGeneration,
+        );
         return false;
       },
     );
@@ -5598,8 +5610,11 @@ describe("requester settle wake trigger", () => {
       completion: { required: false, resultText: "delete-mode findings" },
     });
     const runs = new Map([[entry.runId, entry]]);
-    const settleWake = vi.fn(async (params: Pick<RequesterSettleWakeParams, "completeBatch">) => {
-      await params.completeBatch([entry]);
+    const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
+      await params.completeBatch(
+        [params.settledEntry],
+        params.settledEntry.requesterSettleWake?.rearmGeneration,
+      );
       return false;
     });
     const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
@@ -5624,7 +5639,9 @@ describe("requester settle wake trigger", () => {
       endedReason: "subagent-killed",
     });
     const runs = new Map([[entry.runId, entry]]);
-    const settleWake = vi.fn(async () => false);
+    const settleWake = vi.fn<
+      LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+    >(async () => false);
     const controller = createLifecycleController({
       entry,
       runs,
@@ -5641,9 +5658,11 @@ describe("requester settle wake trigger", () => {
     expect(runs.has(entry.runId)).toBe(true);
     expect(readLifecycleRun(entry).requesterSettleWake?.retireAfterSettle).toBe(true);
     expect(settleWake).toHaveBeenCalledTimes(1);
-    const completeBatch = firstCallArg(settleWake)
-      .completeBatch as RequesterSettleWakeParams["completeBatch"];
-    await completeBatch([entry]);
+    const [settleParams] = settleWake.mock.calls[0]!;
+    await settleParams.completeBatch(
+      [settleParams.settledEntry],
+      settleParams.settledEntry.requesterSettleWake?.rearmGeneration,
+    );
     expect(runs.has(entry.runId)).toBe(false);
   });
 
@@ -5825,14 +5844,18 @@ describe("requester settle wake trigger", () => {
       ) => {
         invocation += 1;
         if (invocation === 1) {
-          await params.transitionBatch([entry], {
-            status: "pending",
-            attemptCount: 0,
-            nextAttemptAt: 30_000,
-            batchRunIds: [entry.runId],
-          });
+          await params.transitionBatch(
+            [params.settledEntry],
+            {
+              status: "pending",
+              attemptCount: 0,
+              nextAttemptAt: 30_000,
+              batchRunIds: [entry.runId],
+            },
+            () => {},
+          );
         } else {
-          await params.completeBatch([entry]);
+          await params.completeBatch([params.settledEntry]);
         }
         return false;
       },
@@ -6460,12 +6483,11 @@ describe("requester settle wake trigger", () => {
         releases.push(resolve);
       });
       if (attempt === 1) {
-        await params.transitionBatch([params.settledEntry], {
-          status: "pending",
-          attemptCount: 1,
-          nextAttemptAt: 100,
-          batchRunIds: [runId],
-        });
+        await params.transitionBatch(
+          [params.settledEntry],
+          { status: "pending", attemptCount: 1, nextAttemptAt: 100, batchRunIds: [runId] },
+          () => {},
+        );
       } else {
         await params.completeBatch(
           [params.settledEntry],

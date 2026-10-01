@@ -10,6 +10,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
@@ -17,7 +18,6 @@ import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = vi.hoisted(() => ({
@@ -97,7 +97,7 @@ async function readStored() {
 }
 
 function createRegistrationFixture() {
-  const refusal = { descriptor: true };
+  const refusal = { descriptor: true, terminal: false };
   const execute = stateWorker.runOpenClawStateWorkerOperation;
   vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
     (owner, run, options) =>
@@ -106,14 +106,14 @@ function createRegistrationFixture() {
         (scope) =>
           run({
             execute: async (command, executeOptions) => {
-              if (
-                refusal.descriptor &&
-                command.type === "subagents.persistChanges" &&
-                (command.input as SubagentRegistryWrite).values.some(
-                  (row) => rowToSubagentRunRecord(row)?.queuedLaunch,
-                )
-              ) {
-                throw new Error("descriptor refused");
+              if (isSubagentRegistryWriteCommand(command)) {
+                const rows = command.input.values.map(rowToSubagentRunRecord);
+                if (refusal.descriptor && rows.some((row) => row?.queuedLaunch)) {
+                  throw new Error("descriptor refused");
+                }
+                if (refusal.terminal && rows.some((row) => row?.execution.status === "terminal")) {
+                  throw new Error("terminal settlement refused");
+                }
               }
               return scope.execute(command, executeOptions);
             },
@@ -153,7 +153,8 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
   "reconciles a retained descriptorless registration through %s",
   async (recovery) => {
     const newerSibling = recovery === "restart with newer sibling";
-    const { manager } = createRegistrationFixture();
+    const { refusal, manager } = createRegistrationFixture();
+    refusal.terminal = true;
     let ownership: SubagentRegistrationScope | undefined;
     const runId = "retained-registration";
     const childSessionKey = "agent:main:subagent:retained-registration";
@@ -208,7 +209,20 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
             },
           },
         ),
-      ).rejects.toMatchObject({ outcome: "not-committed" });
+      ).rejects.toMatchObject({
+        cause: expect.objectContaining({ outcome: "not-committed" }),
+        errors: [
+          expect.objectContaining({
+            outcome: "not-committed",
+            message: expect.stringContaining("descriptor refused"),
+          }),
+          expect.objectContaining({
+            outcome: "not-committed",
+            message: expect.stringContaining("terminal settlement refused"),
+          }),
+        ],
+      });
+      refusal.terminal = false;
       expect((await readStored()).get(runId)?.queuedLaunch).toBeUndefined();
       expect((await readStored()).get(runId)?.execution.status).toBe("queued");
       expect(expectDefined(ownership, "registration scope").canCleanupSession()).toBe(false);

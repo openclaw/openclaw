@@ -4,8 +4,8 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
-  resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";

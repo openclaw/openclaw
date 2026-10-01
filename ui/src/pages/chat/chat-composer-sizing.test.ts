@@ -128,6 +128,11 @@ describe("chat composer sizing", () => {
       expect(thread.scrollTop).toBe(position === "end" ? 750 : 100);
       expect(onTranscriptScroll).toHaveBeenCalledExactlyOnceWith({
         type: "resize",
+        viewport: {
+          clientHeight: 450,
+          scrollHeight: 1200,
+          scrollTop: position === "end" ? 750 : 100,
+        },
         ...(position === "end" ? { scrollCorrection: { before: 642, after: 750 } } : {}),
       });
       onTranscriptScroll.mockClear();
@@ -143,6 +148,7 @@ describe("chat composer sizing", () => {
         expect(thread.scrollTop).toBe(750);
         expect(onTranscriptScroll).toHaveBeenCalledExactlyOnceWith({
           type: "resize",
+          viewport: { clientHeight: 450, scrollHeight: 1200, scrollTop: 750 },
           scrollCorrection: { before: 746, after: 750 },
         });
         onTranscriptScroll.mockClear();
@@ -154,6 +160,11 @@ describe("chat composer sizing", () => {
       expect(thread.scrollTop).toBe(position === "end" ? 642 : 100);
       expect(onTranscriptScroll).toHaveBeenCalledExactlyOnceWith({
         type: "resize",
+        viewport: {
+          clientHeight: 558,
+          scrollHeight: 1200,
+          scrollTop: position === "end" ? 642 : 100,
+        },
         ...(position === "end" ? { scrollCorrection: { before: 750, after: 642 } } : {}),
       });
     },

@@ -13,6 +13,7 @@ import { restoreSubagentRunsFromDisk } from "../agents/subagents/registry/subage
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
 import {
@@ -162,7 +163,7 @@ describe("registered correlated completion recovery custody", () => {
         });
         const completionRuntime = createSubagentRegistryCompletionRuntime({
           runs: subagentRuns,
-          resumed: new Set([child.runId]),
+          resumed: new Set([getSubagentRunRuntimeKey(child)]),
           retryTimers: new Set(),
           completeSubagentRun: failedCompletion,
           scheduleSweep: vi.fn(),

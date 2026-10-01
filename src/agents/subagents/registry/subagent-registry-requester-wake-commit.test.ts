@@ -304,6 +304,38 @@ describe("requester settle wake commit retry", () => {
     expect(getPendingWakeCommit(context, entry)).toBeUndefined();
   });
 
+  it.each([
+    { progress: "status", wake: { status: "pending" as const } },
+    { progress: "attempt count", wake: { attemptCount: 4 } },
+    { progress: "replay count", wake: { replayCount: 1 } },
+    { progress: "deferral count", wake: { deferralCount: 1 } },
+    { progress: "retry deadline", wake: { nextAttemptAt: 20_000 } },
+    { progress: "pause notice", wake: { pauseNotice: { acknowledgment: "Waiting for input" } } },
+  ])(
+    "retires an uncommitted retry when the same generation advances $progress",
+    async ({ wake }) => {
+      const entry = makeRetainedChild();
+      const { context } = makeContext([entry]);
+      const commit = vi.fn(() => false);
+      await commitRequesterWake(context, [entry], undefined, commit, true);
+      expect(getPendingWakeCommit(context, entry)).toBeDefined();
+
+      const advanced = copySubagentRunRuntimeOwner<SubagentRunRecord>(entry, {
+        ...entry,
+        requesterSettleWake: { status: "dispatching", attemptCount: 3, ...wake },
+      });
+      context.options.runs.set(entry.runId, advanced);
+      await sweep(context, entry, 1);
+
+      expect(commit).toHaveBeenCalledOnce();
+      expect(getPendingWakeCommit(context, advanced)).toBeUndefined();
+      expect(context.options.runs.get(entry.runId)).toBe(advanced);
+      const nextCommit = vi.fn(() => true);
+      await commitRequesterWake(context, [advanced], undefined, nextCommit, true);
+      expect(nextCommit).toHaveBeenCalledOnce();
+    },
+  );
+
   it("reports one sustained failure per episode, with its run ids", async () => {
     const entry = makeRetainedChild();
     const { context, warn } = makeContext([entry]);
@@ -370,7 +402,13 @@ describe("requester settle wake commit retry", () => {
     expect(getPendingWakeCommit(context, entry)).toBeUndefined();
 
     const nextCommit = vi.fn(() => true);
-    await commitRequesterWake(context, [entry], 1, nextCommit, true);
+    await commitRequesterWake(
+      context,
+      [context.options.runs.get(entry.runId)!],
+      1,
+      nextCommit,
+      true,
+    );
     expect(nextCommit).toHaveBeenCalledOnce();
     expect(getPendingWakeCommit(context, entry)).toBeUndefined();
   });

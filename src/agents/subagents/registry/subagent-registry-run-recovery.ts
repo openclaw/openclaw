@@ -12,14 +12,17 @@ import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
-import { clearDeliveryState, normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import {
+  clearDeliveryState,
+  normalizeSubagentRunState,
+  resetRequesterSettleWakeRetry,
+} from "./subagent-delivery-state.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
-import { resetRequesterSettleWakeRetry } from "./subagent-registry-run-pause.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import {

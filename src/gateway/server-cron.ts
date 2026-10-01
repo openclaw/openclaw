@@ -956,9 +956,7 @@ export function buildGatewayCronService(params: {
         dispatchGatewayCronFinishedNotifications({
           evt,
           job,
-          deps: params.deps,
           logger: cronServiceLogger,
-          resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
           ssrfPolicy: webhookSsrfPolicy,
         });

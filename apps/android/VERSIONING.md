@@ -135,8 +135,18 @@ signed artifacts for the same failure investigation and recovery process.
 ### Firebase distribution and recovery
 
 Internal runs check Firebase credentials, AAB integration, and group access before
-building or uploading to Play. Once the atomic Play upload and source-ref record
-succeed, Firebase receives the retained signed AABs, checked against their SHA-256
+building or uploading to Play. Preflight connections close before the build;
+publishing opens fresh connections afterward. Authentication and read-only checks
+retry transient connection failures, HTTP 408/429, and temporary server errors up
+to four total attempts with exponential backoff and jitter. Reads have a 30-second
+attempt timeout and a two-minute total budget, including any `Retry-After` delay.
+Permanent errors, including HTTP 401/403, fail immediately. Retry diagnostics show
+only the operation, safe error code or HTTP status, and attempt count.
+
+Uploads, release-note writes, and notification requests are not automatically
+retried; their existing recovery receipts preserve any uncertain outcome.
+Once the atomic Play upload and source-ref record succeed, Firebase receives the
+retained signed AABs, checked against their SHA-256
 sidecars. Wear is uploaded and distributed first; Phone follows after Wear
 finishes so Phone appears first in Firebase's default latest-release ordering.
 Notes identify **Phone** and **Wear OS — watch only**. Each successful group

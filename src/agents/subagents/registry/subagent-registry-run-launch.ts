@@ -7,7 +7,11 @@ import {
 } from "../../../infra/agent-events.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import {
+  normalizeAgentIdStrict,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
@@ -87,6 +91,17 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const cfg = this.options.getRuntimeConfig();
     const requesterAgentId = resolveSubagentRequesterAgentId(cfg, registerParams);
     const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
+    const keyAgentId = parseAgentSessionKey(childSessionKey)?.agentId;
+    const explicitChildAgentId =
+      registerParams.childAgentId === undefined
+        ? undefined
+        : normalizeAgentIdStrict(registerParams.childAgentId);
+    if (explicitChildAgentId && !explicitChildAgentId.ok) {
+      throw new Error("Subagent registration has an invalid child agent id.");
+    }
+    if (keyAgentId && explicitChildAgentId && keyAgentId !== explicitChildAgentId.value) {
+      throw new Error("Subagent registration child agent disagrees with its session key.");
+    }
     const context = captureOpenClawStateWorkerContext();
     const selected = this.options.runs.get(runId);
     const registrationOwnership = subagentRuns.captureRegistrationOwnership(childSessionKey);
@@ -217,6 +232,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               },
               cfg,
             );
+          entry.childAgentId = previous
+            ? previous.childAgentId
+            : keyAgentId
+              ? undefined
+              : explicitChildAgentId?.value;
           if (registerParams.queued) {
             entry.queuedLaunch = undefined;
           }

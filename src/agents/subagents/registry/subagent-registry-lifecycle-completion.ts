@@ -208,6 +208,7 @@ export async function completeSubagentRunAttempt(
         selected.childSessionKey,
         assertCurrent,
         selected.execution.transcriptTarget,
+        selected.childAgentId,
       );
     }
     const now = Date.now();

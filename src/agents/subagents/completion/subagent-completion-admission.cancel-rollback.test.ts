@@ -107,15 +107,19 @@ describe("requester wake cancellation rollback", () => {
             finalized,
           );
         } else {
-          await params.transitionBatch(batch, {
-            status: "dispatching",
-            attemptCount: 1,
-            replayCount: 1,
-            nextAttemptAt: Date.now() + 30_000,
-            batchRunIds,
-            rearmGeneration: 1,
-            lastError: "ambiguous transport",
-          });
+          await params.transitionBatch(
+            batch,
+            {
+              status: "dispatching",
+              attemptCount: 1,
+              replayCount: 1,
+              nextAttemptAt: Date.now() + 30_000,
+              batchRunIds,
+              rearmGeneration: 1,
+              lastError: "ambiguous transport",
+            },
+            () => {},
+          );
         }
         return outcome === "delivered";
       });

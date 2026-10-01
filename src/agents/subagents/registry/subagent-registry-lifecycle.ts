@@ -534,6 +534,13 @@ export class SubagentLifecycleController {
   refreshFrozenResultFromSession = (sessionKey: string) =>
     refreshFrozenResultFromSession(this, sessionKey);
 
+  markRequesterSettleWakeRestored = (entry: SubagentRunRecord): void => {
+    const current = getCurrentSubagentRunOwner(this.options.runs, entry);
+    if (current) {
+      this.restoredRequesterSettleWakeRuns.add(this.trackRun(current));
+    }
+  };
+
   resumeRequesterSettleWake = (
     runId: string,
     entry: SubagentRunRecord,
@@ -544,7 +551,7 @@ export class SubagentLifecycleController {
       source === "restore" &&
       !this.scheduledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))
     ) {
-      this.restoredRequesterSettleWakeRuns.add(getSubagentRunRuntimeKey(entry));
+      this.markRequesterSettleWakeRestored(entry);
     }
     scheduleRequesterSettleWake(this, runId, entry);
   };
@@ -632,7 +639,7 @@ export class SubagentLifecycleController {
           return;
         }
         if (source === "restore") {
-          this.restoredRequesterSettleWakeRuns.add(getSubagentRunRuntimeKey(entry));
+          this.markRequesterSettleWakeRestored(entry);
         }
         scheduleRequesterSettleWake(this, runId, entry);
       },

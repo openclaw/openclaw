@@ -169,6 +169,32 @@ describe("automations output contract", () => {
     ).toEqual([]);
   });
 
+  it("still runs on a shipped Gateway that rejects the run wait", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid cron.run params: unexpected property 'waitTimeoutMs'",
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true, enqueued: true, runId: "manual:job:1" });
+    const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+    const result = await tool.execute("call-run", {
+      action: "run",
+      jobId: "job",
+      runMode: "force",
+    });
+    expect(gatewayCall.mock.calls.map((call) => call[2])).toEqual([
+      { id: "job", mode: "force", waitTimeoutMs: 60_000 },
+      { id: "job", mode: "force" },
+    ]);
+    expect(result.details).toMatchObject({ runId: "manual:job:1", note: expect.any(String) });
+    expect(
+      Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
+    ).toEqual([]);
+  });
+
   it("composes action results through generated declarations and JavaScript", async () => {
     onTestFinished(resetCodeModeTestState);
     const h = createCodeModeHarness();

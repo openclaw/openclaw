@@ -46,17 +46,13 @@ import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const completeRequesterSettleWakeBatch = async (
   context: SubagentLifecycleWakeContext,
-  observedEntries: readonly SubagentRunRecord[],
+  entries: readonly SubagentRunRecord[],
   stateContext: OpenClawStateWorkerContext,
   pending: PendingRequesterSettleWakeCommit,
   rearmGeneration?: number,
   outcome?: SubagentAnnounceDeliveryResult,
 ): Promise<boolean> => {
   const params = context.options;
-  const entries = observedEntries.map((entry) => {
-    const current = params.runs.get(entry.runId);
-    return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-  });
   if (
     !pending.committedWake &&
     !isCurrentRequesterSettleWakeBatch(
@@ -407,7 +403,7 @@ export function scheduleRequesterSettleWake(
     scheduleRequesterSettleWakeRetry(context, runId, entry, stateContext);
     return;
   }
-  const admittedBatch = (
+  let admittedBatch = (
     entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice
       ? [runId]
       : (admittedWake?.batchRunIds ?? [runId])
@@ -445,7 +441,7 @@ export function scheduleRequesterSettleWake(
               requesterOrigin: entry.requesterOrigin,
               settledEntry: entry,
               isSourceCurrent,
-              transitionBatch: async (batch, state) => {
+              transitionBatch: async (batch, state, onPublished) => {
                 const isCurrent = () =>
                   isSourceCurrent() &&
                   isCurrentRequesterSettleWakeBatch(context, batch, state.rearmGeneration);
@@ -474,6 +470,10 @@ export function scheduleRequesterSettleWake(
                       { kind: "transition", state },
                       stateContext,
                       episode,
+                      (acknowledged) => {
+                        admittedBatch = [...acknowledged];
+                        onPublished(acknowledged);
+                      },
                     );
                     if (committed) {
                       published = true;

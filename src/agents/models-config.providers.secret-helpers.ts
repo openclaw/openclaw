@@ -13,7 +13,6 @@ import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.
 import {
   isNonSecretApiKeyMarker,
   resolveEnvSecretRefHeaderValueMarker,
-  resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 
@@ -149,7 +148,7 @@ export function normalizeHeaderValues(params: {
     nextHeaders[headerName] =
       resolvedRef.source === "env"
         ? resolveEnvSecretRefHeaderValueMarker(resolvedRef.id)
-        : resolveNonEnvSecretRefHeaderValueMarker(resolvedRef.source);
+        : resolveNonEnvSecretRefApiKeyMarker(resolvedRef.source);
   }
   if (!mutated) {
     return { headers, mutated: false };

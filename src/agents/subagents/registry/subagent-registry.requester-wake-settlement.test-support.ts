@@ -175,14 +175,15 @@ export function registerRequesterWakeSettlementBoundaryTests({
         isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry: batch,
-        transitionBatch: async (entries, state) => {
+        transitionBatch: async (entries, state, onPublished) => {
           const publication = await mutateRequesterSettleWakeBatch({
             entries,
             operation: { kind: "transition", state },
             context: captureOpenClawStateWorkerContext(),
             assertCurrent: () => {},
             onCommitted: () => {},
-            onPublished: () => {},
+            onPublished: () =>
+              onPublished(entries.map((entry) => registry.getSubagentRunByRunId(entry.runId)!)),
           });
           expect(publication).toEqual({ applied: true, publication: "published" });
           transitions.push({

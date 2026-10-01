@@ -4,9 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-execution-identity.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
+import { consumeSubagentPauseNotice } from "../agents/subagents/registry/subagent-delivery-state.js";
 import { subagentRuns as runs } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
-import { consumeSubagentPauseNotice } from "../agents/subagents/registry/subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   revokeRequesterCronAuthority,

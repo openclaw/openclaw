@@ -2,6 +2,7 @@ import net from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { splitArgsPreservingQuotes } from "../daemon/arg-split.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
@@ -16,7 +17,9 @@ export function classifyPortListener(listener: PortListener, _port: number): Por
     return "non_gateway";
   }
   const argv = listener.commandLine
-    ? splitArgsPreservingQuotes(listener.commandLine, { escapeMode: "backslash-quote-only" })
+    ? process.platform === "win32"
+      ? (parseWindowsNativeCommandLine(listener.commandLine) ?? [])
+      : splitArgsPreservingQuotes(listener.commandLine, { escapeMode: "backslash-quote-only" })
     : [listener.command ?? ""];
   if (classifyOpenClawArgv(argv, { command: "gateway", pid: listener.pid }).kind === "openclaw") {
     return "gateway";

@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
@@ -70,7 +70,7 @@ function observeCheckpoints(pathname: string) {
   return {
     observations,
     stop,
-    wait: () => withTestTimeout(first.promise, 5_000, "WAL checkpoint observation timed out"),
+    wait: (signal: AbortSignal) => withinTest(first.promise, signal),
   };
 }
 
@@ -88,7 +88,9 @@ function sqliteBytes(databasePath: string) {
   );
 }
 
-it("keeps periodic WAL work off the host before and after a competing SQLite writer releases", async () => {
+it("keeps periodic WAL work off the host before and after a competing SQLite writer releases", async ({
+  signal,
+}) => {
   const { database, periodic } = openWithPeriodicMaintenance(
     path.join(tempDirs.make("state-wal-native-writer-"), "openclaw.sqlite"),
   );
@@ -102,7 +104,7 @@ it("keeps periodic WAL work off the host before and after a competing SQLite wri
     periodic();
     expect(observations).toEqual([]);
     await nextTurn;
-    await wait();
+    await wait(signal);
     expect(writer.isTransaction).toBe(true);
     expect(observations.every((state) => state === "complete" || state === "blocked")).toBe(true);
     expect(prepare).not.toHaveBeenCalled();
@@ -119,7 +121,7 @@ it("keeps periodic WAL work off the host before and after a competing SQLite wri
   const afterRelease = observeCheckpoints(database.path);
   try {
     periodic();
-    await afterRelease.wait();
+    await afterRelease.wait(signal);
     expect(afterRelease.observations[0]).toBe("complete");
     expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
     expect(prepare).not.toHaveBeenCalled();
@@ -207,9 +209,9 @@ it("joins private maintenance timer cancellation before retiring its native hand
   ).toEqual({ value_json: "true" });
 });
 
-it.each(["parent", "independent"] as const)(
+it.for(["parent", "independent"] as const)(
   "keeps periodic maintenance after a %s caller adopts its cached handle",
-  async (adopter) => {
+  async (adopter, { signal }) => {
     const databasePath = path.join(tempDirs.make("state-wal-adopted-owner-"), "openclaw.sqlite");
     const parent = createOpenClawDatabaseMaintenanceScope();
     const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
@@ -225,7 +227,7 @@ it.each(["parent", "independent"] as const)(
       prepare.mockClear();
       execute.mockClear();
       periodic();
-      await observed.wait();
+      await observed.wait(signal);
       expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
       expect(prepare).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
@@ -290,7 +292,9 @@ it("refuses independent adoption after its cached handle starts closing", async 
   }
 });
 
-it("refuses checkpoints without borrowing the timer caller's maintenance authority", async () => {
+it("refuses checkpoints without borrowing the timer caller's maintenance authority", async ({
+  signal,
+}) => {
   const { database, periodic } = openWithPeriodicMaintenance(
     path.join(tempDirs.make("state-wal-maintenance-authority-"), "openclaw.sqlite"),
   );
@@ -305,7 +309,7 @@ it("refuses checkpoints without borrowing the timer caller's maintenance authori
   const prepare = vi.spyOn(database.db, "prepare");
   try {
     maintenance.run(() => periodic());
-    await wait();
+    await wait(signal);
     expect(observations).toEqual(["error"]);
     expect(database.walMaintenance.health?.error).toContain("offline maintenance");
     expect(prepare).not.toHaveBeenCalled();
@@ -327,7 +331,7 @@ it("refuses checkpoints without borrowing the timer caller's maintenance authori
   const afterRelease = observeCheckpoints(database.path);
   try {
     periodic();
-    await afterRelease.wait();
+    await afterRelease.wait(signal);
     expect(afterRelease.observations[0]).toBe("complete");
   } finally {
     afterRelease.stop();
@@ -337,7 +341,7 @@ it("refuses checkpoints without borrowing the timer caller's maintenance authori
 // Windows cannot rename a directory while SQLite retains its native files.
 it.runIf(process.platform !== "win32")(
   "refuses a physically replaced database after periodic admission yields",
-  async () => {
+  async ({ signal }) => {
     const root = tempDirs.make("state-wal-replacement-");
     const originalDirectory = path.join(root, "original");
     const replacementDirectory = path.join(root, "replacement");
@@ -365,7 +369,7 @@ it.runIf(process.platform !== "win32")(
       originalMoved = true;
       fs.renameSync(replacementDirectory, originalDirectory);
       replacementInstalled = true;
-      await wait();
+      await wait(signal);
       expect(database.walMaintenance.health).toMatchObject({
         state: "error",
         error: expect.stringContaining(

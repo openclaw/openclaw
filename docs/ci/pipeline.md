@@ -131,15 +131,16 @@ ordinary and isolated unit-fast lanes partition their existing file inventories:
 failures or additional skips stay on Node, and the compatible remainder runs on
 Bun. Those Node files still execute; they are not excluded from CI.
 The process lane runs `terminal-pty-bun.test.ts` on Bun and retains its other
-files on Node. Its native real-PTY block skips when the pinned Bun build lacks
-`Bun.Terminal.pause()` and `resume()`, as the current pin does. macOS and Linux
-select the native PTY without Node only on builds with that capability, such as
-the OpenClaw Bun fork builds that also carry the macOS child-exit fix. Other Bun
+files on Node. The pinned fork supports `Bun.Terminal.pause()` and `resume()`,
+so its native real-PTY cases run on Linux. macOS and Linux select the native PTY
+without Node on builds with that capability, including the pinned fork's macOS
+child-exit fix. Other Bun
 releases keep the Node helper, which requires an installed Node runtime and
 skips Bun's `node` shim when selecting it. Windows keeps `node-pty`.
-TypeScript compiler analysis suites also stay on Node because the synchronous
-native compiler API requires Node child-process pipe handles. This includes
-compiler assertions in mixed runtime suites; their cases remain enabled.
+The qualified TypeScript compiler analysis files and `src/library.test.ts` run
+on Bun. The pinned fork exposes the child-process pipe handles and stream
+reference controls used by TypeScript's synchronous native API. Compiler
+assertions in mixed runtime suites remain enabled.
 The Node Code Mode executor suite also stays on Node: its warm-worker cleanup
 requires diagnostics-channel delivery to preserve sibling subscribers when a
 callback unsubscribes during publication. Bun can skip the next subscriber.
@@ -225,18 +226,21 @@ Node seed, with separate transform-cache leaves.
 The same owner sets `MIMALLOC_PURGE_HOLES_MIN_INTERVAL=1000` to reduce allocator
 scavenger work between short UI updates; normal reclamation and default heaps remain enabled.
 
-The test-runtime setup action installs a checksum-pinned build of the Bun fork
+The test-runtime setup action installs a checksum-pinned prerelease of `openclaw/bun`
 only for jobs that need it. The source commit, archive checksum, and executable
 checksum live together in `.github/actions/setup-test-bun/action.yml`.
+The action checks the release zip and manifest against `SHA256SUMS`, then checks
+the extracted executable against the manifest. Independent archive and executable
+pins keep the selected bytes fixed even if release metadata changes.
 The fork owns the backing storage of `node:vm` cached bytecode, so compiled
 functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `6b9148b17a6df4d02776fbf4aeb0c874e2ff955a` with WebKit
-`4429d11361a5f1680a9e57884ebc1941c2cc7e48`, containing the
-`caa5d805b646edc59ca0d12b49a7a574f942dedb` FTL backport.
-The backport preserves string bounds checks through FTL dead-code elimination,
+The pinned build pairs Bun `57fadf566d797870759abbe103206ee3981a9323` with WebKit
+`f20ce7744553c910bcf16a33faf976af208de091` in prerelease
+`openclaw-v1.4.3-20260930-57fadf566d-webkit-f20ce77445`.
+This WebKit build preserves string bounds checks through FTL dead-code elimination,
 fixing the CSS tokenizer's end-of-input loop.
 The fork keeps the lifecycle-script `node` shim in a per-user directory, with a
 private fallback when that directory is unusable. This lets several accounts on

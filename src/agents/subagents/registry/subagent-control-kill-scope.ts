@@ -9,8 +9,8 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { resolveSessionAgentId } from "../../agent-scope.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   ensureSubagentControllerOwnsRun,
   getLatestOwnedSubagentRun,
@@ -209,6 +209,7 @@ export async function withSubagentKillScope<T>(
               selectedRun.childSessionKey,
               () => assertSubagentRegistryWriteSourceCurrent(stateContext),
               selectedRun.execution.transcriptTarget,
+              selectedRun.childAgentId,
             );
             releaseSessions.push(session.release);
             if (!tree.canTraverse(false)) {
@@ -241,10 +242,7 @@ export async function withSubagentKillScope<T>(
     for (const { tree } of pending) {
       const controller = {
         controllerSessionKey: tree.entry.childSessionKey,
-        controllerAgentId: resolveSessionAgentId({
-          config: params.cfg,
-          sessionKey: tree.entry.childSessionKey,
-        }),
+        controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
       };
       capture(
         pending,
@@ -290,10 +288,7 @@ export async function withSubagentKillScope<T>(
         hold(tree);
         const controller = {
           controllerSessionKey: tree.entry.childSessionKey,
-          controllerAgentId: resolveSessionAgentId({
-            config: params.cfg,
-            sessionKey: tree.entry.childSessionKey,
-          }),
+          controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
         };
         // Retirement preserves captured work, not discovery beneath a missing ancestor.
         const candidates = await withSubagentRunReadSnapshot(

@@ -64,6 +64,15 @@ export function createToolPolicyMatcher(
     if (matchesAnyGlobPattern(normalized, allow)) {
       return true;
     }
+    // Code Mode shipped whole skill reads under the ordinary read grant.
+    // The separately named tool keeps that grant; explicit denials still win.
+    if (
+      normalized === "skills_read" &&
+      matchesAnyGlobPattern("read", allow) &&
+      !matchesAnyGlobPattern("read", deny)
+    ) {
+      return true;
+    }
     // Runtime policy historically treats `write` as covering `apply_patch`.
     // Construction planning can disable that compatibility to avoid selecting a shell factory.
     if (

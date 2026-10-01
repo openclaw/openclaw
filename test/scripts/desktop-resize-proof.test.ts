@@ -62,7 +62,11 @@ const base = "b".repeat(40);
 const merge = "c".repeat(40);
 const tree = "d".repeat(40);
 const size = { width: 1200, height: 850 };
-const assets = { "index-fixture.js": "e".repeat(64) };
+const assets = {
+  "index-fixture.js": "e".repeat(64),
+  "desktop-panel-fixture.js": "f".repeat(64),
+  "novnc-fixture.js": "a".repeat(64),
+};
 function sourceAdmissionFixture(status: string, tracked: string[]) {
   const receipt = { phase: "preflight", sourceStatus: null as DesktopProofSourceStatus | null };
   const replies: Record<string, string> = {
@@ -1344,6 +1348,7 @@ describe("desktop proof identity and public evidence", () => {
   it("rejects asset paths and non-digests", () => {
     expect(() => desktopProofAssets({ "../index.js": "e".repeat(64) })).toThrow();
     expect(() => desktopProofAssets({ "index.js": "private" })).toThrow();
+    expect(() => desktopProofAssets({ "control-ui-boot-shared.js": "e".repeat(64) })).toThrow();
   });
 
   it("exports a complete bounded allowlist without raw diagnostics or metadata", async () => {
@@ -1374,7 +1379,9 @@ describe("desktop proof identity and public evidence", () => {
     await writeFile(path.join(nested, "served-assets.json"), JSON.stringify(assets));
     await writeFile(path.join(nested, "resize-proof.json"), JSON.stringify(proof()));
     await writeFile(path.join(nested, "connection-diagnostics.json"), "private-token");
-    expect((await exportDesktopResizeProof(input, output, "node")).complete).toBe(true);
+    const exported = await exportDesktopResizeProof(input, output, "node");
+    expect(exported.complete).toBe(true);
+    expect(exported.proof?.assets).toEqual(assets);
     expect(await readdir(output)).toHaveLength(13);
     expect(await readFile(path.join(output, "resize-proof.json"), "utf8")).not.toMatch(
       /private|hello|deviceId/u,

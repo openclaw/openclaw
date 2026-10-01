@@ -214,7 +214,8 @@ export async function createPluginReloadRecoveryFixture(
   assert(metadataOwners === undefined || metadataOwners instanceof Set);
   const metadataOwnerSet: Set<unknown> | undefined = metadataOwners;
   const precedingMetadataOwners = new Set(metadataOwnerSet);
-  const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
+  const scheduler = createTestGatewayScheduler();
+  const metadata = retainGatewayPluginMetadata(scheduler);
   const fixtureMetadataOwners = metadataOwnerSet
     ? [...metadataOwnerSet].filter((entry) => !precedingMetadataOwners.has(entry))
     : [];
@@ -226,6 +227,7 @@ export async function createPluginReloadRecoveryFixture(
     createPluginMetadataSnapshotFixture({ plugins: [{ id: "first" }, { id: "sibling" }] });
   metadata.publish(snapshot);
   const runtime = {
+    scheduler,
     requestEntryLifetime: new GatewayRequestEntryLifetime(),
     pluginMetadataSnapshot: snapshot,
     pluginRuntime: registryOwner,
@@ -252,6 +254,7 @@ export async function createPluginReloadRecoveryFixture(
     broadcast: vi.fn(),
   } as unknown as Parameters<typeof reloadGatewayPlugins>[0]["runtime"];
   cleanups.push(async () => {
+    await scheduler.stop();
     await currentServices?.stop().catch(() => {});
     await initial.stop().catch(() => {});
     const retirementFailure = await lifetime.stop().catch((error: unknown) => error);
@@ -322,7 +325,9 @@ export async function createPluginReloadRecoveryFixture(
           sourceConfig: nextConfig,
           changedPaths,
           checkpoint: options.checkpoint,
-          prepareConfigEffects: options.prepareConfigEffects ?? (() => rollbackConfigEffects),
+          prepareConfigEffects:
+            options.prepareConfigEffects ??
+            (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
           pluginLifecycle: {
             reason: "reload",
             waitForDrain: options.waitForDrain,

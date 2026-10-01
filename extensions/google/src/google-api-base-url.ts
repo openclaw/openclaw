@@ -7,10 +7,6 @@ function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-function isCanonicalGoogleApiOriginShorthand(value: string): boolean {
-  return /^https:\/\/generativelanguage\.googleapis\.com\/?$/i.test(value);
-}
-
 function isGoogleGenerativeAiUrl(url: URL): boolean {
   return (
     url.protocol === "https:" && url.hostname.toLowerCase() === "generativelanguage.googleapis.com"
@@ -20,14 +16,11 @@ function isGoogleGenerativeAiUrl(url: URL): boolean {
 /** Exact official AI Studio request root eligible for native provider behavior. */
 export function isOfficialGoogleAiStudioBaseUrl(baseUrl?: string | null): boolean {
   const raw = normalizeOptionalString(baseUrl) ?? DEFAULT_GOOGLE_API_BASE_URL;
-  try {
-    const href = trimTrailingSlashes(new URL(raw).href);
-    return (
-      href === "https://generativelanguage.googleapis.com" || href === DEFAULT_GOOGLE_API_BASE_URL
-    );
-  } catch {
-    return false;
-  }
+  const url = URL.parse(raw);
+  const href = url ? trimTrailingSlashes(url.href) : undefined;
+  return (
+    href === "https://generativelanguage.googleapis.com" || href === DEFAULT_GOOGLE_API_BASE_URL
+  );
 }
 
 function stripUrlUserInfo(url: URL): void {
@@ -56,31 +49,24 @@ export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {
   if (!raw) {
     return false;
   }
-  try {
-    return isGoogleVertexHostname(new URL(raw).hostname);
-  } catch {
-    return false;
-  }
+  const url = URL.parse(raw);
+  return url !== null && isGoogleVertexHostname(url.hostname);
 }
 
 export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
   const raw = trimTrailingSlashes(normalizeOptionalString(baseUrl) || DEFAULT_GOOGLE_API_BASE_URL);
-  try {
-    const url = new URL(raw);
-    url.hash = "";
-    url.search = "";
-    stripUrlUserInfo(url);
-    if (isGoogleGenerativeAiUrl(url)) {
-      const normalizedPath = trimTrailingSlashes(url.pathname || "");
-      url.pathname = normalizedPath || "/v1beta";
-    }
-    return trimTrailingSlashes(url.toString());
-  } catch {
-    if (isCanonicalGoogleApiOriginShorthand(raw)) {
-      return DEFAULT_GOOGLE_API_BASE_URL;
-    }
+  const url = URL.parse(raw);
+  if (!url) {
     return raw;
   }
+  url.hash = "";
+  url.search = "";
+  stripUrlUserInfo(url);
+  if (isGoogleGenerativeAiUrl(url)) {
+    const normalizedPath = trimTrailingSlashes(url.pathname || "");
+    url.pathname = normalizedPath || "/v1beta";
+  }
+  return trimTrailingSlashes(url.toString());
 }
 
 export function isGoogleGenerativeAiApi(api?: string | null): boolean {
@@ -94,15 +80,13 @@ export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | u
   }
 
   const normalized = normalizeGoogleApiBaseUrl(raw);
-  try {
-    const url = new URL(normalized);
+  const url = URL.parse(normalized);
+  if (url) {
     stripUrlUserInfo(url);
     if (isGoogleGenerativeAiUrl(url)) {
       url.pathname = trimTrailingSlashes(url.pathname || "").replace(/\/openai$/i, "") || "/v1beta";
       return trimTrailingSlashes(url.toString());
     }
-  } catch {
-    // `normalizeGoogleApiBaseUrl` already returned the best-effort input form.
   }
 
   return normalized;

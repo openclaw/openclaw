@@ -111,50 +111,57 @@ describe("bundled channel legacy config migrations", () => {
     expect(slackAccounts.work?.heartbeatVisibility).toEqual({ showAlerts: false });
   });
 
-  it("prefers bundled channel doctor contract normalizers before plugin registry fallback", () => {
-    collectRelevantDoctorPluginIds.mockReturnValueOnce([]);
-    loadBundledChannelDoctorContractApi.mockImplementation((channelId: string) =>
-      channelId === "slack"
-        ? {
-            normalizeCompatibilityConfig: ({
-              cfg,
-            }: {
-              cfg: { channels?: { slack?: Record<string, unknown> } };
-            }) => ({
-              config: {
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  slack: {
-                    ...cfg.channels?.slack,
-                    normalizedByBundledContract: true,
+  it.each([false, true])(
+    "prefers bundled channel doctor contracts (pluginContracts=%s)",
+    (pluginContracts) => {
+      collectRelevantDoctorPluginIds.mockReturnValueOnce([]);
+      loadBundledChannelDoctorContractApi.mockImplementation((channelId: string) =>
+        channelId === "slack"
+          ? {
+              normalizeCompatibilityConfig: ({
+                cfg,
+              }: {
+                cfg: { channels?: { slack?: Record<string, unknown> } };
+              }) => ({
+                config: {
+                  ...cfg,
+                  channels: {
+                    ...cfg.channels,
+                    slack: {
+                      ...cfg.channels?.slack,
+                      normalizedByBundledContract: true,
+                    },
                   },
                 },
-              },
-              changes: ["Normalized channels.slack via bundled doctor contract."],
-            }),
-          }
-        : undefined,
-    );
-    getBootstrapChannelPlugin.mockReturnValue(undefined);
+                changes: ["Normalized channels.slack via bundled doctor contract."],
+              }),
+            }
+          : undefined,
+      );
+      getBootstrapChannelPlugin.mockReturnValue(undefined);
 
-    const result = applyChannelDoctorCompatibilityMigrations({
-      channels: {
-        slack: {
-          streaming: true,
+      const result = applyChannelDoctorCompatibilityMigrations(
+        {
+          channels: {
+            slack: {
+              streaming: true,
+            },
+          },
         },
-      },
-    });
+        { pluginContracts },
+      );
+      expect(collectRelevantDoctorPluginIds).toHaveBeenCalledTimes(pluginContracts ? 1 : 0);
 
-    expect(applyPluginDoctorCompatibilityMigrations).not.toHaveBeenCalled();
-    expect(loadBundledChannelDoctorContractApi).toHaveBeenCalledWith("slack");
-    const nextChannels = (result.next.channels ?? {}) as {
-      slack?: Record<string, unknown>;
-    };
-    expect(nextChannels.slack?.streaming).toBe(true);
-    expect(nextChannels.slack?.normalizedByBundledContract).toBe(true);
-    expect(result.changes).toEqual(["Normalized channels.slack via bundled doctor contract."]);
-  });
+      expect(applyPluginDoctorCompatibilityMigrations).not.toHaveBeenCalled();
+      expect(loadBundledChannelDoctorContractApi).toHaveBeenCalledWith("slack");
+      const nextChannels = (result.next.channels ?? {}) as {
+        slack?: Record<string, unknown>;
+      };
+      expect(nextChannels.slack?.streaming).toBe(true);
+      expect(nextChannels.slack?.normalizedByBundledContract).toBe(true);
+      expect(result.changes).toEqual(["Normalized channels.slack via bundled doctor contract."]);
+    },
+  );
 
   it("uses registry fallback when a bundled channel contract is unavailable", () => {
     collectRelevantDoctorPluginIds.mockReturnValueOnce(["mattermost"]);

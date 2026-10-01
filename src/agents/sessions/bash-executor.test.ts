@@ -25,10 +25,10 @@ function operationsForChunks(chunks: readonly OutputChunk[]): BashOperations {
 }
 
 describe("executeBashWithOperations", () => {
-  it.runIf(process.platform !== "win32").each(nativeBashSpillScenarios)(
+  it.runIf(process.platform !== "win32").for(nativeBashSpillScenarios)(
     "settles real Bash output for %s",
-    async (scenario) => {
-      await expectNativeBashSpill("executor", scenario);
+    async (scenario, { signal }) => {
+      await expectNativeBashSpill("executor", scenario, signal);
     },
   );
 

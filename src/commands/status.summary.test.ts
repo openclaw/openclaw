@@ -95,41 +95,43 @@ vi.mock("../config/sessions/paths.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadExactSessionEntryReadOnly: statusSummaryMocks.loadExactSessionEntryReadOnly,
-  readSessionStoreSummaryReadOnly: (
-    scope: Parameters<
-      typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
-    >[0],
-    options: Parameters<
-      typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
-    >[1],
-  ) => {
-    const entries = statusSummaryMocks
-      .listSessionEntriesCore(scope)
-      .filter(({ sessionKey }) => sessionKey.startsWith("agent:"))
-      .map(({ sessionKey, entry }) => ({
-        sessionKey,
-        entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
-      }))
-      .toSorted(
-        (left, right) =>
-          right.entry.updatedAt - left.entry.updatedAt ||
-          (left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0),
-      );
-    const summarize = (rows: typeof entries) => ({
-      count: rows.length,
-      recent: rows.slice(0, options.recentLimit),
-    });
-    return {
-      ...summarize(entries),
-      byAgent: new Map(
-        options.agentIds.map((agentId) => [
-          agentId,
-          summarize(entries.filter(({ sessionKey }) => sessionKey.startsWith(`agent:${agentId}:`))),
-        ]),
-      ),
-    };
-  },
 }));
+
+vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createSessionStoreSummaryReaderStub } =
+    await import("../config/sessions/session-store-summary.test-support.js");
+  return {
+    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub((scope, options) => {
+      const entries = statusSummaryMocks
+        .listSessionEntriesCore(scope)
+        .filter(({ sessionKey }) => sessionKey.startsWith("agent:"))
+        .map(({ sessionKey, entry }) => ({
+          sessionKey,
+          entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+        }))
+        .toSorted(
+          (left, right) =>
+            right.entry.updatedAt - left.entry.updatedAt ||
+            (left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0),
+        );
+      const summarize = (rows: typeof entries) => ({
+        count: rows.length,
+        recent: rows.slice(0, options.recentLimit),
+      });
+      return {
+        ...summarize(entries),
+        byAgent: new Map(
+          options.agentIds.map((agentId) => [
+            agentId,
+            summarize(
+              entries.filter(({ sessionKey }) => sessionKey.startsWith(`agent:${agentId}:`)),
+            ),
+          ]),
+        ),
+      };
+    }),
+  };
+});
 
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(),

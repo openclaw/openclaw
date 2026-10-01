@@ -1,24 +1,14 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
+import {
+  clearDeliveryState,
+  ensureCompletionState,
+  resetRequesterSettleWakeRetry,
+} from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
-
-export function resetRequesterSettleWakeRetry(
-  wake?: RequesterSettleWakeState,
-): RequesterSettleWakeState {
-  return {
-    ...wake,
-    status: "pending",
-    attemptCount: 0,
-    replayCount: undefined,
-    nextAttemptAt: undefined,
-    deferralCount: undefined,
-    lastError: undefined,
-  };
-}
+import { mutateSubagentRuns, SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /** Capture the accepted tool intent before the runtime publishes its yielded terminal. */
 export async function markSubagentMessageWaitInRuns(params: {
@@ -28,8 +18,8 @@ export async function markSubagentMessageWaitInRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   context: OpenClawStateWorkerContext;
   assertCurrent: () => void;
-}): Promise<void> {
-  await mutateSubagentRuns(
+}): Promise<boolean> {
+  const registered = await mutateSubagentRuns(
     [params.runId],
     (rows) => {
       const entry = rows.get(params.runId);
@@ -41,10 +31,12 @@ export async function markSubagentMessageWaitInRuns(params: {
         entry.execution.status !== "running" ||
         entry.killIntent ||
         entry.killReconciliation ||
-        entry.suppressCompletionDelivery ||
-        entry.requesterSettleWake?.pauseNotice
+        entry.suppressCompletionDelivery
       ) {
-        return { value: undefined };
+        return { value: false };
+      }
+      if (entry.requesterSettleWake?.pauseNotice) {
+        return { value: true };
       }
       const next = structuredClone(entry);
       next.requesterSettleWake = {
@@ -57,21 +49,20 @@ export async function markSubagentMessageWaitInRuns(params: {
           ),
         },
       };
-      return { value: undefined, postimages: new Map([[entry.runId, next]]) };
+      return { value: true, postimages: new Map([[entry.runId, next]]) };
     },
     { runs: params.runs, context: params.context, assertCurrent: params.assertCurrent },
   );
-}
-
-/** A pause uses the existing retry owner, but never consumes the completion cohort. */
-export function consumeSubagentPauseNotice(entry: SubagentRunRecord): boolean {
-  const wake = entry.requesterSettleWake;
-  if (entry.pauseReason !== "sessions_yield" || !wake?.pauseNotice) {
-    return false;
+  try {
+    params.assertCurrent();
+  } catch (error) {
+    throw new SubagentRegistryWriteError(
+      registered ? "committed" : "not-committed",
+      error,
+      registered ? "published" : undefined,
+    );
   }
-  const { pauseNotice: _notice, ...completionWake } = wake;
-  entry.requesterSettleWake = resetRequesterSettleWakeRetry(completionWake);
-  return true;
+  return registered;
 }
 
 export function markSubagentRunPausedAfterYield(params: {

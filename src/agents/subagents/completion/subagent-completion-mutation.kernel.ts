@@ -12,6 +12,7 @@ import {
 import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
 import {
+  consumeSubagentPauseNotice,
   completeRequesterSettleWakeState,
   transitionRequesterSettleWakeState,
   ensureCompletionState,
@@ -22,7 +23,6 @@ import {
   markRequesterSettleWakePending,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
-import { consumeSubagentPauseNotice } from "../registry/subagent-registry-run-pause.js";
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
@@ -492,6 +492,12 @@ function mutateRequesterWake(
         Boolean(params.operation.state.pauseNotice)
     ) {
       throw new Error("Requester pause notice changed before transition");
+    }
+    if (
+      (subagent.requesterSettleWake?.yieldedFinalDeliverable === true) !==
+      (params.operation.state.yieldedFinalDeliverable === true)
+    ) {
+      throw new Error("Requester wake reply policy changed before transition");
     }
     transitionRequesterSettleWakeState(subagent, params.operation.state);
     return { subagent };

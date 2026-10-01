@@ -165,14 +165,6 @@ export type ChildCompletionRow = {
   completion?: Parameters<typeof resolveSubagentCompletionResultText>[0]["completion"];
 };
 
-function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
-  return Boolean(
-    child.completion?.terminalReply ||
-    child.completion?.resultText?.trim() ||
-    child.completion?.fallbackResultText?.trim(),
-  );
-}
-
 export function buildChildCompletionFindings(
   children: Array<ChildCompletionRow>,
 ): string | undefined {
@@ -203,7 +195,10 @@ export function buildChildCompletionFindings(
     if (
       child.execution.outcome?.status === "ok" &&
       !resultText &&
-      hasCapturedChildCompletionReply(child)
+      child.completion?.terminalReply?.disposition !== "empty" &&
+      (child.completion?.terminalReply ||
+        child.completion?.resultText?.trim() ||
+        child.completion?.fallbackResultText?.trim())
     ) {
       continue;
     }

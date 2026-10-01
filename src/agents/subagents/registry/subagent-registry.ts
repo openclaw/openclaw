@@ -359,7 +359,13 @@ const subagentRestorer = createSubagentRegistryRestorer({
           continue;
         }
         const previousResumeKey = getSubagentRunRuntimeKey(entry);
-        if (await recoverSubagentRunGatewayOwner(entry, lifecycleGatewayContextResolver)) {
+        if (
+          await recoverSubagentRunGatewayOwner(
+            entry,
+            lifecycleGatewayContextResolver,
+            subagentLifecycleController.markRequesterSettleWakeRestored,
+          )
+        ) {
           resumedRuns.delete(previousResumeKey);
         }
         continue;
@@ -709,13 +715,6 @@ export function adoptSubagentRunForRequesterTurn(
   return adoptSubagentRunForRequesterTurnInRuns({
     ...params,
     runs: subagentRuns,
-    assertPublicationCurrent: () =>
-      subagentRuns.runWithCompletionAuthority(params.expected, () => {
-        params.assertPublicationCurrent?.();
-        if (subagentLifecycleController.newerGenerationOwnsSession(params.expected)) {
-          throw new Error("Steered completion no longer owns its execution");
-        }
-      }),
     assertCurrent: () =>
       subagentRuns.runWithCompletionAuthority(params.expected, () => {
         params.assertCurrent();

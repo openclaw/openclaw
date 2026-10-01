@@ -1,7 +1,9 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureKyselyTypes } from "../../scripts/generate-kysely-types.mts";
+import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,6 +39,95 @@ function createSchemaFixture() {
 }
 
 describe("Kysely declarations", () => {
+  it("packages a runnable generator closure through the published file policy", () => {
+    const root = tempDirs.make("kysely-package-");
+    for (const file of [
+      "package.json",
+      "scripts/prepare-git-hooks.mjs",
+      "scripts/generate-kysely-types.mts",
+      "scripts/lib/direct-run.mjs",
+    ]) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.copyFileSync(file, path.join(root, file));
+    }
+    const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: path.join(root, ".state") };
+    const packed = spawnSync(
+      process.execPath,
+      [
+        path.resolve("node_modules/npm/bin/npm-cli.js"),
+        "pack",
+        "--ignore-scripts",
+        "--json",
+        "--offline",
+        "--cache",
+        path.join(root, "cache"),
+      ],
+      { cwd: root, env, encoding: "utf8" },
+    );
+    expect(packed.status, packed.stderr).toBe(0);
+    const [inventory] = JSON.parse(packed.stdout) as Array<{
+      filename: string;
+      files: Array<{ path: string }>;
+    }>;
+    const unpacked = path.join(root, "unpacked");
+    fs.mkdirSync(unpacked);
+    const extracted = spawnSync(
+      "tar",
+      ["-xzf", path.join(root, inventory!.filename), "-C", unpacked],
+      {
+        env,
+        encoding: "utf8",
+      },
+    );
+    expect(extracted.status, extracted.stderr).toBe(0);
+    const packageRoot = path.join(unpacked, "package");
+    expect(
+      collectPackageDistImportErrors({
+        files: inventory!.files.map((file) => file.path),
+        readText: (file: string) => fs.readFileSync(path.join(packageRoot, file), "utf8"),
+      }),
+    ).toEqual([]);
+    const run = (file: string) =>
+      spawnSync(process.execPath, [path.join(packageRoot, file)], {
+        cwd: packageRoot,
+        env,
+        encoding: "utf8",
+      });
+    for (const file of ["scripts/generate-kysely-types.mts", "scripts/prepare-git-hooks.mjs"]) {
+      const result = run(file);
+      expect(result.status, result.stderr).toBe(0);
+    }
+    expect(fs.existsSync(path.join(packageRoot, ".artifacts"))).toBe(false);
+    fs.unlinkSync(path.join(packageRoot, "scripts/lib/direct-run.mjs"));
+    const missing = run("scripts/generate-kysely-types.mts");
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("direct-run.mjs");
+  });
+
+  it("retires omitted sparse projections and still requires complete generation", async () => {
+    const { root, schemas, output } = createSchemaFixture();
+    const agentOutput = path.join(root, ".artifacts/kysely/openclaw-agent-db.generated.ts");
+    await ensureKyselyTypes(root);
+    fs.unlinkSync(schemas[1]!);
+    await ensureKyselyTypes(root, false, { allowPartialCheckout: true });
+    expect(fs.readFileSync(output, "utf8")).toContain("export interface Records");
+    expect(fs.existsSync(agentOutput)).toBe(false);
+    await expect(ensureKyselyTypes(root)).rejects.toThrow("openclaw-agent-schema.sql");
+    await expect(ensureKyselyTypes(root, true, { allowPartialCheckout: true })).rejects.toThrow(
+      "openclaw-agent-schema.sql",
+    );
+    fs.writeFileSync(schemas[1]!, `${schema}\nALTER TABLE records ADD COLUMN restored TEXT;`);
+    await ensureKyselyTypes(root);
+    expect(fs.readFileSync(agentOutput, "utf8")).toContain("  restored: string | null;");
+    for (const source of schemas) {
+      fs.unlinkSync(source);
+    }
+    await ensureKyselyTypes(root, false, { allowPartialCheckout: true });
+    expect(fs.existsSync(output)).toBe(false);
+    expect(fs.existsSync(agentOutput)).toBe(false);
+    expect(fs.existsSync(path.join(root, ".artifacts/kysely/inputs.sha256"))).toBe(false);
+  });
+
   it("skips source-less installs but rejects an incomplete schema checkout", async () => {
     const root = tempDirs.make("kysely-source-less-");
     fs.mkdirSync(path.join(root, "src/state"), { recursive: true });

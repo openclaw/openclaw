@@ -101,12 +101,16 @@ describe("requester settle retry lifetime", () => {
       const wake = vi.fn(async (params: WakeParams) => {
         wakeSignals.push(getAsyncWorkSignal());
         if (wakeSignals.length === 1) {
-          await params.transitionBatch([params.settledEntry], {
-            status: "pending",
-            attemptCount: 1,
-            nextAttemptAt: Date.now() + 1_000,
-            rearmGeneration: 1,
-          });
+          await params.transitionBatch(
+            [params.settledEntry],
+            {
+              status: "pending",
+              attemptCount: 1,
+              nextAttemptAt: Date.now() + 1_000,
+              rearmGeneration: 1,
+            },
+            () => {},
+          );
           return false;
         }
         await params.completeBatch(
