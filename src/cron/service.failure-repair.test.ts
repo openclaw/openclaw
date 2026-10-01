@@ -90,6 +90,59 @@ describe("CronService failure repair", () => {
     });
   });
 
+  it("repairs a failure streak once, even when its cause changes after the cooldown", async () => {
+    await withRepair(
+      async ({ cron, runIsolatedAgentJob, sendCronFailureAlert, runCronFailureRepair, addJob }) => {
+        const job = await addJob("drifting sync", {
+          ...owned,
+          failureAlert: { after: 2, cooldownMs: 60_000 },
+        });
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+        expect(runCronFailureRepair).toHaveBeenCalledOnce();
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+
+        vi.setSystemTime(Date.now() + 60_000);
+        runIsolatedAgentJob.mockResolvedValue({ status: "error", error: "wrong model id" });
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+        expectAlertTextContaining(sendCronFailureAlert, "automatic repair was requested");
+        expect(runCronFailureRepair).toHaveBeenCalledOnce();
+
+        runIsolatedAgentJob.mockResolvedValueOnce({ status: "ok", delivered: true });
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+        expect(runCronFailureRepair).toHaveBeenCalledTimes(2);
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+      },
+    );
+  });
+
+  it("alerts instead of repairing a one-shot job that will not run again", async () => {
+    await withRepair(
+      async ({ cron, runIsolatedAgentJob, sendCronFailureAlert, runCronFailureRepair, addJob }) => {
+        runIsolatedAgentJob.mockResolvedValue({ status: "error", error: "rate limit exceeded" });
+        const job = await addJob("one-shot sync", {
+          ...owned,
+          schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
+          failureAlert: { after: 4, cooldownMs: 0 },
+        });
+        for (let attempt = 1; attempt <= 4; attempt += 1) {
+          vi.setSystemTime(cron.getJob(job.id)?.state.nextRunAtMs ?? Date.now());
+          await cron.run(job.id, "due");
+        }
+        expect(cron.getJob(job.id)).toMatchObject({
+          enabled: false,
+          state: { consecutiveErrors: 4 },
+        });
+        expect(runCronFailureRepair).not.toHaveBeenCalled();
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
   it("alerts on the next failure when the repair request fails", async () => {
     await withRepair(async ({ cron, sendCronFailureAlert, runCronFailureRepair, addJob }) => {
       runCronFailureRepair.mockRejectedValueOnce(new Error("owner session deleted"));
@@ -102,7 +155,6 @@ describe("CronService failure repair", () => {
       await cron.run(job.id, "force");
       expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       expectAlertTextContaining(sendCronFailureAlert, "automatic repair was requested");
-      expect(cron.getJob(job.id)?.state.failureAlertIncident?.repair).toBeUndefined();
     });
   });
 
@@ -159,7 +211,7 @@ describe("CronService failure repair", () => {
       payload,
       owner: { agentId: "main", sessionKey: ownerSessionKey },
       failureAlert: { after: 2, cooldownMs: 0, channel: "telegram", to: "19098680" },
-      state: { consecutiveErrors: 2 },
+      state: { consecutiveErrors: 2, nextRunAtMs: nowMs + 60_000 },
     } as CronJob;
     const deferredNotifications: DeferredCronNotifications = [];
     maybeEmitFailureAlert(state, {

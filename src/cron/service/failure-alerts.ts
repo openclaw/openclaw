@@ -23,6 +23,7 @@ import type {
   CronMessageChannel,
 } from "../types.js";
 import { buildCronFailureRepairBrief } from "./failure-repair-brief.js";
+import { hasScheduledNextRunAtMs, isJobEnabled } from "./jobs-scheduling.js";
 import {
   cronNotificationJob,
   type CronNotificationJob,
@@ -253,9 +254,11 @@ function startFailureNotification(job: CronJob): void {
 function startFailureAlertCycle(job: CronJob, incident: FailureAlertSignal, now: number): void {
   startFailureNotification(job);
   job.state.lastFailureAlertAtMs = now;
+  const current = job.state.failureAlertIncident;
   job.state.failureAlertIncident = {
+    ...current,
     ...incident,
-    scope: job.state.failureAlertIncident?.scope === "run" ? "run" : incident.scope,
+    scope: current?.scope === "run" ? "run" : incident.scope,
   };
 }
 
@@ -289,12 +292,16 @@ function failureRecoveryScope(
   return detail?.kind === "script-failure" && detail.source === "trigger" ? "trigger" : "run";
 }
 
-function recordUnresolvedFailure(job: CronJob, detail?: CronFailureNotificationDetail): void {
+function recordUnresolvedFailure(
+  job: CronJob,
+  detail?: CronFailureNotificationDetail,
+): FailureAlertIncident {
   const scope = failureRecoveryScope(detail);
   const incident = (job.state.failureAlertIncident ??= { scope });
   if (scope === "run") {
     incident.scope = "run";
   }
+  return incident;
 }
 
 function failureIncident(params: {
@@ -326,8 +333,9 @@ function failureIncident(params: {
 
 /**
  * Emits one alert per incident when threshold, best-effort, and cooldown policy allow it.
- * For a job with an owner conversation, the first chat alert of a failure streak becomes a
- * repair request in that conversation; a later failure of that streak alerts, naming it.
+ * For a job with an owner conversation and a future run, the first chat notification of a
+ * failure streak becomes a repair request in that conversation; later alerts of the streak
+ * name it, and only a successful run lets a new streak be repaired again.
  */
 export function maybeEmitFailureAlert(
   state: CronJobPolicyContext,
@@ -343,7 +351,7 @@ export function maybeEmitFailureAlert(
     deferredNotifications: DeferredCronNotifications;
   },
 ) {
-  recordUnresolvedFailure(params.job, params.failureNotificationDetail);
+  const streak = recordUnresolvedFailure(params.job, params.failureNotificationDetail);
   const alertConfig = params.alertConfig;
   if (!alertConfig || params.consecutiveCount < alertConfig.after) {
     return;
@@ -353,34 +361,27 @@ export function maybeEmitFailureAlert(
   if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
     return;
   }
-  const incident = failureIncident({ ...params, route: alertConfig });
-  const now = state.deps.nowMs();
-  // The repair request took this incident's alert and cooldown slot; if the job still
-  // fails, the user gets the alert once, and the streak is never repaired twice.
-  const repairRequested = params.job.state.failureAlertIncident?.repair !== undefined;
-  if (repairRequested) {
-    startFailureAlertCycle(params.job, incident, now);
-  } else if (!requestFailureNotification(state, params.job, alertConfig, incident)) {
-    return;
-  }
-  const job = cronNotificationJob(params.job);
   if (
-    !repairRequested &&
+    streak.signature === undefined &&
+    streak.repair === undefined &&
     alertConfig.mode === "announce" &&
     params.status === "error" &&
     params.job.owner?.sessionKey?.trim() &&
     // Command jobs and on-exit or stream schedules are operator-only, so they alert as before.
     params.job.payload.kind !== "command" &&
     params.job.schedule.kind !== "on-exit" &&
-    params.job.schedule.kind !== "stream"
+    params.job.schedule.kind !== "stream" &&
+    // A job that will not run again cannot show a repair worked, so it alerts.
+    isJobEnabled(params.job) &&
+    hasScheduledNextRunAtMs(params.job.state.nextRunAtMs)
   ) {
-    const opened = params.job.state.failureAlertIncident ?? incident;
-    params.job.state.failureAlertIncident = { ...opened, repair: { atMs: now } };
-    // No alert is sent for this cycle; the repair conversation owns any messaging.
+    streak.repair = { atMs: state.deps.nowMs() };
+    // The repair leaves the alert slot open: if the job fails again, that failure alerts.
+    startFailureNotification(params.job);
     params.job.state.lastFailureNotificationDeliveryStatus = "not-requested";
     params.deferredNotifications.push({
       kind: "failure-repair",
-      job,
+      job: cronNotificationJob(params.job),
       text: buildCronFailureRepairBrief({
         job: params.job,
         consecutiveErrors: params.consecutiveCount,
@@ -390,6 +391,11 @@ export function maybeEmitFailureAlert(
     });
     return;
   }
+  const incident = failureIncident({ ...params, route: alertConfig });
+  if (!requestFailureNotification(state, params.job, alertConfig, incident)) {
+    return;
+  }
+  const job = cronNotificationJob(params.job);
   params.deferredNotifications.push({
     kind: "failure-alert",
     job,
@@ -401,7 +407,7 @@ export function maybeEmitFailureAlert(
       consecutiveErrors: params.consecutiveCount,
       route: alertConfig,
       status: params.status,
-      repairRequested,
+      repairRequested: streak.repair !== undefined,
     }),
     runAtMs: params.runAtMs,
     route: alertConfig,
