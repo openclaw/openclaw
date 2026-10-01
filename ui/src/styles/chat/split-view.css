@@ -588,12 +588,12 @@
      styling rule above; a bare class here silently loses that cascade. */
   .chat-pane__actions .chat-pane__split-down,
   .chat-pane__actions .chat-pane__split-right,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__nav-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__palette-open,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__participants,
-  .chat-pane__header:has(.chat-pane__close-pane) openclaw-session-owner-chip {
+  .chat-pane__header.chat-pane__header--closable .chat-side-panel-toggle,
+  .chat-pane__header.chat-pane__header--closable .chat-pane__sharing-menu,
+  .chat-pane__header.chat-pane__header--closable .chat-pane__nav-toggle,
+  .chat-pane__header.chat-pane__header--closable .chat-pane__palette-open,
+  .chat-pane__header.chat-pane__header--closable .chat-pane__participants,
+  .chat-pane__header.chat-pane__header--closable openclaw-session-owner-chip {
     display: none;
   }
 }

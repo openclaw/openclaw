@@ -301,7 +301,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
 
   return html`
     <div
-      class="chat-pane__header "
+      class=${`chat-pane__header${props.onClosePane ? " chat-pane__header--closable" : ""}`}
       role="group"
       aria-label=${props.title}
       tabindex="-1"

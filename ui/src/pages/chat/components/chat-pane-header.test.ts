@@ -21,7 +21,11 @@ import {
   mountChatPaneHeader,
   type ChatPaneHeaderProps,
 } from "./chat-pane-header.test-support.ts";
-import { canRevealSessionWorkspace, resolveChatPaneParentSession } from "./chat-pane-header.ts";
+import {
+  canRevealSessionWorkspace,
+  renderChatPaneHeader,
+  resolveChatPaneParentSession,
+} from "./chat-pane-header.ts";
 import { renderChatPanePlacement } from "./chat-pane-placement.ts";
 
 const containers: HTMLElement[] = [];
@@ -120,7 +124,7 @@ describe("chat pane header", () => {
   });
 
   it("places the session menu last in the header action row", () => {
-    const { container } = mountHeader({
+    const { container, props } = mountHeader({
       mergedChrome: true,
       onClosePane: vi.fn(),
       sessionMenuAction: html`<button data-action="session-menu"></button>`,
@@ -134,6 +138,12 @@ describe("chat pane header", () => {
     ).toBe("session-menu");
     expect(actions?.querySelector(".chat-pane__palette-open")).not.toBeNull();
     expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
+    const header = container.querySelector(".chat-pane__header")!;
+    expect(header.classList.contains("chat-pane__header--closable")).toBe(true);
+
+    render(renderChatPaneHeader({ ...props, onClosePane: undefined }), container);
+    expect(container.querySelector(".chat-pane__close-pane")).toBeNull();
+    expect(container.querySelector(".chat-pane__header--closable")).toBeNull();
   });
 
   it("moves narrow session actions into the compact menu", () => {
