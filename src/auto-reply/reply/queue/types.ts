@@ -114,6 +114,8 @@ export type FollowupRun = {
   sourceTurnId?: string;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Invocation-owned replay fence; never restored from persisted session metadata. */
+  assertForkReplaySourceCurrent?: () => void;
   /** Latest session to claim without rewriting the queued run before store refresh. */
   admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
@@ -193,6 +195,8 @@ export type FollowupRun = {
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: {
+    /** Native source for exactly one admitted inbound user turn. */
+    inboundTransport?: import("../../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams["inboundTransport"];
     providerReviewAcknowledgment?: import("../../../sessions/provider-review.js").ProviderReviewAcknowledgment;
     agentId: string;
     agentDir: string;

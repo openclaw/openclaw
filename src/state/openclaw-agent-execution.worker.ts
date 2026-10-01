@@ -54,6 +54,7 @@ import {
 } from "./openclaw-agent-execution-domain.js";
 import {
   loadAgentTranscriptOperations,
+  loadAgentForkOperations,
   loadAgentReplacementOperations,
   loadAgentEntryReadOperations,
   loadAgentTrajectoryOperations,
@@ -353,6 +354,7 @@ function openAgentDatabaseBackend(
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,
     "session.transcript.initialize": loadAgentTranscriptOperations,
+    "session.transcript.forkAtMessage": loadAgentForkOperations,
     "session.entries.replace": loadAgentReplacementOperations,
     "session.entry.acp": loadAgentAcpOperations,
     "session.providerReview.compare": loadAgentProviderReviewOperations,

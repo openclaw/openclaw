@@ -50,6 +50,7 @@ import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
+import { attachNativeInboundTransportForPersistence } from "./inbound-transport-persistence.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import {
   type InitialUserTurnReplayPreparation,
@@ -616,6 +617,18 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     onUserMessagePreparingForPersistence: (_message, recorder) => {
       latestPersistedUserMessage = undefined;
       latestUserTurnTranscriptRecorder = recorder;
+    },
+    onUserMessagePreparedForPersistence: (message, recorder) => {
+      // Only the admitted inbound turn owns this native message ID. Internal
+      // continuations, replay, and unrecorded synthetic user prompts stay untagged.
+      if (
+        recorder &&
+        recorder === attempt.userTurnTranscriptRecorder &&
+        attempt.inboundTransport &&
+        Object.isExtensible(message)
+      ) {
+        attachNativeInboundTransportForPersistence(message, attempt.inboundTransport);
+      }
     },
     onUserMessagePersisted: (message, runtimeMessage) => {
       latestPersistedUserMessage = message;

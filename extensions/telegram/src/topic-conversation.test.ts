@@ -1,6 +1,20 @@
 // Telegram tests cover topic conversation plugin behavior.
 import { describe, expect, it } from "vitest";
+import { telegramPlugin } from "./channel.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
+
+describe("Telegram inbound conversation plugin contract", () => {
+  it("keeps topics in one chat distinct in the channel resolver", () => {
+    const resolve = telegramPlugin.messaging?.resolveInboundConversation;
+    expect(resolve).toBeTypeOf("function");
+    expect(
+      resolve?.({ to: "-1001", conversationId: "-1001", threadId: "42", isGroup: true }),
+    ).toEqual({ conversationId: "-1001:topic:42", parentConversationId: "-1001" });
+    expect(
+      resolve?.({ to: "-1001", conversationId: "-1001", threadId: "43", isGroup: true }),
+    ).toEqual({ conversationId: "-1001:topic:43", parentConversationId: "-1001" });
+  });
+});
 
 describe("parseTelegramTopicConversation", () => {
   it("parses direct chatId:topic:topicId strings", () => {

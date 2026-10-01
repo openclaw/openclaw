@@ -1,4 +1,3 @@
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getTelegramRuntime } from "./runtime.js";
 import {
@@ -7,11 +6,10 @@ import {
   TELEGRAM_THREAD_BINDINGS_NAMESPACE,
   TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   type TelegramThreadBindingRecord,
+  type TelegramThreadBindingStore,
 } from "./thread-bindings-store.js";
 
-type TelegramThreadBindingStore = PluginStateKeyedStore<TelegramThreadBindingRecord>;
-
-function openThreadBindingStore(): TelegramThreadBindingStore {
+export function openThreadBindingStore(): TelegramThreadBindingStore {
   return getTelegramRuntime().state.openKeyedStore<TelegramThreadBindingRecord>({
     namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
     maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
@@ -20,12 +18,9 @@ function openThreadBindingStore(): TelegramThreadBindingStore {
 
 export async function loadBindingsFromStore(
   accountId: string,
+  store: TelegramThreadBindingStore | undefined,
 ): Promise<TelegramThreadBindingRecord[]> {
-  let store: TelegramThreadBindingStore;
-  try {
-    store = openThreadBindingStore();
-  } catch (err) {
-    logVerbose(`telegram thread bindings store open failed (${accountId}): ${String(err)}`);
+  if (!store) {
     return [];
   }
   let entries: Array<{ key: string; value: TelegramThreadBindingRecord }>;
@@ -59,6 +54,7 @@ export async function loadBindingsFromStore(
 export async function persistBindingMutation(params: {
   accountId: string;
   persist: boolean;
+  store: TelegramThreadBindingStore | undefined;
   binding: TelegramThreadBindingRecord;
   remove?: boolean;
   reason: string;
@@ -69,7 +65,10 @@ export async function persistBindingMutation(params: {
     return false;
   }
   try {
-    const store = openThreadBindingStore();
+    const store = params.store;
+    if (!store) {
+      throw new Error("Telegram thread binding persistence store is unavailable");
+    }
     const key = resolveStoredBindingKey(params.binding);
     if (params.remove) {
       await store.delete(key, { assertCurrent: params.assertCurrent });

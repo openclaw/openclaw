@@ -484,6 +484,43 @@ it("keeps uncertain alias membership unavailable after newer native metadata set
 });
 
 it.each([false, true])(
+  "filters a worker fork identity superseded before settlement (%s)",
+  async (superseded) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+      if (typeof identity !== "string") {
+        throw new Error("Expected durable fixture");
+      }
+      const key = "agent:main:worker-fork-publication";
+      const publication = retainSessionEntryWorkerPublication({
+        agentId: "main",
+        storePath: database.path,
+        databaseIdentity: identity,
+      });
+      publication.begin([key], []);
+      if (superseded) {
+        replaceSessionEntrySync(
+          { agentId: "main", storePath: database.path, sessionKey: key },
+          { sessionId: "newer-target", updatedAt: 2 },
+        );
+      }
+      const published = publication.settle(
+        {
+          kind: "session-message-forked",
+          key,
+          sessionId: "forked-target",
+          sourceSessionId: "source",
+          databaseIdentity: identity,
+        },
+        false,
+      );
+      expect(published?.current.get(key)?.sessionId).toBe(superseded ? undefined : "forked-target");
+    });
+  },
+);
+
+it.each([false, true])(
   "invalidates rehomed membership while preserving newer native metadata (%s)",
   async (newerNative) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

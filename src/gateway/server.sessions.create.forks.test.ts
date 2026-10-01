@@ -342,6 +342,29 @@ async function seedSizedForkParent(dir: string, entry: Parameters<typeof session
   });
 }
 
+test("sessions.create rejects explicit succeedsParent without command hooks, including false", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "agent:main:main": sessionStoreEntry("sess-fork-no-hooks-parent"),
+    },
+  });
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "agent:main:main",
+    fork: true,
+    forkFrom: "last-completed",
+    succeedsParent: false,
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "succeedsParent requires emitCommandHooks",
+  });
+});
+
 test("sessions.create retains the 100K fallback when only another provider has model capacity", async () => {
   const { dir } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };

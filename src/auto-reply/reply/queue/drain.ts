@@ -37,7 +37,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { resolveCollectedRun } from "./collected-run.js";
+import { resolveCollectedRun, resolveSyntheticOverflowRun } from "./collected-run.js";
 import {
   collectRuntimeMetadata,
   createOverflowSummaryRetrySource,
@@ -45,7 +45,9 @@ import {
   hasPreparedCurrentTurnImages,
   resolveFollowupDeliveryContextKey,
   resolveFollowupReplyAnchor,
-  resolveOverflowSummaryInboundEventKind,
+  resolveOverflowRuntimeAuthority,
+  overflowRuntimeMetadata,
+  resolveOverflowSummarySourceGroup,
 } from "./delivery-context.js";
 import {
   admitFollowupRunLifecycle,
@@ -783,20 +785,6 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
     : { cross: true };
 }
 
-function resolveOverflowSummarySourceGroup(queue: {
-  summarySources: FollowupRun[];
-}): FollowupRun[] {
-  const source = queue.summarySources[0];
-  if (!source) {
-    return [];
-  }
-  const contextKey = resolveFollowupDeliveryContextKey(source);
-  const end = queue.summarySources.findIndex(
-    (candidate) => resolveFollowupDeliveryContextKey(candidate) !== contextKey,
-  );
-  return queue.summarySources.slice(0, end < 0 ? undefined : end);
-}
-
 async function drainProtectedPriorityFollowup(
   queue: Pick<FollowupQueueState, "inFlight" | "items">,
   runFollowup: (run: FollowupRun) => Promise<void>,
@@ -853,8 +841,7 @@ async function runSyntheticOverflowSummary(params: {
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     errorContext: "followup overflow summary transcript",
   });
-  const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
-  const runtimeMetadata = collectRuntimeMetadata(params.sources);
+  const { currentInboundEventKind, runtimeMetadata } = overflowRuntimeMetadata(params.sources);
   let admitted = false;
   await params.runFollowup({
     prompt: params.prompt,
@@ -863,13 +850,13 @@ async function runSyntheticOverflowSummary(params: {
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
     userTurnTranscriptRecorder,
-    run: resolveCollectedRun(params.sources, params.source.run),
+    run: resolveSyntheticOverflowRun(params.sources, params.source.run),
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
     explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
     gatewayLocalUserIngress: runtimeMetadata.gatewayLocalUserIngress,
-    operatorAuthority: runtimeMetadata.operatorAuthority,
+    ...resolveOverflowRuntimeAuthority(runtimeMetadata),
     personalBootstrapEligible: runtimeMetadata.personalBootstrapEligible,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,

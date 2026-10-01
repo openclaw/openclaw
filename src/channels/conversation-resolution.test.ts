@@ -1,5 +1,6 @@
 // Conversation resolution tests cover channel conversation lookup and fallback rules.
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveNativeInboundTransportOrigin } from "../auto-reply/reply/native-inbound-transport-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -236,6 +237,148 @@ describe("conversation resolution", () => {
       conversationId: "42",
       parentConversationId: "parent-room",
       threadId: "42",
+    });
+  });
+
+  it("keeps topic and channel contract origins distinct despite the same native message ID", () => {
+    const collidingNativeMessageId = "91";
+    // Core tests use the plugin contract; adapters assert their own resolver grammar.
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      messaging: {
+        resolveInboundConversation: ({ conversationId, to, threadId }) => {
+          const chatId = (conversationId ?? to ?? "").trim();
+          if (!chatId) {
+            return null;
+          }
+          const topicId = threadId == null ? undefined : String(threadId);
+          return {
+            conversationId: topicId ? `${chatId}:topic:${topicId}` : chatId,
+            parentConversationId: topicId ? chatId : undefined,
+            threadId: topicId,
+          };
+        },
+      },
+    });
+    const telegramA = resolveInboundConversationResolution({
+      cfg: testConfig,
+      channel: "telegram",
+      accountId: "default",
+      to: "-1001",
+      conversationId: "-1001",
+      threadId: "42",
+      isGroup: true,
+    });
+    const telegramB = resolveInboundConversationResolution({
+      cfg: testConfig,
+      channel: "telegram",
+      accountId: "default",
+      to: "-1002",
+      conversationId: "-1002",
+      threadId: "42",
+      isGroup: true,
+    });
+    expect(telegramA?.conversationId).toBeTruthy();
+    expect({ messageId: collidingNativeMessageId, conversation: telegramA }).not.toEqual({
+      messageId: collidingNativeMessageId,
+      conversation: telegramB,
+    });
+    const telegramOrigin = (chatId: string) =>
+      resolveNativeInboundTransportOrigin({
+        cfg: testConfig,
+        messageId: collidingNativeMessageId,
+        chatId,
+        channel: "telegram",
+        routedChannel: "telegram",
+        accountId: "default",
+        to: chatId,
+        threadId: "42",
+        chatType: "group",
+        synthetic: false,
+      });
+    expect(telegramOrigin("-1001")?.conversation.conversationId).toBe(telegramA?.conversationId);
+    expect(telegramOrigin("-1001")).not.toEqual(telegramOrigin("-1002"));
+    expect(
+      resolveNativeInboundTransportOrigin({
+        cfg: testConfig,
+        messageId: collidingNativeMessageId,
+        chatId: "-1001",
+        channel: "telegram",
+        routedChannel: "discord",
+        chatType: "group",
+        synthetic: false,
+      }),
+    ).toBeUndefined();
+
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+      messaging: {
+        resolveInboundConversation: ({ conversationId, to }) => {
+          const channelId = (conversationId ?? to ?? "").replace(/^channel:/i, "").trim();
+          return channelId ? { conversationId: channelId } : null;
+        },
+      },
+    });
+    const discordA = resolveInboundConversationResolution({
+      cfg: testConfig,
+      channel: "discord",
+      accountId: "default",
+      to: "channel:123",
+      conversationId: "123",
+      isGroup: true,
+    });
+    const discordB = resolveInboundConversationResolution({
+      cfg: testConfig,
+      channel: "discord",
+      accountId: "default",
+      to: "channel:456",
+      conversationId: "456",
+      isGroup: true,
+    });
+    expect(discordA?.conversationId).toBeTruthy();
+    expect({ messageId: collidingNativeMessageId, conversation: discordA }).not.toEqual({
+      messageId: collidingNativeMessageId,
+      conversation: discordB,
+    });
+    const discordOrigin = (chatId: string) =>
+      resolveNativeInboundTransportOrigin({
+        cfg: testConfig,
+        messageId: collidingNativeMessageId,
+        chatId,
+        channel: "discord",
+        routedChannel: "discord",
+        accountId: "default",
+        to: "channel:" + chatId,
+        chatType: "group",
+        synthetic: false,
+      });
+    expect(discordOrigin("123")?.conversation.conversationId).toBe(discordA?.conversationId);
+    expect(discordOrigin("123")).not.toEqual(discordOrigin("456"));
+  });
+
+  it("uses the runtime inbound resolver and preserves provider canonical ids", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+      messaging: {
+        resolveInboundConversation: ({ conversationId, to }) => {
+          const source = (conversationId ?? to ?? "").trim();
+          const normalized = source.replace(/^discord:/i, "");
+          return normalized ? { conversationId: normalized } : null;
+        },
+      },
+    });
+
+    expect(
+      resolveInboundConversationResolution({
+        cfg: testConfig,
+        channel: "discord",
+        accountId: "default",
+        to: "discord:channel:123",
+      }),
+    ).toEqual({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "channel:123",
     });
   });
 

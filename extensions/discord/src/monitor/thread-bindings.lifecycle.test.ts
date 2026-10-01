@@ -1,3 +1,4 @@
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -176,6 +177,42 @@ describe("thread binding lifecycle", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("persists a restored absolute deadline across touch and restart", async () => {
+    await withOpenClawTestState({ label: "discord-fork-deadline" }, async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const conversation = {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558667",
+      };
+      try {
+        await resetThreadBindingsForTests();
+        vi.setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+        const expiresAt = Date.now() + 60_000;
+        const manager = await createTestThreadBindingManager({ persist: true });
+        const service = getSessionBindingService();
+        const bound = await service.bind({
+          targetSessionKey: "agent:main:source",
+          targetKind: "session",
+          conversation,
+          placement: "current",
+          expiresAt,
+        });
+        expect(bound.expiresAt).toBe(expiresAt);
+        vi.setSystemTime(Date.now() + 30_000);
+        await manager.touchThread({ threadId: conversation.conversationId });
+        expect(service.resolveByConversation(conversation)?.expiresAt).toBe(expiresAt);
+
+        await resetThreadBindingsForTests();
+        await createTestThreadBindingManager({ persist: true });
+        expect(service.resolveByConversation(conversation)?.expiresAt).toBe(expiresAt);
+      } finally {
+        await resetThreadBindingsForTests();
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("persists unbinds even when no manager is active", async () => {

@@ -184,6 +184,7 @@ type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "sourceTurnId"
   | "operatorAuthority"
+  | "assertForkReplaySourceCurrent"
   | "personalBootstrapEligible"
   | "currentInboundEventKind"
   | "currentInboundAudio"
@@ -265,6 +266,13 @@ export function collectRuntimeMetadata(
   return {
     sourceTurnId: authoritySource?.sourceTurnId,
     operatorAuthority: authoritySource?.operatorAuthority,
+    assertForkReplaySourceCurrent: items.some((item) => item.assertForkReplaySourceCurrent)
+      ? () => {
+          for (const item of items) {
+            item.assertForkReplaySourceCurrent?.();
+          }
+        }
+      : undefined,
     ...(items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
       ? { personalBootstrapEligible: true }
       : {}),
@@ -290,13 +298,46 @@ export function collectRuntimeMetadata(
   };
 }
 
-export function resolveOverflowSummaryInboundEventKind(
-  sources: FollowupRun[],
-): "room_event" | undefined {
+function resolveOverflowSummaryInboundEventKind(sources: FollowupRun[]): "room_event" | undefined {
   return sources.length > 0 &&
     sources.every((source) => source.currentInboundEventKind === "room_event")
     ? "room_event"
     : undefined;
+}
+
+/** Preserve source-owned replay authority when an overflow summary becomes a new run. */
+export function resolveOverflowRuntimeAuthority(
+  source: Pick<FollowupRun, "operatorAuthority" | "assertForkReplaySourceCurrent">,
+): Pick<
+  FollowupRun,
+  "operatorAuthority" | "assertForkReplaySourceCurrent" | "disableCollectBatching"
+> {
+  return {
+    operatorAuthority: source.operatorAuthority,
+    assertForkReplaySourceCurrent: source.assertForkReplaySourceCurrent,
+    disableCollectBatching: Boolean(source.assertForkReplaySourceCurrent),
+  };
+}
+
+export function overflowRuntimeMetadata(items: FollowupRun[]) {
+  return {
+    currentInboundEventKind: resolveOverflowSummaryInboundEventKind(items),
+    runtimeMetadata: collectRuntimeMetadata(items),
+  };
+}
+
+export function resolveOverflowSummarySourceGroup(queue: {
+  summarySources: FollowupRun[];
+}): FollowupRun[] {
+  const source = queue.summarySources[0];
+  if (!source) {
+    return [];
+  }
+  const contextKey = resolveFollowupDeliveryContextKey(source);
+  const end = queue.summarySources.findIndex(
+    (candidate) => resolveFollowupDeliveryContextKey(candidate) !== contextKey,
+  );
+  return queue.summarySources.slice(0, end < 0 ? undefined : end);
 }
 
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
@@ -305,6 +346,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     sourceTurnId: source.sourceTurnId,
     admissionSessionId: source.admissionSessionId,
     operatorAuthority: source.operatorAuthority,
+    assertForkReplaySourceCurrent: source.assertForkReplaySourceCurrent,
     personalBootstrapEligible: source.personalBootstrapEligible,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
@@ -335,6 +377,8 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
+    // Keep the captured run identity for Stop's compact-source custody check.
+    // The synthetic summary strips transport provenance at its dispatch boundary.
     run: source.run,
   };
 }

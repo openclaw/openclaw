@@ -1,5 +1,6 @@
 // Generic current-conversation bindings persist lightweight conversation ->
 // session links for plugin channels without a custom binding adapter.
+import { randomUUID } from "node:crypto";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -279,11 +280,16 @@ export async function bindGenericCurrentConversation(
       ? Math.max(0, Math.floor(input.ttlMs))
       : undefined;
   const expiresAt =
-    ttlMs === undefined
-      ? undefined
-      : ttlMs === 0
-        ? now
-        : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+    input.expiresAt !== undefined
+      ? asDateTimestampMs(input.expiresAt)
+      : ttlMs === undefined
+        ? undefined
+        : ttlMs === 0
+          ? now
+          : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (input.expiresAt !== undefined && expiresAt === undefined) {
+    return null;
+  }
   if (ttlMs !== undefined && expiresAt === undefined) {
     return null;
   }
@@ -291,6 +297,7 @@ export async function bindGenericCurrentConversation(
     assertCurrent?.();
     return {
       bindingId: buildBindingId(conversation),
+      generation: randomUUID(),
       targetSessionKey,
       targetKind: input.targetKind,
       conversation,
@@ -368,14 +375,16 @@ export function touchGenericCurrentConversationBinding(
 function unbindCurrentConversationBindingById(
   bindingId: string,
   scope?: SessionBindingScope,
+  assertCurrent?: () => void,
 ): SessionBindingRecord[] {
   const conversation = bindingRefFromId(bindingId, scope);
   if (!conversation || !supportsGenericCurrentConversationBinding(conversation)) {
     return [];
   }
-  const { previous, current } = updateCurrentConversationBindingRecord(conversation, (latest) =>
-    latest?.bindingId === bindingId ? null : latest,
-  );
+  const { previous, current } = updateCurrentConversationBindingRecord(conversation, (latest) => {
+    assertCurrent?.();
+    return latest?.bindingId === bindingId ? null : latest;
+  });
   return previous && !current ? [previous] : [];
 }
 
@@ -385,8 +394,13 @@ export async function unbindGenericCurrentConversationBindings(
 ): Promise<SessionBindingRecord[]> {
   const normalizedBindingId = input.bindingId?.trim();
   if (normalizedBindingId?.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
-    return unbindCurrentConversationBindingById(normalizedBindingId, input.scope);
+    return unbindCurrentConversationBindingById(
+      normalizedBindingId,
+      input.scope,
+      input.assertCurrent,
+    );
   }
+  input.assertCurrent?.();
   const normalizedTargetSessionKey = input.targetSessionKey?.trim();
   return normalizedTargetSessionKey
     ? deleteCurrentConversationBindingRecordsBySession(

@@ -577,6 +577,38 @@ describe("createFollowupRunner", () => {
     );
   });
 
+  it.each([false, true])(
+    "fences final queued fork completion delivery after revocation=%s",
+    async (revoke) => {
+      const turn = createTurn();
+      let authorized = true;
+      const sourceDelivery = vi.fn(async () => {});
+      const assertCurrent = vi.fn(() => {
+        if (!authorized) {
+          throw new Error("fork replay source revoked");
+        }
+      });
+      turn.queued.assertForkReplaySourceCurrent = assertCurrent;
+      turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDelivery };
+      state.admit.mockResolvedValue({ kind: "admitted", turn });
+      state.execute.mockResolvedValue(createRejectedExecution());
+      state.account.mockResolvedValue(undefined);
+      state.deliver.mockImplementation(async () => {
+        authorized = !revoke;
+        return { kind: "completed", payloads: [{ text: "queued fork answer" }] };
+      });
+      const run = createFollowupRunner({
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      });
+      await run(turn.queued);
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(sourceDelivery).toHaveBeenCalledTimes(revoke ? 0 : 1);
+      expect(turn.operation.fail).toHaveBeenCalledTimes(revoke ? 1 : 0);
+    },
+  );
+
   it("holds the reply operation through progress drain, accounting, and delivery", async () => {
     const order: string[] = [];
     const typing = createTypingController();

@@ -32,17 +32,23 @@ function touchCurrentConversationBindingInDatabase(
     const { idleTimeoutMs, maxAgeMs } = input.accountPolicy;
     const idleExpiresAt = idleTimeoutMs > 0 ? input.at + idleTimeoutMs : undefined;
     const maxAgeExpiresAt = maxAgeMs > 0 ? current.boundAt + maxAgeMs : undefined;
+    const absoluteExpiresAt = current.metadata?.["__sessionBindingAbsoluteExpiresAt"];
+    const lifecycleExpiresAt =
+      idleExpiresAt != null && maxAgeExpiresAt != null
+        ? Math.min(idleExpiresAt, maxAgeExpiresAt)
+        : (idleExpiresAt ?? maxAgeExpiresAt);
     return {
       bindingId: `${conversation.accountId}:${conversation.conversationId}`,
+      generation: current.generation,
       targetSessionKey: current.targetSessionKey,
       targetKind: input.accountPolicy.targetKinds[current.targetKind],
       conversation,
       status: "active",
       boundAt: current.boundAt,
       expiresAt:
-        idleExpiresAt != null && maxAgeExpiresAt != null
-          ? Math.min(idleExpiresAt, maxAgeExpiresAt)
-          : (idleExpiresAt ?? maxAgeExpiresAt),
+        typeof absoluteExpiresAt === "number" && Number.isFinite(absoluteExpiresAt)
+          ? Math.min(lifecycleExpiresAt ?? absoluteExpiresAt, absoluteExpiresAt)
+          : lifecycleExpiresAt,
       metadata: {
         ...current.metadata,
         agentId:

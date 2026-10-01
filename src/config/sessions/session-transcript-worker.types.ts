@@ -141,6 +141,14 @@ export type SessionModelContextWorkerInput = {
   limits?: SessionModelContextLimits;
 };
 
+export type SessionForkReplySelectionWorkerInput = {
+  kind: "fork-reply-selection";
+  target: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv };
+  replyToId: string;
+  conversation: import("../../infra/outbound/session-binding.types.js").ConversationRef;
+  replyConversationRef?: string;
+};
+
 export type SessionSqliteTargetWorkerInput = {
   kind: "sqlite-target";
   storePath: string;
@@ -524,6 +532,7 @@ export type SessionTranscriptWorkerInput =
   | SessionSqliteTargetWorkerInput
   | SessionHistoryWorkerInput
   | SessionModelContextWorkerInput
+  | SessionForkReplySelectionWorkerInput
   | SessionEntryWorkerInput
   | SessionResetRecallWorkerInput
   | SessionBranchSummaryWorkerInput;
@@ -535,6 +544,7 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = {
+  "fork-reply-selection": import("./session-transcript-fork-reply.js").SessionForkReplySelection;
   prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
   "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };

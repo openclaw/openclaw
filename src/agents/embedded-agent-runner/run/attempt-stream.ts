@@ -128,13 +128,16 @@ export function installEmbeddedAttemptStreamGuards(
   const { sessionAgentId } = input.setup;
   const { signal: abortSignal } = input.runAbortController;
   const operatorAuthority = readRunOperatorAuthority(attempt);
-  if (operatorAuthority) {
+  if (operatorAuthority || attempt.assertForkReplaySourceCurrent) {
     const providerStream = session.agent.streamFn;
     session.agent.streamFn = (model, context, options) => {
-      assertOperatorModelAllowed(operatorAuthority, {
-        provider: attempt.provider,
-        model: attempt.modelId,
-      });
+      attempt.assertForkReplaySourceCurrent?.();
+      if (operatorAuthority) {
+        assertOperatorModelAllowed(operatorAuthority, {
+          provider: attempt.provider,
+          model: attempt.modelId,
+        });
+      }
       return providerStream(model, context, options);
     };
   }

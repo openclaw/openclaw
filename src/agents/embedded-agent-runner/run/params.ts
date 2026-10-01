@@ -4,6 +4,7 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
+import type { ConversationRef } from "../../../infra/outbound/session-binding-service.js";
 import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
@@ -64,6 +65,10 @@ type ReasoningStreamPayload = Pick<
 };
 
 export type RunEmbeddedAgentParams = {
+  /** Host-only fork replay fence checked at physical provider dispatch. */
+  assertForkReplaySourceCurrent?: () => void;
+  /** Verified native ingress identity for one user turn; never infer it from a session key. */
+  inboundTransport?: { messageId: string; conversation: ConversationRef };
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
   sessionPersistence?: "durable" | "detached";
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */

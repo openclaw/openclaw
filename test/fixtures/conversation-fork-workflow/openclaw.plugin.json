@@ -1,0 +1,1 @@
+{"id":"gate-a-fork-workflow","name":"Gate A Isolated Fork Workflow","version":"0.0.1","description":"Independent fork-invoking proof consumer","configSchema":{"type":"object","additionalProperties":false,"properties":{}}}

@@ -10,6 +10,7 @@ import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-err
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionBranchSummaryWorkerInput,
+  SessionForkReplySelectionWorkerInput,
   SessionEntryWorkerInput,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
@@ -17,6 +18,7 @@ import type {
   SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
 } from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 
@@ -48,6 +50,20 @@ const sessionEntries = createTranscriptReadPool<
 
 // Branch scans share background compute admission without delaying foreground history or context.
 const branchSummaries = createTranscriptReadPool<SessionBranchSummaryWorkerInput>(true);
+
+const forkReplySelections = createTranscriptReadPool<SessionForkReplySelectionWorkerInput>(true);
+
+export async function readSessionForkReplySelectionInWorker(
+  input: Omit<SessionForkReplySelectionWorkerInput, "kind">,
+) {
+  const captured = { ...input, target: captureSessionTranscriptTargetBinding(input.target) };
+  return unwrapSessionTranscriptWorkerReply<"fork-reply-selection">(
+    await forkReplySelections.run(
+      { kind: "fork-reply-selection", ...captured },
+      { inputBytes: JSON.stringify(captured).length * 2, timeoutMs: 60_000 },
+    ),
+  );
+}
 
 export async function readSessionTranscriptModelContextAsync(
   target: SessionTranscriptRuntimeTarget,

@@ -50,6 +50,7 @@ import {
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
+import { resolveNativeInboundTransportOrigin } from "./native-inbound-transport-origin.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -377,6 +378,20 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   }
   const admittedSessionSettings = opts?.admittedSessionSettings;
   const groupTurn = getGroupThreadTurn();
+  const inboundTransport = resolveNativeInboundTransportOrigin({
+    cfg,
+    messageId: sessionCtx.MessageSid,
+    chatId: sessionCtx.NativeChannelId ?? sessionCtx.ChatId,
+    channel: sessionCtx.OriginatingChannel,
+    routedChannel: replyRoute.channel,
+    accountId: sessionCtx.AccountId,
+    to: sessionCtx.OriginatingTo ?? sessionCtx.To,
+    from: sessionCtx.From,
+    threadId: sessionCtx.MessageThreadId,
+    threadParentId: sessionCtx.ThreadParentId,
+    chatType: replyRoute.chatType,
+    synthetic: Boolean(groupTurn && groupTurn.round !== 1),
+  });
   const personalBootstrapEligible = isSessionPersonalBootstrapTurn({
     ...ctx,
     InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
@@ -392,6 +407,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     }),
     personalBootstrapEligible,
     operatorAuthority: opts?.operatorAuthority,
+    assertForkReplaySourceCurrent: opts?.assertForkReplaySourceCurrent,
+    disableCollectBatching: Boolean(opts?.assertForkReplaySourceCurrent),
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
@@ -440,6 +457,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       normalizeOptionalString(sessionCtx.ChatId),
     originatingChatType: replyRoute.chatType,
     run: {
+      ...(inboundTransport ? { inboundTransport } : {}),
       providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId,
       agentDir,

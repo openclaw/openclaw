@@ -40,6 +40,8 @@ import {
 } from "./session-binding-service.js";
 import type { ConversationRef } from "./session-binding.types.js";
 
+const ABSOLUTE_BINDING_DEADLINE_KEY = "__sessionBindingAbsoluteExpiresAt";
+
 /** Binding record scoped to one channel account and conversation id. */
 export type AccountScopedConversationBindingRecord<TKind extends string = string> = {
   accountId: string;
@@ -65,6 +67,8 @@ export type AccountScopedConversationBindingManager<TKind extends string = strin
     targetKind: BindingTargetKind;
     targetSessionKey: string;
     metadata?: Record<string, unknown>;
+    expiresAt?: number;
+    ttlMs?: number;
   }) => AccountScopedConversationBindingRecord<TKind> | null;
   touchConversation: (
     conversationId: string,
@@ -123,10 +127,15 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
   ): SessionBindingRecord => {
     const idleExpiresAt = idleTimeoutMs > 0 ? record.lastActivityAt + idleTimeoutMs : undefined;
     const maxAgeExpiresAt = maxAgeMs > 0 ? record.boundAt + maxAgeMs : undefined;
-    const expiresAt =
+    const lifecycleExpiresAt =
       idleExpiresAt != null && maxAgeExpiresAt != null
         ? Math.min(idleExpiresAt, maxAgeExpiresAt)
         : (idleExpiresAt ?? maxAgeExpiresAt);
+    const absoluteExpiresAt = metadata?.[ABSOLUTE_BINDING_DEADLINE_KEY];
+    const expiresAt =
+      typeof absoluteExpiresAt === "number" && Number.isFinite(absoluteExpiresAt)
+        ? Math.min(lifecycleExpiresAt ?? absoluteExpiresAt, absoluteExpiresAt)
+        : lifecycleExpiresAt;
     return {
       bindingId: `${record.accountId}:${record.conversationId}`,
       targetSessionKey: record.targetSessionKey,
@@ -178,6 +187,8 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     targetKind: BindingTargetKind;
     targetSessionKey: string;
     metadata?: Record<string, unknown>;
+    expiresAt?: number;
+    ttlMs?: number;
   }): SessionBindingRecord | null => {
     const normalizedConversationId = input.conversationId.trim();
     const normalizedTargetSessionKey = input.targetSessionKey.trim();
@@ -196,6 +207,16 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         const existingLocal = previous ? asAccountBindingRecord(previous) : undefined;
         // Preserve plugin ownership on refresh without assigning its opaque target an agent.
         const metadata = { ...previous?.metadata, ...input.metadata };
+        delete metadata[ABSOLUTE_BINDING_DEADLINE_KEY];
+        const absoluteExpiresAt =
+          typeof input.expiresAt === "number" && Number.isFinite(input.expiresAt)
+            ? Math.floor(input.expiresAt)
+            : typeof input.ttlMs === "number" && Number.isFinite(input.ttlMs)
+              ? now + Math.max(0, Math.floor(input.ttlMs))
+              : previous?.metadata?.[ABSOLUTE_BINDING_DEADLINE_KEY];
+        if (typeof absoluteExpiresAt === "number" && Number.isFinite(absoluteExpiresAt)) {
+          metadata[ABSOLUTE_BINDING_DEADLINE_KEY] = absoluteExpiresAt;
+        }
         const record: AccountScopedConversationBindingRecord<TKind> = {
           accountId,
           conversationId: normalizedConversationId,
@@ -335,6 +356,8 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         targetKind: input.targetKind,
         targetSessionKey: input.targetSessionKey,
         metadata: input.metadata,
+        expiresAt: input.expiresAt,
+        ttlMs: input.ttlMs,
       });
     },
     listBySession: (targetSessionKey) =>

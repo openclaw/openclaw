@@ -400,6 +400,7 @@ async function sendFollowupPayloads(params: {
   const crossChannelFailures: ReplyPayload[] = [];
   const queuedPayloads: ReplyPayload[] = [];
   const dispatchPayload = async (payload: ReplyPayload) => {
+    turn.queued.assertForkReplaySourceCurrent?.();
     if (deliverQueuedBatch) {
       queuedPayloads.push(payload);
     } else {
@@ -432,6 +433,7 @@ async function sendFollowupPayloads(params: {
           : originRoutable
             ? "origin"
             : "dispatcher";
+    turn.queued.assertForkReplaySourceCurrent?.();
     await typing.signalTextDelta(payload.text);
     if (route !== "origin") {
       await dispatchPayload(payload);
@@ -463,6 +465,7 @@ async function sendFollowupPayloads(params: {
             : params.mirror,
         replyKind: params.kind,
         runId: params.runId,
+        assertDirectAdapterHandoff: turn.queued.assertForkReplaySourceCurrent,
       });
       if (!result.delivered && (result.queueCustody === "held" || result.ambiguous)) {
         logVerbose(
@@ -507,6 +510,7 @@ async function sendFollowupPayloads(params: {
     });
   }
   if (params.kind !== "final" && queuedPayloads.length > 0) {
+    turn.queued.assertForkReplaySourceCurrent?.();
     await deliverQueuedBatch?.({
       kind: "queued-followup",
       runId: params.runId,

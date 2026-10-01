@@ -39,6 +39,8 @@ export type SessionBindingScope = Pick<ConversationRef, "channel" | "accountId">
  */
 export type SessionBindingRecord = {
   bindingId: string;
+  /** Non-reusable owner generation for mutation-safe comparisons. */
+  generation?: string;
   targetSessionKey: string;
   targetKind: BindingTargetKind;
   conversation: ConversationRef;
@@ -58,8 +60,12 @@ export type SessionBindingBindInput = {
   placement?: SessionBindingPlacement;
   metadata?: Record<string, unknown>;
   ttlMs?: number;
+  /** Absolute deadline retained when restoring a previous binding; never refreshed by touch. */
+  expiresAt?: number;
   /** Host admission authority; current-placement adapters recheck before committing a binding. */
   assertCurrent?: () => void;
+  /** Fork-specific: recheck source authority even after confirmed native child creation. */
+  requireLiveSourceAtCommit?: boolean;
 };
 
 /**
@@ -71,6 +77,8 @@ export type SessionBindingUnbindInput = {
   /** Restrict removal to this owner; omit only for intentional cross-channel cleanup. */
   scope?: SessionBindingScope;
   reason: string;
+  /** Admission authority; adapters recheck at the removal commit boundary. */
+  assertCurrent?: () => void;
 };
 
 /**

@@ -272,6 +272,32 @@ describe("account-scoped conversation binding expiry", () => {
     expect(service.listBySession(binding.targetSessionKey)).toEqual([]);
   });
 
+  it("keeps a restored absolute deadline through worker touch and database reopen", async () => {
+    const deadlineStartedAt = Date.now();
+    const manager = createManager();
+    const service = getSessionBindingService();
+    const conversation = {
+      channel: "imessage",
+      accountId: manager.accountId,
+      conversationId: "chat:restored-deadline",
+    };
+    const expiresAt = deadlineStartedAt + 60_000;
+    const bound = await service.bind({
+      targetSessionKey: "agent:main:source",
+      targetKind: "session",
+      conversation,
+      placement: "current",
+      expiresAt,
+    });
+    expect(bound.expiresAt).toBe(expiresAt);
+    await service.touchAsync(bound.bindingId, deadlineStartedAt + 30_000, conversation);
+    expect(service.resolveByConversation(conversation)?.expiresAt).toBe(expiresAt);
+    manager.stop();
+    closeOpenClawStateDatabaseForTest();
+    createManager();
+    expect(service.resolveByConversation(conversation)?.expiresAt).toBe(expiresAt);
+  });
+
   it("enforces maximum age even when activity refreshes the idle deadline", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     const manager = createManager({

@@ -531,6 +531,35 @@ describe("session binding service", () => {
     );
   });
 
+  it.each([Date.now() - 1, Number.MAX_SAFE_INTEGER, Number.NaN])(
+    "rejects an invalid absolute deadline before calling an adapter (%s)",
+    async (expiresAt) => {
+      const bind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
+      registerSessionBindingAdapter({
+        channel: "demo-binding",
+        accountId: "default",
+        bind,
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      });
+
+      await expectSessionBindingError(
+        getSessionBindingService().bind({
+          targetSessionKey: "agent:main:subagent:child-1",
+          targetKind: "subagent",
+          conversation: {
+            channel: "demo-binding",
+            accountId: "default",
+            conversationId: "thread-1",
+          },
+          expiresAt,
+        }),
+        "BINDING_CREATE_FAILED",
+      );
+      expect(bind).not.toHaveBeenCalled();
+    },
+  );
+
   it("reports adapter capabilities for command preflight messaging", () => {
     registerSessionBindingAdapter({
       channel: "demo-binding",

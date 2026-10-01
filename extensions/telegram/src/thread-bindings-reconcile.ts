@@ -4,10 +4,12 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { persistBindingMutation } from "./thread-bindings-persistence.js";
 import { resolveBindingKey } from "./thread-bindings-session.js";
 import { getThreadBindingsState, listBindingsForAccount } from "./thread-bindings-state.js";
+import type { TelegramThreadBindingStore } from "./thread-bindings-store.js";
 
 export async function reconcileTelegramAcpBindingsOnStartup(params: {
   accountId: string;
   persist: boolean;
+  store: TelegramThreadBindingStore | undefined;
 }): Promise<void> {
   const { accountId, persist } = params;
   const acpSessionKeys = new Set<string>();
@@ -46,6 +48,7 @@ export async function reconcileTelegramAcpBindingsOnStartup(params: {
       await persistBindingMutation({
         accountId,
         persist,
+        store: params.store,
         binding,
         remove: true,
         reason: "cleanup-stale",

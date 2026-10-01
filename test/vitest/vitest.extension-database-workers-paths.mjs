@@ -395,6 +395,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/sticker-cache.test.ts",
   "extensions/telegram/src/telegram-ingress-callback.integration.test.ts",
   "extensions/telegram/src/telegram-ingress-spool.test.ts",
+  "extensions/telegram/src/thread-bindings-ambiguous-chat.test.ts",
+  "extensions/telegram/src/thread-bindings.deadline.test.ts",
   "extensions/telegram/src/thread-bindings-reconcile.test.ts",
   "extensions/telegram/src/thread-bindings.test.ts",
   "extensions/telegram/src/topic-name-cache.test.ts",

@@ -13,6 +13,7 @@ vi.mock("./send-runtime.js", () => ({
   loadTelegramSendModule: async () => ({ createForumTopicTelegram: createForumTopicMock }),
 }));
 
+import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import type {
   TelegramThreadBindingManager,
   TelegramThreadBindingRecord,
@@ -51,6 +52,61 @@ describe("telegram thread bindings", () => {
 
   beforeEach(() => {
     createForumTopicMock.mockReset();
+  });
+
+  it("persists an adapter binding after the initiating Telegram runtime scope is gone", async () => {
+    const accountId = "foreign-plugin-command";
+    await createTelegramThreadBindingManager({
+      accountId,
+      persist: true,
+      enableSweeper: false,
+    });
+    clearTelegramRuntimeForTest();
+
+    const binding = await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:forked",
+      targetKind: "session",
+      conversation: { channel: "telegram", accountId, conversationId: "-100123" },
+      placement: "current",
+    });
+    expect(binding.targetSessionKey).toBe("agent:main:forked");
+    expect(
+      (await storedBindings()).find((entry) => entry.conversationId === "-100123")
+        ?.targetSessionKey,
+    ).toBe("agent:main:forked");
+  });
+
+  it("persists a new generation for each same-millisecond binding replacement", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T16:00:00.000Z"));
+    const accountId = "fork-generation";
+    const manager = await createTelegramThreadBindingManager({
+      accountId,
+      persist: true,
+      enableSweeper: false,
+    });
+    const conversation = {
+      channel: "telegram" as const,
+      accountId,
+      conversationId: "-100123:topic:42",
+    };
+    const input = {
+      targetSessionKey: "agent:main:source",
+      targetKind: "session" as const,
+      conversation,
+      placement: "current" as const,
+    };
+    const first = await getSessionBindingService().bind(input);
+    const second = await getSessionBindingService().bind(input);
+    expect(first.boundAt).toBe(second.boundAt);
+    expect(first.bindingId).toBe(second.bindingId);
+    expect(second.generation).toBeTruthy();
+    expect(second.generation).not.toBe(first.generation);
+    await manager.stop();
+    await createTelegramThreadBindingManager({ accountId, persist: true, enableSweeper: false });
+    expect(
+      (await getSessionBindingService().resolveByConversationAsync(conversation))?.generation,
+    ).toBe(second.generation);
   });
 
   it("joins concurrent startup before exposing hydrated bindings", async () => {
@@ -409,7 +465,7 @@ describe("telegram thread bindings", () => {
     ]);
   });
 
-  it.each(["before-create", "after-create"] as const)(
+  it.each(["before-create", "after-create", "after-create-strict"] as const)(
     "settles forum-topic binding only after native create admission (%s revocation)",
     async (revokeAt) => {
       const manager = await createTelegramThreadBindingManager({
@@ -433,15 +489,18 @@ describe("telegram thread bindings", () => {
         targetKind: "session",
         conversation: { channel: "telegram", accountId: "default", conversationId: "-100200300" },
         placement: "child",
+        requireLiveSourceAtCommit: revokeAt === "after-create-strict",
         assertCurrent: () => {
           if (!ownerCurrent) {
             throw new Error("Command owner was revoked");
           }
         },
       });
-      if (revokeAt === "before-create") {
-        await expect(result).rejects.toThrow("failed to bind");
-        expect(nativeCreates).toBe(0);
+      if (revokeAt === "before-create" || revokeAt === "after-create-strict") {
+        await expect(result).rejects.toThrow(
+          revokeAt === "before-create" ? "failed to bind" : "Command owner was revoked",
+        );
+        expect(nativeCreates).toBe(revokeAt === "before-create" ? 0 : 1);
         expect(manager.getByConversationId("-100200300:topic:88")).toBeUndefined();
       } else {
         await expect(result).resolves.toMatchObject({
@@ -454,6 +513,29 @@ describe("telegram thread bindings", () => {
       }
     },
   );
+
+  it("does not report a safe no-effect failure after a child create request may have reached Telegram", async () => {
+    const accountId = "uncertain-topic-create";
+    const manager = await createTelegramThreadBindingManager({
+      accountId,
+      persist: false,
+      enableSweeper: false,
+    });
+    createForumTopicMock.mockImplementationOnce(async (_chatId, _name, options) => {
+      options.assertPlatformSendAuthorized?.();
+      throw new Error("transport response lost after request admission");
+    });
+    await expect(
+      getSessionBindingService().bind({
+        targetSessionKey: "agent:main:uncertain",
+        targetKind: "session",
+        conversation: { channel: "telegram", accountId, conversationId: "-100200300" },
+        placement: "child",
+        assertCurrent: () => {},
+      }),
+    ).rejects.toThrow("creation outcome is unknown");
+    expect(manager.listBySessionKey("agent:main:uncertain")).toEqual([]);
+  });
 
   it("drops stopped-manager bindings without clearing a replacement generation", async () => {
     const stopped = await createTelegramThreadBindingManager({
@@ -672,6 +754,32 @@ describe("telegram thread bindings", () => {
     expect(reloaded.getByConversationId("8460800771")).toBeUndefined();
   });
 
+  it("keeps a binding when Back removal authority is revoked", async () => {
+    const manager = await createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:dashboard:fork",
+      targetKind: "session",
+      conversation: { channel: "telegram", accountId: "default", conversationId: "revoked-back" },
+    });
+    await expect(
+      getSessionBindingService().unbind({
+        bindingId: bound.bindingId,
+        scope: { channel: "telegram", accountId: "default" },
+        reason: "conversation-fork-back",
+        assertCurrent: () => {
+          throw new Error("revoked");
+        },
+      }),
+    ).rejects.toThrow("revoked");
+    expect(manager.getByConversationId("revoked-back")?.targetSessionKey).toBe(
+      "agent:main:dashboard:fork",
+    );
+  });
+
   it("persists only the changed binding without scanning or rewriting its siblings", async () => {
     const manager = await createTelegramThreadBindingManager({
       accountId: "row-writes",
@@ -754,13 +862,15 @@ describe("telegram thread bindings", () => {
       enableSweeper: false,
     });
 
-    expect(reloaded.getByConversationId("metadata-thread")?.metadata).toStrictEqual({
+    expect(reloaded.getByConversationId("metadata-thread")?.metadata).toMatchObject({
       retained: "yes",
+      __threadBindingGeneration: expect.any(String),
     });
     expect(
       (await storedBindings()).find((binding) => binding.accountId === "metadata")?.metadata,
-    ).toStrictEqual({
+    ).toMatchObject({
       retained: "yes",
+      __threadBindingGeneration: expect.any(String),
     });
   });
 

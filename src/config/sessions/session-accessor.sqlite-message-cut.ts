@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { readMessageWorkContext } from "../../chat/work-context.js";
+import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -21,6 +23,8 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import type { SessionMessageForkPublication } from "./session-accessor.sqlite-message-cut-publication.js";
+import type { SessionForkAtMessageWorkerInput } from "./session-accessor.sqlite-message-cut.types.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteScope,
@@ -73,6 +77,54 @@ type SessionTranscriptMutationResult =
 
 type SessionTranscriptMutationMode = "fork" | "rewind" | "switch";
 type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
+function forkSessionAtMessageInWorkerTransaction(
+  database: OpenClawAgentDatabase,
+  resolved: ResolvedSqliteScope,
+  input: SessionForkAtMessageWorkerInput,
+  admitCommit: (publication: SessionMessageForkPublication | undefined) => void,
+): SessionMessageCutMutationResult | { status: "conflict" } {
+  const result = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
+    ...input,
+    mode: "fork",
+    // SAFETY: The fork mode returns only the fork-specific mutation union or a lifecycle conflict.
+  }) as SessionMessageCutMutationResult | { status: "conflict" };
+  const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+  if (result.status === "created" && typeof identity !== "string") {
+    throw new Error("Worker session fork requires a durable database identity");
+  }
+  const publication =
+    result.status === "created"
+      ? {
+          kind: "session-message-forked" as const,
+          key: result.key,
+          sessionId: result.entry.sessionId,
+          lifecycleRevision: result.entry.lifecycleRevision,
+          sourceSessionId: input.expectedState.sessionId,
+          // SAFETY: A created worker fork rejected a non-string database identity above.
+          databaseIdentity: identity as string,
+        }
+      : undefined;
+  if (publication) {
+    deferSqliteWorkerCommitReceipt(database.db, publication);
+  }
+  admitCommit(publication);
+  return result;
+}
+
+export function executeSessionForkAtMessageWorkerOperation(
+  resolved: ResolvedSqliteScope,
+  input: SessionForkAtMessageWorkerInput,
+  runWrite: (
+    write: (
+      database: OpenClawAgentDatabase,
+    ) => SessionMessageCutMutationResult | { status: "conflict" },
+  ) => SessionMessageCutMutationResult | { status: "conflict" },
+  admitCommit: (publication: SessionMessageForkPublication | undefined) => void,
+) {
+  return runWrite((database) =>
+    forkSessionAtMessageInWorkerTransaction(database, resolved, input, admitCommit),
+  );
+}
 
 export async function rewindSessionToMessage(
   params: SessionMessageCutMutationParams,

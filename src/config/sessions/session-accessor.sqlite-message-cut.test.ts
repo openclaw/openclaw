@@ -5,6 +5,8 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { buildConversationIdentity } from "./conversation-identity.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -19,6 +21,7 @@ import {
   switchSessionBranch,
   updateSessionEntry,
 } from "./session-accessor.js";
+import { forkSessionAtMessageInWorker } from "./session-accessor.sqlite-message-cut-worker.js";
 import {
   agentId,
   sessionKey,
@@ -37,6 +40,213 @@ afterEach(() => {
 });
 
 describe("SQLite session message cuts", () => {
+  it("selects a replied-to message through the durable transcript worker", async () => {
+    const { env, scope } = await createSession();
+    const conversation = {
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-100123",
+    };
+    const conversationRef = buildConversationIdentity({
+      channel: "telegram",
+      accountId: "default",
+      kind: "group",
+      peerId: "-100123",
+      deliveryTarget: "telegram:-100123",
+    })!.conversationRef;
+    await appendTranscriptMessage(scope, {
+      eventId: "durable-user-reply",
+      parentId: "assistant-2",
+      message: {
+        role: "user",
+        content: "selected durable prompt",
+        __openclaw: {
+          transport: { messageId: "telegram-43", channel: "telegram", conversationRef },
+        },
+      },
+      now: Date.now(),
+    });
+    const { readSessionForkReplySelectionInWorker } =
+      await import("./session-transcript-read-worker-runtime.js");
+    await expect(
+      readSessionForkReplySelectionInWorker({
+        target: {
+          ...scope,
+          storePath: resolveSessionStorePathCore(undefined, { agentId, env: scope.env }),
+        },
+        replyToId: "telegram-43",
+        conversation,
+        replyConversationRef: conversationRef,
+      }),
+    ).resolves.toEqual({
+      status: "found",
+      entryId: "durable-user-reply",
+      text: "selected durable prompt",
+    });
+    const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR;
+    try {
+      const { readPluginForkReplySelection } =
+        await import("../../plugins/plugin-command-conversation-fork-reply-selection.js");
+      await expect(
+        readPluginForkReplySelection({
+          config: {},
+          agentId,
+          sessionKey: scope.sessionKey,
+          replyToId: "telegram-43",
+          conversation,
+          replyConversationRef: conversationRef,
+          assertCurrent: () => undefined,
+        }),
+      ).resolves.toEqual({
+        status: "found",
+        entryId: "durable-user-reply",
+        text: "selected durable prompt",
+      });
+      await expect(
+        readPluginForkReplySelection({
+          config: {},
+          agentId,
+          sessionKey: scope.sessionKey,
+          replyToId: "telegram-43",
+          conversation,
+          replyConversationRef: "conv_wrong",
+          assertCurrent: () => undefined,
+        }),
+      ).resolves.toEqual({ status: "missing" });
+      await expect(
+        readPluginForkReplySelection({
+          config: {},
+          agentId,
+          sessionKey: scope.sessionKey,
+          replyToId: "telegram-43",
+          conversation: { ...conversation, channel: "discord" },
+          replyConversationRef: conversationRef,
+          assertCurrent: () => undefined,
+        }),
+      ).resolves.toEqual({ status: "missing" });
+      await expect(
+        readPluginForkReplySelection({
+          config: {},
+          agentId,
+          sessionKey: scope.sessionKey,
+          replyToId: "telegram-43",
+          conversation,
+          assertCurrent: () => undefined,
+        }),
+      ).resolves.toEqual({ status: "missing" });
+    } finally {
+      if (priorStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = priorStateDir;
+      }
+    }
+  });
+
+  it("selects a replied-to message from the process-held incognito owner", async () => {
+    const { env, scope } = await createSession({ incognito: true });
+    const conversation = {
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-100123",
+    };
+    const selected = await appendTranscriptMessage(scope, {
+      eventId: "incognito-user-reply",
+      parentId: "assistant-2",
+      message: {
+        role: "user",
+        content: "selected private prompt",
+        __openclaw: { transport: { messageId: "telegram-44", conversation } },
+      },
+      now: Date.now(),
+    });
+    expect(selected).toBeDefined();
+    const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR;
+    try {
+      const { readPluginForkReplySelection } =
+        await import("../../plugins/plugin-command-conversation-fork-reply-selection.js");
+      await expect(
+        readPluginForkReplySelection({
+          config: {},
+          agentId,
+          sessionKey: scope.sessionKey,
+          replyToId: "telegram-44",
+          conversation,
+          assertCurrent: () => undefined,
+        }),
+      ).resolves.toEqual({
+        status: "found",
+        entryId: "incognito-user-reply",
+        text: "selected private prompt",
+      });
+    } finally {
+      if (priorStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = priorStateDir;
+      }
+    }
+  });
+
+  it("forks the reply transcript through the canonical worker and publishes its target", async () => {
+    const { env } = await createSession();
+    const targetKey = `${sessionKey}:worker-fork`;
+    const result = await forkSessionAtMessageInWorker(
+      {
+        agentId,
+        env,
+        sessionKey,
+        entryId: "user-2",
+        targetKey,
+        creation: { via: "plugin" },
+      },
+      sourceExpectedState,
+    );
+    expect(result).toMatchObject({ status: "created", key: targetKey });
+    const target = loadSessionEntry({ agentId, env, sessionKey: targetKey });
+    expect(target).toMatchObject({
+      sessionId: result.status === "created" ? result.entry.sessionId : undefined,
+      forkSource: { sessionKey, sessionId: sourceExpectedState.sessionId, entryId: "user-2" },
+    });
+    expect(
+      await loadTranscriptEvents({
+        agentId,
+        env,
+        sessionId: result.status === "created" ? result.entry.sessionId : "",
+        sessionKey: targetKey,
+      }),
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
+  });
+
+  it("refuses a worker reply fork after its source lifecycle changes", async () => {
+    const { env, scope } = await createSession();
+    await updateSessionEntry(scope, async () => ({
+      lifecycleRevision: "replaced-before-worker-cut",
+    }));
+    const targetKey = `${sessionKey}:stale-worker-fork`;
+    await expect(
+      forkSessionAtMessageInWorker(
+        { agentId, env, sessionKey, entryId: "user-2", targetKey },
+        sourceExpectedState,
+      ),
+    ).resolves.toEqual({ status: "conflict" });
+    expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })).toBeUndefined();
+  });
+
+  it("refuses an incognito reply cut when its in-memory owner cannot enter the worker", async () => {
+    const { env, scope } = await createSession({ incognito: true });
+    const targetKey = `${scope.sessionKey}:fork`;
+    await expect(
+      forkSessionAtMessageInWorker(
+        { agentId, env, sessionKey: scope.sessionKey, entryId: "user-2", targetKey },
+        sourceExpectedState,
+      ),
+    ).rejects.toThrow("requires its existing native owner");
+    expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })).toBeUndefined();
+  });
+
   it("returns authored text without captured context or attachments on fork", async () => {
     const { env, scope } = await createSession();
     const text = "Edit only these words";

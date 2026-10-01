@@ -161,6 +161,7 @@ export async function buildEmbeddedRunBaseParams(params: {
       }));
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
+    inboundTransport: params.run.inboundTransport,
     providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,

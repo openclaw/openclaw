@@ -30,6 +30,10 @@ import {
   stageIncognitoSharingPublication,
 } from "./session-accessor.sqlite-incognito-sharing.js";
 import {
+  selectCommittedForkIdentityPublication,
+  type SessionMessageForkPublication,
+} from "./session-accessor.sqlite-message-cut-publication.js";
+import {
   publishRetainedSessionGeneration,
   reconcileSessionSharingAcquisition,
   updateSessionSharingField,
@@ -588,6 +592,7 @@ export function retainSessionEntryWorkerPublication(params: {
       receipt:
         | SessionEntryReplacementPublication
         | SessionTranscriptInitializationPublication
+        | SessionMessageForkPublication
         | undefined,
       unknown: boolean,
     ) {
@@ -597,6 +602,7 @@ export function retainSessionEntryWorkerPublication(params: {
       const replacement = receipt?.kind === "session-entry-replacements" ? receipt : undefined;
       const initialization =
         receipt?.kind === "session-transcript-initialized" ? receipt : undefined;
+      const fork = receipt?.kind === "session-message-forked" ? receipt : undefined;
       const current = (sessionKey: string) => !owner.superseded.has(sessionKey);
       const currentIdentity = (sessionKey: string) => {
         if (current(sessionKey)) {
@@ -624,7 +630,13 @@ export function retainSessionEntryWorkerPublication(params: {
         ...new Set([
           ...(
             replacement?.changedKeys ??
-            (initialization?.placeholder ? [initialization.sessionKey] : unknown ? keys : [])
+            (fork
+              ? [fork.key]
+              : initialization?.placeholder
+                ? [initialization.sessionKey]
+                : unknown
+                  ? keys
+                  : [])
           ).filter(current),
           ...membershipInvalidated,
         ]),
@@ -703,7 +715,7 @@ export function retainSessionEntryWorkerPublication(params: {
               previous: new Map([...replacement.previous].filter(([key]) => currentIdentity(key))),
               current: new Map([...replacement.current].filter(([key]) => currentIdentity(key))),
             }
-          : undefined;
+          : selectCommittedForkIdentityPublication(fork, currentIdentity);
       } finally {
         for (const sessionKey of keys) {
           const key = `${identityKey}\0${sessionKey}`;

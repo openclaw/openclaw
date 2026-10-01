@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const TELEGRAM_THREAD_BINDINGS_NAMESPACE = "telegram.thread-bindings";
@@ -18,11 +19,16 @@ export type TelegramThreadBindingRecord = {
   lastActivityAt: number;
   idleTimeoutMs?: number;
   maxAgeMs?: number;
+  expiresAt?: number;
   metadata?: Record<string, unknown>;
 };
 
+export type TelegramThreadBindingStore = PluginStateKeyedStore<TelegramThreadBindingRecord>;
+
 export type TelegramThreadBindingManager = {
   accountId: string;
+  /** Retained Telegram-owned store, independent of the invoking command plugin scope. */
+  bindingStore: TelegramThreadBindingStore | undefined;
   shouldPersistMutations: () => boolean;
   getIdleTimeoutMs: () => number;
   getMaxAgeMs: () => number;
@@ -35,6 +41,7 @@ export type TelegramThreadBindingManager = {
   ) => Promise<TelegramThreadBindingRecord | null>;
   unbindConversation: (params: {
     conversationId: string;
+    assertCurrent?: () => void;
     reason?: string;
     sendFarewell?: boolean;
     throwOnPersistError?: boolean;
@@ -112,6 +119,13 @@ export function sanitizeStoredBinding(
   }
   if (typeof entry?.maxAgeMs === "number" && Number.isFinite(entry.maxAgeMs)) {
     record.maxAgeMs = Math.max(0, Math.floor(entry.maxAgeMs));
+  }
+  if (
+    typeof entry?.expiresAt === "number" &&
+    Number.isFinite(entry.expiresAt) &&
+    entry.expiresAt >= 0
+  ) {
+    record.expiresAt = Math.floor(entry.expiresAt);
   }
   if (typeof entry?.agentId === "string" && entry.agentId.trim()) {
     record.agentId = entry.agentId.trim();

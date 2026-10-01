@@ -29,6 +29,7 @@ import {
   rewindSessionToMessage,
   switchSessionBranch,
 } from "./session-accessor.js";
+import { forkSessionAtMessageInWorker } from "./session-accessor.sqlite-message-cut-worker.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
@@ -202,6 +203,7 @@ const actions = [
   "reset",
   "batched reset",
   "fork",
+  "worker fork",
   "rewind",
   "branch switch",
   "branch list",
@@ -247,6 +249,11 @@ async function runAction(action: Action, fixture: Fixture) {
         entryId: "question",
         targetKey: "agent:main:forked",
       });
+    case "worker fork":
+      return forkSessionAtMessageInWorker(
+        { ...scope, entryId: "question", targetKey: "agent:main:worker-forked" },
+        { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
+      );
     case "rewind":
       return rewindSessionToMessage({ ...scope, entryId: "question" });
     case "branch switch":
@@ -290,7 +297,7 @@ describe("cold current transcript lifecycle", () => {
     const result = await runAction(action, fixture);
     if (action === "reset" || action === "batched reset") {
       expect(result).toMatchObject({ sessionId: "reset-next" });
-    } else if (action === "fork" || action === "rewind") {
+    } else if (action === "fork" || action === "worker fork" || action === "rewind") {
       expect(result).toMatchObject({ status: "created", editorText: "Question" });
     } else if (action === "branch list") {
       expect(result).toMatchObject({

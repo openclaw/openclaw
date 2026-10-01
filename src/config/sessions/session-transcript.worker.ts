@@ -14,6 +14,10 @@ import {
   sessionHistoryCleanupError,
 } from "./session-history-worker-errors.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import {
+  searchTranscriptsInWorker,
+  selectForkReplyInTranscriptWorker,
+} from "./session-transcript-worker-queries.js";
 import type {
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerInput,
@@ -258,16 +262,11 @@ serveOwnedWorkerTasks(
           result: opened.found ? opened.value : undefined,
         };
       }
+      if (request.kind === "fork-reply-selection") {
+        return selectForkReplyInTranscriptWorker(request);
+      }
       if (request.kind === "transcript-search") {
-        const { searchSessionTranscriptsReadOnlySync } =
-          await import("./session-transcript-search.js");
-        return {
-          kind: "transcript-search" as const,
-          result: searchSessionTranscriptsReadOnlySync(request.params, {
-            ...request.database,
-            env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
-          }),
-        };
+        return searchTranscriptsInWorker(request);
       }
       if (request.kind === "session-store-target") {
         const { readSessionStoreTargetResult } =

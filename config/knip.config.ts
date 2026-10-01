@@ -449,6 +449,8 @@ const rootEntries = [
   "src/mcp/plugin-tools-serve.ts!",
   // Dedicated tsdown entry exercised against built plugin singletons.
   "src/plugins/build-smoke-entry.ts!",
+  // The packaged-plugin regression loads this fixture through its manifest path.
+  "test/fixtures/conversation-fork-workflow/index.js!",
   // Required metadata readers load this tsdown entry by computed source/dist path.
   "src/plugins/plugin-metadata-readers.runtime.ts!",
   "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts!",

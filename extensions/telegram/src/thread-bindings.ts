@@ -14,6 +14,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   loadBindingsFromStore,
+  openThreadBindingStore,
   persistBindingMutation,
   updateStoredBindingSync,
 } from "./thread-bindings-persistence.js";
@@ -87,7 +88,10 @@ async function initializeThreadBindingManager(
   );
   const maxAgeMs = normalizeDurationMs(params.maxAgeMs, DEFAULT_THREAD_BINDING_MAX_AGE_MS);
 
-  const loaded = await loadBindingsFromStore(accountId);
+  // Open while the Telegram plugin owns its runtime scope. A third-party
+  // command may later call this adapter under a different plugin instance.
+  const bindingStore = persist ? openThreadBindingStore() : undefined;
+  const loaded = await loadBindingsFromStore(accountId, bindingStore);
   for (const entry of loaded) {
     const key = resolveBindingKey({
       accountId,
@@ -102,6 +106,7 @@ async function initializeThreadBindingManager(
   await reconcileTelegramAcpBindingsOnStartup({
     accountId,
     persist,
+    store: bindingStore,
   });
 
   let sweepTimer: NodeJS.Timeout | null = null;
@@ -127,6 +132,7 @@ async function initializeThreadBindingManager(
 
   const manager: TelegramThreadBindingManager = {
     accountId,
+    bindingStore,
     shouldPersistMutations: () => persist,
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
@@ -175,6 +181,7 @@ async function initializeThreadBindingManager(
         mutation.prepare(nextRecord);
         const committed = await persistBindingMutation({
           accountId,
+          store: bindingStore,
           persist: manager.shouldPersistMutations(),
           binding: nextRecord,
           reason: "touch",
@@ -184,7 +191,11 @@ async function initializeThreadBindingManager(
         return nextRecord;
       });
     },
-    unbindConversation: ({ conversationId: conversationIdRaw, throwOnPersistError }) =>
+    unbindConversation: ({
+      conversationId: conversationIdRaw,
+      throwOnPersistError,
+      assertCurrent,
+    }) =>
       mutate(async () => {
         const conversationId = normalizeOptionalString(conversationIdRaw);
         if (!conversationId) {
@@ -195,15 +206,20 @@ async function initializeThreadBindingManager(
         if (!removed) {
           return null;
         }
+        assertCurrent?.();
         mutation.prepare(null);
         const committed = await persistBindingMutation({
           accountId,
+          store: bindingStore,
           persist: manager.shouldPersistMutations(),
           binding: removed,
           remove: true,
           reason: "unbind-conversation",
           throwOnError: throwOnPersistError,
-          assertCurrent: mutation.assertCurrent,
+          assertCurrent: () => {
+            mutation.assertCurrent();
+            assertCurrent?.();
+          },
         });
         mutation.publish(null, committed);
         return removed;
@@ -227,6 +243,7 @@ async function initializeThreadBindingManager(
           mutation.prepare(null);
           const committed = await persistBindingMutation({
             accountId,
+            store: bindingStore,
             persist: manager.shouldPersistMutations(),
             binding: current,
             remove: true,
@@ -352,6 +369,7 @@ async function initializeThreadBindingManager(
             (normalizeOptionalString(metadata.threadName) ?? "") ||
             (normalizeOptionalString(metadata.label) ?? "") ||
             `Agent: ${targetSessionKey.split(":").pop()}`;
+          let nativeCreateAdmitted = false;
           try {
             const tokenResolution = resolveTelegramToken(params.cfg, { accountId });
             if (!tokenResolution.token) {
@@ -362,7 +380,12 @@ async function initializeThreadBindingManager(
               cfg: params.cfg,
               token: tokenResolution.token,
               accountId,
-              ...(assertCurrent ? { assertPlatformSendAuthorized: assertCurrent } : {}),
+              assertPlatformSendAuthorized: () => {
+                assertCurrent?.();
+                // A lost response after this edge cannot prove whether Telegram
+                // created the topic. Never report a safe fallback in that case.
+                nativeCreateAdmitted = true;
+              },
             });
             conversationId = `${result.chatId}:topic:${result.topicId}`;
             nativeTopicCreated = true;
@@ -370,6 +393,9 @@ async function initializeThreadBindingManager(
             logVerbose(
               `telegram: child thread-binding failed for ${chatId}: ${formatErrorMessage(err)}`,
             );
+            if (nativeCreateAdmitted) {
+              throw new Error("Telegram child topic creation outcome is unknown", { cause: err });
+            }
             return null;
           }
         } else {
@@ -388,9 +414,11 @@ async function initializeThreadBindingManager(
             targetKind,
             conversationId,
             metadata,
+            expiresAt: input.expiresAt,
+            ttlMs: input.ttlMs,
           },
         });
-        if (!nativeTopicCreated) {
+        if (!nativeTopicCreated || prepared.requireLiveSourceAtCommit) {
           assertCurrent?.();
         }
         mutation.prepare(record);
@@ -399,13 +427,14 @@ async function initializeThreadBindingManager(
           manager.shouldPersistMutations() &&
           (await persistBindingMutation({
             accountId,
+            store: bindingStore,
             persist: true,
             binding: record,
             reason: "bind",
             throwOnError: true,
             assertCurrent: () => {
               mutation.assertCurrent();
-              if (!nativeTopicCreated) {
+              if (!nativeTopicCreated || prepared.requireLiveSourceAtCommit) {
                 assertCurrent?.();
               }
             },
@@ -481,6 +510,7 @@ async function initializeThreadBindingManager(
         reason: input.reason,
         sendFarewell: false,
         throwOnPersistError: true,
+        assertCurrent: input.assertCurrent,
       });
       return removed ? [projectSessionBinding(removed)] : [];
     },
@@ -515,6 +545,7 @@ async function initializeThreadBindingManager(
           mutation.prepare(null);
           const committed = await persistBindingMutation({
             accountId,
+            store: bindingStore,
             persist,
             binding: record,
             remove: true,
@@ -565,6 +596,7 @@ async function updateTelegramBindingsBySessionKey(params: {
     mutation.prepare(next);
     const committed = await persistBindingMutation({
       accountId: params.manager.accountId,
+      store: params.manager.bindingStore,
       persist: params.manager.shouldPersistMutations(),
       binding: next,
       reason: "session-lifecycle-update",

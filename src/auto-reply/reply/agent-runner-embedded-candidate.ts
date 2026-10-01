@@ -122,6 +122,7 @@ export async function runEmbeddedFallbackCandidate(
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
         preparedRunAdmission: params.preparedRunAdmission,
+        assertForkReplaySourceCurrent: turn.followupRun.assertForkReplaySourceCurrent,
         ...embeddedContext,
         messageActionTurnCapability: params.messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),

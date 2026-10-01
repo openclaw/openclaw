@@ -44,6 +44,10 @@ function toSessionBindingRecord(
   const lifecycle = resolvePreparedThreadBindingLifecycle({ record, ...defaults });
   return {
     bindingId,
+    generation:
+      typeof record.metadata?.["__threadBindingGeneration"] === "string"
+        ? record.metadata["__threadBindingGeneration"]
+        : undefined,
     targetSessionKey: record.targetSessionKey,
     targetKind: record.targetKind === "subagent" ? "subagent" : "session",
     conversation: {
@@ -139,7 +143,10 @@ export function createThreadBindingSessionAdapter(params: {
         boundBy,
         introText,
         metadata,
+        expiresAt: input.expiresAt,
+        ttlMs: input.ttlMs,
         ...(assertCurrent ? { assertCurrent } : {}),
+        requireLiveSourceAtCommit: input.requireLiveSourceAtCommit,
       });
       return bound ? serializeBinding(bound) : null;
     },
@@ -189,6 +196,7 @@ export function createThreadBindingSessionAdapter(params: {
       const removed = await params.manager.unbindThread({
         threadId,
         reason: input.reason,
+        assertCurrent: input.assertCurrent,
       });
       return removed ? [serializeBinding(removed)] : [];
     },

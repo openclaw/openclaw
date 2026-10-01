@@ -19,6 +19,7 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { attachNativeInboundTransportForPersistence } from "./embedded-agent-runner/run/inbound-transport-persistence.js";
 import { flushPendingToolResultsAfterIdle } from "./embedded-agent-runner/wait-for-idle-before-flush.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
@@ -56,6 +57,26 @@ function getMessages(sm: ReturnType<typeof guardSessionManager>): AgentMessage[]
 
 describe("guardSessionManager integration", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("persists the final user record's exact transport conversation, not the runtime prompt", () => {
+    const conversation = {
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001:topic:42",
+      parentConversationId: "-1001",
+    };
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      onUserMessagePreparedForPersistence: (message) => {
+        attachNativeInboundTransportForPersistence(message, { messageId: "91", conversation });
+      },
+    });
+    sm.appendMessage({ role: "user", content: "source prompt", timestamp: Date.now() });
+    expect(getMessages(sm)[0]).toMatchObject({
+      role: "user",
+      content: "source prompt",
+      __openclaw: { transport: { messageId: "91", conversation } },
+    });
+  });
 
   it("keeps real toolResult pending across delivery-mirror assistant messages", () => {
     const sm = guardSessionManager(SessionManager.inMemory());

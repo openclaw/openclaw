@@ -24,6 +24,47 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 const identityConfig = { logging: { audit: { executionIdentity: true } } } as const;
 
 describe("channel run admission", () => {
+  it("retains a configured-owner fork replay fence through admission and host effects", async () => {
+    let sourceCurrent = true;
+    const prepared = prepareChannelRunAdmission({
+      cfg: {},
+      runId: "configured-owner-fork-replay",
+      agentId: "main",
+      ingressKind: "channel",
+      boundary: "auto-reply.agent-runner",
+      assertSourceCurrent: () => {
+        if (!sourceCurrent) {
+          throw new Error("fork source changed");
+        }
+      },
+    });
+    const admittedRunContext = await prepared.admit("plugin-harness", "channel-harness");
+    const host = createAgentHarnessHostCapabilities({
+      attempt: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "configured-owner-fork-replay",
+        cwd: "/attempt/worktree",
+        workspaceDir: "/workspace",
+        currentChannelId: "chat-1",
+        messageChannel: "telegram",
+        admittedRunContext,
+      },
+      pluginId: "codex",
+    });
+    try {
+      host.capabilities.assertActive();
+      sourceCurrent = false;
+      expect(() => prepared.assertSourceCurrent()).toThrow("fork source changed");
+      expect(() => host.capabilities.assertActive()).toThrow();
+    } finally {
+      host.close();
+      prepared.close();
+      resetAgentRunRegistryForTest();
+    }
+  });
+
   it.each(["profileless", "unresolved", "copied", "forged"] as const)(
     "records only owner-prepared Gateway facts for a %s carrier",
     async (kind) => {
