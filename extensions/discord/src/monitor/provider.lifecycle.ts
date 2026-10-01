@@ -28,6 +28,7 @@ const DISCORD_GATEWAY_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
 const DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS = 2_000;
+const MAX_DISCORD_GATEWAY_READY_RECOVERY_ATTEMPTS = 10;
 const DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
 const DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
 const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
@@ -334,6 +335,22 @@ async function waitForGatewayReady(params: {
 
     attempt += 1;
     const restartAt = Date.now();
+    if (attempt >= MAX_DISCORD_GATEWAY_READY_RECOVERY_ATTEMPTS) {
+      const message =
+        `discord: gateway READY recovery exhausted after ${MAX_DISCORD_GATEWAY_READY_RECOVERY_ATTEMPTS} consecutive timeouts; restarting the provider`;
+      params.pushStatus?.({
+        connected: false,
+        lifecycle: "recovering",
+        lastEventAt: restartAt,
+        lastDisconnect: {
+          at: restartAt,
+          error: "startup-recovery-exhausted",
+        },
+        lastError: "startup-recovery-exhausted",
+      });
+      params.runtime.error?.(danger(message));
+      throw new Error(message);
+    }
     params.runtime.error?.(
       danger(
         `discord: gateway READY wait timed out after ${params.readyTimeoutMs}ms; reconnecting with backoff (attempt ${attempt})`,
