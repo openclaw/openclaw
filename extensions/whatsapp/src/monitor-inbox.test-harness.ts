@@ -243,11 +243,13 @@ export function getSock(): MockSock {
 }
 
 type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
+type InboxMonitorListener = Awaited<ReturnType<MonitorWebInbox>>;
 type ResetWebInboundDedupe = typeof import("./inbound.js").resetWebInboundDedupe;
 export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
 export type InboxMonitorOptions = Parameters<MonitorWebInbox>[0];
 let monitorWebInbox: MonitorWebInbox;
 let resetWebInboundDedupe: ResetWebInboundDedupe;
+const activeInboxListeners = new Set<InboxMonitorListener>();
 
 // Yields two macrotask ticks so already-scheduled inbound continuations run.
 // This deliberately does NOT wait for pending inbound work to finish — tests
@@ -352,7 +354,21 @@ export async function startInboxMonitor(
       callerOnPendingWorkChanged?.(pendingWorkCount, at);
     },
   });
-  return { listener, sock: getSock() };
+  let closed = false;
+  let trackedListener: InboxMonitorListener;
+  trackedListener = {
+    ...listener,
+    close: async () => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      activeInboxListeners.delete(trackedListener);
+      await listener.close();
+    },
+  };
+  activeInboxListeners.add(trackedListener);
+  return { listener: trackedListener, sock: getSock() };
 }
 
 export function buildNotifyMessageUpsert(params: {
@@ -436,13 +452,28 @@ export function installWebMonitorInboxUnitTestHooks() {
     authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    let closeFailed = false;
+    let closeError: unknown;
+    for (const listener of [...activeInboxListeners]) {
+      try {
+        await listener.close();
+      } catch (error) {
+        if (!closeFailed) {
+          closeFailed = true;
+          closeError = error;
+        }
+      }
+    }
     resetLogger();
     setLoggerOverride(null);
     vi.useRealTimers();
     if (authDir) {
       fsSync.rmSync(authDir, { recursive: true, force: true });
       authDir = undefined;
+    }
+    if (closeFailed) {
+      throw closeError;
     }
   });
 }

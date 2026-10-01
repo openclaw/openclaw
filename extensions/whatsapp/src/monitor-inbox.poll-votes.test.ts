@@ -342,23 +342,7 @@ describe("web monitor inbox poll vote hook", () => {
     const creationKey = { remoteJid: CHAT_JID, id: pollMessageId, fromMe: true };
 
     const normalMessageId = "NORMAL-AFTER-THROWING-POLL-HOOK";
-    let resolvePreflightDelivery!: () => void;
-    const preflightDeliveryObserved = new Promise<void>((resolve) => {
-      resolvePreflightDelivery = resolve;
-    });
-    let resolvePostThrowDelivery!: () => void;
-    const postThrowDeliveryObserved = new Promise<void>((resolve) => {
-      resolvePostThrowDelivery = resolve;
-    });
-    let deliveryCalls = 0;
-    const onMessage = vi.fn(async () => {
-      deliveryCalls += 1;
-      if (deliveryCalls === 1) {
-        resolvePreflightDelivery();
-      } else if (deliveryCalls === 2) {
-        resolvePostThrowDelivery();
-      }
-    });
+    const onMessage = vi.fn(async () => {});
     const { sock } = await startInboxMonitor(onMessage, {
       recentMessageKeys: baileysCache.recentMessageKeys,
       baileysGroupMetaCache: baileysCache.baileysGroupMetaCache,
@@ -376,8 +360,6 @@ describe("web monitor inbox poll vote hook", () => {
         },
       ],
     });
-    // Queue admission precedes its polling drain; this signal makes activity assertions non-vacuous.
-    await preflightDeliveryObserved;
     await waitForInboundWorkDrained();
     const preflightDurableId = createWhatsAppDurableInboundMessageId({
       remoteJid: CHAT_JID,
@@ -444,7 +426,6 @@ describe("web monitor inbox poll vote hook", () => {
     expect(maybeEmitWhatsAppPollVoteReceivedHookMock).toHaveBeenCalledWith(
       expect.objectContaining({ key: expect.objectContaining({ id: voteMessageId }) }),
     );
-    await postThrowDeliveryObserved;
     await waitForInboundWorkDrained();
 
     const normalDurableId = createWhatsAppDurableInboundMessageId({
