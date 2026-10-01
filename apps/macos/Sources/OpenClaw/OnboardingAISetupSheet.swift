@@ -98,13 +98,13 @@ struct OnboardingAISetupSheet: View {
             if let error = self.model.authError {
                 OnboardingErrorCard(
                     title: self.model.providerAuthCancellation == .unconfirmed
-                        ? String(localized: "Cancellation not confirmed")
+                        ? "Cancellation not confirmed"
                         : self.model.providerWizardKind == .activation
-                        ? String(localized: "AI setup didn’t complete")
+                        ? "AI setup didn’t complete"
                         : self.model.isPreparingModel
-                        ? String(localized: "Model setup didn’t complete")
-                        : String(localized: "Sign-in didn’t complete"),
-                    message: error.summary,
+                        ? "Model setup didn’t complete"
+                        : "Sign-in didn’t complete",
+                    message: .verbatim(error.summary),
                     details: error.detail,
                     docsSlug: "concepts/model-providers",
                     retry: nil)

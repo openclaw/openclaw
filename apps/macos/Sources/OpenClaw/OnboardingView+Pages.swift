@@ -348,7 +348,7 @@ extension OnboardingView {
                 .foregroundStyle(.secondary)
         case let .ok(_, success):
             VStack(alignment: .leading, spacing: 2) {
-                Label(success.title, systemImage: "checkmark.circle.fill")
+                Label { Text(success.title) } icon: { Image(systemName: "checkmark.circle.fill") }
                     .font(.caption)
                     .foregroundStyle(.green)
                 if let detail = success.detail {
@@ -360,7 +360,7 @@ extension OnboardingView {
             }
         case let .failed(_, message):
             if remoteAuthIssue == nil {
-                Text(message)
+                Text(verbatim: message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -379,12 +379,12 @@ extension OnboardingView {
             VStack(alignment: .leading, spacing: 4) {
                 Text(issue.title)
                     .font(.caption.weight(.semibold))
-                Text(.init(issue.body))
+                Text(issue.body)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let footnote = issue.footnote {
-                    Text(.init(footnote))
+                    Text(footnote)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -661,7 +661,8 @@ extension OnboardingView {
                         title: self.cliExecutableReady
                             ? "The Gateway didn’t start"
                             : (bundled ? "OpenClaw preparation failed" : "OpenClaw installation failed"),
-                        message: self.cliStatus ?? "OpenClaw setup did not finish.",
+                        message: self.cliStatus.map { .verbatim($0) }
+                            ?? .localized("OpenClaw setup did not finish."),
                         docsSlug: "platforms/mac/bundled-gateway",
                         retryTitle: "Try again")
                     {

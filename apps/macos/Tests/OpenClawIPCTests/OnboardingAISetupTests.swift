@@ -4315,10 +4315,10 @@ struct OnboardingAISetupTests {
         #expect(view.aiSetup.candidates.isEmpty)
         #expect(harness.session.latestTask()?.snapshotSendCount() == 1)
         let card = OnboardingAISetupView.gatewayAuthCard(for: .tokenRequired)
-        #expect(card.title == "Gateway authentication required")
-        #expect(card.primaryTitle == "Back to Gateway")
-        #expect(card.secondaryTitle == "Try again")
-        #expect(!card.title.localizedCaseInsensitiveContains("AI account"))
+        #expect(String(localized: card.title) == "Gateway authentication required")
+        #expect(String(localized: card.primaryTitle) == "Back to Gateway")
+        #expect(String(localized: card.secondaryTitle) == "Try again")
+        #expect(!String(localized: card.title).localizedCaseInsensitiveContains("AI account"))
 
         let decision = try #require(OnboardingView.gatewayAuthenticationReturnDecision(
             connectionMode: appState.connectionMode,

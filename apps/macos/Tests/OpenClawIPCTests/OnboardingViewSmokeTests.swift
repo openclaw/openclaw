@@ -3,6 +3,7 @@ import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
 import OpenClawKit
+import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -245,6 +246,63 @@ struct OnboardingViewSmokeTests {
         #expect(short < preferred)
     }
 
+    @Test(.testWaitLimit, arguments: ["localized", "verbatim-key", "verbatim-diagnostic"])
+    func `error card renders localized copy without interpreting diagnostics`(_ kind: String) async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bundle = try makeOnboardingLocalizationBundle(at: root)
+        let copy = OnboardingAISetupView.gatewayAuthCard(for: .pairingRequired)
+        let diagnostic = "**literal** %@\nsecond line"
+        let message: OnboardingErrorCard.Message = switch kind {
+        case "localized":
+            .localized(onboardingResource(copy.message, bundle: bundle, locale: "en"))
+        case "verbatim-key": .verbatim("Try again")
+        default: .verbatim(diagnostic)
+        }
+        let expectedMessage = switch kind {
+        case "localized": "Kopplung erforderlich. F\u{00fc}hre /pair approve aus."
+        case "verbatim-key": "Try again"
+        default: diagnostic
+        }
+        let locale = Locale(identifier: "de")
+        let card = OnboardingErrorCard(
+            title: onboardingResource(copy.title, bundle: bundle, locale: "en"),
+            message: message,
+            docsSlug: "start/onboarding",
+            retryTitle: onboardingResource(copy.primaryTitle, bundle: bundle, locale: "en"),
+            secondaryTitle: onboardingResource(copy.secondaryTitle, bundle: bundle, locale: "en"),
+            secondary: {},
+            retry: {})
+        _ = AppKitTestSupport.application
+        let hosting = NSHostingView(rootView: card.environment(\.locale, locale))
+        hosting.frame = NSRect(x: 0, y: 0, width: 800, height: 300)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+        }
+        window.orderFront(nil)
+        let expected = Set([
+            "Gateway-Anmeldung erforderlich", "Zur\u{00fc}ck zum Gateway", "Erneut versuchen", expectedMessage,
+        ])
+        var visible: Set<String> = []
+        try await TestWait.state("localized onboarding error card") {
+            hosting.layoutSubtreeIfNeeded()
+            let elements = try await AppKitTestSupport.accessibilityElements(in: hosting)
+            visible = Set(elements.flatMap { element -> [String] in
+                let value: Any? = element.accessibilityValue?()
+                return [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element), value as? String]
+                    .compactMap { $0 }
+            })
+            return expected.isSubset(of: visible)
+        }
+        #expect(expected.isSubset(of: visible))
+        #expect(card.message.resolved(locale: locale) == expectedMessage)
+    }
+
     @Test(arguments: ["primary", "dual", "passive"])
     func `error card trailing closure owns its primary action`(_ actions: String) throws {
         var primaryInvocations = 0
@@ -253,7 +311,7 @@ struct OnboardingViewSmokeTests {
         case "primary":
             OnboardingErrorCard(
                 title: "Setup failed",
-                message: "Fixture failure",
+                message: .verbatim("Fixture failure"),
                 docsSlug: "start/onboarding",
                 retryTitle: "Try again")
             {
@@ -262,7 +320,7 @@ struct OnboardingViewSmokeTests {
         case "dual":
             OnboardingErrorCard(
                 title: "Setup failed",
-                message: "Fixture failure",
+                message: .verbatim("Fixture failure"),
                 docsSlug: "start/onboarding",
                 retryTitle: "Back to Gateway",
                 secondaryTitle: "Try again",
@@ -271,7 +329,7 @@ struct OnboardingViewSmokeTests {
         default:
             OnboardingErrorCard(
                 title: "Setup failed",
-                message: "Fixture failure",
+                message: .verbatim("Fixture failure"),
                 docsSlug: "start/onboarding",
                 retry: nil)
         }

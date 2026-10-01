@@ -357,8 +357,11 @@ struct ConnectionSettingsView: View {
                     }
                 }
             }
+        case let .authIssue(issue):
+            Text(issue.statusResource)
+                .foregroundStyle(.red)
         case let .failed(message):
-            Text(message)
+            Text(verbatim: message)
                 .foregroundStyle(.red)
         }
     }
@@ -401,6 +404,7 @@ private enum RemoteStatus: Equatable {
     case idle
     case checking
     case ok(RemoteGatewayProbeSuccess)
+    case authIssue(RemoteGatewayAuthIssue)
     case failed(String)
 }
 
@@ -436,7 +440,7 @@ extension ConnectionSettingsView {
         case let .ready(success):
             self.remoteStatus = .ok(success)
         case let .authIssue(issue):
-            self.remoteStatus = .failed(issue.statusMessage)
+            self.remoteStatus = .authIssue(issue)
         case let .failed(message):
             self.remoteStatus = .failed(message)
         }
