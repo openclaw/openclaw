@@ -53,10 +53,12 @@ them into each workspace package. On supported macOS volumes, this also lets pnp
 reuse whole-package APFS clones instead of importing every file separately.
 
 Installation also prepares Kysely declarations from the SQL schemas in `src/state`.
-The generated files live in ignored `.artifacts/kysely/`; build, typecheck, and
-test entrypoints refresh them automatically, including after an install with
+The generated files live in ignored `.artifacts/kysely/`; build, typecheck,
+type-aware lint, and test entrypoints refresh them automatically, including after an install with
 `--ignore-scripts`. Unchanged inputs reuse the declarations without rewriting
 them. `pnpm db:kysely:check` checks schema projection and generator contracts.
+Sparse-checkout lint prepares only the available schemas and retires declarations
+for omitted schemas; normal generation and verification still require complete sources.
 
 Give each source checkout its own physical dependency installation. Tooling does
 not automatically link a missing `node_modules` to another checkout. Existing
