@@ -4,7 +4,6 @@ import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
 
 export { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
-export { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 
 // Legacy checks use raw dotted paths so doctor can report exact config keys.
 function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
@@ -23,7 +22,6 @@ export function findLegacyConfigIssues(
   raw: unknown,
   sourceRaw?: unknown,
   extraRules: LegacyConfigRule[] = [],
-  _touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
   return findLegacyConfigRuleIssues(raw, [...LEGACY_CONFIG_RULES, ...extraRules], sourceRaw);
 }

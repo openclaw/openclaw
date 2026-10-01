@@ -5,11 +5,9 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  listSessionTranscriptInstances,
-  readTranscriptStatsBatchReadOnlySync,
-} from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,

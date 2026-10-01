@@ -1,4 +1,3 @@
-// Gateway service installer: writes config defaults, resolves credentials, and installs service definitions.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -8,7 +7,6 @@ import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.j
 import {
   resolveGatewayDaemonRuntime,
   isGatewayDaemonRuntime,
-  type GatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
@@ -90,13 +88,14 @@ function formatNoAuthNonLoopbackInstallBlock(params: {
       ? `gateway.bind=tailnet currently resolves to ${params.bindHost} but can later resolve to a Tailnet interface`
       : `gateway.bind=${params.bind} resolves to ${params.bindHost}`;
   const hints: string[] = [`${bindReason}, but gateway.auth.mode=none disables Gateway auth.`];
-  if (normalizeOptionalString(auth.token)) {
+  const configuredSecret = normalizeOptionalString(auth.token)
+    ? "token"
+    : normalizeOptionalString(auth.password)
+      ? "password"
+      : undefined;
+  if (configuredSecret) {
     hints.push(
-      `This config already has gateway.auth.token; run ${formatCliCommand("openclaw config set gateway.auth.mode token")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
-    );
-  } else if (normalizeOptionalString(auth.password)) {
-    hints.push(
-      `This config already has gateway.auth.password; run ${formatCliCommand("openclaw config set gateway.auth.mode password")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
+      `This config already has gateway.auth.${configuredSecret}; run ${formatCliCommand(`openclaw config set gateway.auth.mode ${configuredSecret}`)} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
     );
   } else {
     hints.push(
@@ -369,21 +368,33 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return;
     }
   }
+  const buildInstallPlan = (
+    options: Pick<Parameters<typeof buildGatewayInstallPlan>[0], "runtimeExplicit" | "warn">,
+  ) =>
+    buildGatewayInstallPlan({
+      allowUnconfigured: opts.allowUnconfigured,
+      env: installEnv,
+      port,
+      runtime,
+      runtimePath,
+      pinnedRuntimePath,
+      wrapperPath,
+      existingCommand: existingServiceCommand,
+      existingEnvironment: existingServiceEnv,
+      existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
+      config: cfg,
+      ...options,
+    });
   if (loaded && !opts.force) {
     autoRefreshMessage ??= await getGatewayServiceAutoRefreshMessage({
       allowUnconfigured: opts.allowUnconfigured,
       currentCommand: existingServiceCommand,
       env: process.env,
       installEnv,
-      port,
-      runtime,
-      runtimePath,
       wrapperPath,
       pinnedRuntimePath,
       pinChanged: opts.runtime !== undefined || opts.runtimePath !== undefined,
-      existingEnvironment: existingServiceEnv,
-      existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
-      config: cfg,
+      buildInstallPlan: () => buildInstallPlan({ warn: () => undefined }),
     });
     if (autoRefreshMessage) {
       if (!(await assertWritable())) {
@@ -450,20 +461,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   const { programArguments, workingDirectory, environment, environmentValueSources } =
-    await buildGatewayInstallPlan({
-      allowUnconfigured: opts.allowUnconfigured,
-      env: installEnv,
-      port,
-      runtime,
-      runtimePath,
-      pinnedRuntimePath,
-      wrapperPath,
-      existingCommand: existingServiceCommand,
+    await buildInstallPlan({
       runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
-      existingEnvironment: existingServiceEnv,
-      existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
       warn,
-      config: cfg,
     });
   const install = async (definitionTransaction?: GatewayServiceDefinitionTransactionHooks) => {
     await service.install({
@@ -524,15 +524,10 @@ async function getGatewayServiceAutoRefreshMessage(params: {
   currentCommand: GatewayServiceCommandConfig | null;
   env: Record<string, string | undefined>;
   installEnv: NodeJS.ProcessEnv;
-  port: number;
-  runtime: GatewayDaemonRuntime;
-  runtimePath?: string;
   wrapperPath?: string;
   pinnedRuntimePath?: string;
   pinChanged?: boolean;
-  existingEnvironment?: Record<string, string | undefined>;
-  existingEnvironmentValueSources?: GatewayServiceCommandConfig["environmentValueSources"];
-  config: OpenClawConfig;
+  buildInstallPlan: () => ReturnType<typeof buildGatewayInstallPlan>;
 }): Promise<string | undefined> {
   try {
     const currentCommand = resolveManagedGatewayServiceCommand(params.currentCommand);
@@ -542,22 +537,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
     if (params.pinChanged) {
       return "Gateway runtime selection changed; refreshing the install.";
     }
-    const getPlannedInstall = createLazyPromise(() =>
-      buildGatewayInstallPlan({
-        allowUnconfigured: params.allowUnconfigured,
-        env: params.installEnv,
-        port: params.port,
-        runtime: params.runtime,
-        runtimePath: params.runtimePath,
-        wrapperPath: params.wrapperPath,
-        pinnedRuntimePath: params.pinnedRuntimePath,
-        existingCommand: params.currentCommand,
-        existingEnvironment: params.existingEnvironment,
-        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
-        warn: () => undefined,
-        config: params.config,
-      }),
-    );
+    const getPlannedInstall = createLazyPromise(params.buildInstallPlan);
     const currentAllowsUnconfigured =
       currentCommand.programArguments.includes("--allow-unconfigured");
     if (currentAllowsUnconfigured || params.allowUnconfigured) {

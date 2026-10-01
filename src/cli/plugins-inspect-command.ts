@@ -40,40 +40,17 @@ function failPluginInspect(message: string, json: boolean | undefined): void {
 }
 
 function formatGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[]): string {
-  const lines: string[] = [];
-  for (const { pluginId, level, message } of diagnostics) {
-    if (!pluginId) {
-      const line = formatConsoleDiagnosticLine({
-        level,
-        message: shortenHomeInString(`${level.toUpperCase()}: ${message}`),
-      });
-      // Global discovery diagnostics also matter when the JSON result is an empty array.
-      lines.push(`${line}\n`);
-    }
-  }
-  return lines.join("");
-}
-
-function formatCapabilityKinds(
-  capabilities: Array<{
-    kind: string;
-  }>,
-): string {
-  if (capabilities.length === 0) {
-    return "-";
-  }
-  return capabilities.map((entry) => entry.kind).join(", ");
-}
-
-function formatHookSummary(params: { typedHookCount: number; customHookCount: number }): string {
-  const parts: string[] = [];
-  if (params.typedHookCount > 0) {
-    parts.push(`${params.typedHookCount} typed`);
-  }
-  if (params.customHookCount > 0) {
-    parts.push(`${params.customHookCount} custom`);
-  }
-  return parts.length > 0 ? parts.join(", ") : "-";
+  // Global discovery diagnostics also matter when the JSON result is an empty array.
+  return diagnostics
+    .filter(({ pluginId }) => !pluginId)
+    .map(
+      ({ level, message }) =>
+        `${formatConsoleDiagnosticLine({
+          level,
+          message: shortenHomeInString(`${level.toUpperCase()}: ${message}`),
+        })}\n`,
+    )
+    .join("");
 }
 
 function formatInstallLines(install: PluginInstallRecord | undefined): string[] {
@@ -175,7 +152,10 @@ export async function runPluginsInspectCommand(
           inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
         Status: formatPluginStatus(inspect.plugin, runtimeInspect),
         Shape: inspect.shape,
-        Capabilities: formatCapabilityKinds(inspect.capabilities),
+        Capabilities:
+          inspect.capabilities.length > 0
+            ? inspect.capabilities.map((entry) => entry.kind).join(", ")
+            : "-",
         Compatibility:
           inspect.compatibility.length > 0
             ? inspect.compatibility
@@ -183,10 +163,13 @@ export async function runPluginsInspectCommand(
                 .join(", ")
             : "none",
         Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
-        Hooks: formatHookSummary({
-          typedHookCount: inspect.typedHooks.length,
-          customHookCount: inspect.customHooks.length,
-        }),
+        Hooks:
+          [
+            inspect.typedHooks.length > 0 ? `${inspect.typedHooks.length} typed` : "",
+            inspect.customHooks.length > 0 ? `${inspect.customHooks.length} custom` : "",
+          ]
+            .filter(Boolean)
+            .join(", ") || "-",
       }));
       return renderTable({
         width: tableWidth,

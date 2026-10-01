@@ -241,6 +241,11 @@ describe("CI changed Node test plan", () => {
 
   it.each([
     {
+      source: "scripts/check-test-timeout-race-ratchet.mts",
+      targets: ["test/scripts/check-test-timeout-race-ratchet.test.ts"],
+      areas: ["scripts", "src/scripts", "test/scripts"],
+    },
+    {
       source: "ui/src/styles/chat/layout.css",
       areas: ["ui"],
       targets: [
@@ -276,8 +281,10 @@ describe("CI changed Node test plan", () => {
       targets: [
         "src/channels/message-access/operator-authority.test.ts",
         "src/agents/command/delivery.restart-final.integration.test.ts",
+        "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
+        "src/gateway/server.mcp-session-owner.test.ts",
       ],
       areas: ["src/channels"],
     },
@@ -358,7 +365,7 @@ describe("CI changed Node test plan", () => {
 
   it.each([
     "src/node-host/node-worker-bundle-installer.test.ts",
-    "src/plugin-sdk/config-runtime.test.ts",
+    "src/plugin-sdk/plugin-config-runtime.test.ts",
     "src/plugins/contracts/registry.retry.test.ts",
     "src/channels/plugins/config-schema.test.ts",
   ])("keeps exact test leaf %s focused while retaining boundary coverage", (target) => {
@@ -418,7 +425,7 @@ describe("CI changed Node test plan", () => {
   it("keeps uncovered and deleted-path coverage beside a dedicated contract target", () => {
     const target = "src/plugins/contracts/registry.retry.test.ts";
     const remaining = [
-      "src/plugin-sdk/config-runtime.test.ts",
+      "src/plugin-sdk/plugin-config-runtime.test.ts",
       "src/channels/plugins/config-schema.test.ts",
       "src/plugins/contracts/deleted.test.ts",
     ];
@@ -784,9 +791,24 @@ describe("CI changed Node test plan", () => {
       consumer,
     ]);
 
-    expect(resolvePolicyTestTargets([source])).toEqual([gatewayCallsitesGuard, sourcePolicyTest]);
+    const sourceInventories = [
+      "test/scripts/pr-wrapper-source-closure.test.ts",
+      "test/scripts/pr-worktree-provision.test.ts",
+      "test/scripts/eager-import-closure.test.ts",
+      "test/scripts/update-restart-module-outcome.test.ts",
+      "test/scripts/type-suppression-inventory.test.ts",
+      "test/scripts/plugin-sdk-surface-report.test.ts",
+    ];
+    expect(resolvePolicyTestTargets([source])).toEqual([
+      ...sourceInventories,
+      gatewayCallsitesGuard,
+      sourcePolicyTest,
+    ]);
     expect(resolvePolicyTestTargets([source], { completeOwnersOnly: true })).toEqual([]);
-    expect(resolvePolicyTestTargets(["src/example/runtime.ts"])).toEqual([gatewayCallsitesGuard]);
+    expect(resolvePolicyTestTargets(["src/example/runtime.ts"])).toEqual([
+      ...sourceInventories,
+      gatewayCallsitesGuard,
+    ]);
   });
 
   it("selects erased core sources through their concrete owner tests", () => {
@@ -1032,6 +1054,18 @@ describe("CI changed Node test plan", () => {
       expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
     },
     {
+      changedPath: "scripts/lib/ci-proof-test-inventory.mts",
+      expected: ["test/vitest-pr-exempt-retention.test.ts"],
+    },
+    {
+      changedPath: "scripts/lib/test-selector-source-facts.mts",
+      expected: ["test/vitest-pr-exempt-retention.test.ts"],
+    },
+    {
+      changedPath: "scripts/lib/test-source-term-matcher.mts",
+      expected: ["test/vitest-pr-exempt-retention.test.ts"],
+    },
+    {
       changedPath: "src/plugins/plugin-instance.ts",
       expected: [
         "test/scripts/eager-import-closure.test.ts",
@@ -1067,6 +1101,7 @@ describe("CI changed Node test plan", () => {
           runnerBackend: "github",
           includeReleaseOnlyToolingShards: false,
           includeReleaseOnlyRuntimeTests: false,
+          includePrExemptRuntimeTests: false,
           onFallback: (reason) => reasons.push(reason),
         });
         expect(shards, reasons.join("\n")).not.toBeNull();
@@ -1074,6 +1109,9 @@ describe("CI changed Node test plan", () => {
         for (const guard of expected) {
           expect(files.filter((file) => file === guard)).toHaveLength(1);
         }
+        expect(files.includes("test/vitest-pr-exempt-retention.test.ts")).toBe(
+          expected.includes("test/vitest-pr-exempt-retention.test.ts"),
+        );
         expect(files).toContain(importer);
         expect(files).toContain(deferred);
         expect(files).not.toContain("test/scripts/mobile-release-ci.test.ts");

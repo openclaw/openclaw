@@ -23,6 +23,7 @@ import type {
   NativeGatewayAuthorization,
   NativeGatewayConnectAuth,
 } from "../app/native-gateway-auth.ts";
+import { i18n } from "../i18n/index.ts";
 import { loadOrCreateDeviceIdentity } from "../lib/nodes/index.ts";
 import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
 
@@ -179,7 +180,7 @@ export async function buildBrowserGatewayConnectPlan({
       connectNonce,
       connectChallengeTs,
     }));
-  const plan: ConnectPlan = {
+  return {
     generation,
     params: {
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
@@ -205,16 +206,16 @@ export async function buildBrowserGatewayConnectPlan({
           "inline-widgets",
           "model-selection-policy",
           "ui-commands",
+          "ultrafast",
           "usage-refreshing",
         ],
       }),
       auth: nativeAuth?.auth ?? buildGatewayConnectAuth(selectedAuth),
       userAgent: navigator.userAgent,
-      locale: navigator.language,
+      locale: i18n.getRequestedLocale(),
     },
     explicitGatewayToken: nativeAuth ? undefined : explicitGatewayToken,
     selectedAuth,
     deviceIdentity,
   };
-  return plan;
 }

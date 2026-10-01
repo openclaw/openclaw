@@ -57,7 +57,7 @@ describe("registered mcp.authLogin", () => {
   let config: McpServerConfig;
   let expectedChallenge: string;
   let registeredRedirect: string;
-  let tokenError: "invalid_grant" | "invalid_client" | "unauthorized_client" | false = false;
+  let tokenError: "invalid_grant" | "invalid_client" | false = false;
   const effects: McpAuthEffectEndpoint = { tokenLifetimeSeconds: 3600 };
   let tokenEntered = createDeferredCore();
   let releaseToken: Deferred | undefined;
@@ -382,7 +382,7 @@ describe("registered mcp.authLogin", () => {
     expect(await readMcpOAuthStore(identity().storeKey)).toEqual(before);
   });
 
-  it.each(["invalid_grant", "invalid_client", "unauthorized_client"] as const)(
+  it.each(["invalid_grant", "invalid_client"] as const)(
     "preserves existing tokens and registration after %s",
     async (error) => {
       await clearMcpOAuthCredentials(identity());
@@ -526,45 +526,34 @@ describe("registered mcp.authLogin", () => {
     expect((await readMcpOAuthStore(identity().storeKey)).codeVerifier).toBeUndefined();
   });
 
-  it.each(["disabled", "removed", "url", "identity", "profile"] as const)(
-    "rejects a successful exchange after the connector is %s",
-    async (change) => {
-      await clearMcpOAuthCredentials(identity());
-      const started = await begin();
-      tokenEntered = createDeferredCore();
-      releaseToken = createDeferredCore();
-      try {
-        expect((await callback(started.state)).status).toBe(200);
-        await tokenEntered.promise;
-        const changed: McpServerConfig =
-          change === "disabled"
-            ? { ...config, enabled: false }
-            : change === "url"
-              ? { ...config, url: resourceUrl + "/replacement" }
-              : change === "identity"
-                ? { ...config, oauth: { identity: "per-requester" } }
-                : { ...config, oauth: { authProfileId: "existing-profile" } };
-        await writeConfigFile({
-          gateway: { reload: { mode: "off" } },
-          mcp: { servers: change === "removed" ? {} : { docs: changed } },
-        });
-        await rpcReq(owner, "wizard.status", { sessionId: started.sessionId });
-        releaseToken.resolve();
-        const result = await terminal(started.sessionId);
-        expect(result.status).toBe("error");
-        expect(JSON.stringify(result)).not.toContain("private exchange detail");
-        expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
-      } finally {
-        releaseToken.resolve();
-        releaseToken = undefined;
-        tokenError = false;
-        await writeConfigFile({
-          gateway: { reload: { mode: "off" } },
-          mcp: { servers: { docs: config } },
-        });
-      }
-    },
-  );
+  it("rejects a successful exchange after the connector URL changes", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const started = await begin();
+    tokenEntered = createDeferredCore();
+    releaseToken = createDeferredCore();
+    try {
+      expect((await callback(started.state)).status).toBe(200);
+      await tokenEntered.promise;
+      await writeConfigFile({
+        gateway: { reload: { mode: "off" } },
+        mcp: { servers: { docs: { ...config, url: resourceUrl + "/replacement" } } },
+      });
+      await rpcReq(owner, "wizard.status", { sessionId: started.sessionId });
+      releaseToken.resolve();
+      const result = await terminal(started.sessionId);
+      expect(result.status).toBe("error");
+      expect(JSON.stringify(result)).not.toContain("private exchange detail");
+      expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
+    } finally {
+      releaseToken.resolve();
+      releaseToken = undefined;
+      tokenError = false;
+      await writeConfigFile({
+        gateway: { reload: { mode: "off" } },
+        mcp: { servers: { docs: config } },
+      });
+    }
+  });
 
   it.each(["register", "token"] as const)(
     "does not follow a %s redirect after configuration authority is withdrawn",

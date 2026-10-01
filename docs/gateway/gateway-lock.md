@@ -16,6 +16,8 @@ title: "Gateway lock"
 
 Startup establishes state ownership before publishing compatibility metadata and binding its listener:
 
+Every server start uses the same admission, including the temporary Gateway started by container onboarding. Direct servers retain ownership until shutdown completes. Managed servers use the run loop's existing owner, which remains responsible for restart handoffs and release; closing one server generation does not release that owner.
+
 1. **Process owner** exclusively creates one sidecar keyed by the canonical shared-state database path. Gateway startup, embedded agents, and offline maintenance compete for this same owner. `OPENCLAW_ALLOW_MULTI_GATEWAY=1` does not permit sharing mutable state.
 2. **Compatibility projection** publishes the owner's PID, process start identity, role, and runtime port in the historical state-local lock. Supported older Gateways use it to detect the current process. It is metadata under the process owner, not an independent lifecycle owner.
 3. **Socket bind** binds the HTTP/WebSocket listener (default `ws://127.0.0.1:18789`) as an exclusive TCP listener.

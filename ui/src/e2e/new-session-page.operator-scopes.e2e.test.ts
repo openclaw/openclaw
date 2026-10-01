@@ -99,12 +99,14 @@ suite.define(() => {
       expect(await where.locator('[data-action="manage-cloud-workers"]').count()).toBe(0);
       await page.keyboard.press("Escape");
       await effort.click();
-      const fastMode = page.locator("[data-chat-speed-toggle]");
+      const fastMode = page.locator('[data-chat-speed-option="on"]');
       await expect.poll(() => fastMode.isEnabled()).toBe(true);
-      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("on");
+      await expect.poll(() => fastMode.getAttribute("role")).toBe("radio");
       await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("false");
       await fastMode.click();
-      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("off");
+      await expect
+        .poll(() => page.locator('[data-chat-speed-option="off"]').getAttribute("aria-checked"))
+        .toBe("false");
       await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
       await submit.click();
 

@@ -1,9 +1,12 @@
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   isGatewayRestartDraining,
   runWithGatewayDetachedWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
+import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
@@ -23,19 +26,22 @@ export function createSubagentRegistryCompletionRuntime(config: {
   async function completeSubagentRunWithRecoveryAttempt(
     params: SubagentCompletionRequest,
     source: string,
-    isCurrent: () => boolean,
+    isCurrent: () => Promise<boolean>,
   ) {
     for (const message of [
       "failed to complete subagent run; retrying completion",
       "failed to complete subagent run after retry; retrying ended cleanup",
     ]) {
-      if (!isCurrent()) {
+      if (!(await isCurrent())) {
         return;
       }
       try {
         await completeSubagentRun(params);
         return;
       } catch (error) {
+        if (hasSqliteWorkerOutcomeUnknown(error)) {
+          throw error;
+        }
         const current = runs.get(params.runId);
         warn(message, {
           source,
@@ -43,13 +49,13 @@ export function createSubagentRegistryCompletionRuntime(config: {
           childSessionKey: current?.childSessionKey,
           error,
         });
-        if (!isCurrent()) {
+        if (!(await isCurrent())) {
           return;
         }
       }
     }
 
-    if (!isCurrent()) {
+    if (!(await isCurrent())) {
       return;
     }
     const latest = runs.get(params.runId);
@@ -105,11 +111,26 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     const generation = entry.generation;
     const runId = params.runId;
-    const isCurrent = () =>
-      runs.get(runId) === entry &&
-      entry.generation === generation &&
-      params.isRecoveryCurrent?.() !== false;
-    const ownedParams = { ...params, expectedEntry: entry, isRecoveryCurrent: isCurrent };
+    const stateContext = captureOpenClawStateWorkerContext();
+    const isHostCurrent = () => {
+      try {
+        assertSubagentRegistryWriteSourceCurrent(stateContext);
+      } catch {
+        return false;
+      }
+      return (
+        runs.get(runId) === entry &&
+        entry.generation === generation &&
+        params.recoveryCurrent?.isHostCurrent() !== false
+      );
+    };
+    const isCurrent = async () =>
+      isHostCurrent() && (await params.recoveryCurrent?.prepare()) !== false && isHostCurrent();
+    const ownedParams = {
+      ...params,
+      expectedEntry: entry,
+      recoveryCurrent: { prepare: isCurrent, isHostCurrent },
+    };
     // Each controller attempt owns its terminal transition, while this outer
     // lease outlives the launch scope and spans retries and fallback cleanup.
     try {
@@ -117,7 +138,10 @@ export function createSubagentRegistryCompletionRuntime(config: {
         await completeSubagentRunWithRecoveryAttempt(ownedParams, source, isCurrent);
       }, "subagents:completion");
     } catch (error) {
-      if (!isCurrent()) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
+      if (!(await isCurrent())) {
         return;
       }
       if (!isGatewayRestartDraining()) {
@@ -161,8 +185,8 @@ export function createSubagentRegistryCompletionRuntime(config: {
   async function finalizeInterruptedSubagentRun(params: {
     runId: string;
     expectedEntry?: SubagentRunRecord;
-    isRecoveryCurrent?: () => boolean;
-    isChildSessionEffectsCurrent?: () => boolean;
+    recoveryCurrent?: SubagentCompletionRequest["recoveryCurrent"];
+    sessionEffects?: SubagentCompletionRequest["sessionEffects"];
     error: string;
     endedAt?: number;
     suppressSessionEffects?: boolean;
@@ -177,10 +201,14 @@ export function createSubagentRegistryCompletionRuntime(config: {
         ? params.endedAt
         : Date.now();
     const entry = runs.get(runId);
+    const generation = entry?.generation;
     if (
       !entry ||
       (params.expectedEntry && entry !== params.expectedEntry) ||
-      params.isRecoveryCurrent?.() === false
+      (params.recoveryCurrent && !(await params.recoveryCurrent.prepare())) ||
+      params.recoveryCurrent?.isHostCurrent() === false ||
+      runs.get(runId) !== entry ||
+      entry.generation !== generation
     ) {
       return 0;
     }
@@ -204,8 +232,8 @@ export function createSubagentRegistryCompletionRuntime(config: {
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
       recoverInterrupted: true,
-      isRecoveryCurrent: params.isRecoveryCurrent,
-      isChildSessionEffectsCurrent: params.isChildSessionEffectsCurrent,
+      recoveryCurrent: params.recoveryCurrent,
+      sessionEffects: params.sessionEffects,
       suppressSessionEffects: params.suppressSessionEffects,
     };
     try {
@@ -217,6 +245,9 @@ export function createSubagentRegistryCompletionRuntime(config: {
       // Keep scheduler retries alive until the exact row is fully terminal.
       return hasCompleteSubagentTerminalState(finalized) ? 1 : 0;
     } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
       if (isGatewayRestartDraining() && runs.get(runId) === entry) {
         warn("subagent completion deferred during gateway restart", {
           source: "explicit-failed-mark",
@@ -242,6 +273,5 @@ export function createSubagentRegistryCompletionRuntime(config: {
     pendingLifecycle,
     completeSubagentRunWithRecovery,
     finalizeInterruptedSubagentRun,
-    scheduleSubagentCompletionRetryAfterRestart,
   };
 }

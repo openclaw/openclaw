@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -32,7 +33,7 @@ suite.define(() => {
       await installMockGateway(page, { sessionKey });
       const paletteModule = await holdModuleResponse(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -72,7 +73,7 @@ suite.define(() => {
         await installMockGateway(page, { sessionKey });
         const paletteModule = await holdModuleResponse(
           page,
-          /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
         );
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -170,7 +171,7 @@ suite.define(() => {
       await installMockGateway(page, { sessionKey });
       const paletteModule = await holdModuleResponse(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -233,7 +234,7 @@ suite.define(() => {
       await installMockGateway(page, { sessionKey });
       const paletteModule = await holdModuleResponse(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -278,12 +279,12 @@ suite.define(() => {
       });
       const paletteModule = await holdModuleResponse(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       // Keep an unrelated route loader present so palette assertions cannot depend on it.
       const chatModule = await holdModuleResponse(
         page,
-        /\/assets\/route-entry-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
       );
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:dashboard:cold-shell"));
       try {

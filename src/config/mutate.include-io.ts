@@ -7,7 +7,7 @@ import {
   withDeferredPluginMigrationsCurrent,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
-import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
 import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
 import { isPathInside } from "../security/scan-paths.js";
@@ -19,7 +19,7 @@ import {
 } from "./includes.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import type { ConfigWriteOptions } from "./io.types.js";
-import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
+import { recoverConfigWriteFailure } from "./io.write-errors.js";
 import {
   captureConfigFileWritePathProof,
   createConfigFileWriteGuard,
@@ -324,28 +324,17 @@ export async function writeRootBoundJsonFile(params: {
     if (publication.phase === "unpublished") {
       throw error;
     }
-    let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
-    let cause = error;
-    try {
-      const rolledBack = await rollbackJsonFileWriteIfUnchanged({
-        target: targetAtCommit,
-        previousRaw: currentRaw,
-        committedRaw: publication.phase === "published" ? content : null,
-        pathProof: publicationProof,
-      });
-      rollbackStatus = rolledBack ? "restored" : "not-restored";
-    } catch (rollbackError) {
-      cause = new AggregateError(
-        [error, rollbackError],
-        `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
-        { cause: rollbackError },
-      );
-    }
-    throw new ConfigWritePostCommitError({
+    return await recoverConfigWriteFailure({
       configPath: targetAtCommit.absolutePath,
-      rollbackStatus,
       publication: publication.phase === "removed" ? "partial" : "complete",
-      cause,
+      cause: error,
+      restoreFile: () =>
+        rollbackJsonFileWriteIfUnchanged({
+          target: targetAtCommit,
+          previousRaw: currentRaw,
+          committedRaw: publication.phase === "published" ? content : null,
+          pathProof: publicationProof,
+        }),
     });
   }
   return publicationProof;

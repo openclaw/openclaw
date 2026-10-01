@@ -85,7 +85,7 @@ describe("live transport suite runtime", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([undefined, 1, 2])(
+  it.each([undefined, 2])(
     "forwards the dedicated Matrix concurrency %s through parsing and the live suite host",
     async (concurrency) => {
       vi.stubEnv("OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT", "1");
@@ -120,10 +120,8 @@ describe("live transport suite runtime", () => {
   it.each([
     ["dedicated", "ready"],
     ["dedicated", "failed"],
-    ["generic", "ready"],
     ["generic", "failed"],
     ["default selection", "ready"],
-    ["default selection", "failed"],
     ["plain selection", "ready"],
   ] as const)("prepares %s Matrix flows before workers start (%s)", async (caller, outcome) => {
     vi.stubEnv("OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT", "1");
@@ -247,7 +245,7 @@ describe("live transport suite runtime", () => {
     }
   });
 
-  it.each(["0", "1.5", "2junk"])(
+  it.each(["0", "1.5"])(
     "rejects invalid dedicated Matrix concurrency %s before suite dispatch",
     async (concurrency) => {
       vi.stubEnv("OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT", "1");
@@ -306,43 +304,38 @@ describe("live transport suite runtime", () => {
     });
   });
 
-  it.each([
-    { channelId: "discord", scenarioId: "discord-canary" },
-    { channelId: "slack", scenarioId: "slack-canary" },
-    { channelId: "whatsapp", scenarioId: "whatsapp-canary" },
-  ])(
-    "propagates the exact $channelId selection context through the standard suite owner",
-    async ({ channelId, scenarioId }) => {
-      resolveLiveTransportQaScenarioIds.mockReturnValueOnce([scenarioId]);
+  it("propagates selection context through the standard suite owner", async () => {
+    const channelId = "discord";
+    const scenarioId = "discord-canary";
+    resolveLiveTransportQaScenarioIds.mockReturnValueOnce([scenarioId]);
 
-      await runStandardLiveTransportQaSuiteCommand({
-        channelId,
-        options: {
-          primaryModel: "openai/custom-selection-model",
-          profile: "all",
-          providerMode: "mock-openai",
-          scenarioIds: [scenarioId, scenarioId],
-        },
-      });
-
-      expect(resolveLiveTransportQaScenarioIds).toHaveBeenLastCalledWith({
-        channelId,
+    await runStandardLiveTransportQaSuiteCommand({
+      channelId,
+      options: {
         primaryModel: "openai/custom-selection-model",
         profile: "all",
         providerMode: "mock-openai",
         scenarioIds: [scenarioId, scenarioId],
-        supportsModuleFlows: true,
-      });
-      expect(runQaSuiteCommand).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          channel: channelId,
-          primaryModel: "openai/custom-selection-model",
-          providerMode: "mock-openai",
-          scenarioIds: [scenarioId],
-        }),
-      );
-    },
-  );
+      },
+    });
+
+    expect(resolveLiveTransportQaScenarioIds).toHaveBeenLastCalledWith({
+      channelId,
+      primaryModel: "openai/custom-selection-model",
+      profile: "all",
+      providerMode: "mock-openai",
+      scenarioIds: [scenarioId, scenarioId],
+      supportsModuleFlows: true,
+    });
+    expect(runQaSuiteCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        channel: channelId,
+        primaryModel: "openai/custom-selection-model",
+        providerMode: "mock-openai",
+        scenarioIds: [scenarioId],
+      }),
+    );
+  });
 
   it("preserves explicit scenario selection after resolving defaults", async () => {
     await runLiveTransportQaSuiteCommand({

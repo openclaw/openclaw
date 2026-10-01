@@ -87,6 +87,9 @@ the WebSocket itself as one trace.
 
 Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
 Authenticated operator requests share a bounded queue for starting RPC handlers.
+Ordinary requests have both aggregate and per-connection waiting limits, so
+concurrent Control UI setup can queue without giving one connection the entire
+request allowance. The aggregate serialized-byte bound still applies.
 Small `sessions.messages.subscribe` requests without approval replay and
 `sessions.messages.unsubscribe` requests have separate bounded waiting capacity,
 including a per-connection limit. They keep the same FIFO order and yielding

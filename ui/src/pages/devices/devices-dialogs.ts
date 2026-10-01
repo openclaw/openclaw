@@ -15,7 +15,7 @@ import {
   revokeDeviceToken,
 } from "../../lib/nodes/page-operations.ts";
 
-export type DeviceAliasTarget = {
+type DeviceAliasTarget = {
   id: string;
   name: string;
   operatorLabel?: string;
@@ -80,9 +80,6 @@ export class DevicesDialogController {
   }
 
   confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
-    if (!this.host.canManagePairing()) {
-      return Promise.resolve();
-    }
     if (prompt.kind === "entry") {
       const entry = prompt.entry;
       return this.confirmDestructiveAction(
@@ -112,9 +109,6 @@ export class DevicesDialogController {
   }
 
   confirmPairingReject(target: "device" | "node", requestId: string): Promise<void> {
-    if (!this.host.canManagePairing()) {
-      return Promise.resolve();
-    }
     return this.confirmDestructiveAction(
       {
         title: t(
@@ -133,9 +127,6 @@ export class DevicesDialogController {
   }
 
   confirmTokenRevoke(deviceId: string, role: string): Promise<void> {
-    if (!this.host.canManagePairing()) {
-      return Promise.resolve();
-    }
     return this.confirmDestructiveAction(
       {
         title: t("devices.inventory.revokePromptTitle", { role }),
@@ -159,7 +150,7 @@ export class DevicesDialogController {
     prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
     run: (pageState: DevicesPageDataState) => unknown,
   ) {
-    if (this.pending) {
+    if (!this.host.canManagePairing() || this.pending) {
       return;
     }
     const controller = new AbortController();

@@ -403,11 +403,6 @@ struct RootTabs: View {
         return NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt)
     }
 
-    private var shouldCollapseSidebarAfterSelection: Bool {
-        Self.shouldCollapseSidebarAfterSelection(
-            layoutMode: self.isSidebarDrawerLayout ? .drawer : .split)
-    }
-
     private var sidebarHeaderAction: OpenClawSidebarHeaderAction? {
         guard Self.shouldShowSidebarRevealInDestinationHeader(
             isSidebarVisible: self.isSidebarVisible,
@@ -590,6 +585,7 @@ struct RootTabs: View {
     private func rootAppearLifecycle(_ content: some View) -> some View {
         content
             .onAppear {
+                self.sidebarModel.setSnoozeWakeUpdatesActive(self.scenePhase == .active)
                 self.updateIdleTimer()
                 self.evaluateOnboardingPresentation(force: false)
                 self.maybeAutoOpenSettings()
@@ -602,6 +598,7 @@ struct RootTabs: View {
             .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.scenePhase) { _, newValue in
+                self.sidebarModel.setSnoozeWakeUpdatesActive(newValue == .active)
                 self.updateIdleTimer()
                 guard newValue == .active else {
                     self.clearVoiceWakeToast()
@@ -614,6 +611,7 @@ struct RootTabs: View {
                 }
             }
             .onDisappear {
+                self.sidebarModel.setSnoozeWakeUpdatesActive(false)
                 UIApplication.shared.isIdleTimerDisabled = false
                 self.clearVoiceWakeToast()
             }
@@ -756,14 +754,11 @@ extension RootTabs {
             self.appModel.openChat(sessionKey: session.key)
             self.selectSidebarDestination(.chat)
         case .dashboard:
-            let target = Self.sidebarDashboardTarget(for: session)
             self.presentedSheet = .sessionDashboard(
-                sessionKey: target.sessionKey,
-                agentId: target.agentId)
-            guard self.shouldCollapseSidebarAfterSelection else { return }
-            withAnimation(self.sidebarAnimation) {
-                self.isSidebarVisible = false
-            }
+                sessionKey: session.key,
+                agentId: session.agentId)
+            guard self.isSidebarDrawerLayout else { return }
+            self.hideSidebar()
         }
     }
 
@@ -773,10 +768,8 @@ extension RootTabs {
         self.selectedSidebarDestination = destination
         self.selectedSettingsRoute = destination.settingsRoute
         self.activeSettingsRoute = destination.settingsRoute
-        guard self.shouldCollapseSidebarAfterSelection else { return }
-        withAnimation(self.sidebarAnimation) {
-            self.isSidebarVisible = false
-        }
+        guard self.isSidebarDrawerLayout else { return }
+        self.hideSidebar()
     }
 
     private func handleOpenChatRequest(_ requestID: Int) {
@@ -806,10 +799,8 @@ extension RootTabs {
         self.selectedSettingsRouteRequestID &+= 1
         self.selectedSidebarDestination = .settings
         self.sidebarNavigationPath = [route]
-        guard self.shouldCollapseSidebarAfterSelection else { return }
-        withAnimation(self.sidebarAnimation) {
-            self.isSidebarVisible = false
-        }
+        guard self.isSidebarDrawerLayout else { return }
+        self.hideSidebar()
     }
 
     private func openNotificationSettings(_ approvalID: String?) {

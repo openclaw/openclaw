@@ -96,7 +96,7 @@ export function resolveSandboxFsPathWithMounts(params: {
   mounts: SandboxFsMount[];
   containerOnlyMounts?: readonly string[];
 }): SandboxResolvedFsPath {
-  const mountsByContainer = [...params.mounts].toSorted(compareMountsByContainerPath);
+  const mountsByContainer = params.mounts.toSorted(compareMountsByContainerPath);
   // The default workspace is an input alias, not a readable host mount. It wins
   // exact host-root ties so a second bind cannot redirect cwd-relative inputs.
   const workspaceAlias: SandboxFsMount = {
@@ -342,13 +342,7 @@ function toDisplayRelative(params: {
   defaultContainerRoot: string;
 }): string {
   const rel = path.posix.relative(params.defaultContainerRoot, params.containerPath);
-  if (!rel) {
-    return "";
-  }
-  if (!relativePathEscapesContainerRoot(rel)) {
-    return rel;
-  }
-  return params.containerPath;
+  return relativePathEscapesContainerRoot(rel) ? params.containerPath : rel;
 }
 
 function normalizePosixInput(value: string): string {

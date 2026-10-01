@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
+import { registerActiveCronTaskRun } from "../cron/service/active-run-cancellation.js";
 import {
   readAgentDeletionRecoveryHolds,
   reconstructAgentDeletionJournal,
@@ -20,6 +22,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -111,6 +114,69 @@ describe("agent lifecycle registry", () => {
     expect(isAgentDeletionBlocked("main", options)).toBe(false);
     expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
   });
+
+  it.each(["commit", "rollback"] as const)(
+    "revokes only the captured agent's cron runs after deletion journal %s",
+    async (outcome) => {
+      const options = createOptions();
+      const otherOptions = createOptions();
+      const identity = requireOpenClawStateDatabaseIdentity(openOpenClawStateDatabase(options)).key;
+      const otherIdentity = requireOpenClawStateDatabaseIdentity(
+        openOpenClawStateDatabase(otherOptions),
+      ).key;
+      const cleanups: Array<() => void> = [];
+      const admit = (jobId: string, agentId: string, stateIdentityKey: string) => {
+        const marker = markCronJobActive(jobId, { agentId, stateIdentityKey });
+        const controller = new AbortController();
+        const unregister = registerActiveCronTaskRun({
+          runId: `${jobId}-${cleanups.length}`,
+          controller,
+          activeJobMarker: marker,
+        });
+        cleanups.push(() => {
+          unregister?.();
+          clearCronJobActive(jobId, marker);
+        });
+        return controller.signal;
+      };
+      const target = admit("deleted-agent-run", "main", identity);
+      const otherAgent = admit("other-agent-run", "kept", identity);
+      const otherState = admit("other-state-run", "main", otherIdentity);
+      const retired = admit("replaced-run", "main", identity);
+      let successor: AbortSignal | undefined;
+      try {
+        await withAgentDeletion(
+          "main",
+          async (begin) => {
+            const mutate = () =>
+              runOpenClawStateWriteTransaction(() => {
+                begin(createEntry("main"));
+                expect(target.aborted).toBe(false);
+                successor = admit("replaced-run", "main", identity);
+                if (outcome === "rollback") {
+                  throw new Error("rollback journal admission");
+                }
+              }, options);
+            if (outcome === "rollback") {
+              expect(mutate).toThrow("rollback journal admission");
+            } else {
+              mutate();
+            }
+            expect(target.aborted).toBe(outcome === "commit");
+            expect(otherAgent.aborted).toBe(false);
+            expect(otherState.aborted).toBe(false);
+            expect(retired.aborted).toBe(false);
+            expect(successor?.aborted).toBe(false);
+          },
+          options,
+        );
+      } finally {
+        for (const cleanup of cleanups.toReversed()) {
+          cleanup();
+        }
+      }
+    },
+  );
 
   it("does not recreate a missing mandatory deletion journal while reading authority", () => {
     const options = createOptions();

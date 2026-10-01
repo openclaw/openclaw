@@ -70,6 +70,9 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
       waitForSystemServiceUpdateHandoffs,
       cancelManagedServiceUpdateHandoff,
     } = await import("./update-managed-service-handoff.js");
+    const { activeManagedServiceUpdateHandoffs } =
+      await import("./update-managed-service-handoff-current.js");
+    let helperClosed: Promise<void> | undefined;
     let updater: net.Socket | undefined;
     let updaterPid: number | undefined;
     let updaterStart: number | null = null;
@@ -91,6 +94,11 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
       });
       if (started.status !== "started" || !started.pid) {
         throw new Error("expected owned helper");
+      }
+      // Retain the spawn-time close observer before transfer can retire the active owner.
+      helperClosed = activeManagedServiceUpdateHandoffs.get(started.installRoot)?.closed;
+      if (!helperClosed) {
+        throw new Error("expected owned helper close observer");
       }
       helperStart = getFileLockProcessStartTime(started.pid);
       await expect(
@@ -154,8 +162,8 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
         getFileLockProcessStartTime(started.pid) === helperStart
       ) {
         process.kill(started.pid, "SIGKILL");
-        await waitForDead(started.pid, 5_000);
       }
+      await helperClosed;
       if (started?.status === "started") {
         await cancelManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...started });
         await fs.rm(path.dirname(started.logPath), { recursive: true, force: true });

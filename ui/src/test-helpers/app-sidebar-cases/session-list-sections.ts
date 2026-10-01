@@ -6,6 +6,7 @@ import {
   createSessions,
   createSessionsHarness,
   mountSidebar,
+  TWO_AGENTS,
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
@@ -197,7 +198,12 @@ describe("AppSidebar session section visibility", () => {
 
   it("renders no chat rows when only the main session exists", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     await sidebar.updateComplete;
 

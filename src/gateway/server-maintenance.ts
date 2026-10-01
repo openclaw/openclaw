@@ -26,7 +26,7 @@ import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkInspectors,
 } from "../infra/gateway-active-work.js";
-import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { generateSecureInt } from "../infra/secure-random.js";
@@ -129,22 +129,19 @@ export function startGatewayMaintenanceTimers(params: {
   skillUsageCleanup: () => Promise<void>;
 } {
   const restartDrainSignal = getGatewayRestartDrainSignal();
-  const { scheduler } = params;
-  const periodicJobs: GatewayScheduledJob[] = [];
+  const scheduler = params.scheduler.scope();
   const schedulePeriodic = (
     id: string,
     everyMs: number,
     run: () => void | Promise<unknown>,
     immediate = false,
   ) => {
-    periodicJobs.push(
-      scheduler.schedule({
-        id: `maintenance:${id}`,
-        atMs: scheduler.now() + (immediate ? 0 : everyMs),
-        everyMs,
-        run,
-      }),
-    );
+    scheduler.schedule({
+      id: `maintenance:${id}`,
+      atMs: scheduler.now() + (immediate ? 0 : everyMs),
+      everyMs,
+      run,
+    });
   };
   let periodicTasksStopPromise: Promise<void> | undefined;
   setBroadcastHealthUpdate((snap: HealthSummary) => {
@@ -181,7 +178,7 @@ export function startGatewayMaintenanceTimers(params: {
     try {
       const restarted = await params.restartRunningChannels(
         mode,
-        () => !invalidated && !periodicTasksStopPromise,
+        () => !invalidated && !scheduler.signal.aborted,
       );
       return restarted
         ? { status: "completed" }
@@ -199,13 +196,12 @@ export function startGatewayMaintenanceTimers(params: {
     },
     refreshPresence: params.refreshPresence,
     resetEventLoopHealth: params.resetEventLoopHealth,
-    isAdmissionClosed: () => Boolean(periodicTasksStopPromise) || isGatewayWorkAdmissionClosed(),
+    isAdmissionClosed: () => scheduler.signal.aborted || isGatewayWorkAdmissionClosed(),
     logger: params.logHealth,
   });
 
-  let telemetryJob: GatewayScheduledJob | undefined;
   const scheduleTelemetry = (delayMs: number) => {
-    telemetryJob = scheduler.schedule({
+    scheduler.schedule({
       id: "maintenance:telemetry",
       delayMs,
       run: async () => {
@@ -214,7 +210,7 @@ export function startGatewayMaintenanceTimers(params: {
         } catch {
           // Telemetry retries on its next jittered maintenance deadline.
         } finally {
-          if (!periodicTasksStopPromise) {
+          if (!scheduler.signal.aborted) {
             scheduleTelemetry(
               TELEMETRY_MAINTENANCE_INTERVAL_MS +
                 generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS),
@@ -287,7 +283,7 @@ export function startGatewayMaintenanceTimers(params: {
 
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
-  let mediaCleanupStopped = false;
+  const mediaScheduler = params.scheduler.scope();
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ??
     (async () => {
@@ -298,19 +294,16 @@ export function startGatewayMaintenanceTimers(params: {
         await pruneOrphanedDeliveryQueueMedia(undefined, context);
       }
     });
-  const mediaJobs: GatewayScheduledJob[] = [];
   const scheduleMedia = (id: string, run: () => Promise<unknown>) => {
-    mediaJobs.push(
-      scheduler.schedule({
-        id: `maintenance:${id}`,
-        atMs: scheduler.now(),
-        everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
-        run,
-      }),
-    );
+    mediaScheduler.schedule({
+      id: `maintenance:${id}`,
+      atMs: mediaScheduler.now(),
+      everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
+      run,
+    });
   };
   void waitForMediaCleanupDrainsToSettle().then(() => {
-    if (!mediaCleanupStopped) {
+    if (!mediaScheduler.signal.aborted) {
       scheduleMedia("delivery-queue-media", () =>
         runDeliveryQueueMediaGc().catch((error: unknown) => {
           params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
@@ -521,13 +514,13 @@ export function startGatewayMaintenanceTimers(params: {
     });
   let mediaCleanupStarted = false;
   const startMediaCleanup = () => {
-    if (mediaCleanupStopped || mediaCleanupStarted) {
+    if (mediaScheduler.signal.aborted || mediaCleanupStarted) {
       return;
     }
     mediaCleanupStarted = true;
     // A stuck prior generation defers only media cleanup, never Gateway readiness.
     void waitForMediaCleanupDrainsToSettle().then(() => {
-      if (mediaCleanupStopped) {
+      if (mediaScheduler.signal.aborted) {
         return;
       }
       scheduleMedia("playback-cache", () =>
@@ -555,12 +548,7 @@ export function startGatewayMaintenanceTimers(params: {
   let stopMediaCleanupPromise: Promise<MediaCleanupStopResult> | undefined;
   const stopMediaCleanup = () => {
     stopMediaCleanupPromise ??= (async () => {
-      mediaCleanupStopped = true;
-      if (mediaJobs.length > 0) {
-        registerMediaCleanupDrain(
-          Promise.allSettled(mediaJobs.map((job) => job.stop())).then(() => undefined),
-        );
-      }
+      registerMediaCleanupDrain(mediaScheduler.stop());
       return await waitForMediaCleanupDrains({
         timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS,
         onTimeout: () => {
@@ -583,8 +571,7 @@ export function startGatewayMaintenanceTimers(params: {
     if (!periodicTasksStopPromise) {
       restartDrainSignal.removeEventListener("abort", onRestartDrain);
       periodicTasksStopPromise = Promise.allSettled([
-        ...periodicJobs.map((job) => job.stop()),
-        telemetryJob?.stop(),
+        scheduler.stop(),
         sessionColdStorageMaintenance.stop(),
         stopMediaCleanup(),
       ]).then((results) => {

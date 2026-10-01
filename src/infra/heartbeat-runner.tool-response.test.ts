@@ -9,11 +9,8 @@ import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/repl
 import { normalizeReplyPayloadDirectives } from "../auto-reply/reply/reply-delivery.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  deleteCronJobScratch,
-  readCronJobScratchState,
-  readHeartbeatMonitorScratch,
-} from "../cron/scratch-store.js";
+import { readCronScratchSnapshot } from "../cron/scratch-read.js";
+import { deleteCronJobScratch, readCronJobScratchState } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
@@ -225,7 +222,10 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   it("does not recreate scratch when its monitor is deleted while the heartbeat runs", async () => {
     await withHeartbeat(async ({ replySpy, run }) => {
       const cronStorePath = resolveCronJobsStorePath();
-      const monitor = readHeartbeatMonitorScratch(cronStorePath, "main");
+      const monitor = await readCronScratchSnapshot(cronStorePath, {
+        kind: "heartbeat",
+        agentId: "main",
+      });
       expect(monitor).toBeDefined();
       if (!monitor) {
         throw new Error("Expected seeded heartbeat monitor");

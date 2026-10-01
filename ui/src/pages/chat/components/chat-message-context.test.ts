@@ -10,7 +10,8 @@ import { renderMessageWorkContext } from "./chat-message-context.ts";
 const container = document.createElement("div");
 afterEach(() => render(html``, container));
 const snapshot = {
-  page: "chat",
+  page: "review:board",
+  detail: { filter: "stuck" },
   title: "Parser work",
   file: "src/parser.ts",
   selection: "<img src=x onerror=alert(1)>",

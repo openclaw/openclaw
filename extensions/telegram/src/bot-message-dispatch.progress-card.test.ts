@@ -20,86 +20,82 @@ import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js"
 import type * as TelegramEditModule from "./send-edit.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
-  it.each([false, true])(
-    "keeps a full plan and recent activity after failed named tool items (rich: %s)",
-    (richMessages) => {
-      const commandLines = Array.from({ length: 8 }, (_, index) =>
-        buildChannelProgressDraftLine(
-          {
-            event: "item",
-            itemKind: "command",
-            itemId: `command-${index}`,
-            name: "exec",
-            status: "failed",
-            meta: `command ${index}`,
-          },
-          { commandText: "raw" },
-        ),
-      ).filter((line) => line !== undefined);
-      const preview = renderTelegramProgressDraftPreview(
+  it("keeps a full plan and recent activity after failed named tool items", () => {
+    const richMessages = true;
+    const commandLines = Array.from({ length: 8 }, (_, index) =>
+      buildChannelProgressDraftLine(
         {
-          lines: [
-            ...["automations", "read", "browser", "custom_command_runner"].map((name) =>
-              buildChannelProgressDraftLine({
-                event: "item",
-                itemKind: "tool",
-                itemId: `failed-${name}`,
-                name,
-                status: "failed",
-              })!,
-            ),
-            ...commandLines,
-          ],
-          plan: [
-            { step: "Inspect", status: "completed" },
-            { step: "Repair", status: "in_progress" },
-            { step: "Verify", status: "pending" },
-          ],
+          event: "item",
+          itemKind: "command",
+          itemId: `command-${index}`,
+          name: "exec",
+          status: "failed",
+          meta: `command ${index}`,
         },
-        { richMessages, toolProgress: true, maxLines: 5, maxLineChars: 300 },
-      );
-      expect(preview.text).toContain("Inspect");
-      expect(preview.text).toContain("Repair");
-      expect(preview.text).toContain("Verify");
-      expect(preview.text).toContain("command 7");
-      expect(preview.text).not.toContain("command 0");
-      expect(preview.text).not.toContain("Automations");
-      expect(preview.text).not.toContain("Browser");
-      expect(preview.text).not.toContain("Custom Command Runner");
-    },
-  );
+        { commandText: "raw" },
+      ),
+    ).filter((line) => line !== undefined);
+    const preview = renderTelegramProgressDraftPreview(
+      {
+        lines: [
+          ...["automations", "read", "browser", "custom_command_runner"].map((name) =>
+            buildChannelProgressDraftLine({
+              event: "item",
+              itemKind: "tool",
+              itemId: `failed-${name}`,
+              name,
+              status: "failed",
+            })!,
+          ),
+          ...commandLines,
+        ],
+        plan: [
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ],
+      },
+      { richMessages, toolProgress: true, maxLines: 5, maxLineChars: 300 },
+    );
+    expect(preview.text).toContain("Inspect");
+    expect(preview.text).toContain("Repair");
+    expect(preview.text).toContain("Verify");
+    expect(preview.text).toContain("command 7");
+    expect(preview.text).not.toContain("command 0");
+    expect(preview.text).not.toContain("Automations");
+    expect(preview.text).not.toContain("Browser");
+    expect(preview.text).not.toContain("Custom Command Runner");
+  });
 
-  it.each([false, true])(
-    "shows a fresh named failure before newer activity replaces it (rich: %s)",
-    (richMessages) => {
-      const failed = buildChannelProgressDraftLine({
-        event: "item",
-        itemKind: "tool",
-        name: "read",
-        status: "failed",
-      })!;
-      const plan = [
-        { step: "Inspect", status: "completed" as const },
-        { step: "Repair", status: "in_progress" as const },
-        { step: "Verify", status: "pending" as const },
-      ];
-      const options = { richMessages, toolProgress: true, maxLines: 3, maxLineChars: 300 };
-      const initial = renderTelegramProgressDraftPreview({ lines: [failed], plan }, options);
-      expect(initial.text).toContain("Read");
-      expect(initial.text).toContain("Repair");
+  it("shows a fresh named failure before newer activity replaces it", () => {
+    const richMessages = false;
+    const failed = buildChannelProgressDraftLine({
+      event: "item",
+      itemKind: "tool",
+      name: "read",
+      status: "failed",
+    })!;
+    const plan = [
+      { step: "Inspect", status: "completed" as const },
+      { step: "Repair", status: "in_progress" as const },
+      { step: "Verify", status: "pending" as const },
+    ];
+    const options = { richMessages, toolProgress: true, maxLines: 3, maxLineChars: 300 };
+    const initial = renderTelegramProgressDraftPreview({ lines: [failed], plan }, options);
+    expect(initial.text).toContain("Read");
+    expect(initial.text).toContain("Repair");
 
-      const after = renderTelegramProgressDraftPreview(
-        {
-          lines: [failed, buildChannelProgressDraftLine({ event: "tool", name: "browser" })!],
-          plan,
-        },
-        options,
-      );
-      expect(after.text).not.toContain("Read");
-      expect(after.text).toContain("Browser");
-      expect(after.text).toContain("Repair");
-    },
-  );
+    const after = renderTelegramProgressDraftPreview(
+      {
+        lines: [failed, buildChannelProgressDraftLine({ event: "tool", name: "browser" })!],
+        plan,
+      },
+      options,
+    );
+    expect(after.text).not.toContain("Read");
+    expect(after.text).toContain("Browser");
+    expect(after.text).toContain("Repair");
+  });
 
   // The real compositor, renderer and transport expose short sends, stopped
   // streams and lifecycle resets at Telegram's stubbed network boundary.

@@ -120,7 +120,7 @@ describe("CronService failure alerts", () => {
     });
   });
 
-  it("groups an incident, alerts on a changed cause, and reports recovery once", async () => {
+  it("groups an incident, alerts on a changed cause, and recovers silently", async () => {
     await withAlerts(
       async ({ cron, sendCronFailureAlert, runIsolatedAgentJob, addJob }) => {
         const job = await addJob("daily report", {
@@ -157,18 +157,18 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
 
+        // Recovery clears the incident and cooldown without messaging the user.
         runIsolatedAgentJob.mockResolvedValue({ status: "ok", delivered: true });
         await cron.run(job.id, "force");
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(3);
-        expectAlertTextContaining(sendCronFailureAlert, 'Automation "daily report" recovered');
-        await cron.run(job.id, "force");
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(3);
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+        expect(cron.getJob(job.id)?.state.failureAlertIncident).toBeUndefined();
+        expect(cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
 
         runIsolatedAgentJob.mockResolvedValue({ status: "error", error: "timeout" });
         await cron.run(job.id, "force");
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(3);
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
         await cron.run(job.id, "force");
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(4);
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(3);
       },
       {
         failureAlert: { enabled: true, after: 2, cooldownMs: 60_000 },
@@ -206,10 +206,11 @@ describe("CronService failure alerts", () => {
         runIsolatedAgentJob.mockResolvedValueOnce({ status: "ok", delivered: true });
         await cron.run(job.id, "force");
         await cron.run(job.id, "force");
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(3);
+        // Recovery is silent, so the second failure starts the next alert cycle.
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
 
         const first = sendCronFailureAlert.mock.calls[0]![0];
-        const current = sendCronFailureAlert.mock.calls[2]![0];
+        const current = sendCronFailureAlert.mock.calls[1]![0];
         expect(first.runAtMs).toBe(current.runAtMs);
         await first.onDeliverySettled({ delivered: true, status: "delivered" });
         expect(cron.getJob(job.id)?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");

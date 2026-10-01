@@ -1,3 +1,5 @@
+import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { hasCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
 import type { CronJob } from "../cron/types.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
@@ -32,6 +34,7 @@ export type CronExitResult = {
 };
 
 export type CronExitWatcherHandlers = {
+  legacyDefaultAgentId?: string;
   getProcessSupervisor: () => ProcessSupervisor;
   fireOnExit: (
     job: OnExitCronJob,
@@ -64,10 +67,17 @@ function scopeKey(jobId: string): string {
   return `${SCOPE_PREFIX}:${jobId}`;
 }
 
-function isWatchableExitJob(job: CronJob): job is OnExitCronJob {
-  return job.enabled && job.schedule.kind === "on-exit";
+function isWatchableExitJob(job: CronJob, legacyDefaultAgentId?: string): job is OnExitCronJob {
+  return (
+    job.enabled &&
+    (!legacyDefaultAgentId ||
+      tryResolveCronJobEffectiveAgentId(job, undefined, legacyDefaultAgentId) !== undefined) &&
+    hasCanonicalCronDeliveryMode(job.delivery) &&
+    job.schedule.kind === "on-exit"
+  );
 }
 
+/** Disabled cron retires every watched command; enabled cron follows the current jobs. */
 export function createCronExitWatchers(
   initialHandlers: CronExitWatcherHandlers,
   scheduler: GatewayScheduler,
@@ -149,6 +159,9 @@ export function createCronExitWatchers(
   };
 
   const arm = (job: OnExitCronJob, consecutiveFailures = 0): Promise<void> => {
+    if (!isWatchableExitJob(job, handlers.legacyDefaultAgentId)) {
+      return Promise.resolve();
+    }
     const armed = createDeferredCore();
     const command = job.schedule.command;
     const cwd = job.schedule.cwd;
@@ -182,7 +195,7 @@ export function createCronExitWatchers(
       }
       try {
         const updated = await settleOwnerCallback(owner.updateWatcherState(slot.job, patch));
-        if (owns() && updated && isWatchableExitJob(updated)) {
+        if (owns() && updated && isWatchableExitJob(updated, handlers.legacyDefaultAgentId)) {
           slot.job = updated;
         }
       } catch (err) {
@@ -353,7 +366,13 @@ export function createCronExitWatchers(
 
   const reconcile = (jobs: CronJob[]) => {
     const jobsById = new Map(jobs.map((job) => [job.id, job] as const));
-    const want = new Map(jobs.filter(isWatchableExitJob).map((j) => [j.id, j] as const));
+    const want = new Map(
+      jobs
+        .filter((job): job is OnExitCronJob =>
+          isWatchableExitJob(job, handlers.legacyDefaultAgentId),
+        )
+        .map((j) => [j.id, j] as const),
+    );
     // Cancel watchers whose job is gone or no longer watchable.
     for (const [jobId, slot] of Array.from(active.entries())) {
       if (!want.has(jobId)) {

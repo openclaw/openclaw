@@ -469,7 +469,9 @@ describe("worker turn launcher build recovery", () => {
         } else {
           markGatewayRestartDraining();
           expect(await result).toBeInstanceOf(GatewayDrainingError);
-          await expect(execution).rejects.toThrow("gateway is draining for restart");
+          await expect(execution).rejects.toThrow(
+            "Gateway is restarting. Please try again shortly.",
+          );
         }
         expect(harness.claimTurn).not.toHaveBeenCalled();
         expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();

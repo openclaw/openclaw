@@ -2,8 +2,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import {
   openPackageActivationJournal,
@@ -13,11 +18,14 @@ import {
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
+import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
 import { writePackageRoot } from "./package-update-steps.test-support.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as snapshot from "./sqlite-snapshot.js";
+import { withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 
 const fixtures = createPackageActivationLifetimeFixture();
 let root: string;
@@ -48,7 +56,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
         let transaction: PackageUpdateTransaction | undefined;
         const result = await swapStagedPackageInstall({
           ...f.params,
-          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           onTransaction: (issued) => {
             transaction = issued;
           },
@@ -107,7 +115,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           let nextTransaction: PackageUpdateTransaction | undefined;
           const next = await swapStagedPackageInstall({
             ...f.params,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
             onTransaction: (issued) => {
               nextTransaction = issued;
             },
@@ -124,6 +132,152 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           ).toBe("3.0.0");
         }
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+      });
+    }),
+);
+
+it.skipIf(process.platform === "win32")(
+  "admits a second publication after the live sibling refusal is resolved",
+  () =>
+    fixtures.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const refusal = new Error("A live sibling still uses this installation");
+      const onTransaction = vi.fn();
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        await expect(
+          swapStagedPackageInstall({
+            ...f.params,
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+            beforeActivate: async () => {
+              throw refusal;
+            },
+            onTransaction,
+          }),
+        ).rejects.toMatchObject({ cause: refusal });
+      });
+      expect(onTransaction).not.toHaveBeenCalled();
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
+        '"version":"1.0.0"',
+      );
+
+      // The next invocation has a new executor and must pass the real admission
+      // check before preparing another candidate in the same installation.
+      assertNoPendingPackageActivation(f.packageRoot);
+      await writePackageRoot(f.params.stage.packageRoot, "2.0.0");
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      fs.mkdirSync(f.params.stage.layout.binDir, { recursive: true });
+      fs.writeFileSync(path.join(f.params.stage.layout.binDir, "openclaw"), "candidate launcher\n");
+      await withRetainedUpdateRuntime(
+        pathToFileURL(path.join(f.packageRoot, "dist/index.js")).href,
+        async (retain) => {
+          await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+            const fence = await executor.enter(f.packageRoot);
+            await retain({
+              mutationRoots: [f.packageRoot],
+              installTarget: f.params.installTarget,
+              timeoutMs: 30_000,
+              assertCurrent: fence.assertCurrent,
+            });
+            const journal = resolvePackageActivationJournalPath(
+              resolvePackageActivationAnchor(f.packageRoot),
+            );
+            expect(fs.statSync(journal).nlink).toBe(1);
+            assertNoPendingPackageActivation(f.packageRoot);
+            const result = await swapStagedPackageInstall({
+              ...f.params,
+              activation: {
+                fence,
+                runtime: packageActivationRuntimeForTest(),
+                onPrepared: () => {},
+              },
+              beforeActivate: async () => {},
+            });
+            expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+          });
+        },
+      );
+      assertNoPendingPackageActivation(f.packageRoot);
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+      expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
+        '"version":"2.0.0"',
+      );
+    }),
+);
+
+it.skipIf(process.platform === "win32")(
+  "retains prepared recovery when the refused callback has unjoined work",
+  () =>
+    fixtures.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const uncertainty = new CommandProcessCleanupError();
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        await expect(
+          swapStagedPackageInstall({
+            ...f.params,
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+            beforeActivate: async () => {
+              throw uncertainty;
+            },
+          }),
+        ).rejects.toSatisfy(hasCommandProcessCleanupError);
+        const anchor = resolvePackageActivationAnchor(f.packageRoot);
+        expect(openPackageActivationJournal(anchor).read().phase).toBe("prepared");
+        expect(fs.readFileSync(path.join(anchor, "candidate", "package.json"), "utf8")).toContain(
+          '"version":"2.0.0"',
+        );
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow(
+          "Package publication is incomplete",
+        );
+      });
+    }),
+);
+
+it.skipIf(process.platform === "win32")(
+  "preserves a foreign replacement and both errors when refusal retirement loses its preimage",
+  () =>
+    fixtures.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const refusal = new Error("A live sibling still uses this installation");
+      const previous = path.join(root, "previous-installation");
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        await expect(
+          swapStagedPackageInstall({
+            ...f.params,
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+            beforeActivate: async () => {
+              fs.renameSync(f.packageRoot, previous);
+              await writePackageRoot(f.packageRoot, "3.0.0");
+              throw refusal;
+            },
+          }),
+        ).rejects.toMatchObject({
+          cause: {
+            cause: refusal,
+            errors: [
+              refusal,
+              expect.objectContaining({
+                message: "The installed package is not either recorded generation.",
+              }),
+            ],
+          },
+        });
+        expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
+          '"version":"3.0.0"',
+        );
+        expect(fs.readFileSync(path.join(previous, "package.json"), "utf8")).toContain(
+          '"version":"1.0.0"',
+        );
+        expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+        expect(
+          openPackageActivationJournal(resolvePackageActivationAnchor(f.packageRoot)).read().phase,
+        ).toBe("prepared");
       });
     }),
 );
@@ -149,7 +303,7 @@ it.skipIf(process.platform === "win32")(
         let transaction: PackageUpdateTransaction | undefined;
         const result = await swapStagedPackageInstall({
           ...f.params,
-          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           onTransaction: (issued) => {
             transaction = issued;
           },

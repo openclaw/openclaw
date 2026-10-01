@@ -6,7 +6,6 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import {
@@ -162,10 +161,7 @@ function isLoopbackOriginLike(value: string): boolean {
 }
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return readStringValue(value);
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function normalizeIpCandidate(raw: string): string {
@@ -206,52 +202,38 @@ function hasNonLoopbackForwardedClient(req: IncomingMessage): boolean {
   return false;
 }
 
-function enforceLoopbackMutationGuards(
-  ctx: NostrProfileHttpContext,
-  req: IncomingMessage,
-  res: ServerResponse,
-): boolean {
+function resolveLoopbackMutationRejection(req: IncomingMessage): string | undefined {
   // Mutation endpoints are local-control-plane only.
   const remoteAddress = req.socket.remoteAddress;
   if (!isLoopbackRemoteAddress(remoteAddress)) {
-    ctx.log?.warn?.(`Rejected mutation from non-loopback remoteAddress=${String(remoteAddress)}`);
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return `Rejected mutation from non-loopback remoteAddress=${String(remoteAddress)}`;
   }
 
   // If a proxy exposes client-origin headers showing a non-loopback client,
   // treat this as a remote request and deny mutation.
   if (hasNonLoopbackForwardedClient(req)) {
-    ctx.log?.warn?.("Rejected mutation with non-loopback forwarded client headers");
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return "Rejected mutation with non-loopback forwarded client headers";
   }
 
   const secFetchSite = normalizeOptionalLowercaseString(
     firstHeaderValue(req.headers["sec-fetch-site"]),
   );
   if (secFetchSite === "cross-site") {
-    ctx.log?.warn?.("Rejected mutation with cross-site sec-fetch-site header");
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return "Rejected mutation with cross-site sec-fetch-site header";
   }
 
   // CSRF guard: browsers send Origin/Referer on cross-site requests.
   const origin = firstHeaderValue(req.headers.origin);
   if (typeof origin === "string" && !isLoopbackOriginLike(origin)) {
-    ctx.log?.warn?.(`Rejected mutation with non-loopback origin=${origin}`);
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return `Rejected mutation with non-loopback origin=${origin}`;
   }
 
   const referer = firstHeaderValue(req.headers.referer ?? req.headers.referrer);
   if (typeof referer === "string" && !isLoopbackOriginLike(referer)) {
-    ctx.log?.warn?.(`Rejected mutation with non-loopback referer=${referer}`);
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return `Rejected mutation with non-loopback referer=${referer}`;
   }
 
-  return true;
+  return undefined;
 }
 
 function enforceGatewayMutationScope(
@@ -297,10 +279,13 @@ export function createNostrProfileHttpHandler(
       }
 
       if ((req.method === "PUT" && !isImport) || (req.method === "POST" && isImport)) {
-        if (
-          !enforceGatewayMutationScope(ctx, accountId, res) ||
-          !enforceLoopbackMutationGuards(ctx, req, res)
-        ) {
+        if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+          return true;
+        }
+        const rejection = resolveLoopbackMutationRejection(req);
+        if (rejection) {
+          ctx.log?.warn?.(rejection);
+          sendJson(res, 403, { ok: false, error: "Forbidden" });
           return true;
         }
         return await (isImport ? handleImportProfile : handleUpdateProfile)(

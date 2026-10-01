@@ -236,6 +236,9 @@ export function createSlackMessageHandler(params: {
                   ...last.message,
                   text: combinedText,
                 };
+                const sourceMessageIds = surviving.flatMap((entry) =>
+                  entry.message.ts ? [entry.message.ts] : [],
+                );
                 const {
                   dispatchCompletion: _completion,
                   awaitDispatch: _awaitDispatch,
@@ -264,9 +267,7 @@ export function createSlackMessageHandler(params: {
                         ? "verified"
                         : "asserted",
                       wasMentioned: combinedMentioned || last.opts.wasMentioned,
-                      sourceMessageIds: surviving.flatMap((entry) =>
-                        entry.message.ts ? [entry.message.ts] : [],
-                      ),
+                      sourceMessageIds,
                       abortSignal: admissionLifecycle.abortSignal,
                       isRuntimePolicyCurrent: runtimeContext.isRuntimePolicyCurrent,
                       onVisibleDrop: () => {
@@ -332,15 +333,10 @@ export function createSlackMessageHandler(params: {
                     },
                   };
                   onPrepared?.(prepared);
-                  if (surviving.length > 1) {
-                    const ids = surviving
-                      .map((entry) => entry.message.ts)
-                      .filter(Boolean) as string[];
-                    if (ids.length > 0) {
-                      prepared.ctxPayload.MessageSids = ids;
-                      prepared.ctxPayload.MessageSidFirst = ids[0];
-                      prepared.ctxPayload.MessageSidLast = ids[ids.length - 1];
-                    }
+                  if (surviving.length > 1 && sourceMessageIds.length > 0) {
+                    prepared.ctxPayload.MessageSids = sourceMessageIds;
+                    prepared.ctxPayload.MessageSidFirst = sourceMessageIds[0];
+                    prepared.ctxPayload.MessageSidLast = sourceMessageIds.at(-1);
                   }
                   await dispatchPreparedSlackMessage(prepared);
                   if (!turnAdoptionLifecycle && !settlementHandedOff) {

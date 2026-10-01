@@ -1,6 +1,5 @@
-// Device Pair notify state helpers keep runtime and doctor migration in sync.
 import { createHash } from "node:crypto";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE = "device-pair-notify.json";
 export const DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE = "notify-subscribers";
@@ -26,16 +25,11 @@ export type NotifySeenRequest = {
 
 export type LegacyNotifyStateFile = {
   subscribers: NotifySubscription[];
-  notifiedRequestIds: Record<string, number>;
 };
 
 export function normalizeLegacyNotifyState(raw: unknown): LegacyNotifyStateFile {
-  const root = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const root = asRecord(raw);
   const subscribersRaw = Array.isArray(root.subscribers) ? root.subscribers : [];
-  const notifiedRaw =
-    typeof root.notifiedRequestIds === "object" && root.notifiedRequestIds !== null
-      ? (root.notifiedRequestIds as Record<string, unknown>)
-      : {};
 
   const subscribers: NotifySubscription[] = [];
   for (const item of subscribersRaw) {
@@ -47,7 +41,7 @@ export function normalizeLegacyNotifyState(raw: unknown): LegacyNotifyStateFile 
     if (!to) {
       continue;
     }
-    const accountId = normalizeOptionalString(record.accountId) ?? undefined;
+    const accountId = normalizeOptionalString(record.accountId);
     const messageThreadId =
       typeof record.messageThreadId === "string"
         ? normalizeOptionalString(record.messageThreadId) || undefined
@@ -68,19 +62,7 @@ export function normalizeLegacyNotifyState(raw: unknown): LegacyNotifyStateFile 
     });
   }
 
-  const notifiedRequestIds: Record<string, number> = {};
-  for (const [requestId, ts] of Object.entries(notifiedRaw)) {
-    const normalizedRequestId = normalizeOptionalString(requestId);
-    if (!normalizedRequestId) {
-      continue;
-    }
-    if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) {
-      continue;
-    }
-    notifiedRequestIds[normalizedRequestId] = Math.trunc(ts);
-  }
-
-  return { subscribers, notifiedRequestIds };
+  return { subscribers };
 }
 
 function normalizeNotifyThreadKey(messageThreadId?: string | number): string {

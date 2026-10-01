@@ -90,6 +90,9 @@ export function useSubagentControlFixture() {
     // Control fixtures inject their transaction faults through one persistence owner.
     persistAsync.mockReset().mockImplementation(async (runs, ids, options) => {
       const snapshot = structuredClone(runs);
+      for (const runId of options.retireRunIds ?? []) {
+        snapshot.delete(runId);
+      }
       await Promise.resolve();
       let committed = false;
       try {

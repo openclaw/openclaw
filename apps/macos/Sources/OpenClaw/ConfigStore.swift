@@ -45,13 +45,13 @@ enum ConfigStore {
             self.gateway = gateway
             self.revision = gateway.selectedEndpointRevision
             self.mode = AppStateStore.shared.connectionMode
-            self.localURL = OpenClawConfigFile.url()
+            self.localURL = OpenClawPaths.configURL
             self.allowsLocalFallback = self.mode != .remote
         }
 
         var selectionIsCurrent: Bool {
             self.gateway.selectedEndpointRevision == self.revision &&
-                AppStateStore.shared.connectionMode == self.mode && OpenClawConfigFile.url() == self.localURL
+                AppStateStore.shared.connectionMode == self.mode && OpenClawPaths.configURL == self.localURL
         }
 
         var isCurrent: Bool {

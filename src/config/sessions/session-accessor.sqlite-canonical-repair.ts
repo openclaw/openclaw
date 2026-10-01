@@ -33,6 +33,10 @@ import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { ensureTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import {
+  attachSessionEntrySnapshots,
+  sessionEntrySnapshotColumns,
+} from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
@@ -63,7 +67,11 @@ export function readExactSessionEntryRowForCanonicalRepair(
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
-    db.selectFrom("session_nodes").selectAll().where("session_key", "=", sessionKey),
+    db
+      .selectFrom("session_nodes")
+      .selectAll()
+      .select(sessionEntrySnapshotColumns)
+      .where("session_key", "=", sessionKey),
   );
   if (!row) {
     return undefined;
@@ -87,12 +95,14 @@ export function readExactSessionEntryRowForCanonicalRepair(
       `invalid persisted session row requires repair for ${sessionKey}`,
     );
   }
-  return {
-    entry:
-      parsedEntry ??
-      ({ sessionId: row.current_session_id, updatedAt: row.updated_at } satisfies SessionEntry),
-    row,
+  const entry: SessionEntry = parsedEntry ?? {
+    sessionId: row.current_session_id,
+    updatedAt: row.updated_at,
   };
+  if (!parsedEntry) {
+    attachSessionEntrySnapshots(entry, row);
+  }
+  return { entry, row };
 }
 
 /** Doctor-only cross-store copy; the source node remains until lifecycle archival succeeds. */

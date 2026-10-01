@@ -6,6 +6,7 @@ import {
   assertManagedHandoffTestConsumer,
   createManagedHandoffTestBinding,
 } from "../helpers/managed-handoff-isolation.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 
 const shellQuote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
 
@@ -39,7 +40,7 @@ for arg in "$@"; do
       break ;;
   esac
 done
-exec ${shellQuote(realpathSync(process.execPath))} ${nodeArgs.map(shellQuote).join(" ")} "$@"
+exec ${shellQuote(realpathSync(requireNodeTool("node")))} ${nodeArgs.map(shellQuote).join(" ")} "$@"
 `,
   );
   chmodSync(join(bin, "node"), 0o755);

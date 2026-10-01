@@ -13,7 +13,7 @@ type RawCopyFinding = {
   text: string;
 };
 
-type RawCopyBaselineEntry = {
+export type RawCopyBaselineEntry = {
   count: number;
   kind: RawCopyFinding["kind"];
   name: string;
@@ -21,7 +21,7 @@ type RawCopyBaselineEntry = {
   text: string;
 };
 
-type RawCopyBaseline = {
+export type RawCopyBaseline = {
   entries: RawCopyBaselineEntry[];
   version: number;
 };

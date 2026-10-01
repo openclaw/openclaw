@@ -24,7 +24,6 @@ import {
 import type { CuaExecutionState } from "./execution-state.js";
 import {
   adoptGeneration,
-  resolveAppRef,
   resolveObservation,
   resolveWindowRef,
   verifyGeneration,
@@ -312,7 +311,7 @@ export async function handleWindowAct(
     case "launch_app": {
       verifyGeneration(state, driver.generation);
       const appName = input.app!;
-      const app = resolveAppRef(state, appName);
+      const app = state.apps?.get(appName);
       if (!app) {
         throw new Error("COMPUTER_STALE_OBSERVATION: refresh list_apps and retry");
       }
@@ -339,7 +338,7 @@ export async function handleWindowAct(
     case "kill_app": {
       verifyGeneration(state, driver.generation);
       const appName = input.app!;
-      const app = resolveAppRef(state, appName);
+      const app = state.apps?.get(appName);
       if (!app?.pid) {
         throw new Error(
           "COMPUTER_INVALID_REQUEST: kill_app requires a running app reference from list_apps",

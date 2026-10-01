@@ -36,12 +36,12 @@ export function registerQueuedCancelledLaunchCases(
     const refusal = new SubagentRegistryWriteError("not-committed", new Error("write refused"));
     try {
       const settlement = f.scope.settleFailedLaunch("accepted launch was cancelled");
-      const rejected = expect(settlement).rejects.toBe(refusal);
+      void settlement.catch(() => {});
       await vi.waitFor(() => expect(f.writes).toHaveLength(3));
       expect(entry).toEqual(killed);
       f.writes[2]!.assertCurrent();
       f.writes[2]!.gate.reject(refusal);
-      await rejected;
+      await expect(settlement).rejects.toBe(refusal);
       expect(f.scope.canCleanupSession()).toBe(false);
 
       const retry = f.scope.settleFailedLaunch("later failure text");
@@ -76,7 +76,7 @@ export function registerQueuedCancelledLaunchCases(
       const failure = new SubagentRegistryWriteError(outcome, new Error("publication failed"));
       try {
         const settlement = f.scope.settleFailedLaunch("accepted launch was cancelled");
-        const rejected = expect(settlement).rejects.toBe(failure);
+        void settlement.catch(() => {});
         await vi.waitFor(() => expect(f.writes).toHaveLength(3));
         if (outcome === "committed") {
           f.writes[2]!.afterPublicationFailure = { error: failure };
@@ -84,7 +84,7 @@ export function registerQueuedCancelledLaunchCases(
         } else {
           f.writes[2]!.gate.reject(failure);
         }
-        await rejected;
+        await expect(settlement).rejects.toBe(failure);
         await expect(f.scope.settleFailedLaunch("retry callback")).rejects.toBe(failure);
         expect(f.writes).toHaveLength(3);
         expect(entry.execution).toEqual(killed.execution);
@@ -104,7 +104,7 @@ export function registerQueuedCancelledLaunchCases(
       const refusal = new SubagentRegistryWriteError("not-committed", new Error("owner changed"));
       try {
         const settlement = f.scope.settleFailedLaunch("accepted launch was cancelled");
-        const rejected = expect(settlement).rejects.toBe(refusal);
+        void settlement.catch(() => {});
         await vi.waitFor(() => expect(f.writes).toHaveLength(3));
         const successor = {
           ...structuredClone(entry),
@@ -115,7 +115,7 @@ export function registerQueuedCancelledLaunchCases(
         f.runs.set(successor.runId, successor);
         expect(f.writes[2]!.assertCurrent).toThrow("lost its original owner");
         f.writes[2]!.gate.reject(refusal);
-        await rejected;
+        await expect(settlement).rejects.toBe(refusal);
         await f.scope.settleFailedLaunch("late callback");
         expect(f.writes).toHaveLength(3);
         expect(entry).toEqual(killed);

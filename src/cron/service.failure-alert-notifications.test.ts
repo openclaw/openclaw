@@ -7,7 +7,7 @@ import {
   resolveHeartbeatRunPrompt,
 } from "../infra/heartbeat-runner-prompt.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
-import { requestHeartbeat as requestHeartbeatWake } from "../infra/heartbeat-wake.js";
+import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
 import {
   drainSystemEvents,
   enqueueSystemEvent,
@@ -76,6 +76,7 @@ describe("CronService failure notification delivery", () => {
       threadId: 77,
     };
     const observed: Array<{ prompt: string; deliveryContext?: DeliveryContext }> = [];
+    const pendingWakes: Array<ReturnType<typeof requestHeartbeatAndWait>> = [];
     const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
       const pendingEventEntries = peekSystemEventEntries(options.sessionKey ?? "");
       const preflight = await resolveHeartbeatPreflight({
@@ -91,7 +92,6 @@ describe("CronService failure notification delivery", () => {
           cfg,
           preflight,
           canRelayToUser: true,
-          startedAt: Date.now(),
           scheduledTasks: [],
           useHeartbeatResponseTool: false,
         }).prompt,
@@ -126,13 +126,17 @@ describe("CronService failure notification delivery", () => {
           contextKey: options?.contextKey,
           deliveryContext: options?.deliveryContext,
         }),
-      requestHeartbeat: (wake) =>
-        requestHeartbeatWake({
-          ...wake,
-          sessionKey:
-            wake.sessionKey ?? resolveAgentMainSessionKey({ cfg, agentId: wake.agentId ?? "main" }),
-          coalesceMs: 0,
-        }),
+      requestHeartbeat: (wake) => {
+        pendingWakes.push(
+          requestHeartbeatAndWait({
+            ...wake,
+            sessionKey:
+              wake.sessionKey ??
+              resolveAgentMainSessionKey({ cfg, agentId: wake.agentId ?? "main" }),
+            coalesceMs: 0,
+          }),
+        );
+      },
       sendCronFailureAlert,
       runIsolatedAgentJob: async () => ({
         status: "error",
@@ -157,6 +161,7 @@ describe("CronService failure notification delivery", () => {
         "failure alert channel unavailable",
       );
       await vi.advanceTimersByTimeAsync(1);
+      await Promise.all(pendingWakes);
 
       expect(peekSystemEventEntries(testCase.sessionKey)).toHaveLength(1);
       expect(runOnce).toHaveBeenCalledTimes(testCase.wakesNow ? 1 : 0);
@@ -183,8 +188,14 @@ describe("CronService failure notification delivery", () => {
       }
     } finally {
       cron.stop();
-      runner.stop();
-      drainSystemEvents(testCase.sessionKey);
+      try {
+        // Stopping the runner retains unfinished notifications for its successor.
+        await vi.advanceTimersByTimeAsync(1);
+        await Promise.all(pendingWakes);
+      } finally {
+        runner.stop();
+        drainSystemEvents(testCase.sessionKey);
+      }
     }
   });
 });

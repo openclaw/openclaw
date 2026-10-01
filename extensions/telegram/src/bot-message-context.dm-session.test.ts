@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { Bot } from "grammy";
 import type { Update } from "grammy/types";
@@ -28,7 +29,6 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiCalls,
@@ -45,13 +45,14 @@ import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.j
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let cfg: OpenClawConfig;
 let storePath: string;
 let updateId = 6000;
 
 beforeEach(() => {
-  storePath = path.join(tempDirs.make("telegram-context-session-"), "sessions.json");
+  const storeDir = harness.state.path("telegram-context-session");
+  mkdirSync(storeDir);
+  storePath = path.join(storeDir, "sessions.json");
   cfg = {
     session: { store: storePath },
     commands: { native: false },

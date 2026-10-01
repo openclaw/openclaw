@@ -33,7 +33,6 @@ import type {
 import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import {
-  isConversationHookName,
   isPluginHookAgentTrigger,
   isPluginHookName,
   isPluginHookReplyDispatchKind,
@@ -50,6 +49,22 @@ import type {
   PluginHookRegistrationOptions,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
+
+const conversationHookNames = new Set<PluginHookName>([
+  "before_model_resolve",
+  "agent_turn_prepare",
+  "before_prompt_build",
+  "before_agent_reply",
+  "llm_input",
+  "llm_output",
+  "before_agent_finalize",
+  "agent_end",
+  "before_agent_run",
+]);
+
+function isConversationHookName(hookName: PluginHookName): boolean {
+  return conversationHookNames.has(hookName);
+}
 
 function normalizeHookEligibility<T>(value: unknown, isEligible: (item: unknown) => item is T) {
   if (!Array.isArray(value)) {
@@ -440,10 +455,8 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (
-      isConversationHookName(hookName) &&
-      !resolveConversationAccessAllowed(record.origin, policy)
-    ) {
+    const conversationAccessAllowed = resolveConversationAccessAllowed(record.origin, policy);
+    if (isConversationHookName(hookName) && !conversationAccessAllowed) {
       const configPath = `plugins.entries.${record.id}.hooks.allowConversationAccess`;
       // An operator who wrote `false` chose this outcome, whatever the plugin's
       // origin, so it stays a warning. This check must come first: a non-bundled
@@ -504,6 +517,9 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
       ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
         ? { requiresToolAuthority: true }
+        : {}),
+      ...(hookName === "session_end" && conversationAccessAllowed
+        ? { conversationAccessAllowed: true }
         : {}),
       source: record.source,
     } as TypedPluginHookRegistration);

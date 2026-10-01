@@ -2,6 +2,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
 import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { isInterSessionGroup } from "../chat-turn-boundary.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 
 type ChatPositionMarker = {
@@ -23,6 +24,7 @@ export function projectChatPositions(
   items: readonly RenderItem[],
   expandedWork: ReadonlyMap<string, boolean>,
   messageRowKeysById: Map<string, string>,
+  searchActive = false,
 ): ChatPositionIndex {
   const markers = new Map<string, ChatPositionMarker>();
   const markerIdsByMessageId = new Map<string, string>();
@@ -43,6 +45,13 @@ export function projectChatPositions(
     messageRowKeysById.set(messageId, rowKey);
   };
   const group = (item: MessageGroup, rowKey: string) => {
+    if (
+      isInterSessionGroup(item) &&
+      !searchActive &&
+      !expandedWork.get("inter-session:" + item.key)
+    ) {
+      return;
+    }
     if ((item.role !== "user" && item.role !== "assistant") || item.visibleContent === "none") {
       return;
     }

@@ -30,6 +30,7 @@ const sessionId = "cron-cli-diagnostic-session";
 
 function makeParams(): RunCronAgentTurnParams {
   return {
+    deliveryAttemptFence: null,
     cfg: {},
     deps: {},
     job: {

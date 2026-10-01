@@ -1,4 +1,3 @@
-// Starts and monitors SSH tunnels for remote gateway access.
 import { spawn } from "node:child_process";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createAbortError, isAbortError, racePromiseWithAbortSignal } from "./abort-signal.js";

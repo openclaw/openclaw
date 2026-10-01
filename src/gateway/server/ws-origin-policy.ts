@@ -1,13 +1,12 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
-import { resolveControlUiAllowedOrigins } from "../../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
   isWebchatClient,
 } from "../../utils/message-channel.js";
-import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
-import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
+import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
+import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
 import { invalidateGatewayPolicyClient } from "./ws-policy-close.js";
 import type { GatewayWsBrowserOrigin, GatewayWsClient } from "./ws-types.js";
 
@@ -36,15 +35,6 @@ export function resolveGatewayWsBrowserOrigin(
   };
 }
 
-export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
-  return checkBrowserOrigin({
-    ...origin,
-    allowedOrigins: resolveControlUiAllowedOrigins(cfg),
-    allowHostHeaderOriginFallback:
-      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
-  });
-}
-
 /** Revocation follows committed publication; unrelated authenticated connections remain live. */
 export function disconnectDisallowedGatewayPolicyClients(
   clients: Iterable<
@@ -55,17 +45,18 @@ export function disconnectDisallowedGatewayPolicyClients(
   cfg: OpenClawConfig,
 ): void {
   for (const client of clients) {
-    if (!isGatewayAuthPolicyCurrent(client.authPolicy, cfg)) {
-      invalidateGatewayPolicyClient(client, {
-        reason: "gateway-policy-changed",
-        code: 4001,
-        message: "gateway policy changed",
-      });
-    } else if (client.browserOrigin && !checkGatewayWsBrowserOrigin(client.browserOrigin, cfg).ok) {
+    if (client.browserOrigin && !checkGatewayWsBrowserOrigin(client.browserOrigin, cfg).ok) {
       invalidateGatewayPolicyClient(client, {
         reason: "origin-policy-changed",
         code: 1008,
         message: "origin not allowed",
+      });
+    } else if (!isGatewayAuthPolicyCurrent(client.authPolicy, cfg)) {
+      invalidateGatewayPolicyClient(client, {
+        reason: "gateway-policy-changed",
+        code: 4001,
+        message: "gateway policy changed",
+        revokeSource: !isGatewayAuthGrantCurrent(client.authPolicy, cfg),
       });
     }
   }

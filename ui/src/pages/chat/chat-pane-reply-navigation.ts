@@ -7,6 +7,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { persistedMessageEntryId } from "./chat-thread.ts";
+import type { ReplyMessageStatus } from "./components/chat-reply-preview.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -17,20 +18,38 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   protected replyMessageRevision = 0;
   private readonly replyMessages = new Map<
     string,
-    { client: object; generation: number; message?: unknown }
+    { client: object; generation: number; message?: unknown; status?: "missing" | "oversized" }
   >();
 
   protected abstract loadOlderMessages(): Promise<boolean>;
 
-  protected readonly readReplyMessage = (messageId: string): unknown => {
+  private currentReplyMessage(messageId: string) {
     const state = this.state;
     if (!state) {
       return undefined;
     }
     const cached = this.replyMessages.get(this.replyMessageCacheKey(state.sessionKey, messageId));
     return cached?.client === state.client && cached.generation === this.connectionGeneration
-      ? cached.message
+      ? cached
       : undefined;
+  }
+
+  protected readonly readReplyMessage = (messageId: string): unknown =>
+    this.currentReplyMessage(messageId)?.message;
+
+  /**
+   * How the current connection answered a lookup without a message. Unknown is
+   * pending from the first paint, including a warm boot rendered before the
+   * Gateway connects, and a transport failure stays pending until a new
+   * connection's retry answers.
+   */
+  protected readonly replyMessageStatus = (messageId: string): ReplyMessageStatus | undefined => {
+    const state = this.state;
+    if (!state || parseCatalogSessionKey(state.sessionKey)) {
+      return undefined;
+    }
+    const cached = this.currentReplyMessage(messageId);
+    return cached?.message ? undefined : (cached?.status ?? "pending");
   };
 
   protected readonly requestReplyMessage = (messageId: string): void => {
@@ -64,7 +83,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     }
     const attempt = { client: scope.client, generation: scope.generation };
     this.replyMessages.set(cacheKey, attempt);
-    let result: ChatMessageGetResult;
+    let result: ChatMessageGetResult | undefined;
     try {
       result = await scope.client.request<ChatMessageGetResult>("chat.message.get", {
         sessionKey,
@@ -73,17 +92,29 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         maxChars: 500,
       });
     } catch {
-      // Retain the failed attempt so rendering cannot retry it in a loop.
-      // A new logical connection owns a fresh attempt, even with the same client.
+      result = undefined;
+    }
+    // A transport failure stays unconfirmed and pending: the retained attempt
+    // stops render retry loops, and a new logical connection owns a fresh
+    // attempt, even with the same client.
+    if (
+      !result ||
+      !this.isConnectionScopeCurrent(scope) ||
+      this.replyMessages.get(cacheKey) !== attempt
+    ) {
       return;
     }
-    if (!this.isConnectionScopeCurrent(scope) || this.replyMessages.get(cacheKey) !== attempt) {
-      return;
-    }
-    if (!result.ok || !result.message) {
-      return;
-    }
-    this.replyMessages.set(cacheKey, { ...attempt, message: result.message });
+    // A Gateway answer without a message confirms the original is inaccessible,
+    // except an oversized one, which exists.
+    this.replyMessages.set(
+      cacheKey,
+      result.ok && result.message
+        ? { ...attempt, message: result.message }
+        : {
+            ...attempt,
+            status: result.unavailableReason === "oversized" ? "oversized" : "missing",
+          },
+    );
     this.replyMessageRevision += 1;
     if (areUiSessionKeysEquivalent(scope.state.sessionKey, sessionKey)) {
       this.requestUpdate();
@@ -116,6 +147,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
       revision: this.replyMessageRevision,
       navigationId: this.currentReplyNavigationId(sessionKey),
       read: this.readReplyMessage,
+      status: this.replyMessageStatus,
       request: this.requestReplyMessage,
       open: this.openReplyMessage,
     };

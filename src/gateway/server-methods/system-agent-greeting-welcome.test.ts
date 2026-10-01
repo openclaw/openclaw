@@ -44,21 +44,9 @@ vi.mock("../../system-agent/onboarding-welcome.js", () => ({
   buildOnboardingWelcome: onboardingWelcomeMocks.buildOnboardingWelcome,
 }));
 
-type FakeEngine = {
-  handle: ReturnType<typeof vi.fn>;
-  seedHistory: ReturnType<typeof vi.fn>;
-  historyLength: ReturnType<typeof vi.fn>;
-  historySince: ReturnType<typeof vi.fn>;
-  getPendingOperatorProposal: ReturnType<typeof vi.fn>;
-  resolveOperatorApproval: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
-  loadOverview: ReturnType<typeof vi.fn>;
-  noteAssistantMessage: ReturnType<typeof vi.fn>;
-  planGreeting: ReturnType<typeof vi.fn>;
-  decorateRejoinReply: ReturnType<typeof vi.fn>;
-};
+type FakeEngine = ReturnType<typeof makeEngine>;
 
-function makeEngine(): FakeEngine {
+function makeEngine() {
   const history: Array<{ role: "user" | "assistant"; text: string }> = [];
   return {
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
@@ -103,6 +91,7 @@ function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequ
 async function callChat(
   context: GatewayRequestContext,
   params: Record<string, unknown>,
+  client: GatewayClient = defaultClient,
 ): Promise<RespondCall> {
   const calls: RespondCall[] = [];
   const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
@@ -111,7 +100,7 @@ async function callChat(
   await expectDefined(
     systemAgentHandlers["openclaw.chat"],
     'systemAgentHandlers["openclaw.chat"] test invariant',
-  )({ params, respond, context, client: defaultClient } as never);
+  )({ params, respond, context, client } as never);
   return expectDefined(calls[0], "system-agent response");
 }
 
@@ -440,5 +429,39 @@ describe("openclaw.chat caretaker welcome", () => {
     expect(greetingMocks.loadSystemAgentGreetingFacts).not.toHaveBeenCalled();
     expect(greetingMocks.resolveSystemAgentGreeting).not.toHaveBeenCalled();
     expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
+  });
+
+  it("renders the onboarding welcome in the connected client's locale", async () => {
+    const { buildOnboardingWelcome } = await vi.importActual<
+      typeof import("../../system-agent/onboarding-welcome.js")
+    >("../../system-agent/onboarding-welcome.js");
+    onboardingWelcomeMocks.buildOnboardingWelcome.mockImplementationOnce(({ locale }) =>
+      buildOnboardingWelcome({
+        locale,
+        workspace: "/workspace/example",
+        engine: {
+          loadOverview: async () => ({
+            config: { exists: false, valid: true },
+            defaultModel: "example/verified-model",
+          }),
+          propose: () => undefined,
+          noteAssistantMessage: () => undefined,
+        } as never,
+      }),
+    );
+    const call = await callChat(
+      makeContext(new Map()),
+      { sessionId: "localized-onboarding", welcomeVariant: "onboarding" },
+      { ...defaultClient, connect: { ...defaultClient.connect, locale: "zh-TW" } },
+    );
+
+    expect(call.payload).toMatchObject({
+      reply: expect.stringContaining("你好，我是 OpenClaw — 我們來孵化你的智慧代理吧。"),
+      question: {
+        options: expect.arrayContaining([
+          expect.objectContaining({ label: "是的 — 開始設定", reply: "yes" }),
+        ]),
+      },
+    });
   });
 });

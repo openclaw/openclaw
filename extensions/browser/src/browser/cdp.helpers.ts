@@ -42,12 +42,8 @@ export { redactCdpUrl };
  * from HTTP(S) endpoints that require /json/version discovery.
  */
 export function isWebSocketUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "ws:" || parsed.protocol === "wss:";
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return parsed?.protocol === "ws:" || parsed?.protocol === "wss:";
 }
 
 /**
@@ -63,17 +59,11 @@ export function isWebSocketUrl(url: string): boolean {
  * Chrome will reject with HTTP 400.
  */
 export function isDirectCdpWebSocketEndpoint(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return (
-      (parsed.protocol === "ws:" || parsed.protocol === "wss:") &&
-      /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
-        parsed.pathname,
-      )
-    );
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return (
+    (parsed?.protocol === "ws:" || parsed?.protocol === "wss:") &&
+    /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(parsed.pathname)
+  );
 }
 
 /** Restrict a trusted CDP endpoint to its configured control-plane host. */
@@ -95,7 +85,7 @@ export function scopeCdpPolicyToConfiguredEndpoint(
 type CdpEndpointSource =
   | { source?: "configured" }
   | { source: "discovered"; configuredUrl: string };
-type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
+export type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
 
 function cdpEndpointAuthority(url: string): string {
   const parsed = new URL(url);

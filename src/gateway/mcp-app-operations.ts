@@ -12,10 +12,8 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  completeDeferredSessionMcpRuntimeRetirement,
-  peekSessionMcpRuntime,
-} from "../agents/agent-bundle-mcp-manager-api.js";
+import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
+import { completeDeferredSessionMcpRuntimeRetirement } from "../agents/agent-bundle-mcp-manager-cleanup.js";
 import { getSessionMcpRequestSignal } from "../agents/agent-bundle-mcp-request-context.js";
 import type { McpCatalogTool, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import {

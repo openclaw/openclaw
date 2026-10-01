@@ -33,6 +33,22 @@ export function renderRunInspectorSafeRef(value: string | number, mono = false, 
   return href ? html`<a href=${href}>${content}</a>` : content;
 }
 
+export function renderRunInspectorValues(
+  section: "values" | "decisions",
+  values: readonly (readonly [string, string | number | TemplateResult])[],
+) {
+  return html`<dl class="run-inspector__values">
+    ${values.map(
+      ([label, value]) => html`
+        <div>
+          <dt>${t(`activity.runInspector.${section}.${label}`)}</dt>
+          <dd>${value}</dd>
+        </div>
+      `,
+    )}
+  </dl>`;
+}
+
 function renderSectionHeading(label: string, headingId: string, headingLevel: 3 | 6) {
   return headingLevel === 6
     ? html`<h6 id=${headingId}>${label}</h6>`
@@ -136,16 +152,10 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
           ${t("activity.runInspector.decisions.requestedHeading")}
         </h5>
         ${receipt.action.summary ? html`<p>${receipt.action.summary}</p>` : nothing}
-        <dl class="run-inspector__values">
-          <div>
-            <dt>${t("activity.runInspector.values.kind")}</dt>
-            <dd>${renderRunInspectorSafeRef(receipt.action.family)}</dd>
-          </div>
-          <div>
-            <dt>${t("activity.runInspector.values.operation")}</dt>
-            <dd>${renderRunInspectorSafeRef(receipt.action.operation)}</dd>
-          </div>
-        </dl>
+        ${renderRunInspectorValues("values", [
+          ["kind", renderRunInspectorSafeRef(receipt.action.family)],
+          ["operation", renderRunInspectorSafeRef(receipt.action.operation)],
+        ])}
       </section>
       <section aria-labelledby="run-inspector-receipt-outcome">
         <h5 id="run-inspector-receipt-outcome">
@@ -176,16 +186,10 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
         <p class="run-inspector__reason">
           ${t(`activity.runInspector.coverage.${runInspectorCoverageKey(coverage)}.description`)}
         </p>
-        <dl class="run-inspector__values">
-          <div>
-            <dt>${t("activity.runInspector.decisions.reasonLabel")}</dt>
-            <dd>${renderRunInspectorSafeRef(receipt.decision.reasonCode, true)}</dd>
-          </div>
-          <div>
-            <dt>${t("activity.runInspector.decisions.occurredAtLabel")}</dt>
-            <dd>${new Date(receipt.occurredAt).toLocaleString()}</dd>
-          </div>
-        </dl>
+        ${renderRunInspectorValues("decisions", [
+          ["reasonLabel", renderRunInspectorSafeRef(receipt.decision.reasonCode, true)],
+          ["occurredAtLabel", new Date(receipt.occurredAt).toLocaleString()],
+        ])}
       </section>
       <section aria-labelledby="run-inspector-receipt-owner">
         <h5 id="run-inspector-receipt-owner">
@@ -193,34 +197,21 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
         </h5>
         ${
           receipt.provenance.state === "verified"
-            ? html`<dl class="run-inspector__values">
-                  <div>
-                    <dt>${t("activity.runInspector.decisions.durableOwnerLabel")}</dt>
-                    <dd>${renderRunInspectorSafeRef(receipt.provenance.producer)}</dd>
-                  </div>
-                </dl>
-                <p class="run-inspector__reason">
-                  ${t("activity.runInspector.decisions.ownerNote")}
-                </p>`
-            : html`<p class="run-inspector__reason">
-                ${t("activity.runInspector.decisions.ownerNote")}
-              </p>`
+            ? renderRunInspectorValues("decisions", [
+                ["durableOwnerLabel", renderRunInspectorSafeRef(receipt.provenance.producer)],
+              ])
+            : nothing
         }
+        <p class="run-inspector__reason">${t("activity.runInspector.decisions.ownerNote")}</p>
       </section>
       <section aria-labelledby="run-inspector-receipt-evidence">
         <h5 id="run-inspector-receipt-evidence">
           ${t("activity.runInspector.decisions.evidenceHeading")}
         </h5>
-        <dl class="run-inspector__values">
-          <div>
-            <dt>${t("activity.runInspector.decisions.policyCountLabel")}</dt>
-            <dd>${receipt.enforcement.policyCount}</dd>
-          </div>
-          <div>
-            <dt>${t("activity.runInspector.decisions.grantCountLabel")}</dt>
-            <dd>${receipt.enforcement.grantCount}</dd>
-          </div>
-        </dl>
+        ${renderRunInspectorValues("decisions", [
+          ["policyCountLabel", receipt.enforcement.policyCount],
+          ["grantCountLabel", receipt.enforcement.grantCount],
+        ])}
         <h6>${t("activity.runInspector.decisions.contextFieldsLabel")}</h6>
         ${renderReceiptCodes(
           receipt.enforcement.contextFieldsUsed,

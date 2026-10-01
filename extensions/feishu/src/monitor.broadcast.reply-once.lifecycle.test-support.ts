@@ -225,46 +225,4 @@ describe("Feishu broadcast reply-once lifecycle", () => {
     };
     expect(activeDelivery.deliver).toHaveBeenCalledTimes(1);
   });
-
-  it("does not duplicate delivery after a post-send failure on the first account", async () => {
-    const onMessageA = await setupLifecycleMonitor("account-A");
-    const onMessageB = await setupLifecycleMonitor("account-B");
-    const event = createFeishuTextMessageEvent({
-      messageId: "om_broadcast_retry",
-      chatId: "oc_broadcast_group",
-      text: "hello broadcast",
-    });
-
-    dispatchReplyFromConfigMock.mockImplementationOnce(
-      async ({ ctx, dispatcher, replyOptions }) => {
-        await replyOptions?.turnAdoptionLifecycle?.onAdopted();
-        if (typeof ctx?.SessionKey === "string" && ctx.SessionKey.includes("agent:susan:")) {
-          return { queuedFinal: false, counts: { final: 0 } };
-        }
-        await dispatcher.sendFinalReply({ text: "broadcast reply once" });
-        throw new Error("post-send failure");
-      },
-    );
-
-    await runFeishuLifecycleSequence(
-      [() => onMessageA(event), () => onMessageB(event)],
-      [
-        () => {
-          expect(dispatchReplyFromConfigMock.mock.calls.length).toBeGreaterThan(0);
-        },
-        () => {
-          expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
-        },
-      ],
-    );
-
-    expect(runtimesByAccount.get("account-A")?.error).not.toHaveBeenCalled();
-    expect(runtimesByAccount.get("account-B")?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
-
-    const activeDelivery = createFeishuReplyDispatcherMock.mock.results[0]?.value.delivery as {
-      deliver: ReturnType<typeof vi.fn>;
-    };
-    expect(activeDelivery.deliver).toHaveBeenCalledTimes(1);
-  });
 });

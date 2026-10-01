@@ -280,9 +280,6 @@ export class RequestClient {
       }
       return parsed;
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw error;
-      }
       if (error instanceof Error) {
         throw error;
       }

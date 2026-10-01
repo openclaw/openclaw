@@ -6,6 +6,7 @@ import {
   onInternalSessionTranscriptUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
+  buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
   loadArchivedSessions,
   readTranscriptStatsBatchReadOnlySync,
@@ -85,10 +86,12 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       }).map((archive) => [archive.archiveName, archive]),
     );
     const forgottenSessions = new Set(
-      listMemorySessionTombstones({
-        agentId: this.agentId,
-        sessionIds: entries.map((entry) => entry.sessionId),
-      }).map((entry) => entry.sessionId),
+      (
+        await listMemorySessionTombstones({
+          agentId: this.agentId,
+          sessionIds: entries.map((entry) => entry.sessionId),
+        })
+      ).map((entry) => entry.sessionId),
     );
     return entries.filter((entry) => {
       const archive = archivedSessions.get(path.basename(entry.sessionFile));
@@ -196,6 +199,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       db: this.db,
       source: "sessions",
     });
+    const indexedPaths = new Set(existingRows.map((row) => row.path));
     const sqliteCorpusEntries = corpusEntries.filter(
       (entry) => entry.transcriptSource === "sqlite",
     );
@@ -214,6 +218,18 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       await runWithConcurrency(
         corpusEntries.map(
           (corpusEntry) => async (): Promise<MemorySessionStartupFileState | null> => {
+            // Missing rows can be intentional: parsing applies provenance admission
+            // that corpus metadata cannot express. Recheck on every catch-up so a
+            // later user turn can make a previously excluded session eligible.
+            if (!indexedPaths.has(this.sessionPathForCorpusEntry(corpusEntry))) {
+              const entry = await buildSessionEntry(
+                corpusEntry.sessionFile,
+                this.buildSessionEntryOptions(corpusEntry),
+              );
+              if (entry && !isMemorySessionIndexable(entry)) {
+                return null;
+              }
+            }
             if (corpusEntry.transcriptSource === "sqlite") {
               const stats = statsByEntry.get(corpusEntry);
               return stats
@@ -437,17 +453,11 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     sessions?: MemorySessionSyncTarget[];
     archiveFiles?: string[];
   }) {
-    const files = new Set<string>();
     const corpusEntries = await this.listSessionCorpusEntries();
-    for (const file of this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []) {
-      files.add(file);
-    }
-    for (const file of await this.resolveArchiveFilesForSyncTargets(
-      params.sessions,
-      corpusEntries,
-    )) {
-      files.add(file);
-    }
+    const files = new Set([
+      ...(this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []),
+      ...(await this.resolveArchiveFilesForSyncTargets(params.sessions, corpusEntries)),
+    ]);
     return files.size > 0 ? { corpusEntries, targetArchiveFiles: files } : null;
   }
 

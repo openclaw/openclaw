@@ -42,23 +42,6 @@ export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
   );
 }
 
-export function resolveRoutedPolicyConversationType(
-  ctx: FinalizedMsgContext,
-): "direct" | "group" | undefined {
-  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
-  if (commandTargetSessionKey && commandTargetSessionKey !== ctx.SessionKey) {
-    return undefined;
-  }
-  const chatType = normalizeChatType(ctx.ChatType);
-  if (chatType === "direct") {
-    return "direct";
-  }
-  if (chatType === "group" || chatType === "channel") {
-    return "group";
-  }
-  return undefined;
-}
-
 export function resolveSessionStoreLookup(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,

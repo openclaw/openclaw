@@ -22,6 +22,7 @@ import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   buildSandboxFsMounts,
+  resolveSandboxFsMount,
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
@@ -51,7 +52,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     this.containerOnlyMounts =
       containerOnlyMounts ??
       resolveSandboxTmpfsMounts(sandbox.docker.tmpfs).map((mount) => mount.containerPath);
-    const mountsByContainer = [...this.mounts].toSorted(
+    const mountsByContainer = this.mounts.toSorted(
       (a, b) => b.containerRoot.length - a.containerRoot.length,
     );
     // Longest mount first keeps nested agent/skill mounts from being claimed by
@@ -99,6 +100,12 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }
 
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
+    return (await this.readFileWithSource(params)).data;
+  }
+
+  async readFileWithSource(
+    params: Parameters<SandboxFsBridge["readFile"]>[0],
+  ): ReturnType<NonNullable<SandboxFsBridge["readFileWithSource"]>> {
     const target = this.resolveResolvedPath(params);
     return this.readPinnedFile(target, params.maxBytes, params.signal);
   }
@@ -337,30 +344,48 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     target: SandboxResolvedFsPath,
     maxBytes?: number,
     signal?: AbortSignal,
-  ): Promise<Buffer> {
+  ): ReturnType<NonNullable<SandboxFsBridge["readFileWithSource"]>> {
     const opened = await this.pathGuard.openReadableFile(target, signal);
     try {
+      let data: Buffer;
       if (maxBytes === undefined) {
-        return await readFileAsync(opened.fd);
+        data = await readFileAsync(opened.fd);
+      } else {
+        if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+          throw new RangeError("maxBytes must be a non-negative safe integer");
+        }
+        const initialStat = fs.fstatSync(opened.fd);
+        if (!initialStat.isFile()) {
+          throw new Error(`Sandbox read requires a regular file: ${target.containerPath}`);
+        }
+        if (initialStat.size > maxBytes) {
+          throw new RangeError(`File exceeds ${maxBytes} bytes`);
+        }
+        // Read and recheck the same guarded descriptor so path swaps and file
+        // growth cannot bypass the byte limit or allocate an unbounded buffer.
+        data = await readFileDescriptorBounded(opened.fd, maxBytes);
+        const finalStat = fs.fstatSync(opened.fd);
+        if (!finalStat.isFile() || finalStat.size > maxBytes) {
+          throw new RangeError(`File exceeds ${maxBytes} bytes`);
+        }
       }
-      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
-        throw new RangeError("maxBytes must be a non-negative safe integer");
-      }
-      const initialStat = fs.fstatSync(opened.fd);
-      if (!initialStat.isFile()) {
-        throw new Error(`Sandbox read requires a regular file: ${target.containerPath}`);
-      }
-      if (initialStat.size > maxBytes) {
-        throw new RangeError(`File exceeds ${maxBytes} bytes`);
-      }
-      // Read and recheck the same guarded descriptor so path swaps and file
-      // growth cannot bypass the byte limit or allocate an unbounded buffer.
-      const data = await readFileDescriptorBounded(opened.fd, maxBytes);
-      const finalStat = fs.fstatSync(opened.fd);
-      if (!finalStat.isFile() || finalStat.size > maxBytes) {
-        throw new RangeError(`File exceeds ${maxBytes} bytes`);
-      }
-      return data;
+      const source = resolveSandboxFsMount(
+        this.mounts,
+        opened.containerPath,
+        this.containerOnlyMounts,
+      );
+      return {
+        data,
+        canonicalPath: opened.containerPath,
+        ...(source?.source === "workspace"
+          ? {
+              workspaceRelativePath: path.posix.relative(
+                source.containerRoot,
+                opened.containerPath,
+              ),
+            }
+          : {}),
+      };
     } finally {
       fs.closeSync(opened.fd);
     }
@@ -444,9 +469,6 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 }
 
 function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
-  if (!typeRaw) {
-    return "other";
-  }
   const normalized = normalizeOptionalLowercaseString(typeRaw) ?? "";
   if (normalized.includes("directory")) {
     return "directory";

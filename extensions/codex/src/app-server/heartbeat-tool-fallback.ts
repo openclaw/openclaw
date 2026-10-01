@@ -18,15 +18,10 @@ export function resolveInactiveCodexHeartbeatResponseDescriptor(params: {
   registeredTools: readonly CodexToolDescriptor[];
   registeredSpecs?: readonly CodexDynamicToolSpec[];
 }): InactiveCodexHeartbeatResponseDescriptor | undefined {
-  if (params.registeredSpecs) {
-    const spec = flattenCodexDynamicToolFunctions(params.registeredSpecs).find(
-      (tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME,
-    );
-    return spec ? { name: spec.name, description: spec.description } : undefined;
-  }
-  const descriptor = params.registeredTools.find(
-    (tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME,
-  );
+  const descriptors = params.registeredSpecs
+    ? flattenCodexDynamicToolFunctions(params.registeredSpecs)
+    : params.registeredTools;
+  const descriptor = descriptors.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
   return descriptor ? { name: descriptor.name, description: descriptor.description } : undefined;
 }
 

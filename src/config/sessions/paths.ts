@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../../infra/boundary-path.js";
-import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import { expandHomePrefix, resolveRequiredHomeDir, resolveUserPath } from "../../infra/home-dir.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -110,10 +110,7 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   if (sessionsDir) {
     return path.resolve(sessionsDir);
   }
-  if (!opts?.agentId?.trim()) {
-    throw new Error("Session storage path requires an explicit agent id.");
-  }
-  return resolveSessionTranscriptsDirForAgent(opts.agentId);
+  return resolveSessionTranscriptsDirForAgent(opts?.agentId ?? "");
 }
 
 function resolvePathFromAgentSessionsDir(
@@ -163,17 +160,10 @@ function resolveSiblingAgentSessionsDir(
 ): string | undefined {
   // Multi-agent stores share a common .../agents/<id>/sessions shape; sibling resolution keeps
   // persisted absolute files portable across active agent stores.
-  const resolvedBase = path.resolve(baseSessionsDir);
-  if (path.basename(resolvedBase) !== "sessions") {
-    return undefined;
-  }
-  const baseAgentDir = path.dirname(resolvedBase);
-  const baseAgentsDir = path.dirname(baseAgentDir);
-  if (path.basename(baseAgentsDir) !== "agents") {
-    return undefined;
-  }
-  const rootDir = path.dirname(baseAgentsDir);
-  return path.join(rootDir, "agents", normalizeAgentId(agentId), "sessions");
+  const agentsDir = resolveAgentsDirFromSessionStorePath(
+    path.join(baseSessionsDir, "sessions.json"),
+  );
+  return agentsDir ? path.join(agentsDir, normalizeAgentId(agentId), "sessions") : undefined;
 }
 
 function resolveAgentSessionsPathParts(
@@ -362,7 +352,7 @@ export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
-  return resolveSessionStorePathWithContext(store, opts, { cwd: process.cwd() });
+  return resolveSessionStorePathWithContext(store, opts, { cwd: resolveUserPath(".") });
 }
 
 /** Internal async readers capture their relative-path base before yielding. */

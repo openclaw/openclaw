@@ -77,7 +77,9 @@ mock.module(new URL(`../config/sessions/session-sqlite-target.${extension}`, imp
 });
 mock.module(new URL(`./sessions-display-model.${extension}`, import.meta.url), {
   namedExports: {
-    resolveSessionDisplayModel: (_cfg: unknown, row: { model: string }) => row.model,
+    resolveSessionDisplayModelRef: (_cfg: unknown, row: { model: string }) => ({
+      model: row.model,
+    }),
   },
 });
 

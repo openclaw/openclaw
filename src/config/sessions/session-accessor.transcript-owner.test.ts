@@ -1,13 +1,30 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
+import {
+  appendTranscriptMessage,
+  appendTranscriptMessageSync,
+  ensureSessionEntrySync,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+  replaceTranscriptEventsSync,
+} from "./session-accessor.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
+} from "./transcript-write-context.js";
+import type { InternalSessionEntry } from "./types.js";
 
 function fleetConfig(storePath: string, owner?: string): OpenClawConfig {
   return {
@@ -320,4 +337,106 @@ describe("transcript turn logical ownership", () => {
       });
     },
   );
+
+  it.each([
+    {
+      name: "writer",
+      fence: {
+        expectedLifecycleRevision: "current-revision",
+        expectedWriterRunId: "superseded-run",
+      },
+    },
+    {
+      name: "lifecycle",
+      fence: {
+        expectedLifecycleRevision: "superseded-revision",
+        expectedWriterRunId: "current-run",
+      },
+    },
+  ])("fences matching transcript mutations with the admitted $name claim", async ({ fence }) => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const sensitivePeer = "+15551234567";
+      const scope = {
+        agentId: "main",
+        sessionId: "session-owned-fence",
+        sessionKey: `agent:main:owned-fence:${sensitivePeer}\n\x1b[31mspoof`,
+        storePath,
+      };
+      replaceSessionEntrySync(scope, {
+        activeWriterRunId: "current-run",
+        lifecycleRevision: "current-revision",
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+      } as InternalSessionEntry);
+
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionFile: scope.sessionKey,
+          sessionKey: scope.sessionKey,
+          sessionTarget: {
+            ...scope,
+            ...fence,
+          },
+          withTranscriptWrite: async (run) => await run(),
+        },
+        async () => {
+          expect(ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 2 })).toBe(
+            true,
+          );
+          const captureClaimError = (run: () => unknown): unknown => {
+            try {
+              run();
+            } catch (error) {
+              return error;
+            }
+            throw new Error("expected the writer claim to reject transcript persistence");
+          };
+          const replacementError = captureClaimError(() => replaceTranscriptEventsSync(scope, []));
+          const eventError = captureClaimError(() =>
+            appendTranscriptEventSync(scope, { type: "custom", id: "stale-event" }),
+          );
+          const messageError = captureClaimError(() =>
+            appendTranscriptMessageSync(scope, {
+              eventId: "stale-message",
+              message: { role: "user", content: "late" },
+            }),
+          );
+          const expectedCause = {
+            actualSessionIdHash: redactIdentifier(scope.sessionId),
+            agentIdHash: redactIdentifier(scope.agentId),
+            code: "session-rebound",
+            expectedSessionIdHash: redactIdentifier(scope.sessionId),
+            sessionKeyHash: redactIdentifier(scope.sessionKey),
+          };
+          expect(eventError).toMatchObject({ cause: expectedCause });
+          expect(messageError).toMatchObject({ cause: expectedCause });
+          await expect(
+            appendTranscriptMessage(
+              { ...scope, ...fence },
+              {
+                eventId: "stale-async-message",
+                message: { role: "user", content: "late async append" },
+              },
+            ),
+          ).rejects.toMatchObject({
+            name: "SessionTranscriptWriterClaimReboundError",
+            cause: expectedCause,
+          });
+          for (const error of [replacementError, eventError, messageError]) {
+            expect(error).toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+            const formatted = formatErrorMessage(error);
+            expect(formatted).not.toContain(scope.sessionKey);
+            expect(formatted).not.toContain(sensitivePeer);
+            expect(formatted).not.toContain("spoof");
+            expect(formatted).not.toContain("\n");
+            expect(formatted).not.toContain("\x1b");
+          }
+        },
+      );
+
+      expect(loadSessionEntry(scope)?.updatedAt).toBe(1);
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
+    });
+  });
 });

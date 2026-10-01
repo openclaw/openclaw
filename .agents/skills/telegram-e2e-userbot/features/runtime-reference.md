@@ -370,7 +370,7 @@ not the model.
 - TDLib replays cached updates after connect; judge only events after the run's sent action.
 - The driver pins `@prebuilt-tdlib` `0.1008067.0`, which reports TDLib `1.8.67`.
 - TDLib 1.8.6 and later take the existing base64 database key in `setTdlibParameters`; re-encoding changes the key.
-- OpenClaw does not expose grammY's Test Server option, so the loopback proxy inserts `/test` after the bot token.
+- Credential readiness calls `https://api.telegram.org/bot<TOKEN>/test/<method>` directly; the standalone doctor never starts a local adapter. The full SUT still uses the loopback adapter because OpenClaw does not expose grammY's Test Server option. That adapter also owns scenario hold/reject controls; Gateway health checks and the mock provider still need local HTTP access. Do not bypass host egress policy to run them.
 - Broker calls time out after 15 seconds. A failed heartbeat fences the runner before later actions and stops an active probe.
 - Chunked broker payloads are authenticated per chunk and bounded to 64 MiB and 4096 chunks before JSON parsing.
 - Scope gateway logs with `logging.file`; the default `/tmp/openclaw/<date>.log` mixes concurrent runs.

@@ -5,10 +5,7 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "./live-transports/shared/credential-lease.runtime.js";
-import {
-  createQaChannelTransport,
-  QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY,
-} from "./qa-channel-transport.js";
+import { createQaChannelTransport } from "./qa-channel-transport.js";
 import type {
   QaTransportAdapterFactory,
   QaTransportFactoryMatchContext,
@@ -241,8 +238,4 @@ export function selectQaTransportDriver(params: {
     return params.channelId ? "live" : params.transportId;
   }
   return params.channelDriver ?? params.transportId;
-}
-
-export function defaultQaSuiteConcurrencyForTransport(id: QaTransportId): number {
-  return id === "qa-channel" ? QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY : 1;
 }

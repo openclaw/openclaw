@@ -1,4 +1,3 @@
-/** ACP session creation, loading, listing, resuming, closing, and configuration. */
 import { randomUUID } from "node:crypto";
 import type {
   AuthenticateRequest,

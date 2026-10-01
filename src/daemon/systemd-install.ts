@@ -154,18 +154,6 @@ function removeSystemdInlineEnvironmentKeys(content: string, keys: ReadonlySet<s
   return sanitizedLines.join("\n");
 }
 
-function sanitizeSystemdUnitBackupContent(params: {
-  content: string;
-  fileManagedKeys: ReadonlySet<string>;
-}): string {
-  // Gateway credentials are never useful in a recovery artifact. File-managed
-  // values are also omitted after OpenClaw moves them to the generated env file.
-  return removeSystemdInlineEnvironmentKeys(
-    params.content,
-    new Set([...params.fileManagedKeys, ...SYSTEMD_GATEWAY_CREDENTIAL_KEYS]),
-  );
-}
-
 function removeLegacyGatewayVersionMetadata(content: string): string {
   const description =
     /^Description=OpenClaw Gateway \((?:(profile: [^,)\r\n]+), )?v([^)\r\n]+)\)$/mu.exec(content);
@@ -322,12 +310,13 @@ async function writeSystemdUnit(
 
         const backupSource = existingUnit ?? existingBackup;
         if (backupSource) {
+          // Recovery artifacts omit credentials and values moved to the generated env file.
           await mutation.publish(
             backupPath,
-            sanitizeSystemdUnitBackupContent({
-              content: backupSource.contents.toString("utf8"),
-              fileManagedKeys,
-            }),
+            removeSystemdInlineEnvironmentKeys(
+              backupSource.contents.toString("utf8"),
+              new Set([...fileManagedKeys, ...SYSTEMD_GATEWAY_CREDENTIAL_KEYS]),
+            ),
             restrictSystemdArtifactMode(backupSource.mode),
           );
         }
@@ -452,7 +441,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   if (!isNodeSystemdEnvironment(env)) {
     return;
   }
-  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
+  const stateDir = resolveStateDir(env);
   const envFilePath = resolveSystemdEnvironmentFilePath({
     stateDir,
     environment: env,
@@ -463,11 +452,10 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   } catch {
     return;
   }
-  const managedKeys = new Set(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
   const remaining = Object.fromEntries(
     Object.entries(existingFile.environment).filter(([key, value]) => {
       const normalized = normalizeServiceEnvKey(key);
-      if (normalized && managedKeys.has(normalized)) {
+      if (normalized && SYSTEMD_GATEWAY_CREDENTIAL_KEYS.has(normalized)) {
         return false;
       }
       return existingFile.literalShellReferenceKeys.has(key) || !isUnresolvedShellReference(value);

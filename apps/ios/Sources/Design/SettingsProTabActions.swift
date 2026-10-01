@@ -167,7 +167,7 @@ extension SettingsProTab {
     }
 
     func refreshGatewayRegistry() {
-        self.gatewayRegistry = GatewaySettingsStore.loadGatewayRegistry()
+        self.gatewayRegistry = self.appModel.loadDisplayedGatewayRegistry()
     }
 
     func gatewayEndpointSummary(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> String {
@@ -202,19 +202,18 @@ extension SettingsProTab {
         IOSDeviceSettingsActions.registerForRemoteNotificationsIfEnrollmentReady(
             status: notificationSettings.authorizationStatus)
 
-        let issueCount = SettingsDiagnostics.issueCount(
+        self.diagnosticsIssueCount = SettingsDiagnostics.issues(
             gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
             talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
-            notificationsAllowed: self.notificationPresentation.isActive)
-        self.diagnosticsIssueCount = issueCount
-        self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
+            notificationsAllowed: self.notificationPresentation.isActive).count
+        self.diagnosticsLastRunText = Date().formatted(date: .omitted, time: .shortened)
     }
 
     func syncSettingsState() {
         self.refreshGatewayRegistry()
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
-        let activeManual = GatewaySettingsStore.activeGatewayEntry()
+        let activeManual = self.gatewayRegistry.activeEntry
         if activeManual?.kind == .manual,
            activeManual?.host?.caseInsensitiveCompare(self.manualGatewayHost) == .orderedSame,
            activeManual?.port == self.manualGatewayPort
@@ -226,7 +225,9 @@ extension SettingsProTab {
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
-        guard let stableID = self.currentManualGatewayStableID else {
+        guard !self.appModel.isLocalGatewayFixtureEnabled,
+              let stableID = self.currentManualGatewayStableID
+        else {
             self.gatewayCredentialFieldStableID = nil
             self.gatewayToken = ""
             self.gatewayPassword = ""
@@ -874,10 +875,10 @@ extension SettingsProTab {
             GatewayStatusBuilder.build(appModel: self.appModel) == .connected
     }
 
-    /// First-run state: no paired gateways yet (demo mode fakes a pairing), so
-    /// the status card surfaces Scan QR as the primary action.
+    /// First-run state: no paired gateways yet (local gateway fixtures fake a
+    /// pairing), so the status card surfaces Scan QR as the primary action.
     var gatewayNeedsPairing: Bool {
-        self.gatewayRegistry.entries.isEmpty && !self.appModel.isAppleReviewDemoModeEnabled
+        self.gatewayRegistry.entries.isEmpty && !self.appModel.isLocalGatewayFixtureEnabled
     }
 
     var gatewayStatusDetail: String {

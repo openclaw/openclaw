@@ -629,6 +629,16 @@ describe("lmstudio plugin", () => {
                 compat: { codeMode: "capable" },
               },
               {
+                id: "bad-window",
+                contextWindow: Number.POSITIVE_INFINITY,
+                contextTokens: 4096.5,
+              },
+              {
+                id: "bad-tokens",
+                contextWindow: -1,
+                contextTokens: 0,
+              },
+              {
                 id: " ",
                 name: "ignored",
               },
@@ -672,6 +682,16 @@ describe("lmstudio plugin", () => {
         reasoning: undefined,
         input: undefined,
       },
+      ...["bad-window", "bad-tokens"].map((id) => ({
+        provider: "lmstudio",
+        id,
+        name: id,
+        compat: { supportsUsageInStreaming: true },
+        contextWindow: undefined,
+        contextTokens: undefined,
+        reasoning: undefined,
+        input: undefined,
+      })),
     ]);
   });
 });

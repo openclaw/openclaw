@@ -352,6 +352,7 @@ declare exactly one active category.
 - **Every plugin must ship a JSON Schema**, even if it accepts no config.
 - An empty schema is acceptable (for example, `{ "type": "object", "additionalProperties": false }`).
 - Config is validated against the manifest schema at config read/write time and before the plugin loads.
+- Local `$ref` JSON Pointer fragments support URI percent-encoding, including encoded `/` separators. Fragments are decoded once before resolving pointer tokens; use `~1` for a slash within a key and `~0` for a tilde.
 - When extending or forking a bundled plugin with new config keys, update that plugin's `openclaw.plugin.json` `configSchema` at the same time. Bundled plugin schemas are strict, so adding `plugins.entries.<id>.config.myNewKey` in user config without adding `myNewKey` to `configSchema.properties` will be rejected before the plugin runtime loads.
 
 Example schema extension:

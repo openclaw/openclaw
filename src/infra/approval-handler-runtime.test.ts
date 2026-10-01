@@ -112,6 +112,28 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     ).resolves.toBeNull();
   });
 
+  it("keeps an older channel runtime from sending cards under scoped plugin reviewer policy", async () => {
+    const deliverPending = vi.fn().mockResolvedValue({ messageId: "1" });
+    const runtime = await createChannelApprovalHandlerFromCapability({
+      capability: makeNativeApprovalCapability({ eventKinds: ["plugin"], deliverPending }),
+      ...TEST_HANDLER_PARAMS,
+      channel: "slack",
+      cfg: {
+        approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
+      },
+    });
+    const request: PluginApprovalRequest = {
+      id: "plugin:older-channel",
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      request: { title: "Review", description: "Allow access", turnSourceChannel: "slack" },
+    };
+
+    await runtime?.handleRequested(request);
+    expect(deliverPending).not.toHaveBeenCalled();
+    await runtime?.stop();
+  });
+
   it("derives kind once before stop-time cleanup unbinds", async () => {
     const unbindPending = vi.fn();
     const shouldHandle = vi.fn().mockReturnValue(true);

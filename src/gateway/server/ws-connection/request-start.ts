@@ -10,32 +10,41 @@ type StartBudget = {
   bytes: number;
   maxCount: number;
   maxBytes: number;
+  maxConnectionCount: number;
+  connections: Map<string, StartConnection>;
 };
-type ControlConnection = { id: string; count: number };
+type StartConnection = { id: string; count: number };
 type RequestStart = {
   grant: () => void;
   budget: StartBudget;
   frameBytes: number;
-  controlConnection: ControlConnection | undefined;
+  connection: StartConnection;
 };
 
 const workBudget: StartBudget = {
   count: 0,
   bytes: 0,
-  maxCount: 256,
+  maxCount: 1024,
   maxBytes: 50 * 1024 * 1024,
+  maxConnectionCount: 256,
+  connections: new Map(),
 };
-const controlBudget: StartBudget = { count: 0, bytes: 0, maxCount: 1024, maxBytes: 1024 * 1024 };
+const controlBudget: StartBudget = {
+  count: 0,
+  bytes: 0,
+  maxCount: 1024,
+  maxBytes: 1024 * 1024,
+  maxConnectionCount: 16,
+  connections: new Map(),
+};
 const pending: RequestStart[] = [];
-const controlsByConnection = new Map<string, ControlConnection>();
 const MAX_CONTROL_FRAME_BYTES = 4096;
-const MAX_PENDING_CONTROLS_PER_CONNECTION = 16;
 const MAX_STARTS_PER_TURN = 64;
 const START_WORK_BUDGET_MS = 12;
 let active = false;
 
-async function grantStarts(first: RequestStart): Promise<void> {
-  let current: RequestStart | undefined = first;
+async function grantStarts(first: () => void): Promise<void> {
+  let current: (() => void) | undefined = first;
   let turnStartedAt = 0;
   let turnStarts = MAX_STARTS_PER_TURN;
   while (current) {
@@ -51,18 +60,17 @@ async function grantStarts(first: RequestStart): Promise<void> {
       turnStarts = 0;
     }
     turnStarts++;
-    current.grant();
-    current = pending.shift();
-    if (current) {
-      current.budget.count--;
-      current.budget.bytes -= current.frameBytes;
-      if (current.controlConnection !== undefined) {
-        current.controlConnection.count--;
-        if (current.controlConnection.count === 0) {
-          controlsByConnection.delete(current.controlConnection.id);
-        }
+    current();
+    const next = pending.shift();
+    if (next) {
+      next.budget.count--;
+      next.budget.bytes -= next.frameBytes;
+      next.connection.count--;
+      if (next.connection.count === 0) {
+        next.budget.connections.delete(next.connection.id);
       }
     }
+    current = next?.grant;
   }
   active = false;
 }
@@ -81,32 +89,30 @@ export function scheduleGatewayRequestStart(
         (request.method === "sessions.messages.subscribe" &&
           asOptionalRecord(request.params)?.includeApprovals !== true));
     const budget = control ? controlBudget : workBudget;
-    const controlConnection = control
-      ? (controlsByConnection.get(connId) ?? { id: connId, count: 0 })
-      : undefined;
+    const connection = active ? budget.connections.get(connId) : undefined;
     // One active scheduling task is separate from waiting capacity. All classes
     // share FIFO order and the same per-turn work budget.
     if (
       active &&
       (budget.count >= budget.maxCount ||
         budget.bytes + frameBytes > budget.maxBytes ||
-        (controlConnection && controlConnection.count >= MAX_PENDING_CONTROLS_PER_CONNECTION))
+        (connection && connection.count >= budget.maxConnectionCount))
     ) {
       return null;
     }
     const { promise, resolve: grant } = createDeferredCore();
-    const start = { grant, budget, frameBytes, controlConnection };
     if (active) {
+      const queuedConnection = connection ?? { id: connId, count: 0 };
       budget.count++;
       budget.bytes += frameBytes;
-      if (controlConnection) {
-        controlConnection.count++;
-        controlsByConnection.set(connId, controlConnection);
+      queuedConnection.count++;
+      if (!connection) {
+        budget.connections.set(connId, queuedConnection);
       }
-      pending.push(start);
+      pending.push({ grant, budget, frameBytes, connection: queuedConnection });
     } else {
       active = true;
-      void grantStarts(start);
+      void grantStarts(grant);
     }
     return promise;
   });

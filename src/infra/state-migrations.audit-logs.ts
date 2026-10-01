@@ -7,6 +7,7 @@ import {
   CONFIG_AUDIT_SCOPE,
   type ConfigAuditRecord,
 } from "../config/io.audit.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import {
   SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
   SYSTEM_AGENT_AUDIT_SCOPE,
@@ -75,7 +76,7 @@ async function resolveAuditArchiveRelativePaths(
   sourceRelativePath: string,
 ): Promise<AuditArchiveRelativePaths> {
   const directoryPath = path.join(root.rootReal, path.dirname(sourceRelativePath));
-  const baseName = path.basename(sourceRelativePath).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const baseName = escapeRegExp(path.basename(sourceRelativePath));
   const archivePattern = new RegExp(
     `^${baseName}\\.migrated(?:\\.([2-9]|[1-9][0-9]+))?(?:\\.raw)?$`,
     "u",

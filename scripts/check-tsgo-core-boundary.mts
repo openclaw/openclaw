@@ -209,12 +209,12 @@ export async function checkCoreTsgoGraphBoundary(
   return graphs;
 }
 
-/** Reuse the core boundary admission before inspecting the remaining CI compilers. */
+/** Noncore discovery requires the caller to retain a separate blocking core boundary. */
 export async function inspectCiTsgoCheckGraphs(
-  options: { cwd?: string } = {},
+  options: { cwd?: string; scope?: "all" | "noncore" } = {},
 ): Promise<CoreTsgoGraph[]> {
   const cwd = realpathSync(options.cwd ?? repoRoot);
-  const graphs = await checkCoreTsgoGraphBoundary({ cwd });
+  const graphs = options.scope === "noncore" ? [] : await checkCoreTsgoGraphBoundary({ cwd });
   for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
     const files = (
       await runTsgoQuery(graph.config, "--listFilesOnly", `${graph.name} file listing`, cwd)

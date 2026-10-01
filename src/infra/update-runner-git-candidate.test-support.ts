@@ -3,12 +3,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { pathExists } from "../utils.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import { updateGitCheckout } from "./update-runner-git.js";
-import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
+import type {
+  CommandRunner,
+  UpdateRunResult,
+  UpdateRunnerOptions,
+  UpdateStepProgress,
+} from "./update-runner-types.js";
 
 const { runCommandWithTimeout } = processExec;
 
@@ -20,6 +28,25 @@ export async function runFixtureGit(root: string, ...args: string[]) {
     throw new Error(result.stderr);
   }
   return result.stdout.trim();
+}
+
+export async function advanceFixtureRemote(remote: string) {
+  await fs.writeFile(path.join(remote, "candidate.txt"), "candidate\n");
+  await runFixtureGit(remote, "add", ".");
+  await runFixtureGit(remote, "commit", "-m", "candidate");
+  return runFixtureGit(remote, "rev-parse", "HEAD");
+}
+
+export async function prepareDeletedTrackedRuntimeAsset(remote: string, root: string) {
+  const asset = "dist/tracked-runtime.txt";
+  await fs.mkdir(path.join(remote, "dist"));
+  await fs.writeFile(path.join(remote, asset), "original tracked runtime\n");
+  await runFixtureGit(remote, "add", "-f", asset);
+  await runFixtureGit(remote, "commit", "-m", "tracked runtime");
+  await runFixtureGit(root, "pull", "--ff-only");
+  const beforeSha = await runFixtureGit(root, "rev-parse", "HEAD");
+  await runFixtureGit(remote, "rm", asset);
+  return { beforeSha, asset: path.join(root, asset) };
 }
 
 export async function resolveCandidateNodeRuntimeForTest(): Promise<{
@@ -41,13 +68,20 @@ export async function expectCancelledGitCandidateCleanup({
   fixture: { localRoot, baseSha, targetSha },
   pnpmVersion,
   runRealGit,
+  progress,
+  onAbort,
 }: {
   phase: "build" | "locked worktree creation";
   fixture: { localRoot: string; baseSha: string; targetSha: string };
   pnpmVersion: string;
   runRealGit: (cwd: string, ...args: string[]) => Promise<string>;
+  progress?: UpdateStepProgress;
+  onAbort?: () => void;
 }) {
   const controller = new AbortController();
+  if (onAbort) {
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+  }
   const stopped = new Error("preflight owner stopped");
   const beforeGitMutation = vi.fn(async () => {
     throw new Error("cancelled update reached mutation");
@@ -112,6 +146,7 @@ export async function expectCancelledGitCandidateCleanup({
           signal: options.signal ?? controller.signal,
         }),
       opts: {
+        progress,
         devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: targetSha },
         inspectGitTarget: async () => {},
         validateCandidate: async () => {
@@ -122,9 +157,23 @@ export async function expectCancelledGitCandidateCleanup({
           throw new Error("cancelled update reached Doctor");
         },
       },
+    }).catch((error: unknown) => {
+      if (
+        !progress ||
+        !controller.signal.aborted ||
+        hasCommandProcessCleanupError(error) ||
+        !collectNestedErrorCandidates(error).some(
+          (cause) => cause instanceof UpdateRequesterRevokedError,
+        )
+      ) {
+        throw error;
+      }
+      return undefined;
     });
     expect(controller.signal.reason).toBe(stopped);
-    expect(result.status).toBe("error");
+    if (result) {
+      expect(result.status).toBe("error");
+    }
     expect(beforeGitMutation).not.toHaveBeenCalled();
   } finally {
     commandSpy.mockRestore();
@@ -231,7 +280,7 @@ export async function writeRuntime(directory: string, sha: string, store: string
   ]);
 }
 
-export async function expectRuntime(root: string, sha: string) {
+export async function expectRuntime(root: string, sha: string, trackedAsset?: string) {
   const child = await processExec.runCommandWithTimeout(
     [process.execPath, path.join(root, "dist", "entry.js")],
     {
@@ -240,6 +289,10 @@ export async function expectRuntime(root: string, sha: string) {
   );
   expect(child.code, child.stderr).toBe(0);
   expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => sha));
+  if (trackedAsset) {
+    expect(await fs.readFile(trackedAsset, "utf8")).toBe("original tracked runtime\n");
+    expect(await runFixtureGit(root, "diff", "--name-only", "HEAD")).toBe("");
+  }
 }
 
 export function registerGitRuntimeStagingTests(

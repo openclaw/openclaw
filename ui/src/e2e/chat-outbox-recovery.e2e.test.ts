@@ -315,7 +315,7 @@ suite.define(() => {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { width: 1280, height: 900 },
-      recordVideo: { dir: artifacts },
+      recordVideo: process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? { dir: artifacts } : undefined,
     });
     const page = await context.newPage();
     const sessionKey = "agent:main:main";

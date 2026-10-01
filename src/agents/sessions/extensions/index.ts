@@ -7,18 +7,9 @@ export type {
   ExtensionUIContext,
   InputSource,
   LoadExtensionsResult,
-  MessageEndEvent,
-  MessageStartEvent,
-  MessageUpdateEvent,
-  ReplacedSessionContext,
   SessionStartEvent,
   ToolDefinition,
-  ToolExecutionEndEvent,
-  ToolExecutionStartEvent,
-  ToolExecutionUpdateEvent,
   ToolInfo,
   TreePreparation,
-  TurnEndEvent,
-  TurnStartEvent,
 } from "./types.js";
 export { wrapRegisteredTools } from "./wrapper.js";

@@ -1,4 +1,3 @@
-// Discovers local Tailscale tailnet addresses.
 import { isIpInCidr } from "@openclaw/net-policy/ip";
 import {
   pickMatchingExternalInterfaceAddress,
