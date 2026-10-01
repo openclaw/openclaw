@@ -31,7 +31,11 @@ afterEach(async () => {
 });
 
 describe("Codex installed skills", () => {
-  it.each([false, true])("uses the host catalog and respects denial (%s)", async (denied) => {
+  it.each([
+    { denied: false, oversized: false },
+    { denied: true, oversized: false },
+    { denied: false, oversized: true },
+  ])("delivers whole host instructions or refuses the read (%j)", async ({ denied, oversized }) => {
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
     const params = createParams(path.join(tempDir, "skills-session.jsonl"), workspaceDir);
@@ -54,7 +58,9 @@ describe("Codex installed skills", () => {
         path: "/skills/release-guide/SKILL.md",
       },
       disableModelInvocation: false,
-      readContent: "# Release\n\nComplete instructions.\n",
+      readContent: oversized
+        ? `# Release\n\n${"Complete instructions. ".repeat(5_000)}\nEND OF SKILL`
+        : "# Release\n\nComplete instructions.\n",
     };
     params.skillsSnapshot = {
       prompt: "",
@@ -99,8 +105,14 @@ describe("Codex installed skills", () => {
         tool: "skills_read",
         arguments: { name: "release-guide" },
       });
-      expect(read.success).toBe(true);
-      expect(JSON.stringify(read)).toContain("Complete instructions.");
+      expect(read.success).toBe(!oversized);
+      if (oversized) {
+        expect(read.diagnosticTerminalType).toBe("error");
+        expect(JSON.stringify(read.contentItems)).toContain("cannot deliver the whole skill");
+        expect(JSON.stringify(read.contentItems)).not.toContain("Complete instructions.");
+      } else {
+        expect(read.contentItems).toEqual([{ type: "inputText", text: skill.readContent }]);
+      }
     }
   });
 });

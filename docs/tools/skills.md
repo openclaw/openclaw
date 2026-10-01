@@ -856,6 +856,8 @@ In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 policies. `await skills.list(offset)` returns up to 20 directory entries;
 the default offset is 0. Codex receives the OpenClaw tools through its dynamic
 tool surface; these are distinct from Codex's native skill-resource tools.
+Codex refuses a skill read that exceeds the turn's dynamic-tool output budget
+instead of returning partial instructions as a successful read.
 An existing `read` policy grant also permits `skills_read`. An explicit
 `skills_read` denial still wins; search permission alone does not grant reads.
 
