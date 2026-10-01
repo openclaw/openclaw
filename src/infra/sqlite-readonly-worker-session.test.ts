@@ -103,8 +103,10 @@ describe("SQLite read-only session operation custody", () => {
       child.emit("error", failure);
       await nextTurn();
       expect(settled()).toBe(false);
+      expect(session.notStarted).toBe(false);
       child.emit("close", -1, null);
       const error = await observed;
+      expect(session.notStarted).toBe(!spawned);
       if (spawned) {
         expect(error).toBe(failure);
       } else {
@@ -322,33 +324,41 @@ it("carries only its captured read scope and refuses callbacks after owner retir
   }
 });
 
-it("counts admitted read-only session children in node spawn diagnostics", () => {
-  let now = 0;
-  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-  const events: unknown[] = [];
-  const stop = onDiagnosticEvent((event) => {
-    if (event.type === "diagnostic.child_process.spawn") {
-      events.push(event);
+it.each([
+  { execPath: "/fixture/bin/node", family: "node" },
+  { execPath: "/fixture/bin/bun", family: "bun" },
+  { execPath: "/fixture/bin/custom-runtime", family: "other" },
+])(
+  "counts admitted read-only session children as $family in spawn diagnostics",
+  ({ execPath, family }) => {
+    const originalExecPath = process.execPath;
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const events: unknown[] = [];
+    const stop = onDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.child_process.spawn") {
+        events.push(event);
+      }
+    });
+    try {
+      process.execPath = execPath;
+      setDiagnosticsEnabledForProcess(false);
+      emitChildProcessSpawnSample();
+      setDiagnosticsEnabledForProcess(true);
+      const { child } = createSession();
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([]);
+      child.emit("spawn");
+      now = 120_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([expect.objectContaining({ family, count: 1 })]);
+    } finally {
+      process.execPath = originalExecPath;
+      stop();
+      setDiagnosticsEnabledForProcess(false);
+      emitChildProcessSpawnSample();
+      clock.mockRestore();
     }
-  });
-  try {
-    setDiagnosticsEnabledForProcess(false);
-    emitChildProcessSpawnSample();
-    setDiagnosticsEnabledForProcess(true);
-    const { child } = createSession();
-    now = 60_000;
-    emitChildProcessSpawnSample();
-    expect(events).toEqual([]);
-    child.emit("spawn");
-    now = 120_000;
-    emitChildProcessSpawnSample();
-    expect(events).toEqual([
-      expect.objectContaining({ family: process.versions.bun ? "other" : "node", count: 1 }),
-    ]);
-  } finally {
-    stop();
-    setDiagnosticsEnabledForProcess(false);
-    emitChildProcessSpawnSample();
-    clock.mockRestore();
-  }
-});
+  },
+);

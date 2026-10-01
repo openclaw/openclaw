@@ -231,6 +231,46 @@ import Testing
         #expect(NodeServiceManager._testLaunchdProgramArguments(plistURL: url) == [])
     }
 
+    @Test func `captures the installed node runtime and generated environment without the terminal CLI`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let state = root.appendingPathComponent("state")
+        try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: root,
+            env: ["OPENCLAW_STATE_DIR": state.path])
+        {
+            let profile = AppProfile(environment: [:])
+            let environment = state.appendingPathComponent("service-env/\(nodeLaunchdLabel).env")
+            let wrapper = state.appendingPathComponent("service-env/\(nodeLaunchdLabel)-env-wrapper.sh")
+            let prefix = [
+                state.appendingPathComponent("tools/node/bin/node").path,
+                state.appendingPathComponent("lib/node_modules/openclaw/dist/index.js").path,
+            ]
+            let plist = root.appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
+            try FileManager.default.createDirectory(
+                at: environment.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: plist.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try "#!/bin/sh\n".write(to: wrapper, atomically: false, encoding: .utf8)
+            try "export OPENCLAW_SQLITE_LIBRARY='/fixture/node-sqlite.dylib'\nexport FIXTURE_SERVICE='retained'\n"
+                .write(to: environment, atomically: false, encoding: .utf8)
+            let command = ["/bin/sh", wrapper.path, environment.path] + prefix + ["node", "run"]
+            try PropertyListSerialization.data(
+                fromPropertyList: ["ProgramArguments": command], format: .xml, options: 0).write(to: plist)
+            let captured = try #require(NodeServiceManager.installedServiceCLI(profile: profile))
+            #expect(captured.prefix == prefix)
+            #expect(captured.sqliteLibrary == "/fixture/node-sqlite.dylib")
+            #expect(captured.environment["FIXTURE_SERVICE"] == "retained")
+            #expect(captured.usesGeneratedEnvironment)
+            #expect(NodeServiceManager.installedServiceCLI(
+                profile: AppProfile(environment: ["OPENCLAW_PROFILE": "named-proof"])) == nil)
+            try FileManager.default.removeItem(at: environment)
+            #expect(NodeServiceManager.installedServiceCLI(profile: profile) == nil)
+        }
+    }
+
     @Test func `node status requires loaded running service`() {
         #expect(NodeServiceManager._testRuntimeIsRunning(fromJSON: """
         {"service":{"loaded":true,"runtime":{"status":"running"}}}

@@ -3,17 +3,23 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { ArtifactsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { materializeRuntimeConfig } from "../../config/materialize.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
+import { prepareAgentSession } from "./agent-session-prepare.js";
 import { artifactsHandlers } from "./artifacts.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const scope = {
   agentId: "main",
@@ -21,15 +27,20 @@ const scope = {
   sessionId: "activity-images",
 };
 
-async function list(params: Record<string, unknown> = {}, client: GatewayClient | null = null) {
+async function invoke(
+  method: "artifacts.list" | "artifacts.download",
+  params: Record<string, unknown>,
+  client: GatewayClient | null = null,
+  context: GatewayRequestContext = createDirectChatContext(),
+) {
   let result: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
   await expectDefined(
-    artifactsHandlers["artifacts.list"],
-    "artifact list handler",
+    artifactsHandlers[method],
+    "artifact handler",
   )({
-    params: { sessionKey: scope.sessionKey, type: "image", limit: 4, ...params },
-    context: createDirectChatContext(),
-    req: { type: "req", id: "images", method: "artifacts.list" },
+    params: { sessionKey: scope.sessionKey, ...params },
+    context,
+    req: { type: "req", id: "images", method },
     client,
     isWebchatConnect: () => false,
     respond: (ok, payload, error) => {
@@ -37,6 +48,10 @@ async function list(params: Record<string, unknown> = {}, client: GatewayClient 
     },
   });
   return expectDefined(result, "artifact response");
+}
+
+function list(params: Record<string, unknown> = {}, client: GatewayClient | null = null) {
+  return invoke("artifacts.list", { type: "image", limit: 4, ...params }, client);
 }
 
 function page(result: Awaited<ReturnType<typeof list>>): ArtifactsListResult {
@@ -177,11 +192,21 @@ describe("bounded Activity image discovery", () => {
         "https://images.example.test/0.png",
         "data:image/png;base64,aGVsbG8=",
       ]);
+      expect(second.artifacts[2]).toMatchObject({
+        id: expect.stringMatching(/^artifact_transcript_image_/),
+        type: "image",
+        title: "inline",
+        mimeType: "image/png",
+        sizeBytes: 5,
+        source: "session-transcript",
+        download: { mode: "bytes" },
+        image: { url: "data:image/png;base64,aGVsbG8=" },
+      });
       expect(second.nextCursor).toBeUndefined();
     });
   });
 
-  it("bounds sparse transcript work and advances past oversized events", async () => {
+  it("bounds sparse transcript work and continues into older messages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       await append([{ type: "image", url: "https://images.example.test/old.png" }]);
@@ -193,16 +218,84 @@ describe("bounded Activity image discovery", () => {
       expect(first.nextCursor).toEqual(expect.any(String));
       const second = page(await list({ cursor: first.nextCursor }));
       expect(second.artifacts).toHaveLength(1);
-      await append([{ type: "image", data: "a".repeat(400_000), mimeType: "image/png" }]);
-      const oversized = page(await list());
-      expect(oversized.artifacts).toEqual([]);
-      expect(oversized.omittedOversized).toBe(true);
-      expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThan(1024);
-      expect(page(await list({ cursor: oversized.nextCursor })).nextCursor).toEqual(
-        expect.any(String),
-      );
       expect(await list({ limit: 5 })).toMatchObject({ ok: false });
       expect(await list({ type: undefined, limit: 2 })).toMatchObject({ ok: false });
+    });
+  });
+
+  it("discovers oversized inline images as downloadable references after newer text", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const data = Buffer.alloc(1.5 * 1024 * 1024, 1).toString("base64");
+      await append([{ type: "image", data, mimeType: "image/png", title: "Screenshot" }]);
+      await append("newer text");
+      await append("newest text");
+      const first = page(await list());
+      expect(first.artifacts).toEqual([]);
+      const oversized = page(
+        await list({ cursor: expectDefined(first.nextCursor, "image cursor") }),
+      );
+      expect(oversized.artifacts).toHaveLength(1);
+      const image = expectDefined(oversized.artifacts[0], "inline image reference");
+      expect(image).toMatchObject({
+        id: expect.stringMatching(/^artifact_transcript_image_/),
+        type: "image",
+        title: "Screenshot",
+        mimeType: "image/png",
+        sizeBytes: 1.5 * 1024 * 1024,
+        source: "session-transcript",
+        download: { mode: "bytes" },
+      });
+      expect(image).not.toHaveProperty("image");
+      expect(oversized).not.toHaveProperty("omittedOversized");
+      expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThan(2 * 1024);
+      expect(oversized.nextCursor).toBeUndefined();
+      expect(await invoke("artifacts.download", { artifactId: image.id })).toMatchObject({
+        ok: true,
+        payload: { encoding: "base64", data },
+      });
+    });
+  });
+
+  it("bounds inline previews for images without transcript download references", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const url = "data:image/png;base64,aGVsbG8=";
+      await append([
+        { type: "image", url },
+        { type: "image", source: { url } },
+        { type: "image", url: `data:image/png;base64,${"a".repeat(256 * 1024)}` },
+        { type: "image_url", image_url: { url } },
+        { type: "attachment", attachment: { kind: "image", url } },
+      ]);
+      const newest = page(await list({ limit: 2 }));
+      expect(newest).not.toHaveProperty("omittedOversized");
+      const older = page(await list({ cursor: newest.nextCursor, limit: 1 }));
+      expect(older.omittedOversized).toBe(true);
+      const oldest = page(await list({ cursor: older.nextCursor, limit: 1 }));
+      expect(oldest).not.toHaveProperty("omittedOversized");
+      expect(oldest.nextCursor).toBeUndefined();
+      const previews = page(await list());
+      expect(previews.artifacts).toHaveLength(4);
+      expect(previews.omittedOversized).toBe(true);
+      expect(previews.nextCursor).toBeUndefined();
+      for (const artifact of previews.artifacts) {
+        expect(artifact).toMatchObject({
+          id: expect.stringMatching(/^preview_/),
+          type: "image",
+          source: "session-transcript-preview",
+          download: { mode: "unsupported" },
+          image: { url },
+        });
+      }
+      await append([
+        { type: "input_image", data: "aGVsbG8=", mimeType: "image/png" },
+        { type: "input_image", source: { data: "aGVsbG8=", media_type: "image/png" } },
+      ]);
+      expect(page(await list({ limit: 2 })).artifacts).toEqual([
+        expect.objectContaining({ image: { url }, download: { mode: "unsupported" } }),
+        expect.objectContaining({ image: { url }, download: { mode: "unsupported" } }),
+      ]);
     });
   });
 
@@ -254,5 +347,113 @@ describe("bounded Activity image discovery", () => {
         error: { details: { type: "artifact_cursor_invalid" } },
       });
     });
+  });
+});
+
+it("keeps an admitted run on its stored main row when the public alias becomes global", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const source: OpenClawConfig = { agents: { ownership: "explicit", entries: { research: {} } } };
+    const materialize = (config: OpenClawConfig) =>
+      materializeRuntimeConfig(config, {
+        env: state.env,
+        manifestRegistry: { plugins: [] },
+      });
+    await state.writeConfig(source);
+    const initial = materialize(source);
+    setRuntimeConfigSnapshot(initial, source);
+    const runId = "qualified-main-run";
+    const stored = {
+      agentId: "research",
+      sessionKey: "agent:research:main",
+      sessionId: "qualified-main-window",
+    };
+    await upsertSessionEntryCore(stored, { sessionId: stored.sessionId, updatedAt: Date.now() });
+    await appendTranscriptMessage(stored, {
+      message: {
+        role: "assistant",
+        content: [
+          { type: "file", data: "aGVsbG8=", mimeType: "text/plain", title: "stored-main.txt" },
+        ],
+        __openclaw: { runId },
+      },
+    });
+    const admitted = expectDefined(
+      prepareAgentSession({
+        cfg: initial,
+        requestedSessionKey: stored.sessionKey,
+        requestedSessionId: stored.sessionId,
+        expectedExistingSessionId: stored.sessionId,
+        request: { message: "stored address proof", idempotencyKey: runId },
+        canUseCronRunContinuation: false,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        respond: () => {
+          throw new Error("Expected session admission");
+        },
+      }),
+      "admitted session",
+    );
+    expect(admitted.canonicalKey).toBe(stored.sessionKey);
+    expect(admitted.canonicalSessionAgentId).toBe(stored.agentId);
+    registerAgentRunContext(runId, {
+      agentId: admitted.canonicalSessionAgentId,
+      sessionKey: admitted.canonicalKey,
+      sessionId: admitted.sessionId,
+    });
+    try {
+      const globalSource: OpenClawConfig = { ...source, session: { scope: "global" } };
+      await state.writeConfig(globalSource);
+      const current = materialize(globalSource);
+      setRuntimeConfigSnapshot(current, globalSource);
+      const global = { agentId: "research", sessionKey: "global", sessionId: "global-window" };
+      await upsertSessionEntryCore(global, { sessionId: global.sessionId, updatedAt: Date.now() });
+      await appendTranscriptMessage(global, {
+        message: {
+          role: "assistant",
+          content: [
+            { type: "file", data: "Z2xvYmFs", mimeType: "text/plain", title: "global.txt" },
+          ],
+        },
+      });
+      const context = createDirectChatContext({ getRuntimeConfig: () => current });
+      const client = sharingPolicyClient({ user: "artifact-viewer", scopes: ["operator.read"] });
+      const aliased = await invoke(
+        "artifacts.list",
+        { sessionKey: stored.sessionKey },
+        client,
+        context,
+      );
+      expect(aliased, JSON.stringify(aliased)).toMatchObject({
+        ok: true,
+        payload: { artifacts: [{ title: "global.txt", sessionKey: "global" }] },
+      });
+      for (const agentId of [undefined, "research"]) {
+        expect(
+          await invoke(
+            "artifacts.list",
+            { sessionKey: undefined, runId, agentId },
+            client,
+            context,
+          ),
+        ).toMatchObject({
+          ok: true,
+          payload: {
+            artifacts: [{ title: "stored-main.txt", sessionKey: stored.sessionKey, runId }],
+          },
+        });
+      }
+      await upsertSessionEntryCore(stored, {
+        sessionId: stored.sessionId,
+        updatedAt: Date.now(),
+        visibility: "draft",
+      });
+      expect(
+        await invoke("artifacts.list", { sessionKey: undefined, runId }, client, context),
+      ).toMatchObject({ ok: false, error: { details: { type: "artifact_scope_not_found" } } });
+      expect(
+        await invoke("artifacts.list", { sessionKey: stored.sessionKey }, client, context),
+      ).toMatchObject({ ok: true, payload: { artifacts: [{ title: "global.txt" }] } });
+    } finally {
+      clearAgentRunContext(runId);
+    }
   });
 });

@@ -38,6 +38,7 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   resolveUpdateRoot: async () => fixture.root,
+  resolveGlobalManager: async () => "npm",
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);

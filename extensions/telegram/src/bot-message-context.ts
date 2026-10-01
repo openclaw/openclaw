@@ -3,6 +3,7 @@ import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
+  type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
@@ -69,16 +70,7 @@ type TelegramReactionApi = (
   messageId: number,
   reactions: Array<{ type: "emoji"; emoji: ReactionTypeEmoji["emoji"] }>,
 ) => Promise<unknown>;
-type TelegramStatusReactionController = {
-  setQueued: () => void | Promise<void>;
-  setThinking: () => void | Promise<void>;
-  setTool: (name: string) => void | Promise<void>;
-  setCompacting: () => void | Promise<void>;
-  cancelPending: () => void;
-  setError: () => void | Promise<void>;
-  setDone: () => void | Promise<void>;
-  restoreInitial: () => void | Promise<void>;
-};
+type TelegramStatusReactionController = Omit<StatusReactionController, "clear">;
 
 export type TelegramMessageContext = {
   cfg: BuildTelegramMessageContextParams["cfg"];

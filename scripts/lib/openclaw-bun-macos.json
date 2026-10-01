@@ -1,0 +1,19 @@
+{
+  "tag": "openclaw-v1.4.3-20261001-fc90aa4d9c-webkit-fb1167ebf2",
+  "commit": "fc90aa4d9c5dac37f7a63a04f8bd2e25df930c60",
+  "revision": "1.4.3-canary.1+fc90aa4d9",
+  "artifacts": {
+    "arm64": {
+      "asset": "bun-darwin-aarch64.zip",
+      "sha256": "f6a309598012091d1ae60eca3588c13bb3cac69a6bc649512ded56dce5a26356",
+      "executable": "bun-darwin-aarch64/bun",
+      "executableSha256": "b718a1ebd8349274f2ad7b76b69fdf2d6c48bc918753f4161b42bb04eaa2f221"
+    },
+    "x86_64": {
+      "asset": "bun-darwin-x64.zip",
+      "sha256": "31d98e310e7d8b39f7ad76fd39b4b820dc0f47731d6559949bcb35e36c558e7b",
+      "executable": "bun-darwin-x64/bun",
+      "executableSha256": "a6ed631f9995e4d8de371b79bf959feaaf68eb086e56aadc86fafe7245faaea1"
+    }
+  }
+}

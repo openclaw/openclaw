@@ -134,16 +134,22 @@ export function runSqliteIntegrityCheckSync(check: SqliteIntegrityCheck): void {
 }
 
 /** Run the same admission steps synchronously when the caller cannot yield. */
-export function runSqliteIntegrityOperationSync<T>(operation: SqliteIntegrityOperation<T>): T {
+export function runSqliteIntegrityOperationSync<T>(
+  operation: SqliteIntegrityOperation<T>,
+  beforeResume?: () => void,
+): T {
+  beforeResume?.();
   let step = operation.next();
   while (!step.done) {
+    let failure: { error: unknown } | undefined;
     try {
       runSqliteIntegrityCheckSync(step.value);
     } catch (error) {
-      step = operation.throw(error);
-      continue;
+      failure = { error };
     }
-    step = operation.next();
+    // A blocking check can outlive its caller; both success and failure resume schema work.
+    beforeResume?.();
+    step = failure ? operation.throw(failure.error) : operation.next();
   }
   return step.value;
 }

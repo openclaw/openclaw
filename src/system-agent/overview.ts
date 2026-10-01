@@ -21,6 +21,7 @@ import {
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { createSetupTranslator, type SetupTranslator } from "../wizard/i18n/index.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
 type SystemAgentSummary = {
@@ -349,18 +350,21 @@ function formatStartupAction(overview: SystemAgentOverview): string | undefined 
  * Welcome shown right after inference activation. OpenClaw owns the
  * remaining workspace, Gateway, channel, and agent setup.
  */
-export function formatSystemAgentOnboardingWelcome(overview: SystemAgentOverview): string {
+export function formatSystemAgentOnboardingWelcome(
+  overview: SystemAgentOverview,
+  translate: SetupTranslator = createSetupTranslator({ keyPrefix: "wizard.onboardingWelcome" }),
+): string {
   return [
-    "## Inference is ready.",
+    `## ${translate("inferenceReady")}`,
     "",
-    `- Verified ${overview.defaultModel ? "model" : "setup model"}: ${overview.defaultModel ?? overview.setupModel ?? "not configured"}.`,
-    `- ${overview.gateway.reachable ? `Gateway: running at ${overview.gateway.url}.` : "Gateway: not configured or reachable yet."}`,
-    "- I can now finish your workspace, Gateway, channels, agents, plugins, and other optional setup.",
-    "- Connect how you want to talk: say `connect whatsapp`, `connect telegram`, `connect slack`, `connect discord` — or `channels` for the full list.",
+    `- ${translate(overview.defaultModel ? "verifiedModel" : "verifiedSetupModel", {
+      model: overview.defaultModel ?? overview.setupModel ?? translate("notConfigured"),
+    })}`,
+    `- ${overview.gateway.reachable ? translate("gatewayRunning", { url: overview.gateway.url }) : translate("gatewayUnavailable")}`,
+    `- ${translate("optionalSetup")}`,
+    `- ${translate("channelCommands")}`,
     "",
-    overview.defaultModel
-      ? "Say `talk to agent` to meet your agent right here, or `help` for everything I can do."
-      : "Your setup model stays available here. Choose a primary model in Model Setup or run `openclaw onboard` before opening regular agent chat.",
+    translate(overview.defaultModel ? "readyNext" : "readySetupNext"),
   ].join("\n");
 }
 

@@ -4,7 +4,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import {
   applySessionGoalOperation,
-  lookupSessionGoalOperation,
+  readSessionGoalOperationInDatabase,
   readSessionGoalOperationReceipt,
   writeSessionGoalOperationReceipt,
 } from "./goals-operations.js";
@@ -21,7 +21,6 @@ import type {
 import { runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction } from "./session-accessor.sqlite-deletion.js";
 import { readQualifiedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
-  collectSessionEntryLookupKeys,
   readSessionEntryRow,
   readSessionIdentitySnapshot,
   writeSessionEntry,
@@ -33,7 +32,6 @@ import {
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import {
-  cloneSessionEntry,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -52,6 +50,7 @@ import {
   buildExpectedTranscriptTurnSessionPatch,
   sessionMatchesExpectedTranscriptTurn,
 } from "./session-transcript-turn-state.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 type SqliteExpectedSessionTranscriptTurnResult = {
@@ -86,7 +85,7 @@ export async function appendExpectedSessionTranscriptTurn(
   },
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
   const initialEntry = options.initialSessionEntry
-    ? cloneSessionEntry(options.initialSessionEntry)
+    ? structuredClone(options.initialSessionEntry)
     : undefined;
   if (
     initialEntry &&
@@ -134,23 +133,23 @@ export async function appendExpectedSessionTranscriptTurn(
         ? () => {
             options.sessionTurnMutation?.assertCurrent?.();
             const current = withOpenClawAgentDatabaseReadOnly(
-              (database) => readWithCanonicalSessionAdmission(database, () => readEntry(database)),
+              (database) =>
+                readWithCanonicalSessionAdmission(database, () => {
+                  restoreEntry = readEntry(database);
+                  return (
+                    resolveExpectedEntry(restoreEntry) ||
+                    (restoreEntry?.entry.sessionId === options.expectedSessionId &&
+                      options.sessionTurnMutation &&
+                      readSessionGoalOperationInDatabase(database, {
+                        sessionKey: resolved.sessionKey,
+                        expectedSessionId: options.expectedSessionId,
+                        operation: options.sessionTurnMutation.operation,
+                      }))
+                  );
+                }),
               toDatabaseOptions(resolved),
             );
-            restoreEntry = current.found ? current.value : undefined;
-            if (resolveExpectedEntry(restoreEntry)) {
-              return;
-            }
-            if (
-              restoreEntry?.entry.sessionId === options.expectedSessionId &&
-              options.sessionTurnMutation &&
-              lookupSessionGoalOperation({
-                ...scope,
-                sessionKey: resolved.sessionKey,
-                expectedSessionId: options.expectedSessionId,
-                operation: options.sessionTurnMutation.operation,
-              })
-            ) {
+            if (current.found ? current.value : resolveExpectedEntry(undefined)) {
               return;
             }
             throw rebound;
@@ -346,7 +345,7 @@ export async function appendExpectedSessionTranscriptTurn(
               : appendedEntry;
           let publishIdentity: (() => void) | undefined;
           if (initialEntry || next !== appendedEntry) {
-            const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);
+            const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
             const previousIdentity = readSessionIdentitySnapshot(
               transactionDb,
               identityKeys.filter((key) => key !== resolved.sessionKey),
@@ -383,7 +382,7 @@ export async function appendExpectedSessionTranscriptTurn(
           result = {
             sessionTurnMutationResult,
             appendedMessages,
-            sessionEntry: cloneSessionEntry(next),
+            sessionEntry: structuredClone(next),
             sessionFile: options.sessionFile,
           };
           return publishIdentity;

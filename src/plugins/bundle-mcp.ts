@@ -1,7 +1,11 @@
-// Bundles MCP metadata exposed by plugins for package output.
 import path from "node:path";
 import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
+import {
+  resolveConfiguredMcpTransport,
+  resolveOpenClawMcpTransportAlias,
+} from "../config/mcp-config-normalize.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -91,7 +95,28 @@ function resolveBundleMcpConfigPaths(params: {
 }
 
 export function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
-  return extractBundleServerMap(raw, ["mcpServers", "servers"]);
+  return normalizeImportedMcpServers(extractBundleServerMap(raw, ["mcpServers", "servers"]));
+}
+
+function normalizeImportedMcpServers(servers: Record<string, BundleMcpServerConfig>) {
+  return Object.fromEntries(
+    Object.entries(servers).map(([name, server]) => {
+      const type = normalizeLowercaseStringOrEmpty(server.type);
+      const importedTransport = type === "stdio" ? "stdio" : resolveOpenClawMcpTransportAlias(type);
+      if (!importedTransport) {
+        // Keep unknown types for CLI validation without admitting them as implicit SSE.
+        return [
+          name,
+          type ? { ...server, transport: resolveConfiguredMcpTransport(server) ?? type } : server,
+        ];
+      }
+      const { type: _type, ...canonical } = server;
+      return [
+        name,
+        { ...canonical, transport: resolveConfiguredMcpTransport(server) ?? importedTransport },
+      ];
+    }),
+  );
 }
 
 function isExplicitRelativePath(value: string): boolean {
@@ -124,7 +149,6 @@ function absolutizeBundleMcpServer(params: {
   baseDir: string;
   server: BundleMcpServerConfig;
   pluginDataDir?: string;
-  agentFormat?: boolean;
 }): BundleMcpServerConfig {
   const next: BundleMcpServerConfig = { ...params.server };
   const expand = (value: string) =>
@@ -143,10 +167,11 @@ function absolutizeBundleMcpServer(params: {
       : normalizeExpandedAbsolutePath(expanded);
   };
 
+  // Remote transports have no process cwd; native runners reject that stdio-only field.
   if (
+    typeof next.command === "string" &&
     typeof next.cwd !== "string" &&
-    typeof next.workingDirectory !== "string" &&
-    (!params.agentFormat || typeof next.command === "string")
+    typeof next.workingDirectory !== "string"
   ) {
     next.cwd = params.baseDir;
   }
@@ -393,7 +418,6 @@ function loadBundleFileBackedMcpConfig(params: {
             baseDir,
             server,
             pluginDataDir: agentLoaded?.pluginDataDir,
-            agentFormat: params.bundleFormat === "agent",
           }),
         ]),
       ),
@@ -415,16 +439,17 @@ function loadRootRelativeMcpConfig(params: {
   mcpServers: Record<string, BundleMcpServerConfig>;
 }): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
   const rootDir = path.resolve(params.rootDir);
+  const servers = normalizeImportedMcpServers(params.mcpServers);
   return {
     config: {
       mcpServers: Object.fromEntries(
-        Object.entries(params.mcpServers).map(([serverName, server]) => [
+        Object.entries(servers).map(([serverName, server]) => [
           serverName,
           absolutizeBundleMcpServer({ rootDir, baseDir: rootDir, server }),
         ]),
       ),
       prepareDataDirsByServer: Object.fromEntries(
-        Object.keys(params.mcpServers).map((serverName) => [serverName, null]),
+        Object.keys(servers).map((serverName) => [serverName, null]),
       ),
     },
     diagnostics: [],

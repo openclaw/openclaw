@@ -124,7 +124,6 @@ const surfaces = [
         vi.fn(),
         vi.fn(),
         vi.fn(),
-        [],
         1,
         vi.fn(),
       ),

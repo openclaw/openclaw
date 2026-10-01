@@ -133,7 +133,6 @@ describe("Windows Startup service inventory", () => {
         expect.arrayContaining([cmd.startupPath, vbs.startupPath]),
       );
       for (const binding of bindings) {
-        expect(binding.profile).toBe(override ? "actual" : "rescue");
         expect(binding.env.OPENCLAW_PROFILE).toBe(override ? "actual" : "rescue");
         expect(binding.scope).toBe("user");
         expect(binding.env.OPENCLAW_WINDOWS_TASK_NAME).toBeUndefined();

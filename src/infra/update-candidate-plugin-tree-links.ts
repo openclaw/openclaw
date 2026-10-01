@@ -8,11 +8,12 @@ import {
   captureUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
-import type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
+import type {
+  UpdateCandidatePluginEntry,
+  UpdateCandidatePluginTreePlan,
+} from "./update-candidate-plugin-tree-schema.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
-
-export type UpdateCandidatePluginTreeEntry = UpdateCandidatePluginTreePlan["entries"][number];
 
 type MaterializablePlan = Omit<UpdateCandidatePluginTreePlan, "bytes" | "entries">;
 
@@ -21,7 +22,7 @@ export const isUpdateCandidateHostLauncher = (file: string) =>
   ["openclaw", "openclaw.cmd", "openclaw.ps1"].includes(path.basename(file));
 
 export function assertUpdateCandidatePluginEntryStat(
-  entry: UpdateCandidatePluginTreeEntry,
+  entry: UpdateCandidatePluginEntry,
   current: BigIntStats,
 ): void {
   const sameKind =

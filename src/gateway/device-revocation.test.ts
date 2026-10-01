@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  acceptGatewayDeviceSourceAuthority,
   bindGatewayDeviceRevocation,
   captureGatewayDeviceRevocation,
   closeGatewayDeviceRevocation,
@@ -8,9 +9,65 @@ import {
   onGatewayDeviceSourceRevoked,
   retainGatewayDeviceRevocation,
   readGatewayDeviceSourceAuthority,
+  readAcceptedGatewayDeviceSourceAuthority,
 } from "./device-revocation.js";
 
 describe("Gateway device revocation", () => {
+  it("keeps accepted source custody through fencing, but only while a holder retains it", () => {
+    const connection = new AbortController();
+    let transportCurrent = true;
+    let sourceCurrent = true;
+    const releaseSource = vi.fn();
+    const request = captureGatewayDeviceRevocation(
+      {},
+      {},
+      () => transportCurrent,
+      connection.signal,
+      { isCurrent: () => sourceCurrent, subscribe: () => releaseSource },
+    );
+    transportCurrent = false;
+    expect(request.isCurrent()).toBe(false);
+    expect(acceptGatewayDeviceSourceAuthority(request.isCurrent)).toBe(true);
+    const accepted = expectDefined(
+      readAcceptedGatewayDeviceSourceAuthority(request.isCurrent),
+      "accepted source",
+    );
+    const releaseInput = expectDefined(retainGatewayDeviceRevocation(request.isCurrent), "input");
+    request.release();
+    expect(request.isCurrent()).toBe(true);
+    expect(accepted()).toBe(true);
+    sourceCurrent = false;
+    expect(request.isCurrent()).toBe(false);
+    expect(accepted()).toBe(false);
+    sourceCurrent = true;
+    releaseInput();
+    expect(releaseSource).toHaveBeenCalledOnce();
+    expect(connection.signal.aborted).toBe(false);
+    expect(request.isCurrent()).toBe(false);
+    expect(accepted()).toBe(false);
+    expect(acceptGatewayDeviceSourceAuthority(request.isCurrent)).toBe(false);
+    expect(() => retainGatewayDeviceRevocation(request.isCurrent)).toThrow("no longer active");
+  });
+
+  it("requires an active source owner to accept custody", () => {
+    const context = {};
+    const request = captureGatewayDeviceRevocation(context, {}, () => true);
+    expect(acceptGatewayDeviceSourceAuthority(request.isCurrent)).toBe(false);
+    expect(readAcceptedGatewayDeviceSourceAuthority(request.isCurrent)).toBeUndefined();
+    const revoked = captureGatewayDeviceRevocation(
+      context,
+      { deviceId: "device" },
+      () => true,
+      undefined,
+      { isCurrent: () => true, subscribe: () => () => {} },
+    );
+    invalidateGatewayDeviceRevocation(context, "device");
+    expect(acceptGatewayDeviceSourceAuthority(revoked.isCurrent)).toBe(false);
+    expect(acceptGatewayDeviceSourceAuthority(() => true)).toBe(false);
+    request.release();
+    revoked.release();
+  });
+
   it("reaches the original admitted caller after the request releases its hold", () => {
     const context = {};
     const identity = { deviceId: "device", role: "operator" };

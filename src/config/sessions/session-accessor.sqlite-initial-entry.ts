@@ -9,7 +9,6 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  collectSessionEntryLookupKeys,
   readSessionEntryRow,
   readSessionIdentitySnapshot,
   writeSessionEntry,
@@ -17,6 +16,7 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import {
   assertOwnedTranscriptWriteCommit,
   getOwnedSessionTranscriptInitialWriter,
@@ -43,7 +43,7 @@ export function ensureSessionEntryInTransaction(
   entry: SessionEntry,
   initialWriterRunId?: string,
 ): InitialSessionEntryCommit {
-  const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
+  const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
   const previous = readSessionIdentitySnapshot(database, identityKeys);
   const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
   if (existing) {

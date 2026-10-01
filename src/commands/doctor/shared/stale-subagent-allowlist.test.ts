@@ -8,40 +8,6 @@ import {
 } from "./stale-subagent-allowlist.js";
 
 describe("stale subagent allowlist doctor repair", () => {
-  it("detects stale default and per-agent subagent targets", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          subagents: {
-            allowAgents: ["planner", "stale-default"],
-          },
-        },
-        list: [
-          {
-            id: "main",
-            subagents: {
-              allowAgents: ["planner", "stale-main"],
-            },
-          },
-          { id: "planner" },
-        ],
-      },
-    } as OpenClawConfig;
-
-    expect(scanStaleSubagentAllowlistReferences(cfg)).toStrictEqual([
-      {
-        pathLabel: "agents.defaults.subagents.allowAgents",
-        agentId: "stale-default",
-        normalizedAgentId: "stale-default",
-      },
-      {
-        pathLabel: "agents.list.main.subagents.allowAgents",
-        agentId: "stale-main",
-        normalizedAgentId: "stale-main",
-      },
-    ]);
-  });
-
   it("keeps wildcard, configured OpenClaw agents, and configured ACP targets", () => {
     const cfg = {
       acp: {

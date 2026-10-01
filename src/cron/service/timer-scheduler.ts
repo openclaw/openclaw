@@ -1,4 +1,5 @@
 import pMap, { pMapSkip } from "p-map";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
@@ -9,10 +10,6 @@ import {
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
-import {
-  finishCronRunReceiptInDatabase,
-  releaseLocalCronRunReceiptOwnership,
-} from "../store/run-receipt-store.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import type { CronJob } from "../types.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
@@ -22,23 +19,25 @@ import {
   summarizeCronJobSchedule,
 } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
+import { releaseReservedCronRuns } from "./run-admission-mutation.js";
 import {
   cleanupQueuedCronRunReservations,
   executeQueuedCronRun,
   persistQueuedCronRunReservations,
-  releaseQueuedCronRun,
   reserveQueuedCronRun,
-  resolveRunConcurrency,
   setCronRunCapacityListener,
   tryAcquireCronRunSlots,
 } from "./run-admission.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
-import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type { CronServiceState } from "./state.js";
-import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import {
+  captureCronServiceMutationSource,
+  ensureLoaded,
+  runPostPersistCronNotifications,
+} from "./store.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import { createCronCapacityRecheckTracker } from "./timer-capacity-recheck.js";
 import {
@@ -183,6 +182,7 @@ async function onAdmittedTimer(state: CronServiceState) {
   if (state.stopped || state.schedulingPaused || state.startupCatchup) {
     return;
   }
+  const source = captureCronServiceMutationSource(state);
   const generation = state.lifecycleGeneration;
   state.running = true;
   state.activeTimerTicks += 1;
@@ -242,6 +242,7 @@ async function onAdmittedTimer(state: CronServiceState) {
         state,
         collectRunnableJobs(state, dueCheckNow),
         dueCheckNow,
+        { source },
       );
       if (state.stopped || state.startupCatchup || state.lifecycleGeneration !== generation) {
         return [];
@@ -287,15 +288,17 @@ async function onAdmittedTimer(state: CronServiceState) {
       try {
         const reservedJobs = await persistQueuedCronRunReservations({
           state,
+          source,
           candidates: admittedDue,
           reservedAtMs: now,
         });
-        const reservedDue = reservedJobs.map(({ job, runReceipt }, index) => ({
+        const reservedDue = reservedJobs.map(({ job, runReceipt, runReceiptContext }, index) => ({
           id: job.id,
           job,
           reservedAtMs: now,
           reservationIdentity: reserveQueuedCronRun(state, job.id, now, {
             runReceipt,
+            runReceiptContext,
             lifecycleGeneration: generation,
           }),
           releaseAdmission: admissionReleases[index]!,
@@ -332,7 +335,7 @@ async function onAdmittedTimer(state: CronServiceState) {
       }
     }
 
-    const concurrency = Math.min(resolveRunConcurrency(), Math.max(1, dueJobs.length));
+    const concurrency = Math.min(DEFAULT_CRON_MAX_CONCURRENT_RUNS, Math.max(1, dueJobs.length));
     capacityRechecks.initializeActivations(dueJobs.length, allowEmptyCapacityRecheck);
     const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state);
     const claimedIndexes = new Set<number>();
@@ -402,40 +405,18 @@ async function onAdmittedTimer(state: CronServiceState) {
                 settleThisInitialActivation(true);
               },
               onNotRunnable: async () => {
-                const committedJob = commitCronRuntimeRows({
+                const owner = state.queuedRunReservationsByJobId.get(due.id);
+                if (owner?.identity !== due.reservationIdentity) {
+                  return;
+                }
+                await releaseReservedCronRuns({
                   state,
-                  jobIds: [due.id],
-                  operationLabel: "cron.skipped-reservation-cleanup",
-                  mutate: ({ database, jobs, receiptSchema }) => {
-                    const current = jobs.get(due.id);
-                    const ownership = state.queuedRunReservationsByJobId.get(due.id);
-                    if (
-                      !current ||
-                      ownership?.identity !== due.reservationIdentity ||
-                      ownership.markerAtMs !== current.state.queuedAtMs
-                    ) {
-                      return { value: undefined };
-                    }
-                    finishCronRunReceiptInDatabase({
-                      receiptSchema,
-                      database,
-                      handle: ownership.runReceipt,
-                      status: "skipped",
-                      finishedAtMs: state.deps.nowMs(),
-                      error: "cron scheduled reservation became ineligible",
-                    });
-                    delete current.state.queuedAtMs;
-                    return { upsertJobIds: [current.id], value: current };
-                  },
+                  context: owner.runReceiptContext,
+                  storeKey: owner.runReceipt.storeKey,
+                  reservations: [{ jobId: due.id, reservationIdentity: due.reservationIdentity }],
+                  policy: { kind: "scheduled-ineligible" },
+                  onSettled() {},
                 });
-                if (committedJob) {
-                  applyCronRuntimeRowsToState(state, [committedJob]);
-                }
-                const ownership = state.queuedRunReservationsByJobId.get(due.id);
-                if (ownership?.identity === due.reservationIdentity) {
-                  releaseLocalCronRunReceiptOwnership(ownership.runReceipt);
-                }
-                releaseQueuedCronRun(state, due.id, due.reservationIdentity);
               },
               onSetupError: (job, errorText) => {
                 state.deps.log.warn(

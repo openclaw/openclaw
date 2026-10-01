@@ -53,6 +53,7 @@ function isRouteNotFound(result: ChatRouteData | RouteNotFound): result is Route
 }
 
 export class OpenClawApp extends OpenClawLightDomElement {
+  @state() private startupPending = false;
   // Pinned while a connect submitted from the visible login gate is in
   // flight, so a failed manual attempt cannot flash the shell in between.
   @state() private loginGatePinned = false;
@@ -94,27 +95,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
   constructor() {
     super();
     this.subscriptions
-      .watch(
+      .watchStore(
         () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeGateway(gateway),
       )
-      .watch(
-        () => (this.terminalOnly ? this.context?.config : undefined),
-        (config, notify) => config.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentSelection,
-        (selection, notify) => selection.subscribe(notify),
-      )
-      .watch(
-        () => (this.terminalOnly ? this.context?.theme : undefined),
-        (theme, notify) => theme.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.router,
-        (router, notify) => router.subscribe(notify),
-      )
+      .watchStore(() => (this.terminalOnly ? this.context?.config : undefined))
+      .watchStore(() => this.context?.agentSelection)
+      .watchStore(() => (this.terminalOnly ? this.context?.theme : undefined))
+      .watchStore(() => this.context?.router)
       .effect(() => this.ownerDocument, installTitleTooltips);
   }
 
@@ -139,18 +127,18 @@ export class OpenClawApp extends OpenClawLightDomElement {
     void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
+    const runtime = this.runtime;
+    this.startupPending = true;
     const focusTarget = this.focusTarget;
-    if (focusTarget?.kind === "terminal") {
-      this.requestLazyDocument(TERMINAL_PANEL_ELEMENT);
-    }
-    if (focusTarget?.kind === "desktop") {
-      this.requestLazyDocument(DESKTOP_PANEL_ELEMENT);
-    }
-    if (focusTarget?.kind === "browser") {
-      this.requestLazyDocument(BROWSER_DOCUMENT_ELEMENT);
-    }
-    if (focusTarget?.kind === "dashboard") {
-      this.requestLazyDocument(DASHBOARD_DOCUMENT_ELEMENT);
+    if (focusTarget) {
+      this.requestLazyDocument(
+        {
+          terminal: TERMINAL_PANEL_ELEMENT,
+          desktop: DESKTOP_PANEL_ELEMENT,
+          browser: BROWSER_DOCUMENT_ELEMENT,
+          dashboard: DASHBOARD_DOCUMENT_ELEMENT,
+        }[focusTarget.kind],
+      );
     }
     if (this.runtime.documentMode?.kind === "approval") {
       this.requestLazyDocument(APPROVAL_PAGE_ELEMENT);
@@ -167,8 +155,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
     // The runtime is created after controller hostConnected hooks run. Ensure
     // their lazy source getters bind on both the initial mount and reconnect.
     this.requestUpdate();
-    void this.runtime
+    void runtime
       .start()
+      .finally(() => {
+        if (this.runtime === runtime) {
+          this.startupPending = false;
+        }
+      })
       .then(() => this.resolveFocusDashboard())
       .catch((error: unknown) => {
         console.error("[openclaw] application start failed", error);
@@ -603,9 +596,21 @@ export class OpenClawApp extends OpenClawLightDomElement {
     const initialConnectPending =
       runtime.documentMode === null &&
       gatewaySnapshot.lastError === null &&
-      (gatewaySnapshot.phase === "starting" ||
+      // Route warming can yield before gateway.start() enters connecting.
+      ((this.startupPending && gatewaySnapshot.phase === "stopped") ||
+        gatewaySnapshot.phase === "starting" ||
         (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
-    const warmConnectPending = initialConnectPending && runtime.warmBoot && !this.loginGatePinned;
+    // A failed network attempt cannot revoke the already admitted local cache.
+    // Credential changes and explicit auth/pairing rejections still return to sign-in.
+    const warmConnectPending =
+      runtime.documentMode === null &&
+      runtime.warmBoot &&
+      !this.loginGatePinned &&
+      (initialConnectPending ||
+        (gatewaySnapshot.phase === "connecting" &&
+          !gatewaySnapshot.lastErrorAuthReason &&
+          (gatewaySnapshot.lastErrorCode === null ||
+            gatewaySnapshot.lastErrorCode === "GATEWAY_BUSY")));
     if (initialConnectPending && !warmConnectPending) {
       return renderConnectingSplash(gatewayStartupStatus);
     }
@@ -644,6 +649,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
             mascot: context.theme.branding.mascot,
             connected: gatewayConnected,
             lastError: gatewaySnapshot.lastError,
+            reconnectAt: gatewaySnapshot.reconnectAt,
             reconnectPending:
               gatewaySnapshot.lastError !== null &&
               (gatewaySnapshot.phase === "connecting" || gatewaySnapshot.phase === "reconnecting"),

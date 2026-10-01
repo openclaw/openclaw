@@ -3,7 +3,8 @@ import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/se
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { readMentionStoreSnapshot } from "./mention-inbox-store.js";
 import {
   SESSION_KEY,

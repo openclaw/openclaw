@@ -40,6 +40,7 @@ import { log } from "../logger.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
+import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import {
@@ -199,17 +200,17 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
   };
-  const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
+  const { session: activeSession } = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
+    resolveCompactionThinkingLevel: createAttemptCompactionThinkingResolver(
+      attempt,
+      input.sessionAgentId,
+    ),
     beforeToolBatch: input.clientToolPreparation.catalogToolHookContext
       ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
       : undefined,
   });
-  const activeSession = createdSession.session;
-  if (!activeSession) {
-    throw new Error("Embedded agent session missing");
-  }
   // Publish ownership before post-construction hooks. Outer cleanup must dispose
   // the session if tool activation or terminal-hook installation fails.
   input.onSessionCreated(activeSession);
@@ -373,7 +374,6 @@ type SessionBoundaryAttempt = Pick<
   | "prompt"
   | "skipPreparedUserTurnMessage"
   | "suppressNextUserMessagePersistence"
-  | "trigger"
   | "userTurnTranscriptRecorder"
 >;
 
@@ -414,7 +414,6 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         preserveLeaf:
           attempt.skipPreparedUserTurnMessage === true ||
           isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
-        trigger: attempt.trigger,
       });
   // Admission can persist the turn before prompt preparation intentionally omits it.
   // Prefer the recorder-owned row so orphan repair cannot detach the canonical leaf.
@@ -540,7 +539,6 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   replayAllowedToolNames: ReadonlySet<string>;
   resolveActiveContextEnginePluginId: () => string | undefined;
   sessionAgentId: string;
-  transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }) {
   const { attempt } = input;
@@ -614,7 +612,8 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
     allowedToolNames: input.replayAllowedToolNames,
     trigger: attempt.trigger,
-    suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
+    suppressNextUserMessagePersistence:
+      prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: attempt.assistantErrorTranscript,
     skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
@@ -640,6 +639,16 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       const media = runtimeMessage ? readPersistedMediaFacts(message) : undefined;
       if (runtimeMessage && media?.length) {
         attachRuntimePromptMediaFacts(runtimeMessage, media);
+      }
+      // Replay suppresses the append of a user that is already durable. Report it
+      // like an adopted append so retries and fallbacks do not append it again;
+      // after compaction that append would adopt a row outside the current turn.
+      if (
+        prepareInitialUserTurnReplay !== undefined &&
+        !attempt.suppressNextUserMessagePersistence &&
+        attempt.userTurnTranscriptRecorder?.hasPersisted() === true
+      ) {
+        attempt.onUserMessagePersisted?.(message);
       }
     },
     onUserMessageBlocked: () => {

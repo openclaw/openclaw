@@ -50,10 +50,6 @@ export function normalizeBundledChannelId(raw?: string | null): string | null {
   return bundledChannelIdSet.has(resolved) ? resolved : null;
 }
 
-export function formatRawChannelConfigIssueMessage(message: string): string {
-  return `invalid config: ${message}`;
-}
-
 function buildDmPolicyDependencyWarning(params: {
   channelId: string;
   accountId?: string;
@@ -94,10 +90,6 @@ function hasConfiguredDmAllowFrom(record: Record<string, unknown>): boolean {
   );
 }
 
-function isConfigRecordEnabled(record: Record<string, unknown>): boolean {
-  return record.enabled !== false;
-}
-
 export function hasChannelDmPolicyDependencyWarningCandidates(config: OpenClawConfig): boolean {
   if (!config.channels || !isRecord(config.channels)) {
     return false;
@@ -106,7 +98,7 @@ export function hasChannelDmPolicyDependencyWarningCandidates(config: OpenClawCo
     ([channelId, channelValue]) =>
       !DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) &&
       isRecord(channelValue) &&
-      isConfigRecordEnabled(channelValue),
+      channelValue.enabled !== false,
   );
 }
 
@@ -136,7 +128,7 @@ export function collectChannelDmPolicyDependencyWarnings(
     if (
       DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) ||
       !isRecord(channelValue) ||
-      !isConfigRecordEnabled(channelValue)
+      channelValue.enabled === false
     ) {
       continue;
     }
@@ -160,7 +152,7 @@ export function collectChannelDmPolicyDependencyWarnings(
       continue;
     }
     for (const [accountId, accountValue] of Object.entries(channelValue.accounts)) {
-      if (!isRecord(accountValue) || !isConfigRecordEnabled(accountValue)) {
+      if (!isRecord(accountValue) || accountValue.enabled === false) {
         continue;
       }
       const allowFromSource = hasConfiguredDmAllowFrom(accountValue) ? "explicit" : "inherited";
@@ -214,7 +206,7 @@ export function collectRawBundledChannelConfigIssues(
         error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`;
       issues.push({
         path,
-        message: formatRawChannelConfigIssueMessage(message),
+        message: `invalid config: ${message}`,
         allowedValues: error.allowedValues,
         allowedValuesHiddenCount: error.allowedValuesHiddenCount,
       });

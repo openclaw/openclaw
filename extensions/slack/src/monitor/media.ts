@@ -197,9 +197,7 @@ function resolveSlackMediaMimetype(
 }
 
 function looksLikeHtmlBuffer(buffer: Buffer): boolean {
-  const head = normalizeLowercaseStringOrEmpty(
-    buffer.subarray(0, 512).toString("utf-8").replace(/^\s+/, ""),
-  );
+  const head = normalizeLowercaseStringOrEmpty(buffer.subarray(0, 512).toString("utf-8"));
   return head.startsWith("<!doctype html") || head.startsWith("<html");
 }
 

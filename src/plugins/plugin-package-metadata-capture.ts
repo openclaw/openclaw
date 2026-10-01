@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import {
   retainLoadedPluginSourceCapture,
@@ -89,6 +90,8 @@ function pluginDependencyNames(manifest: Record<string, unknown> | undefined): S
 type PluginNativeDependencyScope = { prepareDependencies?: () => void };
 
 export type PluginModuleCapture = {
+  staticImports?: ReadonlySet<string>;
+  isRequireReference: (specifier: string) => boolean;
   prepareDependency: ReturnType<typeof createPluginDependencyLookup>;
   nativeScope: PluginNativeDependencyScope;
   capture: (
@@ -622,10 +625,26 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     directory = fs.realpathSync(created);
     fs.chmodSync(directory, 0o700);
   } catch (error) {
-    if (created) {
-      fs.rmSync(created, { recursive: true, force: true });
+    const cleanupErrors: unknown[] = [];
+    try {
+      if (created) {
+        fs.rmSync(created, { recursive: true, force: true });
+      }
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
     }
-    instance?.release();
+    try {
+      instance?.release();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (cleanupErrors.length > 0) {
+      throw createSqliteLifecycleAggregateError(
+        [error, ...cleanupErrors],
+        "Plugin source capture setup and cleanup failed",
+        error,
+      );
+    }
     throw error;
   }
   const inputs = new Map<string, PluginSourceInput>();

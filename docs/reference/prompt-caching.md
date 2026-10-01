@@ -214,6 +214,8 @@ CLI backends that emit JSONL usage events (`jsonlDialect: "claude-stream-json"` 
 
 Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded version probe finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. The first CLI execution or direct Anthropic OAuth request starts the shared probe; concurrent executions reuse it, and API catalog discovery does not start it. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed probe keeps the established argv. `cacheRetention` still has no effect on this path.
 
+One-shot helper runs dispatched through a CLI backend, such as Active Memory recall on `claude-cli`, get a new session key on every run. Those runs carry the Runtime facts line (agent, session, model, channel) in their only user turn instead of the system prompt, so repeated recalls of one agent send a byte-identical system prompt and can reuse Claude's prompt cache. Normal CLI turns keep the Runtime line in the system prompt.
+
 Source: `src/agents/cli-output.ts` (`toCliUsage`).
 
 ### Other providers

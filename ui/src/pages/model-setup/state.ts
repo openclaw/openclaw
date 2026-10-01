@@ -1,4 +1,5 @@
 import type {
+  ProviderLoginOption,
   SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
@@ -62,9 +63,15 @@ export type ModelSetupWizardResult =
   | WizardNextResult
   | { done: true; status: "not-admitted"; error: string };
 
+export type ModelSetupWizardRecovery = {
+  sessionId: string;
+  authChoice: string;
+  authKind?: ProviderLoginOption["kind"];
+};
+
 type ModelSetupWizardPhase =
   | { phase: "idle" }
-  | { phase: "starting"; authChoice: string }
+  | { phase: "starting"; authChoice: string; notice?: string }
   | {
       phase: "step";
       authChoice: string;

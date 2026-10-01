@@ -11,6 +11,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -345,7 +346,12 @@ async function readSlotColdOpenOutcome(
     ).toEqual(offeredSlotLabels);
     const held =
       label === "Discussion"
-        ? await holdModuleResponse(page, /\/assets\/session-discussion-panel-[^/]+\.js$/u)
+        ? await holdModuleResponse(
+            page,
+            controlUiE2eBuiltModuleRequest(
+              "ui/src/pages/chat/components/session-discussion-panel.ts",
+            ),
+          )
         : null;
     try {
       await choices.filter({ hasText: label }).click();

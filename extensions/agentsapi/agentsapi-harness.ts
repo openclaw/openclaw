@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
+import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
 import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
 import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
@@ -29,6 +29,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   let closing = false;
   const runningSessions = new Map<string, number>();
   const isolatedRuns = new Map<AbortController, Promise<unknown>>();
+  const promptHistories: AgentsApiPromptHistories = new WeakMap();
   let bindings: ReturnType<typeof createAgentsApiBindings> | undefined;
   const getBindings = () => (bindings ??= createAgentsApiBindings(runtime));
   const assertCurrent = () => {
@@ -138,6 +139,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
               },
               target,
               () => runtime.config.current().plugins?.entries?.agentsapi?.config,
+              promptHistories,
             );
           },
         );
@@ -200,17 +202,23 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
   ) {
     throw new AgentHarnessPreflightError(
       "Agents API cannot enforce this run's restrictions on native shell, file, or web-search tools.",
-      { scope: "harness" },
+      {
+        scope: "harness",
+        userMessage:
+          "Agents API cannot run with this chat's tool restrictions because it cannot enforce them on native tools. Choose a harness that supports these restrictions or update the tool settings.",
+      },
     );
   }
   const target = requireAgentsApiSessionTarget(params);
   if (!params.resolvedApiKey) {
     throw new Error("Agents API MVP requires an OpenAI API key");
   }
-  if (params.images?.length || params.sandbox) {
-    throw new Error(
-      "Agents API MVP supports text in its selected execution environment only; images and Gateway sandbox placement are unsupported",
-    );
+  if (params.sandbox) {
+    throw new AgentHarnessPreflightError("Agents API does not support Gateway sandbox placement.", {
+      scope: "harness",
+      userMessage:
+        "Agents API cannot run in the configured Gateway sandbox. Choose a harness that supports Gateway sandbox placement before retrying.",
+    });
   }
   if (params.contextEngine && params.contextEngine.info.id !== "legacy") {
     throw new Error("Agents API MVP currently supports only the default legacy context engine");

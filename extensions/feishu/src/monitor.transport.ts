@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -13,7 +14,6 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   createWebhookInFlightLimiter,
-  installRequestBodyLimitGuard,
   readWebhookBodyOrReject,
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -232,13 +232,11 @@ function waitForFeishuWsCycleEnd(params: {
         return;
       }
       settled = true;
-      if (handleAbort) {
-        params.abortSignal?.removeEventListener("abort", handleAbort);
-      }
+      params.abortSignal?.removeEventListener("abort", handleAbort);
       resolve(result);
     };
 
-    const handleAbort: (() => void) | undefined = () => finish("abort");
+    const handleAbort = () => finish("abort");
     params.abortSignal?.addEventListener("abort", handleAbort, { once: true });
     if (params.abortSignal?.aborted) {
       finish("abort");
@@ -269,10 +267,7 @@ export async function monitorWebSocket({
 
     let wsClient: Lark.WSClient | undefined;
     try {
-      let reportTerminalError: (err: Error) => void = () => {};
-      const terminalError = new Promise<Error>((resolve) => {
-        reportTerminalError = resolve;
-      });
+      const { promise: terminalError, resolve: reportTerminalError } = createDeferred<Error>();
       const handleWsError = (err: Error) => {
         if (isFeishuWsTerminalError(err)) {
           reportTerminalError(err);
@@ -490,19 +485,10 @@ async function handleFeishuWebhook(
     return;
   }
 
-  const guard = installRequestBodyLimitGuard(req, res, {
-    maxBytes: FEISHU_WEBHOOK_MAX_BODY_BYTES,
-    timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
-    responseFormat: "text",
-  });
-  if (guard.isTripped()) {
-    preAuthInFlightLimiter.release(preAuthInFlightKey);
-    return;
-  }
-
   try {
     let rawBody: string;
     try {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
       const body = await readWebhookBodyOrReject({
         req,
         res,
@@ -511,9 +497,6 @@ async function handleFeishuWebhook(
         profile: "pre-auth",
       });
       if (!body.ok || res.writableEnded) {
-        return;
-      }
-      if (guard.isTripped()) {
         return;
       }
       rawBody = body.value;
@@ -562,7 +545,6 @@ async function handleFeishuWebhook(
     } finally {
       // This slot owns only untrusted body and signature work; authenticated
       // parsing and dispatch must not reject new reads when downstream stalls.
-      guard.dispose();
       preAuthInFlightLimiter.release(preAuthInFlightKey);
     }
 

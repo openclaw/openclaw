@@ -56,6 +56,8 @@
   --chrome-strong: #000000;
 
   --text: #ffffff;
+  --github-item-bg: color-mix(in srgb, var(--text) 4%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg));
   --text-strong: #ffffff;
   --chat-text: #ffffff;
   --muted: #c9c9c9;
@@ -155,6 +157,8 @@
   --chrome-strong: #ffffff;
 
   --text: #000000;
+  --github-item-bg: color-mix(in srgb, var(--text) 4%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg));
   --text-strong: #000000;
   --chat-text: #000000;
   --muted: #3a3a3a;

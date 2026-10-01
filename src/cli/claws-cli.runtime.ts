@@ -1,5 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { stableStringify } from "@openclaw/normalization-core";
+import { filterStringEntries, stableStringify } from "@openclaw/normalization-core";
 import {
   listAgentEntries,
   listAgentIds,
@@ -47,7 +47,6 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
 } from "../claws/types.js";
-// Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
@@ -100,12 +99,7 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
       typeof server?.url === "string"
         ? redactSensitiveUrlLikeString(server.url)
         : typeof server?.command === "string"
-          ? redactSensitiveArgv([
-              server.command,
-              ...(Array.isArray(server.args)
-                ? server.args.filter((arg): arg is string => typeof arg === "string")
-                : []),
-            ]).join(" ")
+          ? redactSensitiveArgv([server.command, ...filterStringEntries(server.args)]).join(" ")
           : "invalid declaration";
     runtime.log(`  MCP ${action.id}: ${target}`);
   }
@@ -395,8 +389,6 @@ export async function runClawsAddCommand(
           },
         ],
       };
-    } else {
-      resumableInstallRecord = resumeRecord;
     }
   }
 
@@ -506,8 +498,6 @@ export async function runClawsStatusCommand(
     runtime.exit(1);
   }
 }
-
-export { runClawsUpdateCommand } from "./claws-update-cli.runtime.js";
 
 export async function runClawsRemoveCommand(
   target: string,

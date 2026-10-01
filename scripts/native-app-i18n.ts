@@ -6,8 +6,15 @@ import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
-import { selectDeterministicTranslation } from "./android-app-i18n.ts";
+import { decodeXml } from "../src/shared/xml.ts";
+import {
+  collectToolDisplaySources,
+  findClosingDelimiter,
+  lineNumber,
+  selectDeterministicTranslation,
+} from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
+import { compareAscii as compareCodePoints } from "./lib/canonical-json.mjs";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 type NativeI18nSurface = "android" | "apple";
@@ -85,6 +92,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
 const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
+const TOOL_DISPLAY_SOURCE =
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json";
 const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
   android: [
     path.join(ROOT, "apps", "android", "app", "src", "main"),
@@ -264,15 +273,6 @@ function isAsciiAlphaNumeric(character: string): boolean {
   );
 }
 
-function decodeXml(value: string): string {
-  return value
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&");
-}
-
 function isLocalizableApplePlistKey(key: string): boolean {
   return key.endsWith("UsageDescription") || APPLE_LOCALIZABLE_DESCRIPTION_KEYS.has(key);
 }
@@ -400,52 +400,6 @@ function extractKotlinInterpolations(source: string): NativeInterpolation[] | nu
     }
   }
   return values;
-}
-
-function compareCodePoints(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function lineNumber(source: string, offset: number): number {
-  return source.slice(0, offset).split("\n").length;
-}
-
-function findClosingDelimiter(
-  source: string,
-  openingIndex: number,
-  opening: string,
-  closing: string,
-): number | null {
-  let depth = 0;
-  let quoted = false;
-  let escaped = false;
-  for (let index = openingIndex; index < source.length; index += 1) {
-    const character = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
-      continue;
-    }
-    if (character === opening) {
-      depth += 1;
-    } else if (character === closing) {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-  return null;
 }
 
 function readMultilineStringLiteral(
@@ -1209,7 +1163,12 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
     })),
   );
   const sources = await pMap(
-    filesByRoot.flatMap(({ files, surface }) => files.map((filePath) => ({ filePath, surface }))),
+    [
+      ...filesByRoot.flatMap(({ files, surface }) =>
+        files.map((filePath) => ({ filePath, surface })),
+      ),
+      { filePath: path.join(ROOT, TOOL_DISPLAY_SOURCE), surface: "android" as const },
+    ],
     async ({ filePath, surface }) => ({
       repoPath: path.relative(ROOT, filePath).split(path.sep).join("/"),
       source: await readFile(filePath, "utf8"),
@@ -1254,7 +1213,15 @@ export function collectNativeI18nEntriesFromSources(
     }
   }
   const entries = sources.flatMap(({ repoPath, source, surface }) =>
-    extractNativeI18nCandidates(surface, repoPath, source, uiCallNames[surface]),
+    repoPath === TOOL_DISPLAY_SOURCE
+      ? [...collectToolDisplaySources(JSON.parse(source))].map((text) => ({
+          source: text,
+          surface,
+          path: repoPath,
+          kind: "tool-display",
+          line: 1,
+        }))
+      : extractNativeI18nCandidates(surface, repoPath, source, uiCallNames[surface]),
   );
   return assignNativeI18nIds(entries);
 }
@@ -1771,7 +1738,7 @@ async function main() {
       await android.verifyAndroidAppI18n();
       await apple.verifyAppleAppI18n();
     } else {
-      await android.checkAndroidAppI18n({ reportObsolete });
+      await android.checkAndroidAppI18n();
       await apple.checkAppleAppI18n({ reportObsolete });
     }
   }

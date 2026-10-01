@@ -1,7 +1,6 @@
 import { applySessionEntryPatchInDatabase } from "../../config/sessions/session-accessor.sqlite-entry-mutation.js";
 import { readSessionEntrySelectionSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { prepareSessionEntryReplacementPublication } from "../../config/sessions/session-accessor.sqlite-replacement-state.js";
-import { cloneSessionEntry } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
@@ -49,7 +48,7 @@ export function mutateAcpSessionEntryInWorker(
       const next =
         mutation.kind === "touch"
           ? mergeSessionEntry(base, { updatedAt: mutation.updatedAt })
-          : cloneSessionEntry(base);
+          : structuredClone(base);
       delete next.acp;
       const changed = applySessionEntryPatchInDatabase(database, {
         operationLabel: "session-entry.patch",

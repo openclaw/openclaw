@@ -266,13 +266,10 @@ export async function executeActViaPlaywright(
       opts.assertCurrent,
     );
     const newDownloads = await drainDownloads();
-    if (opts.action.kind === "evaluate") {
-      return await withOperationTarget({
-        result,
-        ...(newDownloads ? { downloads: newDownloads } : {}),
-      });
-    }
-    return await withOperationTarget(newDownloads ? { downloads: newDownloads } : {});
+    return await withOperationTarget({
+      ...(opts.action.kind === "evaluate" ? { result } : {}),
+      ...(newDownloads ? { downloads: newDownloads } : {}),
+    });
   } catch (err) {
     let failure = err;
     try {
@@ -309,7 +306,7 @@ export async function executeActViaPlaywright(
   }
 }
 
-export async function batchViaPlaywright(
+async function batchViaPlaywright(
   opts: GuardedInteractionOptions & {
     actions: BrowserActRequest[];
     stopOnError?: boolean;

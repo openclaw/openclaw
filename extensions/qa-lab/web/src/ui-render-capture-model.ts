@@ -1,4 +1,8 @@
-import { captureEventKey, findPairedCaptureEvent } from "./ui-render-capture-events.js";
+import {
+  captureEventKey,
+  findPairedCaptureEvent,
+  groupCaptureEvents,
+} from "./ui-render-capture-events.js";
 import { renderCapturePayload } from "./ui-render-capture-format.js";
 import {
   isSensitiveCaptureField,
@@ -28,15 +32,16 @@ export function buildCaptureViewModel(state: UiState) {
   const availableProviders = availableValues("provider");
   const availableHosts = availableValues("host");
   const normalizedSearch = state.captureSearchText.trim().toLowerCase();
+  const dimensionFilters = [
+    ["kind", state.captureKindFilter],
+    ["provider", state.captureProviderFilter],
+    ["host", state.captureHostFilter],
+  ] as const;
   const activeFilters: string[] = [];
-  if (state.captureKindFilter.length > 0) {
-    activeFilters.push(`kind: ${state.captureKindFilter.join(", ")}`);
-  }
-  if (state.captureProviderFilter.length > 0) {
-    activeFilters.push(`provider: ${state.captureProviderFilter.join(", ")}`);
-  }
-  if (state.captureHostFilter.length > 0) {
-    activeFilters.push(`host: ${state.captureHostFilter.join(", ")}`);
+  for (const [dimension, values] of dimensionFilters) {
+    if (values.length > 0) {
+      activeFilters.push(`${dimension}: ${values.join(", ")}`);
+    }
   }
   if (normalizedSearch) {
     activeFilters.push(`search: ${state.captureSearchText.trim()}`);
@@ -74,16 +79,11 @@ export function buildCaptureViewModel(state: UiState) {
     activeFilters.push("errors only");
   }
   const baseFilteredEvents = events.filter((event) => {
-    if (state.captureKindFilter.length > 0 && !state.captureKindFilter.includes(event.kind)) {
-      return false;
-    }
     if (
-      state.captureProviderFilter.length > 0 &&
-      !state.captureProviderFilter.includes(event.provider || "")
+      dimensionFilters.some(
+        ([dimension, values]) => values.length > 0 && !values.includes(event[dimension] || ""),
+      )
     ) {
-      return false;
-    }
-    if (state.captureHostFilter.length > 0 && !state.captureHostFilter.includes(event.host || "")) {
       return false;
     }
     if (state.captureErrorsOnly && !event.errorText && (event.status ?? 0) < 400) {
@@ -204,17 +204,14 @@ export function buildCaptureViewModel(state: UiState) {
   const selectedPairing = findPairedCaptureEvent(selectedEvent, events);
   const pairedEvent = selectedPairing.counterpart;
   const pairedEventKey = pairedEvent ? captureEventKey(pairedEvent) : null;
-  const pairedEventVisible =
-    pairedEventKey != null &&
-    filteredEvents.some((event) => captureEventKey(event) === pairedEventKey);
+  const isEventVisible = (event: CaptureEventView | null | undefined) =>
+    event != null &&
+    filteredEvents.some((candidate) => captureEventKey(candidate) === captureEventKey(event));
+  const pairedEventVisible = isEventVisible(pairedEvent);
   const pairingLatencyMs =
     selectedEvent && pairedEvent ? Math.max(0, Math.abs(pairedEvent.ts - selectedEvent.ts)) : null;
-  const previousFlowEventVisible =
-    previousFlowEvent != null &&
-    filteredEvents.some((event) => captureEventKey(event) === captureEventKey(previousFlowEvent));
-  const nextFlowEventVisible =
-    nextFlowEvent != null &&
-    filteredEvents.some((event) => captureEventKey(event) === captureEventKey(nextFlowEvent));
+  const previousFlowEventVisible = isEventVisible(previousFlowEvent);
+  const nextFlowEventVisible = isEventVisible(nextFlowEvent);
   const timeline = buildCaptureTimelineModel({
     state,
     filteredEvents,
@@ -251,33 +248,19 @@ export function buildCaptureViewModel(state: UiState) {
   const groupedEvents =
     state.captureGroupMode === "none" || state.captureGroupMode === "burst"
       ? [{ id: "__all__", label: "All Events", meta: "", events: filteredEvents }]
-      : Array.from(
-          filteredEvents.reduce((groups, event) => {
-            const key =
-              state.captureGroupMode === "flow"
-                ? event.flowId || "(no flow)"
-                : [event.host || "(no host)", event.path || "/"].join(" ");
-            const label =
-              state.captureGroupMode === "flow"
-                ? event.flowId || "(no flow id)"
-                : [event.host || "(no host)", event.path || "/"].join(" ");
-            const existing = groups.get(key);
-            if (existing) {
-              existing.events.push(event);
-              return groups;
-            }
-            groups.set(key, {
-              id: key,
-              label,
-              meta:
-                state.captureGroupMode === "flow"
-                  ? [event.host, event.path].filter(Boolean).join(" ")
-                  : event.flowId || "",
-              events: [event],
-            });
-            return groups;
-          }, new Map()),
-        ).map(([, group]) => group);
+      : groupCaptureEvents(filteredEvents, (event) =>
+          state.captureGroupMode === "flow"
+            ? {
+                id: event.flowId || "(no flow)",
+                label: event.flowId || "(no flow id)",
+                meta: [event.host, event.path].filter(Boolean).join(" "),
+              }
+            : {
+                id: [event.host || "(no host)", event.path || "/"].join(" "),
+                label: [event.host || "(no host)", event.path || "/"].join(" "),
+                meta: event.flowId || "",
+              },
+        );
   const clusterEventBursts = (eventsForGroup: CaptureEventView[]) => {
     const sorted = eventsForGroup.toSorted(
       (left, right) =>

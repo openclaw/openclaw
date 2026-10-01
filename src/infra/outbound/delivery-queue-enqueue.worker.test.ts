@@ -144,7 +144,7 @@ describe("outbound enqueue worker", () => {
   it("keeps stages on conflicts and atomically consumes only a matching preparation", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "enqueue-preparation";
-    const stage = createDeliveryQueueMediaRetention([], "outbound-media-stage", stateDir);
+    const stage = await createDeliveryQueueMediaRetention([], "outbound-media-stage", stateDir);
     seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       stateDir,

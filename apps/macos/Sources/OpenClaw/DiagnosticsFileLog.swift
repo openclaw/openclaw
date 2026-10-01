@@ -44,21 +44,15 @@ actor DiagnosticsFileLog {
 
     func clear() throws {
         let fm = FileManager()
-        let base = Self.logFileURL()
-        if fm.fileExists(atPath: base.path) {
-            try fm.removeItem(at: base)
-        }
-        for idx in 1...self.maxBackups {
-            let url = self.rotatedURL(index: idx)
-            if fm.fileExists(atPath: url.path) {
-                try fm.removeItem(at: url)
-            }
+        let files = [Self.logFileURL()] + (1...self.maxBackups).map(self.rotatedURL)
+        for url in files where fm.fileExists(atPath: url.path) {
+            try fm.removeItem(at: url)
         }
     }
 
     private func write(record: Record) {
         do {
-            try self.ensureDirectory()
+            try FileManager().createDirectory(at: Self.logDirectoryURL(), withIntermediateDirectories: true)
             try self.rotateIfNeeded()
             try self.append(record: record)
         } catch {
@@ -66,17 +60,9 @@ actor DiagnosticsFileLog {
         }
     }
 
-    private func ensureDirectory() throws {
-        try FileManager().createDirectory(
-            at: Self.logDirectoryURL(),
-            withIntermediateDirectories: true)
-    }
-
     private func append(record: Record) throws {
         let url = Self.logFileURL()
-        let data = try JSONEncoder().encode(record)
-        var line = Data()
-        line.append(data)
+        var line = try JSONEncoder().encode(record)
         line.append(0x0A) // newline
 
         let fm = FileManager()

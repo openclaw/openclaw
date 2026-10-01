@@ -16,6 +16,7 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { isProviderAuthChoicePlatformSupported } from "./provider-auth-choice-platform.js";
 import { parseProviderPluginMethodChoice } from "./provider-plugin-choice.js";
+import { groupPluginRecords } from "./record-groups.js";
 
 export type ProviderAuthChoiceMetadata = Omit<
   PluginManifestProviderAuthChoice,
@@ -247,16 +248,8 @@ function pickPreferredManifestAuthChoice(
 function resolvePreferredManifestAuthChoicesByChoiceId(
   candidates: readonly ProviderAuthChoiceCandidate[],
 ): ProviderAuthChoiceCandidate[] {
-  const byChoiceId = new Map<string, ProviderAuthChoiceCandidate[]>();
-  for (const candidate of candidates) {
-    const normalizedChoiceId = candidate.choiceId.trim();
-    if (!normalizedChoiceId) {
-      continue;
-    }
-    const group = byChoiceId.get(normalizedChoiceId) ?? [];
-    group.push(candidate);
-    byChoiceId.set(normalizedChoiceId, group);
-  }
+  const byChoiceId = groupPluginRecords(candidates, (candidate) => candidate.choiceId.trim());
+  byChoiceId.delete("");
   return [...byChoiceId.values()].flatMap((group) => {
     const preferred = pickPreferredManifestAuthChoice(group);
     return preferred ? [preferred] : [];

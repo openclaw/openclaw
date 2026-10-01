@@ -78,14 +78,11 @@ export function registerSessionActivityRefs(
 }
 
 function replaceSessionActivityReferences(source: SessionActivity, target: SessionActivity): void {
-  for (const [ref, activity] of activityByRef) {
-    if (activity === source) {
-      activityByRef.set(ref, target);
-    }
-  }
-  for (const [runId, activity] of activityByRunId) {
-    if (activity === source) {
-      activityByRunId.set(runId, target);
+  for (const index of [activityByRef, activityByRunId]) {
+    for (const [key, activity] of index) {
+      if (activity === source) {
+        index.set(key, target);
+      }
     }
   }
 }
@@ -143,13 +140,7 @@ export function resolveSessionActivity(params: {
   seq?: number;
   create?: boolean;
 }): SessionActivity | undefined {
-  let activity: SessionActivity | undefined;
-  if (params.runId) {
-    const byRun = activityByRunId.get(params.runId);
-    if (byRun) {
-      activity = byRun;
-    }
-  }
+  let activity = params.runId ? activityByRunId.get(params.runId) : undefined;
 
   for (const ref of sessionRefs(params)) {
     const byRef = activityByRef.get(ref);

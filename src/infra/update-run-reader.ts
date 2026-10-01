@@ -1,28 +1,20 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
 } from "../state/openclaw-state-db-contract.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
   readCurrentOpenClawStateDatabaseContentVersion,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  iterateSqliteQuerySync,
-} from "./kysely-sync.js";
-import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
+import type { OpenClawStateReadOptions } from "../state/openclaw-state-read.types.js";
+import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   decodeRun,
-  hasStoredUpdateRecovery,
   readActiveUpdateRun,
-  readLatestUpdateRun,
   readUpdateRunRecord,
   readUpdateRuns,
   type UpdateRunListInput,
@@ -32,7 +24,6 @@ import {
   type UpdateFetchFailure,
   type UpdateRunRecord,
 } from "./update-run-record.js";
-import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
 export function getUpdateRun(
   runId: string,
@@ -87,8 +78,31 @@ export async function getUpdateRunAsync(
   runId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<UpdateRunRecord | undefined> {
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type: "updateRuns.get", runId }),
+  return await withArtifactPreservingStateReads(() =>
+    readUpdateRunAsync(runId, options, { preferIndependentWarmRead: true }),
+  );
+}
+
+/** The active updater already writes this ledger, so SQLite sidecars need no private copy.
+ * Canonical state closure drains the retained worker before database replacement.
+ */
+export function getUpdateRunForProgressAsync(
+  runId: string,
+  options: OpenClawStateDatabaseOptions = {},
+  signal?: AbortSignal,
+): Promise<UpdateRunRecord | undefined> {
+  return readUpdateRunAsync(runId, options, { live: true, signal });
+}
+
+async function readUpdateRunAsync(
+  runId: string,
+  options: OpenClawStateDatabaseOptions,
+  readOptions: OpenClawStateReadOptions,
+): Promise<UpdateRunRecord | undefined> {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "updateRuns.get", runId },
+    readOptions,
   );
   if (!reply) {
     return undefined;
@@ -141,16 +155,47 @@ export function createUpdateRunAdmissionReader(
   };
 }
 
-/** The fixed two-row status projection reuses the live owner; cold reads prepare one snapshot. */
+/** Keep the fixed status projection in one read-worker snapshot. */
 export async function getUpdateRunStatusAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<{ activeRun?: UpdateRunRecord; lastRun?: UpdateRunRecord }> {
-  return (
-    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
-      ({ db }) => ({ activeRun: readActiveUpdateRun(db), lastRun: readLatestUpdateRun(db) }),
+  const reply = await withArtifactPreservingStateReads(() =>
+    executeExistingOpenClawStateRead(
       options,
-    )) ?? {}
+      { type: "updateRuns.status" },
+      { preferIndependentWarmRead: true },
+    ),
   );
+  if (!reply) {
+    return {};
+  }
+  if (!reply.ok || reply.type !== "updateRuns.status") {
+    throw new Error("Unexpected update run status result");
+  }
+  return reply.status;
+}
+
+export async function getUpdateRunHistoryStatusAsync(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<{
+  activeRun?: UpdateRunRecord;
+  lastRun?: UpdateRunRecord;
+  expiredRun?: UpdateRunRecord;
+}> {
+  const reply = await withArtifactPreservingStateReads(() =>
+    executeExistingOpenClawStateRead(
+      options,
+      { type: "updateRuns.historyStatus" },
+      { preferIndependentWarmRead: true },
+    ),
+  );
+  if (!reply) {
+    return {};
+  }
+  if (!reply.ok || reply.type !== "updateRuns.historyStatus") {
+    throw new Error("Unexpected update run history status result");
+  }
+  return reply.status;
 }
 
 /** Doctor retains its maintenance owner while the worker reads the private snapshot. */
@@ -159,7 +204,11 @@ export async function listUpdateRunsAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<UpdateRunRecord[]> {
   const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type: "updateRuns.list", input: { ...input } }),
+    executeExistingOpenClawStateRead(
+      options,
+      { type: "updateRuns.list", input: { ...input } },
+      { preferIndependentWarmRead: true },
+    ),
   );
   if (!reply) {
     return [];
@@ -233,50 +282,4 @@ export function getLatestUpdateFetchFailure(
     }
     return latestFailure;
   }, options);
-}
-
-export type UpdateRunReconciliationInput = {
-  explicit?: boolean;
-  runIds?: readonly string[];
-  requireAllActive?: boolean;
-  legacyOnly?: boolean;
-};
-export type UpdateRunReconciliationCandidate = {
-  record: UpdateRunRecord;
-  rule: string | undefined;
-};
-
-export function inspectUpdateRunReconciliation(
-  db: DatabaseSync,
-  record: UpdateRunRecord,
-  input: UpdateRunReconciliationInput,
-): UpdateRunReconciliationCandidate {
-  return {
-    record,
-    rule: hasStoredUpdateRecovery(db, record.runId)
-      ? undefined
-      : inspectUpdateRunAbandonment(record, input),
-  };
-}
-
-export function readUpdateRunReconciliationCandidates(
-  db: DatabaseSync,
-  input: UpdateRunReconciliationInput,
-): UpdateRunReconciliationCandidate[] {
-  if (!tableExists(db, "update_runs")) {
-    return [];
-  }
-  let query = getNodeSqliteKysely<Pick<DB, "update_runs">>(db)
-    .selectFrom("update_runs")
-    .selectAll()
-    .where("status", "=", "running");
-  if (!input.explicit) {
-    query = query.where("updated_at_ms", "<", Date.now() - ABANDONED_UPDATE_RUN_MS);
-  }
-  if (input.runIds) {
-    query = query.where("run_id", "in", [...input.runIds]);
-  }
-  return executeSqliteQuerySync(db, query.orderBy("run_id")).rows.map((row) =>
-    inspectUpdateRunReconciliation(db, decodeRun(row), input),
-  );
 }

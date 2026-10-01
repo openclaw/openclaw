@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { WizardNextResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -35,6 +36,120 @@ describe("ModelSetupPage first-run application recovery", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it.each(["cancelled", "running", "missing"] as const)(
+    "resumes interrupted provider input without replaying setup and releases only confirmed cancellation (%s)",
+    async (outcome) => {
+      const original = createFirstRunContext();
+      const result = {
+        ...detection,
+        authOptions: [
+          {
+            id: "custom-api-key",
+            label: "Custom provider",
+            kind: "custom" as const,
+            featured: true,
+          },
+        ],
+      };
+      const question = {
+        done: false,
+        status: "running",
+        step: { id: "provider-url", type: "text", message: "API Base URL" },
+      };
+      let sessionId: string | undefined;
+      original.request.mockImplementation(async (method, params) => {
+        if (method === "openclaw.setup.auth.start") {
+          sessionId = (params as { sessionId: string }).sessionId;
+          return { sessionId, done: false, status: "running" };
+        }
+        if (method === "wizard.next") {
+          return question;
+        }
+        throw new Error("Original connection closed");
+      });
+      const { page: previous, provider } = await mountPage(original.context, {
+        state: { phase: "ready", result },
+        client: original.client,
+        firstRun: true,
+      });
+      previous
+        .querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
+        .click();
+      await waitForFast(() => expect(previous.textContent).toContain("API Base URL"));
+      provider.remove();
+
+      const relaunched = createFirstRunContext();
+      relaunched.request.mockImplementation(async (method) => {
+        if (method === "wizard.next") {
+          if (outcome === "missing") {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "wizard not found",
+              details: { code: "WIZARD_NOT_FOUND" },
+            });
+          }
+          return question;
+        }
+        if (method === "wizard.cancel") {
+          return { status: outcome };
+        }
+        if (method === "openclaw.setup.detect") {
+          return result;
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const { page } = await mountPage(relaunched.context, {
+        state: { phase: "ready", result },
+        client: relaunched.client,
+        firstRun: true,
+      });
+      await waitForFast(() =>
+        expect(relaunched.request).toHaveBeenCalledWith(
+          "wizard.next",
+          { sessionId },
+          { timeoutMs: null, signal: expect.any(AbortSignal) },
+        ),
+      );
+      if (outcome !== "missing") {
+        await waitForFast(() => expect(page.textContent).toContain("API Base URL"));
+        const cancel = [
+          ...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
+        ].find((button) => button.textContent?.trim() === "Cancel")!;
+        await waitForFast(() => expect(cancel.disabled).toBe(false));
+        cancel.click();
+        if (outcome === "cancelled") {
+          await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+        } else {
+          await waitForFast(() =>
+            expect(page.textContent).toContain("Setup is finishing the current step"),
+          );
+        }
+      } else {
+        await waitForFast(() =>
+          expect(page.textContent).toContain("Gateway no longer has this setup session"),
+        );
+      }
+      await waitForFast(() => {
+        expect(
+          page.querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
+            .disabled,
+        ).toBe(outcome !== "cancelled");
+        expect(readFirstRunActivationReceipt(relaunched.context) === null).toBe(
+          outcome === "cancelled",
+        );
+      });
+      expect(
+        relaunched.request.mock.calls.some(([method]) => method === "openclaw.setup.auth.start"),
+      ).toBe(false);
+      expect(
+        relaunched.request.mock.calls
+          .filter(([method]) => method === "wizard.next")
+          .map(([, params]) => params),
+      ).toEqual([{ sessionId }]);
+      expect(relaunched.context.navigate).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["valid", "expiry", "removal", "auth"])(
     "accepts only a current restored verification after application recreation (%s)",

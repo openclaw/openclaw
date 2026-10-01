@@ -1,4 +1,3 @@
-// Node screen recording command: invokes screen.record and writes returned media locally.
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
@@ -20,7 +19,6 @@ import {
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-/** Register node screen recording commands. */
 export function registerNodesScreenCommands(nodes: Command) {
   const screen = nodes
     .command("screen")

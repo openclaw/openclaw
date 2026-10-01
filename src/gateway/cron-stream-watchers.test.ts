@@ -29,6 +29,41 @@ describe("cron stream watchers", () => {
     vi.useRealTimers();
   });
 
+  it.each(["delivery", "owner"])(
+    "withholds a stream needing %s repair without blocking its healthy sibling",
+    async (repair) => {
+      const warn = vi.fn();
+      const { fake, watchers } = createCronStreamWatcherFixture({
+        legacyDefaultAgentId: repair === "owner" ? "ops" : undefined,
+        logger: { info: vi.fn(), warn },
+      });
+      const invalid = job({ id: "invalid-delivery", delivery: { mode: "none" } });
+      if (repair === "delivery") {
+        Reflect.deleteProperty(invalid.delivery!, "mode");
+      }
+      try {
+        await expect(watchers.start(invalid)).rejects.toThrow("openclaw doctor --fix");
+        await watchers.start({ ...invalid, agentId: "ops", delivery: { mode: "none" } });
+        await settle();
+        expect(watchers.inspect(invalid.id)?.processAlive).toBe(true);
+        await watchers.reconcile([invalid, job({ id: "healthy-stream", agentId: "ops" })], true);
+        await settle();
+        expect(fake.spawn).toHaveBeenCalledTimes(2);
+        expect(watchers.inspect("healthy-stream")?.state).toBe("running");
+        expect(watchers.inspect("invalid-delivery")?.processAlive).toBe(false);
+        expect(warn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            jobId: "invalid-delivery",
+            err: expect.stringContaining("openclaw doctor --fix"),
+          }),
+          "cron-stream: reconcile start failed",
+        );
+      } finally {
+        await watchers.stopAll("shutdown");
+      }
+    },
+  );
+
   it("marks a source stable once after a late scheduler wake", async () => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);

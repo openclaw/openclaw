@@ -811,8 +811,8 @@ describe("explicit live model discovery scope", () => {
     expect(result.plugins?.entries?.ollama).toEqual({ enabled: true });
     expect(result.models?.providers?.ollama).toEqual({
       api: "ollama",
-      baseUrl: OLLAMA_DEFAULT_BASE_URL,
-      apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: "ollama-local",
       models: [],
     });
   });

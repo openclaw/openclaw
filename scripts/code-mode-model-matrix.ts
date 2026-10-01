@@ -48,6 +48,7 @@ import {
 } from "./lib/code-mode-matrix-provider.ts";
 import type { MatrixUsageAccounting } from "./lib/code-mode-matrix-usage.ts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
+import { groupBy } from "./lib/group-by.mts";
 
 export { validateQaEvidenceSummaryJson };
 
@@ -290,18 +291,21 @@ export function parseCodeModeMatrixOptions(
   const models: string[] = [];
   const modes: CodeModeMatrixMode[] = [];
   const tasks: CodeModeMatrixTask[] = [];
-  let allowFailures = false;
-  let dryRun = false;
-  let gatewayExecutor: CodeModeExecutorId = "node";
-  let keepState = false;
-  let outputDir: string | undefined;
-  let runtimeDir: string | undefined;
-  let baselineResults: string | undefined;
-  let repetitions = DEFAULT_REPETITIONS;
-  let thinking = "low";
-  let timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
-  const admission = { ...DEFAULT_ADMISSION };
-  let schedulePath: string | undefined;
+  const options: CodeModeMatrixOptions = {
+    allowFailures: false,
+    ...DEFAULT_ADMISSION,
+    dryRun: false,
+    gatewayExecutor: "node",
+    keepState: false,
+    models,
+    modes,
+    outputDir: undefined,
+    repetitions: DEFAULT_REPETITIONS,
+    repoRoot: path.resolve(cwd),
+    tasks,
+    thinking: "low",
+    timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
+  };
   const seen = new Set<string>();
   const recordOnce = (flag: string) => {
     if (seen.has(flag)) {
@@ -323,14 +327,14 @@ export function parseCodeModeMatrixOptions(
       index += 1;
       continue;
     }
-    const admissionKeys: Record<string, keyof typeof admission> = {
+    const admissionKeys: Record<string, keyof typeof DEFAULT_ADMISSION> = {
       "--concurrency": "concurrency",
       "--max-cells": "maxCells",
       "--max-tokens": "maxTokens",
       "--max-known-cost-usd": "maxKnownCostUsd",
       "--max-wall-seconds": "maxWallSeconds",
     };
-    const admissionKey = admissionKeys[arg];
+    const admissionKey = Object.hasOwn(admissionKeys, arg) ? admissionKeys[arg] : undefined;
     if (admissionKey) {
       recordOnce(arg);
       const raw = requireOptionArgument(argv, index, arg);
@@ -341,94 +345,80 @@ export function parseCodeModeMatrixOptions(
       if (!Number.isFinite(value) || value <= 0) {
         throw new Error(`${arg} must be a positive number`);
       }
-      admission[admissionKey] = value;
+      options[admissionKey] = value;
       index += 1;
       continue;
     }
-    if (arg === "--schedule") {
-      recordOnce(arg);
-      schedulePath = path.resolve(cwd, requireOptionArgument(argv, index, arg));
-      index += 1;
-      continue;
-    }
-    if (arg === "--mode") {
-      collectUnique(modes, parseMode(requireOptionArgument(argv, index, arg)), arg);
-      index += 1;
-      continue;
-    }
-    if (arg === "--executor") {
-      recordOnce(arg);
-      const value = requireOptionArgument(argv, index, arg);
-      if (value !== "node" && value !== "quickjs") {
-        throw new Error(`--executor must be node or quickjs; got ${JSON.stringify(value)}`);
+    switch (arg) {
+      case "--schedule":
+        recordOnce(arg);
+        options.schedulePath = path.resolve(cwd, requireOptionArgument(argv, index, arg));
+        break;
+      case "--mode":
+        collectUnique(modes, parseMode(requireOptionArgument(argv, index, arg)), arg);
+        break;
+      case "--executor": {
+        recordOnce(arg);
+        const value = requireOptionArgument(argv, index, arg);
+        if (value !== "node" && value !== "quickjs") {
+          throw new Error(`--executor must be node or quickjs; got ${JSON.stringify(value)}`);
+        }
+        options.gatewayExecutor = value;
+        break;
       }
-      gatewayExecutor = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--task") {
-      collectUnique(tasks, parseTask(requireOptionArgument(argv, index, arg)), arg);
-      index += 1;
-      continue;
-    }
-    if (arg === "--repetitions") {
-      recordOnce(arg);
-      repetitions = parseIntegerOption(
-        requireOptionArgument(argv, index, arg),
-        arg,
-        MAX_REPETITIONS,
-      );
-      index += 1;
-      continue;
-    }
-    if (arg === "--timeout") {
-      recordOnce(arg);
-      timeoutSeconds = parseIntegerOption(requireOptionArgument(argv, index, arg), arg);
-      index += 1;
-      continue;
-    }
-    if (arg === "--thinking") {
-      recordOnce(arg);
-      thinking = requireOptionArgument(argv, index, arg).trim();
-      index += 1;
-      continue;
-    }
-    if (arg === "--output-dir") {
-      recordOnce(arg);
-      outputDir = requireOptionArgument(argv, index, arg);
-      index += 1;
-      continue;
-    }
-    if (arg === "--runtime-dir" || arg === "--baseline-results") {
-      recordOnce(arg);
-      const value = path.resolve(cwd, requireOptionArgument(argv, index, arg));
-      if (arg === "--runtime-dir") {
-        runtimeDir = value;
-      } else {
-        baselineResults = value;
+      case "--task":
+        collectUnique(tasks, parseTask(requireOptionArgument(argv, index, arg)), arg);
+        break;
+      case "--repetitions":
+        recordOnce(arg);
+        options.repetitions = parseIntegerOption(
+          requireOptionArgument(argv, index, arg),
+          arg,
+          MAX_REPETITIONS,
+        );
+        break;
+      case "--timeout":
+        recordOnce(arg);
+        options.timeoutSeconds = parseIntegerOption(requireOptionArgument(argv, index, arg), arg);
+        break;
+      case "--thinking":
+        recordOnce(arg);
+        options.thinking = requireOptionArgument(argv, index, arg).trim();
+        break;
+      case "--output-dir":
+        recordOnce(arg);
+        options.outputDir = requireOptionArgument(argv, index, arg);
+        break;
+      case "--runtime-dir":
+      case "--baseline-results": {
+        recordOnce(arg);
+        const value = path.resolve(cwd, requireOptionArgument(argv, index, arg));
+        if (arg === "--runtime-dir") {
+          options.runtimeDir = value;
+        } else {
+          options.baselineResults = value;
+        }
+        break;
       }
-      index += 1;
-      continue;
+      case "--allow-failures":
+        recordOnce(arg);
+        options.allowFailures = true;
+        continue;
+      case "--keep-state":
+        recordOnce(arg);
+        options.keepState = true;
+        continue;
+      case "--dry-run":
+        recordOnce(arg);
+        options.dryRun = true;
+        continue;
+      case "--help":
+      case "-h":
+        throw Object.assign(new Error(usage()), { code: "HELP" });
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
     }
-    if (arg === "--allow-failures") {
-      recordOnce(arg);
-      allowFailures = true;
-      continue;
-    }
-    if (arg === "--keep-state") {
-      recordOnce(arg);
-      keepState = true;
-      continue;
-    }
-    if (arg === "--dry-run") {
-      recordOnce(arg);
-      dryRun = true;
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      throw Object.assign(new Error(usage()), { code: "HELP" });
-    }
-    throw new Error(`Unknown argument: ${arg}`);
+    index += 1;
   }
 
   if (models.length === 0) {
@@ -460,34 +450,22 @@ export function parseCodeModeMatrixOptions(
   ) {
     throw new Error("Performance tasks require both explicit direct/code treatment arms.");
   }
-  if (baselineResults && (tasks.length === 0 || tasks.some((task) => !isGatewayTask(task)))) {
+  if (
+    options.baselineResults &&
+    (tasks.length === 0 || tasks.some((task) => !isGatewayTask(task)))
+  ) {
     throw new Error(
       "--baseline-results requires Gateway interview tasks with fixed workload fingerprints.",
     );
   }
-  return {
-    allowFailures,
-    ...admission,
-    dryRun,
-    gatewayExecutor,
-    keepState,
-    models,
-    modes:
-      modes.length > 0
-        ? modes
-        : tasks.some(isMatrixPerformanceTask)
-          ? ["direct", "code"]
-          : ["direct", "auto", "code"],
-    outputDir,
-    repetitions,
-    repoRoot: path.resolve(cwd),
-    ...(runtimeDir ? { runtimeDir } : {}),
-    ...(baselineResults ? { baselineResults } : {}),
-    ...(schedulePath ? { schedulePath } : {}),
-    tasks: tasks.length > 0 ? tasks : ["read", "dependent-read-write"],
-    thinking,
-    timeoutSeconds,
-  };
+  options.modes =
+    modes.length > 0
+      ? modes
+      : tasks.some(isMatrixPerformanceTask)
+        ? ["direct", "code"]
+        : ["direct", "auto", "code"];
+  options.tasks = tasks.length > 0 ? tasks : ["read", "dependent-read-write"];
+  return options;
 }
 
 function slug(value: string): string {
@@ -1400,13 +1378,7 @@ function summarizeMetric(values: (number | undefined)[]) {
 }
 
 function summarizeResults(results: CodeModeMatrixCellResult[]) {
-  const groups = new Map<string, CodeModeMatrixCellResult[]>();
-  for (const result of results) {
-    const key = `${result.model}\0${result.mode}\0${result.task}`;
-    const group = groups.get(key) ?? [];
-    group.push(result);
-    groups.set(key, group);
-  }
+  const groups = groupBy(results, (result) => `${result.model}\0${result.mode}\0${result.task}`);
   return [...groups.entries()].map(([key, group]) => {
     const [model, mode, task] = key.split("\0");
     const passed = group.filter((result) => result.passed);
@@ -1976,11 +1948,7 @@ async function main(): Promise<void> {
   }
 }
 
-function isCliEntrypoint(): boolean {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+const entrypoint = process.argv[1];
+if (entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href) {
   await main();
 }

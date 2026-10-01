@@ -531,56 +531,60 @@ describe("minimax provider hooks", () => {
     expect(model?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
   });
 
-  it("owns fast-mode stream wrapping for MiniMax transports", async () => {
-    const { apiProvider, portalProvider } = await registeredProviders();
+  it.each([true, "ultrafast"] as const)(
+    "owns fast-mode %s stream wrapping for MiniMax transports",
+    async (initialMode) => {
+      let fastMode: boolean | "ultrafast" = initialMode;
+      const { apiProvider, portalProvider } = await registeredProviders();
 
-    let resolvedApiModelId = "";
-    const captureApiModel: StreamFn = (model) => {
-      resolvedApiModelId = model.id ?? "";
-      return {} as ReturnType<StreamFn>;
-    };
-    const wrappedApiStream = apiProvider.wrapStreamFn?.({
-      provider: "minimax",
-      modelId: "MiniMax-M2.7",
-      extraParams: { fastMode: true },
-      streamFn: captureApiModel,
-    } as never);
-
-    void wrappedApiStream?.(
-      {
-        api: "anthropic-messages",
+      let resolvedApiModelId = "";
+      const captureApiModel: StreamFn = (model) => {
+        resolvedApiModelId = model.id ?? "";
+        return {} as ReturnType<StreamFn>;
+      };
+      const wrappedApiStream = apiProvider.wrapStreamFn?.({
         provider: "minimax",
-        id: "MiniMax-M2.7",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    );
+        modelId: "MiniMax-M2.7",
+        extraParams: { fastMode },
+        streamFn: captureApiModel,
+      } as never);
 
-    let resolvedPortalModelId = "";
-    const capturePortalModel: StreamFn = (model) => {
-      resolvedPortalModelId = model.id ?? "";
-      return {} as ReturnType<StreamFn>;
-    };
-    const wrappedPortalStream = portalProvider.wrapStreamFn?.({
-      provider: "minimax-portal",
-      modelId: "MiniMax-M2.7",
-      extraParams: { fastMode: true },
-      streamFn: capturePortalModel,
-    } as never);
+      void wrappedApiStream?.(
+        {
+          api: "anthropic-messages",
+          provider: "minimax",
+          id: "MiniMax-M2.7",
+        } as Model<"anthropic-messages">,
+        { messages: [] } as Context,
+        {},
+      );
 
-    void wrappedPortalStream?.(
-      {
+      let resolvedPortalModelId = "";
+      const capturePortalModel: StreamFn = (model) => {
+        resolvedPortalModelId = model.id ?? "";
+        return {} as ReturnType<StreamFn>;
+      };
+      const wrappedPortalStream = portalProvider.wrapStreamFn?.({
+        provider: "minimax-portal",
+        modelId: "MiniMax-M2.7",
+        extraParams: { fastMode: () => fastMode },
+        streamFn: capturePortalModel,
+      } as never);
+
+      const portalModel = {
         api: "anthropic-messages",
         provider: "minimax-portal",
         id: "MiniMax-M2.7",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    );
+      } as Model<"anthropic-messages">;
+      void wrappedPortalStream?.(portalModel, { messages: [] } as Context, {});
 
-    expect(resolvedApiModelId).toBe("MiniMax-M2.7-highspeed");
-    expect(resolvedPortalModelId).toBe("MiniMax-M2.7-highspeed");
-  });
+      expect(resolvedApiModelId).toBe("MiniMax-M2.7-highspeed");
+      expect(resolvedPortalModelId).toBe("MiniMax-M2.7-highspeed");
+      fastMode = false;
+      void wrappedPortalStream?.(portalModel, { messages: [] } as Context, {});
+      expect(resolvedPortalModelId).toBe("MiniMax-M2.7");
+    },
+  );
 
   it("prefers minimax-portal oauth when resolving MiniMax usage auth", async () => {
     const { apiProvider } = await registeredProviders();

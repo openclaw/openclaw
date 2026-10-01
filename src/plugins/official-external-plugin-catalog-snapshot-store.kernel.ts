@@ -11,6 +11,7 @@ import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-numb
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   HostedCatalogSignedFeedMonotonicityError,
+  isOfficialExternalPluginCatalogRollback,
   isOfficialExternalPluginCatalogSequence,
   parseOfficialExternalPluginCatalogTimestamp,
 } from "./official-external-plugin-catalog-source.js";
@@ -104,22 +105,6 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
   }
 }
 
-function isMonotonicRollback(params: {
-  candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
-  current: StoredHostedCatalogMonotonicState;
-}): boolean {
-  if (params.candidate.sequence < params.current.sequence) {
-    return true;
-  }
-  if (params.candidate.sequence > params.current.sequence) {
-    return false;
-  }
-  if (params.candidate.generatedAt === undefined || params.current.generatedAt === undefined) {
-    return false;
-  }
-  return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
-}
-
 function assertSignedSnapshotWriteIsMonotonic(params: {
   candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState | undefined;
   candidateBody: string;
@@ -132,7 +117,7 @@ function assertSignedSnapshotWriteIsMonotonic(params: {
   if (!current) {
     return;
   }
-  if (isMonotonicRollback({ candidate: params.candidate, current })) {
+  if (isOfficialExternalPluginCatalogRollback({ candidate: params.candidate, current })) {
     throw new HostedCatalogSignedFeedMonotonicityError(
       "hosted catalog signed feed sequence is older than current snapshot",
     );

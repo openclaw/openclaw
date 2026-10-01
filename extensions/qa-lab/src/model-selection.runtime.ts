@@ -1,3 +1,4 @@
+import { normalizeOptionalString as normalizeModel } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -16,7 +17,6 @@ export function resolveQaRuntimeModelPair(params: {
   resolveDefaultModel?: (mode: QaProviderMode, alternate?: boolean) => string;
 }) {
   const providerMode = normalizeQaProviderMode(params.providerMode);
-  const normalizeModel = (model: string | undefined) => model?.trim() || undefined;
   const resolveDefaultModel =
     params.resolveDefaultModel ??
     ((mode: QaProviderModeInput, alternate = false) =>

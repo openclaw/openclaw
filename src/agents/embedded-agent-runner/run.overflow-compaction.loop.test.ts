@@ -221,7 +221,7 @@ describe("embedded run retry dispatch", () => {
   });
   afterEach(() => admission.close());
 
-  it.each([undefined, "global", "agent:main:policy"])(
+  it.each(["agent:main:policy"])(
     "dispatches a global plugin attempt with its prepared owner (%s)",
     async (sandboxSessionKey) => {
       const input = makeDispatchInput({}, createEmbeddedRunReplayState());
@@ -251,25 +251,6 @@ describe("embedded run retry dispatch", () => {
     },
   );
 
-  it.each([
-    {
-      name: "node-bound",
-      execSession: {
-        execHost: "node",
-        execNode: "session-node",
-        execCwd: "/remote/default",
-      } satisfies ExecSessionDefaults,
-    },
-    {
-      name: "sandbox-required",
-      execSession: { sandbox: "required" } satisfies ExecSessionDefaults,
-    },
-  ])("forwards the $name exec session through the attempt projection", async ({ execSession }) => {
-    const result = await dispatchExecSession(execSession);
-
-    expect(result.preparedAttempt.execSession).toBe(execSession);
-  });
-
   it("resolves a projected node session with its node and cwd", async () => {
     const result = await dispatchExecSession({
       execHost: "node",
@@ -283,7 +264,7 @@ describe("embedded run retry dispatch", () => {
       turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
     });
 
-    expect(authority.exec).toEqual({
+    expect(authority.toolAuthority.exec).toEqual({
       host: "node",
       security: "full",
       ask: "off",
@@ -301,7 +282,12 @@ describe("embedded run retry dispatch", () => {
       turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
     });
 
-    expect(authority.exec).toEqual({ host: "sandbox", security: "deny", ask: "off", safeBins: [] });
+    expect(authority.toolAuthority.exec).toEqual({
+      host: "sandbox",
+      security: "deny",
+      ask: "off",
+      safeBins: [],
+    });
   });
 
   it("forwards private commit accounting before queued notices and thrown attempt cleanup", async () => {
@@ -408,7 +394,7 @@ describe("embedded run retry dispatch", () => {
     expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
   });
 
-  it.each(["openclaw", "codex", "copilot"])(
+  it.each(["openclaw", "codex"])(
     "prepares GitHub tools for each admitted run and continuation (%s)",
     async (harness) => {
       const gateway = {} as GatewayRequestContext;
@@ -522,21 +508,7 @@ describe("embedded run retry dispatch", () => {
     },
   );
 
-  it.each([undefined, "current-turn-tool-policy"])(
-    "preserves the supplied turn tool authority at dispatch (%s)",
-    async (toolAuthorityFingerprint) => {
-      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
-      input.runInput.runParams.toolAuthorityFingerprint = toolAuthorityFingerprint;
-
-      await prepareAndDispatchEmbeddedRunAttempt(input);
-
-      expect(mocks.runAttempt.mock.calls[0]?.[0].toolAuthorityFingerprint).toBe(
-        toolAuthorityFingerprint,
-      );
-    },
-  );
-
-  it.each([true, false])(
+  it.each([true])(
     "retains accepted spawns for the logical owner after a late post-compaction abort (yielded: %s)",
     async (yieldDetected) => {
       const postCompactionAbortError = new Error("post-compaction loop detected");

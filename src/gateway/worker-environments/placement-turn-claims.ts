@@ -19,8 +19,7 @@ import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
-  createPlacementSessionToolOperationOps,
-} from "./placement-session-tool-operations.js";
+} from "./placement-session-tool-operations.kernel.js";
 import {
   publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
@@ -31,7 +30,7 @@ import {
   removeTurnClaimReleaseWaiter,
   waitersFor,
 } from "./placement-turn-claim-events.js";
-import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.js";
+import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
 import {
   clearWorkerWorkspacePendingResult,
   hasCurrentWorkspaceResultClaim,
@@ -192,8 +191,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     ): WorkerSessionTurnClaim {
       return claimWorkspaceResult({ ...input, runId: input.claimId }, "mutation");
     },
-
-    ...createPlacementSessionToolOperationOps(runtime),
 
     releaseTurn(claim: WorkerSessionTurnClaim): WorkerSessionPlacementRecord {
       const sessionId = required(claim.sessionId, "session id");

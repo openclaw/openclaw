@@ -35,6 +35,10 @@
   --muted-foreground: #8b8b94;
   --file-icon-glyph: var(--muted);
 
+  /* GitHub references share an opaque neutral surface; only their ink carries status. */
+  --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 10%, var(--bg));
+
   /* Border - Whisper-thin, barely there */
   --border: #1e2028;
   --border-strong: #2e3040;
@@ -196,6 +200,8 @@
   --warn: #f59e0b;
   --warn-muted: rgba(245, 158, 11, 0.75);
   --warn-subtle: rgba(245, 158, 11, 0.08);
+  /* Presence dots are indicators, not text: idle keeps this amber in every theme. */
+  --presence-idle: #f59e0b;
   --danger: #f87171;
   --danger-muted: rgba(248, 113, 113, 0.75);
   --danger-subtle: rgba(248, 113, 113, 0.08);
@@ -252,10 +258,6 @@
   --wa-form-control-value-color: var(--text);
   --wa-form-control-hint-color: var(--muted);
   --wa-form-control-placeholder-color: var(--muted);
-
-  /* Theme transition */
-  --theme-switch-x: 50%;
-  --theme-switch-y: 50%;
 
   /* Typography */
   --mono:
@@ -363,7 +365,10 @@
   --safe-area-left: env(safe-area-inset-left, 0px);
   --shell-viewport-base: 100vh;
   --shell-safe-area-bottom: var(--safe-area-bottom);
-  --shell-canvas-height: var(--shell-viewport-height, var(--shell-viewport-base));
+  --shell-canvas-height: min(
+    var(--shell-viewport-base),
+    var(--shell-viewport-height, var(--shell-viewport-base))
+  );
   --shell-content-height: calc(
     var(--shell-canvas-height) - var(--safe-area-top) - var(--shell-safe-area-bottom)
   );
@@ -591,6 +596,8 @@
   --muted: #6e6960;
   --muted-strong: #56524a;
   --muted-foreground: #6e6960;
+  --github-item-bg: color-mix(in srgb, var(--text) 5%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 9%, var(--bg));
 
   --border: #e8e4dc;
   --border-strong: #d6d0c5;
@@ -801,39 +808,6 @@ summary,
   }
 }
 
-/* Theme transition */
-@keyframes theme-circle-transition {
-  0% {
-    clip-path: circle(0% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
-  }
-  100% {
-    clip-path: circle(150% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
-  }
-}
-
-html.theme-transition {
-  view-transition-name: theme;
-}
-
-html.theme-transition::view-transition-old(theme) {
-  mix-blend-mode: normal;
-  animation: none;
-  z-index: 1;
-}
-
-html.theme-transition::view-transition-new(theme) {
-  mix-blend-mode: normal;
-  z-index: 2;
-  animation: theme-circle-transition 0.4s var(--ease-out) forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html.theme-transition::view-transition-old(theme),
-  html.theme-transition::view-transition-new(theme) {
-    animation: none !important;
-  }
-}
-
 openclaw-app {
   display: block;
   position: relative;
@@ -857,19 +831,10 @@ openclaw-plugin-contributions {
 }
 
 @media (display-mode: standalone) {
-  @supports (height: 100lvh) {
-    :root {
-      /* iOS installed apps can exclude the status-bar inset from dvh even
-         though their canvas starts under it. lvh spans that standalone canvas;
-         never use it in browser tabs, where retractable bars need dvh. */
-      --shell-viewport-base: 100lvh;
-    }
-  }
-
   html,
   body {
-    /* The root clipping box must span the same canvas as the app, not the
-       shorter percentage-height viewport reported by some installed hosts. */
+    /* Keep the root clipping box on the CSS canvas. The app can shrink within
+       it to the visible bound without changing the keyboard layout reference. */
     height: var(--shell-viewport-base);
   }
 

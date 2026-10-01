@@ -1,4 +1,3 @@
-// Copilot plugin module implements fresh, zero-tool inference.
 import { resolve } from "node:path";
 import type { SessionConfig, SessionEvent } from "@github/copilot-sdk";
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -140,28 +139,6 @@ async function awaitWithinCompletionBoundary<T>(params: {
   }
 }
 
-async function sendPrompt(params: {
-  boundary: CompletionBoundary;
-  prompt: string;
-  requestHeaders?: Record<string, string>;
-  session: IsolatedSession;
-}): Promise<SessionEvent | undefined> {
-  return await awaitWithinCompletionBoundary({
-    boundary: params.boundary,
-    start: async (remainingMs) =>
-      await params.session.sendAndWait(
-        {
-          prompt: params.prompt,
-          ...(params.requestHeaders ? { requestHeaders: params.requestHeaders } : {}),
-        },
-        remainingMs,
-      ),
-    onBoundary: () => {
-      void params.session.abort().catch(() => undefined);
-    },
-  });
-}
-
 export async function runCopilotIsolatedCompletion(
   params: AgentHarnessIsolatedCompletionParams,
   getPool: () => Promise<CopilotClientPool>,
@@ -267,11 +244,17 @@ export async function runCopilotIsolatedCompletion(
       },
     });
     session = createdSession;
-    const event = await sendPrompt({
+    const requestHeaders = sessionProvider.provider?.headers;
+    const event = await awaitWithinCompletionBoundary({
       boundary,
-      prompt: params.prompt,
-      requestHeaders: sessionProvider.provider?.headers,
-      session: createdSession,
+      start: async (remainingMs) =>
+        await createdSession.sendAndWait(
+          { prompt: params.prompt, ...(requestHeaders ? { requestHeaders } : {}) },
+          remainingMs,
+        ),
+      onBoundary: () => {
+        void createdSession.abort().catch(() => undefined);
+      },
     });
     if (event?.type !== "assistant.message" || event.agentId !== undefined) {
       throw new Error("[copilot] isolated completion did not return a root assistant message");

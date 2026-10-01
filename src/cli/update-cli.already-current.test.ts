@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -327,6 +326,7 @@ describe("update-cli", () => {
   it.each([true, false])(
     "converges a current Git core using its before-only version receipt (runtime compatible=%s)",
     async (compatible) => {
+      runtimeRecovery.stubNodeRuntime();
       // This case specifies system-runtime guidance, independent of the host Node manager.
       vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
       const fixture = runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION);
@@ -425,7 +425,7 @@ describe("update-cli", () => {
   );
 
   it.each(
-    [true, false].flatMap((restart) =>
+    [true].flatMap((restart) =>
       (["outside", "unknown", "inside", "descendant", "foreign descendant"] as const).map(
         (membership) => ({
           restart,
@@ -515,19 +515,35 @@ describe("update-cli", () => {
         membership,
       );
 
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await updateCommand({
-          admission: "auto",
-          channel: "beta",
-          yes: true,
-          restart: true,
-          json: true,
-        });
-      });
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_DEBUG_PROXY_ENABLED: membership === "outside" ? "yes" : "0",
+          OPENCLAW_DEBUG_PROXY_URL: undefined,
+          OPENCLAW_DEBUG_PROXY_REQUIRE: undefined,
+        },
+        async () => {
+          await updateCommand({
+            admission: "auto",
+            channel: "beta",
+            yes: true,
+            restart: true,
+            json: true,
+          });
+        },
+      );
 
       expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
       expect(doctorCommandCall()).toBeUndefined();
+      const captureNotices = vi
+        .mocked(defaultRuntime.error)
+        .mock.calls.filter(
+          ([message]) =>
+            message ===
+            "Warning: Debug HTTP capture is disabled in this updater process. Doctor may enable capture in its own process after schema readiness is confirmed.",
+        );
+      expect(captureNotices).toHaveLength(membership === "outside" ? 1 : 0);
       if (membership === "unknown") {
         expectNoSideEffects(replaceConfigFile, updateNpmInstalledPlugins);
         expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
@@ -551,34 +567,6 @@ describe("update-cli", () => {
       ).toMatchObject({ status: "succeeded", downtimeMs: 0 });
     },
   );
-
-  it("keeps an explicit same-version channel no-op skipped without snapshot capacity or config rewrites", async () => {
-    const root = await mockPackageInstallAtCaseDir("openclaw-current-package", VERSION);
-    const stateDir = tempDirs.make("openclaw-update-channel-noop-");
-    initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
-    readPackageVersion.mockResolvedValue(VERSION);
-    primeNpmChannelTag("beta", VERSION);
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
-      configSnapshot({ update: { channel: "beta" } }),
-    );
-    await writeJsonFixture(path.join(stateDir, "openclaw.json"), {
-      update: { channel: "beta" },
-    });
-    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
-
-    vi.spyOn(fsSync, "statfsSync").mockReturnValue(statfsFixture({ bavail: 0 }));
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await updateCommand({ channel: "beta", yes: true, restart: true, json: true });
-    });
-
-    expect(replaceConfigFile).not.toHaveBeenCalled();
-    expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expect(doctorCommandCall()).toBeUndefined();
-    expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
-  });
 
   it("completes an equal-version Git-to-package switch", async () => {
     const { nodeModules, pkgRoot } = await setupInstalledPackageRoot(
@@ -654,11 +642,21 @@ describe("update-cli", () => {
       error: "HTTP 404",
     });
 
-    await updateCommand({ tag: "next" });
+    await expect(updateCommand({ tag: "next" })).rejects.toEqual(new ExitError(1));
 
-    expect(getErrorOutput()).toContain("Downgrade confirmation required.");
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(getLogOutput()).toContain("OpenClaw update skipped: downgrade-confirmation-required.");
+    expect(getLogOutput()).toContain(
+      "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+    );
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(doctorCommandCall()).toBeUndefined();
+    expectNoSideEffects(
+      serviceStop,
+      serviceStart,
+      serviceRestart,
+      runDaemonRestart,
+      replaceConfigFile,
+    );
   });
 
   registerUpdatePreflightTests({

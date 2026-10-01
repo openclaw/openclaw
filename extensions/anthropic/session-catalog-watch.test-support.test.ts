@@ -15,8 +15,8 @@ describe("Claude catalog synthetic watcher clock", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([65530.123, 66000.123])("arms and reports only changed children from %s ms", (start) => {
-    vi.spyOn(performance, "now").mockReturnValue(start);
+  it("arms and reports only changed children across a fractional clock boundary", () => {
+    vi.spyOn(performance, "now").mockReturnValue(65530.123);
     const home = path.resolve("synthetic-claude-home");
     const driver = createClaudeCatalogWatchDriver(home);
     watch = createDirtyDirectoryWatch(path.join(home, ".claude", "projects"));

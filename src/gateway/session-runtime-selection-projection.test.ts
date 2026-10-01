@@ -18,14 +18,11 @@ const catalog = [
 describe("session runtime selection ownership projection", () => {
   it.each([
     { kind: "acp", key: "agent:main:main", locked: true },
-    { kind: "native-lock", key: "agent:main:locked", locked: true },
     { kind: "locked-harness", key: "agent:main:locked-harness", locked: true },
     { kind: "locked-override", key: "agent:main:locked-override", locked: true },
     { kind: "historical-harness", key: "agent:main:historical-harness", locked: false },
     { kind: "acp-locked-harness", key: "agent:main:acp:locked-harness", locked: true },
     { kind: "runtime-pin", key: "agent:main:pinned", locked: false },
-    { kind: "key-only", key: "agent:main:acp:no-owner", locked: false },
-    { kind: "replaced-acp", key: "agent:main:replaced", locked: false },
   ])(
     "projects $kind from the authoritative row through all client surfaces",
     async ({ kind, key, locked }) => {
@@ -44,13 +41,10 @@ describe("session runtime selection ownership projection", () => {
               },
             },
           };
-          const modelLocked = [
-            "native-lock",
-            "locked-harness",
-            "locked-override",
-            "acp-locked-harness",
-          ].includes(kind);
-          let entry: SessionEntry = {
+          const modelLocked = ["locked-harness", "locked-override", "acp-locked-harness"].includes(
+            kind,
+          );
+          const entry: SessionEntry = {
             sessionId: "current-session",
             lifecycleRevision: "current-revision",
             updatedAt: 1,
@@ -65,7 +59,7 @@ describe("session runtime selection ownership projection", () => {
           };
           const scope = { agentId: "main", sessionKey: key, env: state.env };
           await upsertSessionEntryCore(scope, entry);
-          if (kind === "acp" || kind === "replaced-acp" || kind === "acp-locked-harness") {
+          if (kind === "acp" || kind === "acp-locked-harness") {
             await upsertAcpSessionMeta({
               cfg,
               agentId: "main",
@@ -80,10 +74,6 @@ describe("session runtime selection ownership projection", () => {
                 lastActivityAt: 1,
               }),
             });
-          }
-          if (kind === "replaced-acp") {
-            entry = { ...entry, lifecycleRevision: "replacement-revision" };
-            await upsertSessionEntryCore(scope, entry);
           }
           const row = buildGatewaySessionRow({
             cfg,

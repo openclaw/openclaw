@@ -188,12 +188,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     patchInputPaths: await resolvePatchInputPaths(parsed.hunks, options),
   };
 
-  const summary: ApplyPatchSummary = {
-    added: [],
-    modified: [],
-    deleted: [],
-  };
-  const seen = {
+  const changedPaths = {
     added: new Set<string>(),
     modified: new Set<string>(),
     deleted: new Set<string>(),
@@ -226,7 +221,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         },
       );
       const target = await targetResolution;
-      recordSummary(summary, seen, "added", target.display);
+      changedPaths.added.add(target.display);
       continue;
     }
 
@@ -245,7 +240,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         },
       );
       const target = await targetResolution;
-      recordSummary(summary, seen, "deleted", target.display);
+      changedPaths.deleted.add(target.display);
       continue;
     }
 
@@ -279,7 +274,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
             hint: "Delete it earlier in the same patch to replace it.",
           });
           await fileOps.remove(target.resolved);
-          recordSummary(summary, seen, "modified", moveTarget.display);
+          changedPaths.modified.add(moveTarget.display);
           return;
         }
         const existing = await fileOps.readFile(target.resolved);
@@ -288,12 +283,17 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         } else {
           noOpPaths.delete(target.display);
           await fileOps.writeFile(target.resolved, applied);
-          recordSummary(summary, seen, "modified", target.display);
+          changedPaths.modified.add(target.display);
         }
       },
     );
   }
 
+  const summary: ApplyPatchSummary = {
+    added: [...changedPaths.added],
+    modified: [...changedPaths.modified],
+    deleted: [...changedPaths.deleted],
+  };
   const noOp = noOpPaths.size > 0 && Object.values(summary).every((paths) => paths.length === 0);
   return {
     summary,
@@ -325,23 +325,6 @@ async function resolvePatchInputPaths(
     );
   }
   return resolved;
-}
-
-function recordSummary(
-  summary: ApplyPatchSummary,
-  seen: {
-    added: Set<string>;
-    modified: Set<string>;
-    deleted: Set<string>;
-  },
-  bucket: keyof ApplyPatchSummary,
-  value: string,
-) {
-  if (seen[bucket].has(value)) {
-    return;
-  }
-  seen[bucket].add(value);
-  summary[bucket].push(value);
 }
 
 function formatSummary(summary: ApplyPatchSummary): string {

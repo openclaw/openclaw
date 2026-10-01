@@ -6,17 +6,18 @@ import { noteStaleUpdateRuns } from "../commands/doctor-update-run.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type { InterruptedUpdateSettlement } from "../infra/update-run-interruption-contract.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
+import { readInterruptedUpdateCandidateAsync } from "../infra/update-run-interruption-worker.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
 import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
-  reconcileAbandonedUpdateRuns,
   recordUpdateRunPhase,
   recordUpdateRunRepairAttempt,
   recordUpdateRunStep,
 } from "../infra/update-run-ledger.js";
 import { readInterruptedUpdateCandidate } from "../infra/update-run-read.kernel.js";
+import { reconcileUpdateRunsInNativeKernelForTest } from "../infra/update-run-reconciliation.test-support.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
@@ -40,17 +41,23 @@ const observation = vi.hoisted(() => ({
   settle: vi.fn(),
 }));
 // Keep the real ledger kernels; worker transport has separate boundary coverage.
+vi.mock("../infra/update-run-reconciliation.js", async (original) => ({
+  ...(await original<typeof import("../infra/update-run-reconciliation.js")>()),
+  reconcileAbandonedUpdateRunsAsync: async (
+    ...args: Parameters<typeof reconcileUpdateRunsInNativeKernelForTest>
+  ) => reconcileUpdateRunsInNativeKernelForTest(...args),
+}));
 vi.mock("../infra/update-run-interruption-worker.js", async () => {
   const { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } =
     await import("../state/openclaw-state-db-readonly.js");
   return {
-    readInterruptedUpdateCandidateAsync: async (
-      options: import("../infra/update-run-codec.js").UpdateRunLedgerOptions,
-    ) =>
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => readInterruptedUpdateCandidate(db),
-        options,
-      ),
+    readInterruptedUpdateCandidateAsync: vi.fn(
+      async (options: import("../infra/update-run-codec.js").UpdateRunLedgerOptions) =>
+        withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+          ({ db }) => readInterruptedUpdateCandidate(db),
+          options,
+        ),
+    ),
     persistInterruptedUpdateObservationAsync: async (
       context: OpenClawStateWorkerContext,
       input: InterruptedUpdateSettlement,
@@ -69,6 +76,8 @@ vi.mock("../infra/update-run-reader.js", async (original) => {
   const actual = await original<typeof import("../infra/update-run-reader.js")>();
   return {
     ...actual,
+    getUpdateRunAsync: async (...args: Parameters<typeof actual.getUpdateRun>) =>
+      actual.getUpdateRun(...args),
     listUpdateRunsAsync: async (...args: Parameters<typeof actual.listUpdateRuns>) =>
       actual.listUpdateRuns(...args),
   };
@@ -177,7 +186,7 @@ it.each([false, true])(
   async (abandoned) => {
     const runId = interruptedRun();
     if (abandoned) {
-      reconcileAbandonedUpdateRuns();
+      reconcileUpdateRunsInNativeKernelForTest();
     }
     const broadcast = vi.fn();
     watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
@@ -201,7 +210,7 @@ it.each([false, true])(
 
 it("explains an older abandoned run whose target identity was never recorded", async () => {
   const runId = interruptedRun({ receipt: false });
-  reconcileAbandonedUpdateRuns();
+  reconcileUpdateRunsInNativeKernelForTest();
   await noteStaleUpdateRuns({});
   expect(note).toHaveBeenCalledWith(expect.stringContaining(runId), "Update history");
   expect(note).toHaveBeenCalledWith(
@@ -267,10 +276,23 @@ it.each([
   expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
 });
 
+it("honors pre-read absence without looking up a later interrupted candidate", async () => {
+  const runId = interruptedRun();
+  vi.mocked(readInterruptedUpdateCandidateAsync).mockClear();
+
+  expect(await reconcileInterruptedUpdateRuns({ candidate: undefined })).toEqual([]);
+
+  expect(readInterruptedUpdateCandidateAsync).not.toHaveBeenCalled();
+  expect(observation.settle).not.toHaveBeenCalled();
+  expect(getUpdateRun(runId)?.status).toBe("running");
+});
+
 it.each(["driver-revived", "newer-completed-run"])(
   "rechecks %s after awaited health probes",
   async (race) => {
     const runId = interruptedRun();
+    const candidate = getUpdateRun(runId);
+    vi.mocked(readInterruptedUpdateCandidateAsync).mockClear();
     observation.inspect.mockImplementationOnce(async () => {
       if (race === "driver-revived") {
         observation.driver = "alive";
@@ -280,7 +302,8 @@ it.each(["driver-revived", "newer-completed-run"])(
       }
       return health();
     });
-    await reconcileInterruptedUpdateRuns();
+    await reconcileInterruptedUpdateRuns({ candidate });
+    expect(readInterruptedUpdateCandidateAsync).not.toHaveBeenCalled();
     expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
     expect(getUpdateRun(runId)?.steps.some((step) => step.step === "reconcile:settle")).toBe(false);
     expect(console.warn).not.toHaveBeenCalled();
@@ -321,7 +344,7 @@ it("cancels pending verification at watcher shutdown without publishing a late s
 
 it.each([false, true])("Doctor respects read-only preflight: %s", async (readOnly) => {
   const runId = interruptedRun();
-  reconcileAbandonedUpdateRuns();
+  reconcileUpdateRunsInNativeKernelForTest();
   await noteStaleUpdateRuns({ migrateState: !readOnly });
   expect(getUpdateRun(runId)?.status).toBe(readOnly ? "failed" : "succeeded");
   if (readOnly) {
@@ -348,7 +371,7 @@ it.each(["repair", "acknowledgement"])(
       recordUpdateRunStep(runId, { step: "reconcile:acknowledged", status: "completed" });
     }
     vi.setSystemTime(Date.now() + 31 * 60_000);
-    reconcileAbandonedUpdateRuns();
+    reconcileUpdateRunsInNativeKernelForTest();
     await noteStaleUpdateRuns({});
     expect(getUpdateRun(runId)).toMatchObject({ status: "failed", reason: "abandoned" });
     expect(observation.settle).not.toHaveBeenCalled();
@@ -414,7 +437,7 @@ it.each([true, false])(
     const second = getUpdateRun(runId)!;
     expect(second.updatedAtMs).toBe(first.updatedAtMs);
     expect(second.steps.filter((step) => step.step === "reconcile:settle")).toEqual([diagnostic]);
-    expect(reconcileAbandonedUpdateRuns()).toEqual([
+    expect(reconcileUpdateRunsInNativeKernelForTest()).toEqual([
       expect.objectContaining({ runId, status: "failed", reason: "abandoned" }),
     ]);
   },

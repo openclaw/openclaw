@@ -13,6 +13,8 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { generateWorktreeSessionTitle } from "../dashboard-session-title.js";
 import { githubApiToken } from "../github-public-api.js";
@@ -83,7 +85,12 @@ export function prepareSessionRepositoryWorkspace(
   const { assertCurrent } = options;
   return async (target) => {
     const store = getSessionRepositoryWorkspaceStore();
-    const existing = store.find({ agentId: target.agentId, sessionKey: target.key });
+    const source = captureOpenClawStateWorkerContext({ path: store.path });
+    const assertSourceCurrent = () => {
+      source.admission.assertCurrent();
+      assertCurrent();
+    };
+    const existing = await store.find({ agentId: target.agentId, sessionKey: target.key });
     if (
       target.entry &&
       (!target.entry.repositoryWorkspaceId ||
@@ -97,26 +104,34 @@ export function prepareSessionRepositoryWorkspace(
     ) {
       return invalidSessionRequest("session repository source cannot be changed");
     }
-    assertCurrent();
-    const workspace = store.create({
+    assertSourceCurrent();
+    const workspace = await store.create({
       agentId: target.agentId,
       sessionKey: target.key,
       url: repository.url,
       requestedRef: repository.ref,
       runSetupScript: options.runSetupScript,
-      assertCurrent,
+      assertCurrent: assertSourceCurrent,
     });
+    const withCommit: NonNullable<PreparedGatewaySessionLifecycle["withCommit"]> = (run) =>
+      runOpenClawStateWorkerOperation(source, () => run(assertSourceCurrent), {
+        assertCurrent: assertSourceCurrent,
+      });
     return ok({
       repositoryWorkspaceId: workspace.workspaceId,
+      withCommit,
       ...(!existing
         ? {
             rollback: async () => {
               // Creation still holds the session lifecycle lock. Cleanup owns only the
               // untouched row it allocated, even when the initiating caller has gone away.
+              source.admission.assertCurrent();
+              const prepared = await store.prepare(workspace.workspaceId);
               await store.delete({
                 workspaceId: workspace.workspaceId,
                 assertCurrent: () => {
-                  const current = store.get(workspace.workspaceId);
+                  source.admission.assertCurrent();
+                  const current = prepared.current();
                   if (
                     current &&
                     (current.agentId !== target.agentId ||

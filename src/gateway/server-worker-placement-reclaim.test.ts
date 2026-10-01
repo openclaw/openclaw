@@ -179,8 +179,8 @@ async function scenario(
             baseManifestRaw: raw,
             currentManifestRaw: raw,
           });
-          stagedResult.record(stagedResult.ref);
-          journal.commit(ref);
+          await stagedResult.record(stagedResult.ref);
+          await journal.commit(ref);
 
           return { ...result, manifestRef: ref, changed: false };
         });

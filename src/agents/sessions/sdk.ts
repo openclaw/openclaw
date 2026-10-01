@@ -23,6 +23,7 @@ import { registerResolvedAgentDir } from "../agent-dir-registry.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { getAgentDirResolution } from "../config.js";
 import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
+import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   Agent,
   type AgentMessage,
@@ -111,7 +112,9 @@ export interface CreateAgentSessionOptions {
 
 type CreateAgentSessionInternalOptions = Pick<
   AgentSessionConfig,
-  "cleanupProviderSessionResourcesOnDispose" | "contextOverflowRecoveryOwner"
+  | "cleanupProviderSessionResourcesOnDispose"
+  | "contextOverflowRecoveryOwner"
+  | "resolveCompactionThinkingLevel"
 > & { beforeToolBatch?: InternalBeforeToolBatchHook };
 
 /** Result from createAgentSession */
@@ -123,8 +126,6 @@ interface CreateAgentSessionResult {
   /** Warning if session was restored with a different model than saved */
   modelFallbackMessage?: string;
 }
-
-// Helper Functions
 
 function createSessionPrepareNextTurnWithContext(
   getAgent: () => Agent,
@@ -190,19 +191,23 @@ function getAttributionHeaders(
   model: Model,
   settingsManager: SettingsManager,
 ): Record<string, string> | undefined {
+  // SDK-backed session streams do not all consult the attribution policy, so forward its
+  // documented header set as caller headers. Hidden (spec-only) attribution stays with the
+  // transports that verify it. Like the transport-side policy, this ignores install telemetry.
+  const { attributionHeaders, allowsHiddenAttribution } = resolveProviderRequestPolicy({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+  });
+  if (attributionHeaders && !allowsHiddenAttribution) {
+    return attributionHeaders;
+  }
+
   if (!isInstallTelemetryEnabled(settingsManager)) {
     return undefined;
   }
 
   const baseUrl = model.baseUrl ?? "";
-
-  if (model.provider === "openrouter" || baseUrl.includes("openrouter.ai")) {
-    return {
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-    };
-  }
 
   if (
     model.provider === "cloudflare-workers-ai" ||
@@ -268,7 +273,6 @@ async function createAgentSessionImpl(
   }
   let resourceLoader = options.resourceLoader;
 
-  // Use provided or create AuthStorage and ModelRegistry
   const config = options.authStorage && options.modelRegistry ? undefined : install.config;
   const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, config);
   const modelRegistry =
@@ -298,7 +302,6 @@ async function createAgentSessionImpl(
     modelRegistry.refresh();
   }
 
-  // Check if session has existing data to restore
   const existingSession = await sessionManager[sessionManagerReadInitialContext]();
   assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
@@ -309,7 +312,6 @@ async function createAgentSessionImpl(
   let model = options.model;
   let modelFallbackMessage: string | undefined;
 
-  // If session has data, try to restore model from it
   if (!model && hasExistingSession && existingSession.model) {
     const restoredModel = modelRegistry.find(
       existingSession.model.provider,
@@ -374,7 +376,6 @@ async function createAgentSessionImpl(
     settingsManager.getDefaultThinkingLevel() ??
     modelThinkingDefault;
 
-  // Clamp to model capabilities
   if (!model) {
     thinkingLevel = "off";
   } else {
@@ -400,7 +401,6 @@ async function createAgentSessionImpl(
     if (!settingsManager.getBlockImages()) {
       return converted;
     }
-    // Filter out ImageContent from all messages, replacing with text placeholder
     return converted.map((msg) => {
       if (msg.role === "user" || msg.role === "toolResult") {
         const content = msg.content;
@@ -415,7 +415,6 @@ async function createAgentSessionImpl(
               )
               .filter((c, i, arr) => {
                 const previous = arr.at(i - 1);
-                // Dedupe consecutive "Image reading is disabled." texts
                 return !(
                   c.type === "text" &&
                   c.text === "Image reading is disabled." &&
@@ -591,6 +590,7 @@ async function createAgentSessionImpl(
     sessionStartEvent: options.sessionStartEvent,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
     contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
+    resolveCompactionThinkingLevel: internalOptions.resolveCompactionThinkingLevel,
     cleanupProviderSessionResourcesOnDispose,
   });
   const extensionsResult = resourceLoader.getExtensions();

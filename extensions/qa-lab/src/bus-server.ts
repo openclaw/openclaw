@@ -275,7 +275,7 @@ function readOptionalIntegerField(
   if (!Number.isSafeInteger(value)) {
     throw new Error(`${opts.label} must be an integer at least ${opts.min}.`);
   }
-  return opts.max === undefined ? value : Math.min(value, opts.max);
+  return value;
 }
 
 function normalizeQaBusPollInput(input: Record<string, unknown>): QaBusPollInput {
@@ -436,7 +436,7 @@ export async function handleQaBusRequest(params: {
   }
 }
 
-export function createQaBusServer(state: QaBusState): Server {
+function createQaBusServer(state: QaBusState): Server {
   return createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
       const handled = await handleQaBusRequest({ req, res, state });

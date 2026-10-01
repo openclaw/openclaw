@@ -1,6 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { lstatIfExists } from "./git.js";
 
 export function normalizeProvisionedRelativePath(relativePath: string): string | undefined {
   if (path.isAbsolute(relativePath)) {
@@ -31,17 +30,6 @@ export async function hasSafeParentDirectories(
     }
   }
   return true;
-}
-
-export async function lstatIfExists(target: string) {
-  try {
-    return await fs.lstat(target);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 type ProvisionedFile = {

@@ -630,9 +630,6 @@ export class GatewayClient {
   }
 
   private createPendingStop(ws: WebSocket): PendingStop {
-    if (this.pendingStop?.ws === ws) {
-      return this.pendingStop;
-    }
     let resolve = () => {};
     const promise = new Promise<void>((done) => {
       resolve = done;

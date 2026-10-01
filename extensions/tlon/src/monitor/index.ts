@@ -42,7 +42,7 @@ import { createTlonApprovalRuntime } from "./approval-runtime.js";
 import { createPendingApproval } from "./approval.js";
 import { resolveChannelAuthorization } from "./authorization.js";
 import { createTlonCitationResolver } from "./cites.js";
-import { fetchAllChannels, fetchInitData } from "./discovery.js";
+import { fetchInitData } from "./discovery.js";
 import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
 import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
 import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
@@ -62,7 +62,6 @@ import {
   isDmAllowedWithIngress,
   isGroupInviteAllowed,
   isSummarizationRequest,
-  resolveAuthorizedMessageText,
   resolveTlonCommandAuthorizationWithIngress,
   resolveTlonMessageIngress,
   stripBotMention,
@@ -540,10 +539,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     const prepareReplyPayload = (payload: ReplyPayload): ReplyPayload => {
       const replyText = payload.text;
-      if (!replyText) {
-        return payload;
-      }
-      if (!effectiveShowModelSig) {
+      if (!replyText || !effectiveShowModelSig) {
         return payload;
       }
       const extPayload = payload as {
@@ -647,7 +643,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const watchedChannels = new Set<string>(groupChannels);
 
   const refreshWatchedChannels = async (): Promise<number> => {
-    const discoveredChannels = await fetchAllChannels(api, runtime);
+    const { channels: discoveredChannels } = await fetchInitData(api, runtime);
     let newCount = 0;
     for (const channelNest of discoveredChannels) {
       if (!watchedChannels.has(channelNest)) {
@@ -824,12 +820,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      const messageText = await resolveAuthorizedMessageText({
-        rawText,
-        content: contentBody,
-        authorizedForCites: true,
-        resolveAllCites,
-      });
+      const messageText = (await resolveAllCites(contentBody)) + rawText;
 
       await processMessage({
         messageId,
@@ -923,8 +914,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               requestingShip: ship,
               messagePreview: "(DM invite - no message yet)",
             });
-            await queueApprovalRequest(approval);
-            processedDmInvites.add(ship);
+            processedDmInvites.addIfAccepted(ship, await queueApprovalRequest(approval));
           }
         }
         return;
@@ -1010,12 +1000,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      const resolvedMessageText = await resolveAuthorizedMessageText({
-        rawText,
-        content: essay.content,
-        authorizedForCites: true,
-        resolveAllCites,
-      });
+      const resolvedMessageText = (await resolveAllCites(essay.content)) + rawText;
       if (ownerDm) {
         runtime.log?.(`[tlon] Processing DM from owner ${senderShip}`);
       }
@@ -1219,15 +1204,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
         let firstWriteError: Error | undefined;
         for (const [groupFlag, foreign] of Object.entries(foreigns)) {
+          const validInvite = foreign.invites?.find((invite) => invite.valid);
+          // Foreigns facts are per-group deltas. Retire only this group's terminal
+          // invite so a later invitation can be admitted without replaying other groups.
+          if (foreign.progress === "done" || !validInvite) {
+            processedGroupInvites.delete(groupFlag);
+            continue;
+          }
           if (processedGroupInvites.has(groupFlag)) {
-            continue;
-          }
-          if (!foreign.invites || foreign.invites.length === 0) {
-            continue;
-          }
-
-          const validInvite = foreign.invites.find((inv) => inv.valid);
-          if (!validInvite) {
             continue;
           }
 
@@ -1272,8 +1256,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               requestingShip: inviterShip,
               groupFlag,
             });
-            await queueApprovalRequest(approval);
-            processedGroupInvites.add(groupFlag);
+            if (await queueApprovalRequest(approval)) {
+              processedGroupInvites.add(groupFlag);
+            }
             continue;
           }
 
@@ -1327,7 +1312,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     }
 
     if (effectiveAutoDiscoverChannels) {
-      const discoveredChannels = await fetchAllChannels(api, runtime);
+      const { channels: discoveredChannels } = await fetchInitData(api, runtime);
       for (const channelNest of discoveredChannels) {
         watchedChannels.add(channelNest);
       }
@@ -1349,7 +1334,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           if (!opts.abortSignal?.aborted) {
             try {
               if (effectiveAutoDiscoverChannels) {
-                const discoveredChannels = await fetchAllChannels(api, runtime);
+                const { channels: discoveredChannels } = await fetchInitData(api, runtime);
                 for (const channelNest of discoveredChannels) {
                   if (!watchedChannels.has(channelNest)) {
                     watchedChannels.add(channelNest);

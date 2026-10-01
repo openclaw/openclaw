@@ -108,29 +108,12 @@ export function resolveSessionIdMatchSelection(
   const canonicalMatches = collapseAliasMatches(
     normalizeSessionIdMatches(matches, normalizeLowercaseStringOrEmpty(sessionId)),
   );
-  if (canonicalMatches.length === 1) {
-    return {
-      kind: "selected",
-      sessionKey: expectDefined(canonicalMatches[0], "canonical matches capture group 0")
-        .sessionKey,
-    };
-  }
-
   const structuralMatches = canonicalMatches.filter((match) => match.isStructural);
-  const selectedStructuralMatch = selectFreshestUniqueMatch(structuralMatches);
-  if (selectedStructuralMatch) {
-    return { kind: "selected", sessionKey: selectedStructuralMatch.sessionKey };
-  }
-  if (structuralMatches.length > 1) {
-    return { kind: "ambiguous", sessionKeys: structuralMatches.map((match) => match.sessionKey) };
-  }
-
-  const selectedCanonicalMatch = selectFreshestUniqueMatch(canonicalMatches);
-  if (selectedCanonicalMatch) {
-    return { kind: "selected", sessionKey: selectedCanonicalMatch.sessionKey };
-  }
-
-  return { kind: "ambiguous", sessionKeys: canonicalMatches.map((match) => match.sessionKey) };
+  const candidates = structuralMatches.length > 0 ? structuralMatches : canonicalMatches;
+  const selected = selectFreshestUniqueMatch(candidates);
+  return selected
+    ? { kind: "selected", sessionKey: selected.sessionKey }
+    : { kind: "ambiguous", sessionKeys: candidates.map((match) => match.sessionKey) };
 }
 
 export function resolvePreferredSessionKeyForSessionIdMatches(

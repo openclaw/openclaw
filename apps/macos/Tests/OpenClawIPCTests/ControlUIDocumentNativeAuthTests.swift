@@ -97,7 +97,7 @@ struct ControlUIDocumentNativeAuthTests {
                     controller.addScriptMessageHandler(
                         handler, contentWorld: .page, name: NativeConversationContract.handlerName)
                 }
-                try Self.scopeNativeIdentity(document, stateDirectory: stateDir)
+                try scopeNativeDashboardIdentity(document, stateDirectory: stateDir)
                 let bridge = NativeConversationBridge(document: document)
                 handler.owner = bridge
                 hostedBridge = bridge
@@ -275,6 +275,8 @@ struct ControlUIDocumentNativeAuthTests {
         let defaults = try #require(UserDefaults(suiteName: defaultsName))
         defer { defaults.removePersistentDomain(forName: defaultsName) }
         try await DeviceIdentityStore.withStateDirectory(stateDir) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            let helloIdentities = LockIsolated<[String]>([])
             let endpoint = GatewayConnection.EndpointSnapshot(
                 config: (server.websocketURL("/control/"), "accepted-profile-token", nil),
                 routeAuthority: 1, deviceAuthGatewayID: "profile-reconnect", revision: 1)
@@ -286,6 +288,13 @@ struct ControlUIDocumentNativeAuthTests {
                 }
                 return GatewayTestWebSocketTask(
                     sendHook: { task, message, sendIndex in
+                        if sendIndex == 0 {
+                            let params = try #require(GatewayWebSocketTestSupport.connectRequestParams(from: message))
+                            let device = try #require(params["device"] as? [String: Any])
+                            let deviceID = try #require(device["id"] as? String)
+                            helloIdentities.withValue { $0.append(deviceID) }
+                            return
+                        }
                         guard sendIndex > 0,
                               let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
                         task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
@@ -305,21 +314,37 @@ struct ControlUIDocumentNativeAuthTests {
             let retirementObserved = AsyncTestGate()
             let releaseRetirement = AsyncTestGate()
             let successorInstalled = AsyncTestGate()
+            let catalogRefreshResolved = LockIsolated<AsyncTestGate?>(nil)
             let target = DashboardGatewayTarget.profile("profile-reconnect")
             let manager = DashboardManager._testMake(
                 selection: MacGatewaySelectionPreferences(defaults: defaults),
-                connectionProvider: { _ in connection }, browserIdentityURLProvider: nil,
+                connectionProvider: { _ in connection },
+                browserIdentityURLProvider: { _, config in
+                    // Catalog notifications may arrive outside the test task.
+                    // Reconnect must still use this fixture's native identity.
+                    try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                        try await connection.controlUiBrowserIdentityURL(config: config)
+                    }
+                },
                 legacyCredentialsProvider: { _, endpoint in
-                    let credentials = try await connection.controlUiLegacyCredentials(endpoint: endpoint)
+                    let credentials = try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                        try await connection.controlUiLegacyCredentials(endpoint: endpoint)
+                    }
                     let lease = try #require(await connection.captureServerLease())
                     let isOriginal = originalLease.withValue { value in
                         if value == nil { value = lease }
                         return value == lease
                     }
                     let waitForInvalidation = try #require(credentials.waitForInvalidation)
+                    let armedRefresh = catalogRefreshResolved.value
                     return DashboardNativeGatewayAuth.LegacyCredentials(
                         credentials: credentials.credentials,
-                        isCurrent: credentials.isCurrent,
+                        isCurrent: {
+                            // The manager checks a resolution in the same main-actor job
+                            // that keeps or replaces the document's projection.
+                            armedRefresh?.open()
+                            return credentials.isCurrent()
+                        },
                         waitForInvalidation: {
                             // Hold only delivery of an actual old-socket invalidation.
                             // The native owner and its successor hello remain real.
@@ -372,9 +397,24 @@ struct ControlUIDocumentNativeAuthTests {
                 #expect(try await webView.evaluateJavaScript("window.unsavedDraft") as? String == "keep me")
                 #expect(retained.documentHost.hasCurrentNativeStartupCredentials)
                 #expect(retained.auth.legacyCredentials == ["token": "accepted-profile-token"])
-                try Self.scopeNativeIdentity(retained.documentHost, stateDirectory: stateDir)
+                #expect(helloIdentities.value == [identity.deviceId, identity.deviceId])
+                try scopeNativeDashboardIdentity(retained.documentHost, stateDirectory: stateDir)
+                let providerRevision = retained.documentHost.nativeGatewayAuthRevision
+                // A catalog change that keeps this socket must not replace the current
+                // projection; that would refuse the document's native challenges.
+                let refreshResolved = AsyncTestGate()
+                catalogRefreshResolved.setValue(refreshResolved)
+                NotificationCenter.default.post(
+                    name: MacGatewayProfileStore.didChangeNotification, object: nil,
+                    userInfo: [MacGatewayProfileStore.changedProfileIDKey: "profile-reconnect"])
+                try await AsyncTimeout.withTimeout(
+                    seconds: 5, onTimeout: { URLError(.timedOut) },
+                    operation: { await refreshResolved.wait() })
+                #expect(retained.documentHost.nativeGatewayAuthRevision == providerRevision)
                 let response = try await Self.decodeReply(Self.challenge(in: webView))
-                let result = try #require(response["result"] as? [String: Any], "Native auth reply: \(response)")
+                let result = try #require(
+                    response["result"] as? [String: Any],
+                    "Native auth reply: \(response); provider revision \(providerRevision) -> \(retained.documentHost.nativeGatewayAuthRevision)")
                 #expect(result["scopes"] as? [String] == ["operator.read", "operator.write"])
                 #expect(session.snapshotMakeCount() == 2)
                 webView.reload()
@@ -388,22 +428,6 @@ struct ControlUIDocumentNativeAuthTests {
             await oldObservation?.value
             await connection.shutdown()
             try outcome.get()
-        }
-    }
-
-    /// WebKit callbacks do not inherit the test task's identity directory. Keep
-    /// the real provider and its live validity checks inside the same private fixture.
-    private static func scopeNativeIdentity(_ document: ControlUIDocumentHost, stateDirectory: URL) throws {
-        let provider = try #require(document.nativeGatewayAuthProvider)
-        document.nativeGatewayAuthProvider = { nonce, signedAt in
-            let response = try await DeviceIdentityStore.withStateDirectory(stateDirectory) {
-                try await provider(nonce, signedAt)
-            }
-            return DashboardNativeGatewayAuth(json: response.json, isCurrent: {
-                DeviceIdentityPaths.$scopedStateDirURL.withValue(stateDirectory) {
-                    response.isCurrent()
-                }
-            })
         }
     }
 

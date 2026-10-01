@@ -521,7 +521,7 @@ describe("legacy state migration caller execution", () => {
     const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     const database = new DatabaseSync(databasePath);
-    database.exec("CREATE TABLE agent_databases (broken TEXT);");
+    database.exec("CREATE TABLE audit_events (broken TEXT);");
     database.close();
     const plan = await planFixture(fixture);
     const pluginLoader = vi.fn(() => {

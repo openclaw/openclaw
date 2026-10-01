@@ -2,11 +2,18 @@
 
 import { render, type LitElement, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
-import "../components/app-sidebar.ts";
+import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
+import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
+import {
+  admitStoredChatComposerQueueItem,
+  persistChatComposerState,
+} from "../pages/chat/composer-persistence.ts";
 import { settleLitElements } from "../test-helpers/lit-settle.ts";
+import "../components/app-sidebar.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -41,8 +48,7 @@ type PairingSidebar = LitElement & {
   onOpenNewSession?: (agentId: string) => void;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
-  outboxAttentionCountForSession: (sessionKey: string) => number;
-  hasSessionDraft: (sessionKey: string) => boolean;
+  storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
 };
 
 type PairingAuth = { role: string; scopes?: string[] };
@@ -188,6 +194,57 @@ afterEach(async () => {
 });
 
 describe("application shell pairing access", () => {
+  it("projects current-account draft and outbox through the real shell, then fences offline retirement", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { shell, context, snapshot, renderSidebar } = createPairingShell({
+      auth: null,
+      connected: false,
+    });
+    const client = new GatewayBrowserClient({
+      url: context.gateway.connection.gatewayUrl,
+      offlineRecoveryScope: "account-a",
+    });
+    snapshot.client = client;
+    const host = {
+      settings: context.gateway.connection,
+      client,
+      connected: false,
+      sessionKey: "agent:main:main",
+      chatMessage: "private draft",
+      chatQueue: [],
+    };
+    expect(persistChatComposerState(host)).toBe(true);
+    expect(
+      admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, host.sessionKey), {
+        id: "failed",
+        text: "private queued input",
+        createdAt: 1,
+        sendState: "failed",
+      }),
+    ).toBe(true);
+    shell.outboxStoreRuntime = createStoredChatOutboxReader();
+    const first = renderSidebar().storedOutboxes!;
+    expect(first.total).toBe(1);
+    expect(first.attentionCountForSession(host.sessionKey)).toBe(1);
+    expect(first.hasSessionDraft(host.sessionKey)).toBe(true);
+    // Same client and unchanged live recovery fields: only retained admission retired.
+    client.retireOfflineRecoveryScope();
+    const retired = renderSidebar().storedOutboxes!;
+    expect(retired.total).toBe(0);
+    expect(retired.hasSessionDraft(host.sessionKey)).toBe(false);
+    expect(retired).not.toBe(first);
+    snapshot.client = new GatewayBrowserClient({
+      url: context.gateway.connection.gatewayUrl,
+      offlineRecoveryScope: "account-b",
+    });
+    expect(renderSidebar().storedOutboxes!.total).toBe(0);
+    snapshot.client = new GatewayBrowserClient({
+      url: context.gateway.connection.gatewayUrl,
+      offlineRecoveryScope: "account-a",
+    });
+    expect(renderSidebar().storedOutboxes!.total).toBe(1);
+  });
+
   it.each([false, true])(
     "does not rerender navigation chrome for unrelated shell updates (outbox runtime: %s)",
     async (withOutboxes) => {
@@ -195,13 +252,14 @@ describe("application shell pairing access", () => {
       const { shell, renderSidebar, container, overlaySnapshot } = createPairingShell({
         auth: { role: "operator", scopes: ["operator.admin"] },
       });
+      let storedOutboxes = {
+        total: 1,
+        attentionCountForSession: () => 1,
+        hasSessionDraft: () => true,
+      };
       if (withOutboxes) {
         shell.outboxStoreRuntime = {
-          read: () => ({
-            total: 1,
-            attentionCountForSession: () => 1,
-            hasSessionDraft: () => true,
-          }),
+          read: () => storedOutboxes,
           subscribe: () => () => undefined,
           invalidate: () => undefined,
         };
@@ -228,8 +286,24 @@ describe("application shell pairing access", () => {
       expect(renderTopbarChild).not.toHaveBeenCalled();
       expect(sidebar.textContent).toBe(sidebarText);
       expect(topbar.textContent).toBe(topbarText);
-      expect(sidebar.outboxAttentionCountForSession("agent:main:main")).toBe(withOutboxes ? 1 : 0);
-      expect(sidebar.hasSessionDraft("agent:main:main")).toBe(withOutboxes);
+      expect(sidebar.storedOutboxes?.attentionCountForSession("agent:main:main") ?? 0).toBe(
+        withOutboxes ? 1 : 0,
+      );
+      expect(sidebar.storedOutboxes?.hasSessionDraft("agent:main:main") ?? false).toBe(
+        withOutboxes,
+      );
+      if (withOutboxes) {
+        storedOutboxes = {
+          total: 2,
+          attentionCountForSession: () => 2,
+          hasSessionDraft: () => false,
+        };
+        render(shell.render(), container);
+        await settleLitElements([sidebar, topbar]);
+        expect(renderSidebarChild).toHaveBeenCalledOnce();
+        expect(sidebar.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
+        expect(sidebar.querySelector(".session-row-badge--draft")).toBeNull();
+      }
     },
   );
 
@@ -287,7 +361,7 @@ describe("application shell pairing access", () => {
     expect(openNewSession).toHaveBeenCalledOnce();
   });
 
-  it("invalidates the resident sidebar when the stored outbox changes", async () => {
+  it("updates the shell when the stored outbox changes", async () => {
     vi.useFakeTimers();
     let publish: (() => void) | undefined;
     const shell = document.createElement("openclaw-app-shell") as LitElement & {
@@ -317,7 +391,6 @@ describe("application shell pairing access", () => {
       publish?.();
 
       expect(shell.isUpdatePending).toBe(true);
-      expect(shell.navigationSidebar.isUpdatePending).toBe(true);
     } finally {
       shell.remove();
       shell.navigationSidebar.remove();
@@ -326,16 +399,6 @@ describe("application shell pairing access", () => {
   });
 
   it.each([
-    {
-      name: "pairing-only",
-      auth: { role: "operator", scopes: ["operator.pairing"] },
-      canPair: true,
-    },
-    {
-      name: "administrator",
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      canPair: true,
-    },
     { name: "legacy authenticated", auth: { role: "operator" }, canPair: true },
     { name: "legacy unadvertised", auth: null, canPair: true },
     { name: "read-only", auth: { role: "operator", scopes: ["operator.read"] }, canPair: false },

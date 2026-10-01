@@ -213,7 +213,7 @@ async function createFixture(params: {
     await fs.mkdir(workspace);
     if (scenario === "inventory" || scenario === "delta" || scenario === "unchanged") {
       await exec("git", ["-c", `core.hooksPath=${os.devNull}`, "init", "--quiet", workspace], {
-        env: { ...isolatedEnv(root), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull },
+        env: isolatedEnv(root),
       });
     }
     if (scenario === "inventory" || scenario === "manifest") {
@@ -539,10 +539,7 @@ async function runSource(
   const samples: Sample[] = [];
   try {
     const ready = await receive();
-    assert.equal(ready.type, "ready");
-    if (ready.type !== "ready") {
-      throw new Error("child did not become ready");
-    }
+    assert.equal<"ready">(ready.type, "ready");
     const url = `http://127.0.0.1:${ready.port}/readyz`;
     const initial = await fetch(url, { signal: AbortSignal.timeout(options.timeoutMs) });
     assert.equal(initial.status, 200);

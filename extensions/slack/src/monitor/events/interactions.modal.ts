@@ -65,14 +65,6 @@ function shouldHandleSlackModalLifecycleBody(body: unknown): boolean {
   return Boolean(metadata.pluginInteractiveData?.trim());
 }
 
-function resolveSlackModalPluginNamespace(data: string | undefined): string | undefined {
-  if (!data) {
-    return undefined;
-  }
-  const separatorIndex = data.indexOf(":");
-  return separatorIndex >= 0 ? data.slice(0, separatorIndex) : data;
-}
-
 function resolveSlackPluginSystemEventPayload(
   result: unknown,
 ): Record<string, unknown> | undefined {
@@ -261,7 +253,7 @@ async function dispatchSlackModalPluginInteractiveHandler(params: {
   });
   return {
     ...result,
-    namespace: result.matched ? resolveSlackModalPluginNamespace(params.data) : undefined,
+    namespace: result.matched ? params.data.split(":", 1)[0] : undefined,
     systemEvent: result.matched ? resolveSlackPluginSystemEventPayload(result.result) : undefined,
   };
 }

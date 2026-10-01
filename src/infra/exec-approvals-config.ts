@@ -4,8 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
+  normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
@@ -19,8 +18,6 @@ import type {
 } from "./exec-approvals-core.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { expandHomePrefix, resolveHomeRelativePath } from "./home-dir.js";
-
-const toStringOrUndefined = readStringValue;
 
 const execSecuritySchema = z.enum(["allowlist", "full", "deny"]);
 const execAskSchema = z.enum(["always", "off", "on-miss"]);
@@ -121,12 +118,6 @@ export function resolveExecApprovalsDisplayPath(env: NodeJS.ProcessEnv = process
     : path.join(stateDir, locator);
 }
 
-export function resolveExecApprovalsTranscriptPath(): string {
-  return process.env.OPENCLAW_STATE_DIR?.trim()
-    ? "$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config"
-    : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/state/openclaw.sqlite#exec_approvals_config`;
-}
-
 export function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
   return normalizeExecApprovalsInternal({
     version: 1,
@@ -167,6 +158,14 @@ const diagnosticFields = new Set([
   "lastResolvedPath",
 ]);
 
+const diagnosticTypeReasons = new Map([
+  ["string", "expected a string"],
+  ["number", "expected a finite number"],
+  ["boolean", "expected a boolean"],
+  ["array", "expected an array"],
+  ["object", "expected an object"],
+]);
+
 function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unknown): string {
   // Only the object arm has field issues. The string arm's root error would
   // misdiagnose object metadata; Zod's union child paths are relative.
@@ -204,25 +203,7 @@ function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unkn
   let reason = "invalid value";
   switch (detail.code) {
     case "invalid_type":
-      switch (detail.expected) {
-        case "string":
-          reason = "expected a string";
-          break;
-        case "number":
-          reason = "expected a finite number";
-          break;
-        case "boolean":
-          reason = "expected a boolean";
-          break;
-        case "array":
-          reason = "expected an array";
-          break;
-        case "object":
-          reason = "expected an object";
-          break;
-        default:
-          break;
-      }
+      reason = diagnosticTypeReasons.get(detail.expected) ?? reason;
       break;
     case "invalid_value":
       reason = "expected a supported value";
@@ -273,11 +254,6 @@ export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile |
   return result.ok ? result.value : null;
 }
 
-function normalizeAllowlistPattern(value: string | undefined): string | null {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
-}
-
 function mergeLegacyAgent(
   current: ExecApprovalsAgent,
   legacy: ExecApprovalsAgent,
@@ -285,7 +261,7 @@ function mergeLegacyAgent(
   const allowlist: ExecAllowlistEntry[] = [];
   const seen = new Set<string>();
   const pushEntry = (entry: ExecAllowlistEntry) => {
-    const patternKey = normalizeAllowlistPattern(entry.pattern);
+    const patternKey = normalizeOptionalLowercaseString(entry.pattern);
     if (!patternKey) {
       return;
     }
@@ -335,21 +311,19 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
   for (const item of allowlist) {
     if (typeof item === "string") {
       const trimmed = item.trim();
+      changed = true;
       if (trimmed) {
         result.push({ pattern: trimmed });
-        changed = true;
-      } else {
-        changed = true; // dropped empty string
       }
     } else if (item && typeof item === "object" && !Array.isArray(item)) {
       const pattern = (item as { pattern?: unknown }).pattern;
       if (typeof pattern === "string" && pattern.trim().length > 0) {
         result.push(item as ExecAllowlistEntry);
       } else {
-        changed = true; // dropped invalid entry
+        changed = true;
       }
     } else {
-      changed = true; // dropped invalid entry
+      changed = true;
     }
   }
   return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
@@ -380,9 +354,9 @@ function normalizeAllowlistMetadata(
 function sanitizeExecApprovalPolicy(
   policy: ExecApprovalsDefaults | ExecApprovalsAgent | undefined,
 ): ExecApprovalsDefaults {
-  const security = toStringOrUndefined(policy?.security)?.trim();
-  const ask = toStringOrUndefined(policy?.ask)?.trim();
-  const askFallback = toStringOrUndefined(policy?.askFallback)?.trim();
+  const security = readStringValue(policy?.security)?.trim();
+  const ask = readStringValue(policy?.ask)?.trim();
+  const askFallback = readStringValue(policy?.askFallback)?.trim();
   return {
     security:
       security === "deny" || security === "allowlist" || security === "full" ? security : undefined,
@@ -426,18 +400,15 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
     }
   }
   const sanitizedDefaults = sanitizeExecApprovalPolicy(file.defaults);
-  const normalized: ExecApprovalsFile = {
+  return {
     version: 1,
     socket: {
       path: socketPath && socketPath.length > 0 ? socketPath : undefined,
       token: token && token.length > 0 ? token : undefined,
     },
-    defaults: {
-      ...sanitizedDefaults,
-    },
+    defaults: sanitizedDefaults,
     agents,
   };
-  return normalized;
 }
 
 export function mergeExecApprovalsSocketDefaults(params: {

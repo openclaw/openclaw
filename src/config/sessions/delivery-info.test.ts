@@ -1,11 +1,11 @@
 // Session delivery info tests cover persisted delivery metadata.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
 type SessionEntryFixture = SessionEntry & {
@@ -117,16 +117,16 @@ beforeEach(() => {
 
 describe("extractDeliveryInfo", () => {
   it("parses base session and thread/topic ids", () => {
-    expect(parseSessionThreadInfo("agent:main:telegram:group:1:topic:55")).toEqual({
+    expect(resolveSessionThreadInfo("agent:main:telegram:group:1:topic:55")).toEqual({
       baseSessionKey: "agent:main:telegram:group:1",
       threadId: "55",
     });
-    expect(parseSessionThreadInfo("agent:main:slack:channel:C1:thread:123.456")).toEqual({
+    expect(resolveSessionThreadInfo("agent:main:slack:channel:C1:thread:123.456")).toEqual({
       baseSessionKey: "agent:main:slack:channel:C1",
       threadId: "123.456",
     });
     expect(
-      parseSessionThreadInfo(
+      resolveSessionThreadInfo(
         "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",
       ),
     ).toEqual({
@@ -134,7 +134,7 @@ describe("extractDeliveryInfo", () => {
       threadId: "$AbC123:example.org",
     });
     expect(
-      parseSessionThreadInfo(
+      resolveSessionThreadInfo(
         "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       ),
     ).toEqual({
@@ -142,11 +142,11 @@ describe("extractDeliveryInfo", () => {
         "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       threadId: undefined,
     });
-    expect(parseSessionThreadInfo("agent:main:telegram:dm:user-1")).toEqual({
+    expect(resolveSessionThreadInfo("agent:main:telegram:dm:user-1")).toEqual({
       baseSessionKey: "agent:main:telegram:dm:user-1",
       threadId: undefined,
     });
-    expect(parseSessionThreadInfo(undefined)).toEqual({
+    expect(resolveSessionThreadInfo(undefined)).toEqual({
       baseSessionKey: undefined,
       threadId: undefined,
     });

@@ -198,14 +198,7 @@ function resolveOpenAIEnvironmentBaseUrl(
 }
 
 function isHttpBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string") {
-    return false;
-  }
-  try {
-    return new URL(baseUrl.trim()).protocol === "http:";
-  } catch {
-    return false;
-  }
+  return typeof baseUrl === "string" && URL.parse(baseUrl.trim())?.protocol === "http:";
 }
 
 function codexCanReproduceRoute(

@@ -1,4 +1,5 @@
 /** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -208,17 +209,9 @@ function isProfileForProvider(params: {
 }
 
 function uniqueProviders(provider: string, acceptedProviderIds?: readonly string[]): string[] {
-  const providers = new Set<string>();
-  const push = (value: string | undefined) => {
-    const normalized = value?.trim();
-    if (normalized) {
-      providers.add(normalized);
-    }
-  };
-  const candidates =
-    acceptedProviderIds && acceptedProviderIds.length > 0 ? acceptedProviderIds : [provider];
-  candidates.forEach(push);
-  return [...providers];
+  return normalizeUniqueTrimmedStringList(
+    acceptedProviderIds?.length ? acceptedProviderIds : [provider],
+  );
 }
 
 /** Resolve a person's new-session default through the canonical credential store. */

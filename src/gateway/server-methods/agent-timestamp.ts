@@ -29,28 +29,17 @@ export function buildTimestampPrefix(
 
 /** CLI prompts need a clock; embedded messages are stamped once at the LLM boundary. */
 export function injectTimestamp(message: string, opts?: TimestampInjectionOptions): string {
-  if (opts?.includeTimestamp === false) {
-    return message;
-  }
-  if (!message.trim()) {
-    return message;
-  }
-
-  if (TIMESTAMP_ENVELOPE_PATTERN.test(message)) {
-    return message;
-  }
-
-  if (message.includes(CRON_TIME_MARKER)) {
+  if (
+    opts?.includeTimestamp === false ||
+    !message.trim() ||
+    TIMESTAMP_ENVELOPE_PATTERN.test(message) ||
+    message.includes(CRON_TIME_MARKER)
+  ) {
     return message;
   }
 
-  const now = opts?.now ?? new Date();
-  const prefix = buildTimestampPrefix(now, opts);
-  if (!prefix) {
-    return message;
-  }
-
-  return `${prefix}${message}`;
+  const prefix = buildTimestampPrefix(opts?.now ?? new Date(), opts);
+  return prefix ? `${prefix}${message}` : message;
 }
 
 export function timestampOptsFromConfig(cfg: OpenClawConfig): TimestampInjectionOptions {

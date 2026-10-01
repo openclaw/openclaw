@@ -4,10 +4,10 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
-import {
-  lookupSessionGoalOperation,
-  type SessionGoalOperation,
-  type SessionGoalOperationResult,
+import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
+import type {
+  SessionGoalOperation,
+  SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { logVerbose } from "../../globals.js";
@@ -126,6 +126,7 @@ async function handleChatSendWithOptions(
     restartSafeAdmission,
   } = admitted.value;
   const preparedAttachments = await prepareChatSendAttachments({
+    client,
     request: normalizedRequest.value,
     session: preparedSession.value,
     admission: admitted.value,
@@ -229,6 +230,14 @@ async function handleChatSendWithOptions(
       sessionMutationCommitGuard?.();
     };
     assertInputAdmissionCurrent();
+    const assertGoalCurrent = createChatSendGoalCommitGuard({
+      admission: admitted.value,
+      session: preparedSession.value,
+      client,
+      context,
+      sessionMutationAuthorization,
+      sessionMutationCommitGuard,
+    });
     const userTurn = createGatewayChatUserTurnController({
       admission: admitted.value,
       client,
@@ -239,14 +248,7 @@ async function handleChatSendWithOptions(
       warn: (message) => context.logGateway.warn(message),
       mentionInbox: context.mentionInbox,
       assertOriginalInputCommit: assertInputAdmissionCurrent,
-      assertGoalCurrent: createChatSendGoalCommitGuard({
-        admission: admitted.value,
-        session: preparedSession.value,
-        client,
-        context,
-        sessionMutationAuthorization,
-        sessionMutationCommitGuard,
-      }),
+      assertGoalCurrent,
     });
     const {
       persist: persistGatewayUserTurnTranscript,
@@ -368,15 +370,18 @@ async function handleChatSendWithOptions(
       const goalOperation = normalizedRequest.value.goalOperation;
       if (goalOperation) {
         const mutation = persistedUserTurn?.sessionTurnMutationResult;
-        goalResult =
-          mutation?.result ??
-          lookupSessionGoalOperation({
+        goalResult = mutation?.result;
+        if (!goalResult) {
+          goalResult = await lookupSessionGoalOperation({
             sessionKey,
             storePath,
             agentId: preparedSession.value.agentId,
             expectedSessionId: admittedSessionId,
             operation: goalOperation,
           });
+          assertInputAdmissionCurrent();
+          assertGoalCurrent();
+        }
         if (goalResult && (!persistedUserTurn || mutation?.replayed)) {
           admitted.value.cleanupAdmittedRun();
           clearAgentRunContext(clientRunId, lifecycleGeneration);

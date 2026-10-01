@@ -198,38 +198,22 @@ export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
     return null;
   }
 
+  const localPath = base.startsWith("./") || base.startsWith("../") || base.startsWith("~/");
+  let normalized: { url: string; label: string };
   if (looksLikeGitHubRepoShorthand(base) || looksLikeGitHubHostPath(base)) {
-    const normalized = normalizeGitHubRepo(base);
-    return {
-      input: trimmed,
-      url: normalized.url,
-      ref: split.ref,
-      label: normalized.label,
-      normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `@${split.ref}` : ""}`,
-    };
+    normalized = normalizeGitHubRepo(base);
+  } else if (hasHttpUrlPrefix(base) || isGitUrl(base) || localPath) {
+    const url = localPath ? resolveUserPath(base) : base;
+    normalized = { url, label: normalizeGitLabel(url) };
+  } else {
+    return null;
   }
-
-  if (
-    hasHttpUrlPrefix(base) ||
-    isGitUrl(base) ||
-    base.startsWith("./") ||
-    base.startsWith("../") ||
-    base.startsWith("~/")
-  ) {
-    const url =
-      base.startsWith("./") || base.startsWith("../") || base.startsWith("~/")
-        ? resolveUserPath(base)
-        : base;
-    return {
-      input: trimmed,
-      url,
-      ref: split.ref,
-      label: normalizeGitLabel(url),
-      normalizedSpec: `${GIT_SPEC_PREFIX}${url}${split.ref ? `@${split.ref}` : ""}`,
-    };
-  }
-
-  return null;
+  return {
+    input: trimmed,
+    ...normalized,
+    ref: split.ref,
+    normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `@${split.ref}` : ""}`,
+  };
 }
 
 function createGitCommandEnv(): NodeJS.ProcessEnv {

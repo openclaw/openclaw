@@ -22,6 +22,8 @@ export type GatewayInstanceAgentDispatchOptions = {
   internalDeliveryMediaUrls?: string[];
   runtimeContextFragments?: RuntimeContextFragment[];
   internalDeliverySuppressText?: boolean;
+  /** Keep runtime error payloads (timeouts, provider failures) out of the delivered reply. */
+  internalDeliverySuppressErrors?: boolean;
   onAccepted?: (payload: unknown) => void;
   onStartOwner?: (owner: AgentTurnStartOwner) => void;
   onExecutionStarted?: () => void;

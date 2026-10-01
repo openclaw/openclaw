@@ -18,6 +18,11 @@ export function createCodingToolsGatewayCaller(params: {
       ? {
           agentId,
           sessionKey: sessionKey.trim(),
+          // The existing source fence rechecks this after tool preparation and at final I/O.
+          receiptAuthority:
+            capabilityProfile.policy.requesterPolicySource === "completion-handoff"
+              ? options.trustedInternalHandoff?.settleBatch?.isCurrent
+              : undefined,
           assertToolAllowed: (toolName: string) => {
             if (!isConversationToolAllowed(capabilityProfile, toolName)) {
               throw new Error(`${toolName} is not allowed by this conversation's tool policy`);

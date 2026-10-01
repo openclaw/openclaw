@@ -3,6 +3,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import { sessionWorkspaceRoot, type WorkerSessionWorkspace } from "./session-workspace.js";
 import {
   projectWorkspaceResultConflict,
@@ -19,8 +20,16 @@ type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "acti
 
 export function createWorkspaceResultJournal(params: {
   placement: OwnedWorkerPlacement;
-  placements: WorkerSessionPlacementStore;
+  placements: Pick<
+    WorkerSessionPlacementStore,
+    | "loadWorkspaceReconciliation"
+    | "beginWorkspaceReconciliation"
+    | "updateWorkspaceBaseManifest"
+    | "abortWorkspaceReconciliation"
+  >;
   turnClaim: WorkerSessionTurnClaim;
+  assertCurrent?: () => void;
+  current?: PlacementTurnClaimCurrentCheck;
 }) {
   const owner = {
     sessionId: params.placement.sessionId,
@@ -31,14 +40,29 @@ export function createWorkspaceResultJournal(params: {
   let manifestAccepted = false;
   return {
     adapter: {
-      load: () => params.placements.loadWorkspaceReconciliation(owner),
-      begin: (next: Parameters<typeof params.placements.beginWorkspaceReconciliation>[1]) =>
-        params.placements.beginWorkspaceReconciliation(owner, next),
-      commit: (manifestRef: string) => {
-        params.placements.updateWorkspaceBaseManifest({ claim: params.turnClaim, manifestRef });
+      load: () =>
+        params.placements.loadWorkspaceReconciliation(owner, undefined, params.assertCurrent),
+      begin: (next: Parameters<typeof params.placements.beginWorkspaceReconciliation>[1]) => {
+        params.assertCurrent?.();
+        return params.placements.beginWorkspaceReconciliation(owner, next, params.assertCurrent);
+      },
+      commit: async (manifestRef: string) => {
+        params.assertCurrent?.();
+        await params.placements.updateWorkspaceBaseManifest(
+          { claim: params.turnClaim, manifestRef },
+          params.assertCurrent,
+          params.current,
+        );
         manifestAccepted = true;
       },
-      abort: () => params.placements.abortWorkspaceReconciliation(owner),
+      abort: () => {
+        params.assertCurrent?.();
+        return params.placements.abortWorkspaceReconciliation(
+          owner,
+          undefined,
+          params.assertCurrent,
+        );
+      },
     },
     wasAccepted: () => manifestAccepted,
   };

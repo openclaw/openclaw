@@ -169,20 +169,6 @@ export function resolveModelListCallback(params: {
     : undefined;
 }
 
-function isCurrentModelSelection(params: {
-  currentModel?: string;
-  provider: string;
-  model: string;
-}): boolean {
-  const currentModel = params.currentModel?.trim();
-  if (!currentModel) {
-    return false;
-  }
-  return currentModel.includes("/")
-    ? currentModel === `${params.provider}/${params.model}`
-    : currentModel === params.model;
-}
-
 export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   const rows: ButtonRow[] = [];
   for (const [index, provider] of providers.entries()) {
@@ -196,6 +182,7 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
 
 export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const { provider, models, currentModel, currentPage, totalPages, modelNames } = params;
+  const currentSelection = currentModel?.trim() ?? "";
   const pageSize = params.pageSize ?? MODELS_PAGE_SIZE;
 
   if (models.length === 0) {
@@ -210,7 +197,9 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
 
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
-    const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
+    const isCurrentModel =
+      currentSelection.length > 0 &&
+      currentSelection === (currentSelection.includes("/") ? `${provider}/${model}` : model);
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
     const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
     const displayText = truncateModelLabel(displayLabel, MODEL_BUTTON_LABEL_MAX_LENGTH);

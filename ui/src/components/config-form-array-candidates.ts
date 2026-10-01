@@ -74,8 +74,6 @@ export function arrayAddCandidates(params: {
     (isUnset && isRequired && maximumItems === 0 && isSupportedConfigValueValid(schema, [])
       ? []
       : undefined);
-  const atomicCandidate = Array.isArray(wholeArrayDefault)
-    ? structuredClone(wholeArrayDefault)
-    : undefined;
+  const atomicCandidate = wholeArrayDefault && structuredClone(wholeArrayDefault);
   return { atomicCandidate, autoCandidate };
 }

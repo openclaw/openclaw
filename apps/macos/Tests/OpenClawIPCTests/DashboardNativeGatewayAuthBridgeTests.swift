@@ -1,10 +1,10 @@
 import AppKit
 import ConcurrencyExtras
 import Foundation
-import OpenClawKit
 import Testing
 import WebKit
 @testable import OpenClaw
+@testable import OpenClawKit
 
 @MainActor
 func waitForNativeDashboardDocument(_ controller: DashboardWindowController) async throws {
@@ -38,6 +38,23 @@ func dashboardNativeAuthSnapshot(_ controller: DashboardWindowController) async 
     try await waitForNativeDashboardDocument(controller)
     return try #require(try await controller.webView.evaluateJavaScript(
         "window.__OPENCLAW_NATIVE_CONTROL_AUTH__") as? [String: Any])
+}
+
+/// WebKit callbacks do not inherit the test task's identity directory. Keep
+/// the real provider and its live validity checks inside the same private fixture.
+@MainActor
+func scopeNativeDashboardIdentity(_ document: ControlUIDocumentHost, stateDirectory: URL) throws {
+    let provider = try #require(document.nativeGatewayAuthProvider)
+    document.nativeGatewayAuthProvider = { nonce, signedAt in
+        let response = try await DeviceIdentityStore.withStateDirectory(stateDirectory) {
+            try await provider(nonce, signedAt)
+        }
+        return DashboardNativeGatewayAuth(json: response.json, isCurrent: {
+            DeviceIdentityPaths.$scopedStateDirURL.withValue(stateDirectory) {
+                response.isCurrent()
+            }
+        })
+    }
 }
 
 @Suite(.serialized)

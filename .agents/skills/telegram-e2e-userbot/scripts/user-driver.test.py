@@ -320,6 +320,119 @@ class OwnedGroupTest(unittest.TestCase):
             self.assertEqual(instance.client.members, {123, 42})
 
 
+class ForwardBurstTest(unittest.TestCase):
+    def make_driver(self, responses):
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.config = {}
+        instance.bot_config = {}
+        instance.client = SimpleNamespace(request=Mock(side_effect=responses), updates=[])
+        instance.client.next_update = lambda timeout: instance.client.updates.pop(0)
+        return instance
+
+    def test_bot_posts_dm_sources_directly_then_forwards_with_qa_ids(self):
+        from email import policy
+        from email.parser import BytesParser
+
+        pending = [{"id": -index, "sending_state": {"@type": "messageSendingStatePending"}}
+                   for index in (1, 2)]
+        forwarded = [{"id": message_id, "forward_info": {"@type": "messageForwardInfo"}}
+                     for message_id in (30, 40)]
+        instance = self.make_driver([{"id": 101}, {"messages": pending}])
+        instance.config = {"testDc": True}
+        instance.bot_config = {"sutBotToken": "fixture-token"}
+        unrelated = {"@type": "updateChatTitle", "chat_id": 999, "title": "fixture"}
+        confirmations = [{"@type": "updateMessageSendSucceeded", "old_message_id": -index,
+                          "message": message}
+                         for index, message in enumerate(forwarded, start=1)]
+        instance.client.updates = [unrelated, confirmations[1], confirmations[0]]
+        requests = []
+        def urlopen(request, timeout):
+            instance.client.request.assert_called_once_with({"@type": "getMe"})
+            requests.append(request)
+            self.assertEqual(timeout, 15)
+            # Bot API receipt IDs deliberately differ from QA-side TDLib IDs.
+            return io.BytesIO(b'{"ok": true, "result": {"message_id": 999}}')
+        photo_bytes = b"synthetic photo bytes\x00\r\n"
+        with tempfile.NamedTemporaryFile(suffix=".png") as photo, \
+             patch.object(driver.urllib.request, "urlopen", side_effect=urlopen), \
+             patch.object(driver.time, "time", return_value=0):
+            photo.write(photo_bytes)
+            photo.flush()
+            self.assertIsNone(instance.post_forward_sources("burst text", photo.name))
+            result = instance.forward_messages(4242, 4242, [10, 20])
+        self.assertEqual([r.full_url for r in requests], [
+            "https://api.telegram.org/botfixture-token/test/sendMessage",
+            "https://api.telegram.org/botfixture-token/test/sendPhoto",
+        ])
+        self.assertEqual([r.method for r in requests], ["POST", "POST"])
+        self.assertEqual(requests[0].get_header("Content-type"), "application/json")
+        self.assertEqual(driver.json.loads(requests[0].data), {
+            "chat_id": 101, "text": "burst text", "disable_notification": True,
+        })
+        multipart = BytesParser(policy=policy.default).parsebytes(
+            ("Content-Type: " + requests[1].get_header("Content-type") + "\r\n\r\n").encode()
+            + requests[1].data
+        )
+        self.assertEqual(multipart.get_content_type(), "multipart/form-data")
+        parts = list(multipart.iter_parts())
+        self.assertEqual([(part.get_param("name", header="content-disposition"),
+                           part.get_payload(decode=True)) for part in parts], [
+            ("chat_id", b"101"), ("disable_notification", b"true"), ("photo", photo_bytes),
+        ])
+        self.assertEqual(parts[2].get_filename(), "upload")
+        self.assertEqual(parts[2].get_content_type(), "application/octet-stream")
+        self.assertEqual(instance.client.request.call_args_list, [
+            unittest.mock.call({"@type": "getMe"}),
+            unittest.mock.call({"@type": "forwardMessages", "chat_id": 4242, "topic_id": None,
+                                "from_chat_id": 4242, "message_ids": [10, 20],
+                                "options": {"@type": "messageSendOptions", "disable_notification": True,
+                                            "from_background": False, "scheduling_state": None},
+                                "send_copy": False, "remove_caption": False}, timeout=30),
+        ])
+        self.assertEqual(result, forwarded)
+        self.assertEqual(instance.client.updates, [unrelated])
+
+    def test_bot_request_errors_never_expose_token_for_json_or_multipart(self):
+        token = "fixture-token"
+        with tempfile.NamedTemporaryFile() as photo:
+            for files in (None, {"photo": photo.name}):
+                for failure in ("transport", "json", "api"):
+                    with self.subTest(files=bool(files), failure=failure):
+                        response = io.BytesIO(b"invalid json" if failure == "json" else
+                                              driver.json.dumps({"ok": False, "description": token}).encode())
+                        with patch.object(driver.urllib.request, "urlopen", return_value=response,
+                                          side_effect=OSError("https://api.telegram.org/bot" + token)
+                                          if failure == "transport" else None):
+                            with self.assertRaises(driver.DriverError) as raised:
+                                driver.telegram_bot(token, "sendPhoto", {"chat_id": 101}, test_dc=True, files=files)
+                        self.assertNotIn(token, str(raised.exception))
+                        self.assertEqual(str(raised.exception), "<redacted>" if failure == "api"
+                                         else "Telegram Bot API sendPhoto request failed")
+
+    def test_rejects_partial_forward_receipts_and_missing_forward_origin(self):
+        valid = {"id": 30, "forward_info": {"@type": "messageForwardInfo"}}
+        for messages, error in [
+            ([], "every forwarded message"),
+            ([valid], "every forwarded message"),
+            ([valid, None], "every forwarded message"),
+            ([valid, valid, valid], "every forwarded message"),
+            ([valid, {"id": 40}], "no forward origin"),
+        ]:
+            with self.subTest(messages=messages):
+                instance = self.make_driver([{"messages": messages}])
+                with self.assertRaisesRegex(driver.DriverError, error):
+                    instance.forward_messages(4242, 102, [10, 20])
+                self.assertEqual(instance.client.request.call_count, 1)
+
+    def test_missing_photo_fails_before_any_request(self):
+        instance = self.make_driver([])
+        with tempfile.TemporaryDirectory() as directory, patch.object(driver.urllib.request, "urlopen") as http:
+            with self.assertRaisesRegex(driver.DriverError, "Photo file not found"):
+                instance.post_forward_sources("burst text", str(Path(directory) / "missing.png"))
+        instance.client.request.assert_not_called()
+        http.assert_not_called()
+
+
 class PhotoContentTest(unittest.TestCase):
     def lookup_driver(self, *steps):
         pending = list(steps)

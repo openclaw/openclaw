@@ -1,5 +1,6 @@
 // Reuse the maintained native service fixture and the actual Windows recovery owner.
 import "./update-command-service-maintenance.test-support.js";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as schtasksExec from "../../daemon/schtasks-exec.js";
@@ -7,6 +8,9 @@ import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { waitForSignalExitBarriers } from "../signal-exit-barrier.js";
+import type { UpdateCommandOptions } from "./shared.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
@@ -172,5 +176,95 @@ it.each(["disable", "restore", "compensation", "never", "stop-return", "stop-rej
           await privateRecovery?.complete(false);
         }
       }
+    }),
+);
+
+it.each(["before-disable", "after-disable", "invocation-replaced"] as const)(
+  "preserves Windows task compensation authority when interrupted %s",
+  (interruption) =>
+    withServiceHome(async (home) => {
+      const root = process.cwd();
+      const run: NonNullable<UpdateCommandOptions["run"]> = {
+        runId: randomUUID(),
+        env: { HOME: home },
+      };
+      const opts: UpdateCommandOptions = { run };
+      const mutations: string[] = [];
+      let enabled = true;
+      vi.spyOn(schtasksExec, "execSchtasks").mockImplementation(async (args) => {
+        if (args[0] === "/Query") {
+          if (interruption === "before-disable") {
+            run.interrupted = true;
+          }
+          return {
+            code: 0,
+            stdout: `<Task><Settings><Enabled>${enabled}</Enabled></Settings></Task>`,
+            stderr: "",
+          };
+        }
+        const action = args.at(-1);
+        if (args[0] !== "/Change" || (action !== "/ENABLE" && action !== "/DISABLE")) {
+          throw new Error("Unexpected Scheduled Task mutation");
+        }
+        mutations.push(action);
+        enabled = action === "/ENABLE";
+        if (action === "/DISABLE") {
+          run.interrupted = true;
+          if (interruption === "invocation-replaced") {
+            opts.run = { ...run };
+          }
+          return { code: 124, stdout: "", stderr: "disable failed after commit" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      const service = createMockGatewayService({
+        readCommand: async () => ({
+          programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
+          environment: { HOME: home },
+          sourcePath: path.join(home, "gateway.cmd"),
+        }),
+        readRuntime: async () => ({ status: "running" }),
+        isLoaded: async () => true,
+      });
+      mocks.service.mockReturnValue(service);
+      let failure: unknown;
+      try {
+        await withUpdateCommandExecutor(run.runId, async (executor) => {
+          const guards = createUpdateCommandExecutionGuards(opts, root);
+          guards.admitExecutor(await executor.enter(root));
+          const platform = mockProcessPlatform("win32");
+          try {
+            await maybeStopManagedServiceBeforeMutableUpdate({
+              root,
+              updateInstallKind: "package",
+              shouldRestart: false,
+              jsonMode: true,
+              updateRun: run,
+              recordPhase: guards.recordPhase,
+              assertCurrent: guards.assertCurrent,
+            });
+          } finally {
+            platform.mockRestore();
+          }
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(mutations).toEqual(
+        interruption === "before-disable"
+          ? []
+          : interruption === "invocation-replaced"
+            ? ["/DISABLE"]
+            : ["/DISABLE", "/ENABLE"],
+      );
+      expect(enabled).toBe(interruption !== "invocation-replaced");
+      expect(service.stop).not.toHaveBeenCalled();
+      expect(String(failure)).toMatch(
+        interruption === "before-disable"
+          ? /requester-revoked/
+          : interruption === "invocation-replaced"
+            ? /requester-revoked/
+            : /schtasks disable failed: disable failed after commit/,
+      );
     }),
 );

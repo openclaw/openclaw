@@ -19,6 +19,7 @@ import {
   readSessionEntriesFromStoreInWorker,
   loadSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { preserveSqliteSameKeySessionRolloverLineage } from "../../config/sessions/session-entry-lineage.js";
 import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -69,23 +70,19 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "acp",
 ] as const satisfies readonly (keyof SessionEntry)[];
 
-function cloneSessionField<T>(value: T): T {
-  return globalThis.structuredClone(value);
-}
-
-function copySessionFields(
-  target: SessionEntry,
-  entry: SessionEntry,
-  fields: readonly (keyof SessionEntry)[],
+function copySessionFields<K extends keyof SessionEntry>(
+  target: Partial<Pick<SessionEntry, K>>,
+  entry: Pick<SessionEntry, K>,
+  fields: readonly K[],
 ): void {
   for (const field of fields) {
     if (entry[field] !== undefined) {
-      target[field] = cloneSessionField(entry[field]) as never;
+      target[field] = globalThis.structuredClone(entry[field]);
     }
   }
 }
 
-function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry): void {
+function preserveNonAutoModelOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
   if (entry.modelOverrideSource === "default") {
     target.modelOverrideSource = "default";
     return;
@@ -115,7 +112,7 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
   }
 }
 
-function preserveUserAuthOverride(target: SessionEntry, entry: SessionEntry): void {
+function preserveUserAuthOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
   const source = resolveSessionAuthProfileOverrideSource(entry);
   if (source === "user") {
     if (entry.authProfileOverride !== undefined) {
@@ -131,8 +128,8 @@ function preserveUserAuthOverride(target: SessionEntry, entry: SessionEntry): vo
 function sanitizeFreshCronSessionEntry(
   entry: SessionEntry,
   options: { preserveAmbientContext: boolean },
-): SessionEntry {
-  const next = {} as SessionEntry;
+): Partial<SessionEntry> {
+  const next: Partial<SessionEntry> = {};
 
   copySessionFields(next, entry, FRESH_CRON_CARRIED_PREFERENCE_FIELDS);
   if (entry.skillLibrarySelections) {
@@ -303,10 +300,26 @@ export function resolveCronSession(
     sessionEntry.agentHarnessId = undefined;
     sessionEntry.compactionCount = 0;
   }
+  if (sourceSessionDiffers) {
+    delete sessionEntry.usageFamilyKey;
+    delete sessionEntry.usageFamilySessionIds;
+  }
+  if (targetEntry) {
+    copySessionFields(sessionEntry, targetEntry, ["usageFamilyKey", "usageFamilySessionIds"]);
+  }
   return {
     storePath,
     store,
-    sessionEntry: preserveCreationStamp(sessionEntry, targetEntry),
+    sessionEntry: preserveCreationStamp(
+      targetEntry?.sessionId
+        ? preserveSqliteSameKeySessionRolloverLineage({
+            next: sessionEntry,
+            previous: targetEntry,
+            sessionKey: params.sessionKey,
+          })
+        : sessionEntry,
+      targetEntry,
+    ),
     lifecycleRevision,
     systemSent,
     isNewSession,

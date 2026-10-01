@@ -13,10 +13,10 @@ import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
 import { resolveCronJobsStorePath } from "./store/paths.js";
 import {
-  deleteCronQuarantinedJobsFromDatabase,
-  saveCronQuarantinedJobs,
-} from "./store/quarantine.js";
-import { assertCronStoreCanPersist, readCronJobsFingerprint } from "./store/row-codec.js";
+  assertCronStoreCanPersist,
+  readCronJobsFingerprint,
+  readCronStoreFingerprints,
+} from "./store/row-codec.js";
 import type { CronJobFamilyIdentity } from "./store/row-codec.js";
 import { prepareCronRunReceiptWriteSchema } from "./store/run-receipt-write-admission.js";
 import { CronJobsStoreChangedError, restoreCronSaveError } from "./store/save-error.js";
@@ -27,7 +27,6 @@ import type {
 import {
   isCronRuntimeOnlySave,
   prepareCronStoreChanges,
-  replaceCronStoreRowsInDatabase,
   saveCronStoreChangesInDatabase,
   saveCronStoreInDatabase,
 } from "./store/save.kernel.js";
@@ -41,12 +40,8 @@ import type { CronStoreFile } from "./types.js";
 export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
 export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 export { CronJobsStoreChangedError } from "./store/save-error.js";
-export type {
-  CronConfigJobRuntimeEntry,
-  CronQuarantinedJob,
-  LoadedCronStore,
-  QuarantinedCronConfigJob,
-} from "./store/types.js";
+export type { CronConfigJobRuntimeEntry, LoadedCronStore } from "./store/types.js";
+export type { CronQuarantinedJob, QuarantinedCronConfigJob } from "./types-shared.js";
 export { loadCronQuarantinedJobs, saveCronQuarantinedJobs } from "./store/quarantine.js";
 
 const MAX_TRACKED_CRON_STORE_REVISIONS = 64;
@@ -150,7 +145,12 @@ type CronStoreReplacementOptions = Pick<
   "deleteQuarantineEntries" | "preserveRuntimeState" | "quarantine"
 >;
 
-type CronStoreCommit<Value> = { value: Value; revision: number };
+type CronStoreCommit<Value> = {
+  value: Value;
+  revision: number;
+  jobsFingerprint?: string;
+  runtimeFingerprint?: string;
+};
 
 function publishCronStoreSaveRevision(storeKey: string, observedRevision: number): number {
   const unchanged = getCronJobsStoreRevision(storeKey) === observedRevision;
@@ -171,22 +171,22 @@ function commitCronStoreNative<Value>(
   const observedRevision = getCronJobsStoreRevision(storeKey);
   let committed = false;
   try {
-    const value = runOpenClawStateWriteTransaction(
+    const result = runOpenClawStateWriteTransaction(
       (database) => {
         const admittedHooks = hooks
           ? { hooks, receiptSchema: prepareCronRunReceiptWriteSchema(database.db) }
           : undefined;
-        const result = operation(database, admittedHooks);
+        const value = operation(database, admittedHooks);
         deferSqlitePostCommitPublication(database.db, () => {
           committed = true;
         });
-        return result;
+        return { value, ...readCronStoreFingerprints(database.db, storeKey) };
       },
       {},
       operationLabel ? { operationLabel } : undefined,
     );
     hooks?.afterCommit?.();
-    return { value, revision: publishCronStoreSaveRevision(storeKey, observedRevision) };
+    return { ...result, revision: publishCronStoreSaveRevision(storeKey, observedRevision) };
   } catch (error) {
     if (committed) {
       noteCronJobsStoreCommit(storeKey);
@@ -215,7 +215,12 @@ async function saveCronStoreWithWorker<Value>(
       if (!result.ok) {
         throw restoreCronSaveError(result.error);
       }
-      return { value: result.value, revision };
+      return {
+        value: result.value,
+        revision,
+        jobsFingerprint: result.jobsFingerprint,
+        runtimeFingerprint: result.runtimeFingerprint,
+      };
     });
   } catch (error) {
     if (!received) {
@@ -226,18 +231,18 @@ async function saveCronStoreWithWorker<Value>(
   }
 }
 
-/** Internal synchronous entry for callers whose authority callbacks must not yield before commit. */
-export function saveCronJobsStoreChangesWithRevisionNative(
+/** Maintenance hooks retain their owning synchronous database transaction. */
+function saveCronJobsStoreChangesNative(
   storePath: string,
   previous: CronStoreFile,
   next: CronStoreFile,
   opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
-): CronStoreCommit<CronStoreFile> {
+): CronStoreFile {
   assertCronStoreCanPersist(next);
   const storeKey = cronStoreKey(path.resolve(storePath));
   const prepared = prepareCronStoreChanges(previous, next);
   if (prepared.changedIds.size === 0) {
-    return { value: previous, revision: getCronJobsStoreRevision(storeKey) };
+    return previous;
   }
   const { transactionHooks, ...options } = opts ?? {};
   return commitCronStoreNative(
@@ -246,44 +251,35 @@ export function saveCronJobsStoreChangesWithRevisionNative(
       saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, admittedHooks),
     transactionHooks,
     "cron.config-mutation",
-  );
+  ).value;
 }
 
-/** Commits scheduler-disabled CRUD rows and retains this operation's revision fact. */
-export async function saveCronJobsStoreChangesWithRevision(
-  storePath: string,
-  previous: CronStoreFile,
-  next: CronStoreFile,
-  opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
-): Promise<CronStoreCommit<CronStoreFile>> {
-  if (opts?.transactionHooks) {
-    return saveCronJobsStoreChangesWithRevisionNative(storePath, previous, next, opts);
-  }
-  assertCronStoreCanPersist(next);
-  const storeKey = cronStoreKey(path.resolve(storePath));
-  const prepared = prepareCronStoreChanges(previous, next);
-  if (prepared.changedIds.size === 0) {
-    return { value: previous, revision: getCronJobsStoreRevision(storeKey) };
-  }
-  const { transactionHooks: _hooks, ...options } = opts ?? {};
-  const input = structuredClone({ storeKey, changes: prepared, options });
-  return await saveCronStoreWithWorker(storeKey, (scope) =>
-    scope.execute({ type: "cron.saveChanges", input }),
-  );
-}
-
-/** Commits only scheduler-disabled CRUD rows against authoritative SQLite state. */
+/** Commits maintenance changes against authoritative SQLite state. */
 export async function saveCronJobsStoreChanges(
   storePath: string,
   previous: CronStoreFile,
   next: CronStoreFile,
   opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
 ): Promise<CronStoreFile> {
-  return (await saveCronJobsStoreChangesWithRevision(storePath, previous, next, opts)).value;
+  if (opts?.transactionHooks) {
+    return saveCronJobsStoreChangesNative(storePath, previous, next, opts);
+  }
+  assertCronStoreCanPersist(next);
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const prepared = prepareCronStoreChanges(previous, next);
+  if (prepared.changedIds.size === 0) {
+    return previous;
+  }
+  const { transactionHooks: _hooks, ...options } = opts ?? {};
+  const input = structuredClone({ storeKey, changes: prepared, options });
+  const committed = await saveCronStoreWithWorker(storeKey, (scope) =>
+    scope.execute({ type: "cron.saveChanges", input }),
+  );
+  return committed.value;
 }
 
-/** Internal synchronous entry preserving the caller's consumed guard/capture window. */
-export function saveCronJobsStoreWithRevisionNative(
+/** Doctor fingerprint hooks retain their owning synchronous database transaction. */
+function saveCronJobsStoreWithRevisionNative(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronJobsStoreOptions,
@@ -346,27 +342,7 @@ export async function saveCronJobsStoreWithMetadata(
     if (!acquireMetadata(database.db)) {
       return false;
     }
-    if (opts?.quarantine?.entries.length) {
-      saveCronQuarantinedJobs({
-        storePath: resolvedStorePath,
-        entries: opts.quarantine.entries,
-        nowMs: opts.quarantine.nowMs,
-        database,
-      });
-    }
-    if (opts?.deleteQuarantineEntries?.length) {
-      deleteCronQuarantinedJobsFromDatabase({
-        database: database.db,
-        storePath: resolvedStorePath,
-        entries: opts.deleteQuarantineEntries,
-      });
-    }
-    replaceCronStoreRowsInDatabase(
-      database.db,
-      storeKey,
-      store,
-      opts?.preserveRuntimeState === true,
-    );
+    saveCronStoreInDatabase(database, storeKey, store, { ...opts, stateOnly: false });
     return true;
   });
   if (committed) {

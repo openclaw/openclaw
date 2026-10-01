@@ -259,7 +259,8 @@ export function createGatewayNarrationDelivery(params: {
       state.subscriptionKeys = sessionKeys;
       connection.sessions.set(key, state);
       if (isRecord(payload.message)) {
-        cancelPending(state);
+        state.retirePending?.();
+        state.retirePending = undefined;
         state.pending = { payload, projection, sessionKeys, opts };
         const signal = opts?.liveText?.group;
         if (signal) {
@@ -292,7 +293,7 @@ export function createGatewayNarrationDelivery(params: {
         const delay = NARRATION_INTERVAL_MS - (Date.now() - (state.lastSentAt ?? -Infinity));
         if (delay <= 0) {
           flush(client, connection, state);
-        } else {
+        } else if (!state.timer) {
           state.timer = setTimeout(() => flush(client, connection, state), delay);
           state.timer.unref?.();
         }

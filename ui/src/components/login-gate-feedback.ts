@@ -33,6 +33,7 @@ type LoginFailureKind =
   | "origin-not-allowed"
   | "build-mismatch"
   | "protocol-mismatch"
+  | "busy"
   | "network";
 
 /**
@@ -79,6 +80,7 @@ export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[
   gatewayUrl?: string;
   secret?: string;
   reconnectPending?: boolean;
+  reconnectAt?: number;
 };
 
 function buildFeedback(params: {
@@ -127,6 +129,17 @@ export function resolveLoginFailureFeedback(
   const lastErrorCode = params.lastErrorCode ?? null;
   const lower = normalizeLowercaseStringOrEmpty(rawError);
   const host = formatGatewayHost(params.gatewayUrl);
+
+  if (lastErrorCode === "GATEWAY_BUSY" && params.reconnectPending) {
+    return buildFeedback({
+      kind: "busy",
+      tone: "pending",
+      rawError,
+      titleKey: "login.failure.busy.title",
+      summaryKey: "login.failure.busy.summary",
+      stepKeys: [],
+    });
+  }
 
   if (lastErrorCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID) {
     return buildFeedback({

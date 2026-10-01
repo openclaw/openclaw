@@ -56,10 +56,6 @@ function resolveDefaultProviderEnvVar(
   return envVars?.find((candidate) => normalizeOptionalString(candidate) !== undefined);
 }
 
-function resolveDefaultFilePointerId(provider: string): string {
-  return `/providers/${encodeJsonPointerToken(provider)}/apiKey`;
-}
-
 export function resolveRefFallbackInput(params: {
   config: OpenClawConfig;
   provider: string;
@@ -296,7 +292,7 @@ export async function promptSecretRefForSetup(params: {
 }): Promise<{ ref: SecretRef; resolvedValue: string }> {
   const defaultEnvVar =
     params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider, params.config) ?? "";
-  const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
+  const defaultFilePointer = `/providers/${encodeJsonPointerToken(params.provider)}/apiKey`;
   let sourceChoice: SecretRefChoice = "env"; // pragma: allowlist secret
 
   while (true) {
@@ -327,12 +323,8 @@ export async function promptSecretRefForSetup(params: {
 
     if (source === "env") {
       return await promptEnvSecretRefForSetup({
-        provider: params.provider,
-        config: params.config,
-        prompter: params.prompter,
+        ...params,
         defaultEnvVar,
-        copy: params.copy,
-        env: params.env,
       });
     }
 
@@ -368,12 +360,8 @@ export async function promptSecretRefForSetup(params: {
 
     try {
       return await promptProviderSecretRefForSetup({
-        provider: params.provider,
-        config: params.config,
-        prompter: params.prompter,
+        ...params,
         defaultFilePointer,
-        copy: params.copy,
-        env: params.env,
       });
     } catch (error) {
       if (error instanceof Error && error.message === "retry") {

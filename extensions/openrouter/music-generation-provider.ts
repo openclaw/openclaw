@@ -20,6 +20,7 @@ import {
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
@@ -208,21 +209,9 @@ async function readOpenRouterStreamChunk(
   deadline: ProviderOperationDeadline,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   const timeoutMs = resolveOpenRouterStreamRemainingMs(deadline);
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      reader.read(),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
+  return await withTimeout(reader.read(), timeoutMs, {
+    createError: () => new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`),
+  });
 }
 
 async function readOpenRouterAudioStream(

@@ -169,10 +169,7 @@ export async function executeTelegramPluginCommand(
             buildTelegramThreadParams(dispatch.threadSpec),
           ),
       });
-      const maybeMessageId = (sent as { message_id?: unknown } | undefined)?.message_id;
-      if (typeof maybeMessageId === "number") {
-        progressMessageId = maybeMessageId;
-      }
+      progressMessageId = sent.message_id;
     } catch {
       // Fall back to the normal final reply path if the placeholder send fails.
     }

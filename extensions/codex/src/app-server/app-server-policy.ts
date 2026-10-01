@@ -13,7 +13,7 @@ export function resolveCodexAppServerForModelProvider(params: {
   codexConfigToml?: string | null;
 }): CodexAppServerRuntimeOptions {
   if (
-    !isCodexModelBackedApprovalsReviewer(params.appServer.approvalsReviewer) ||
+    params.appServer.approvalsReviewer === "user" ||
     canUseCodexModelBackedApprovalsReviewerForModel({
       modelProvider: params.provider,
       model: params.model,
@@ -32,8 +32,4 @@ export function resolveCodexAppServerForModelProvider(params: {
     ...params.appServer,
     approvalsReviewer: "user",
   };
-}
-
-function isCodexModelBackedApprovalsReviewer(value: string): boolean {
-  return value === "auto_review" || value === "guardian_subagent";
 }

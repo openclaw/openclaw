@@ -1,5 +1,6 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { Type, type Static } from "typebox";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
@@ -7,7 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
-import { onSubagentRegistryPersisted } from "../subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
 import { prepareSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { markCollectorReaderTool } from "../subagents/swarm/swarm-collector-capability.js";
@@ -21,6 +22,12 @@ const MAX_WAIT_IDS = 1_000;
 const AgentsWaitToolSchema = Type.Object({
   ids: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: MAX_WAIT_IDS }),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  required: Type.Optional(
+    Type.Boolean({
+      description:
+        "Join required collector results until settlement or cancellation, without polling; mutually exclusive with timeoutSeconds. Child and agent budgets still apply.",
+    }),
+  ),
 });
 
 const CollectorCompletionSchema = Type.Object(
@@ -204,6 +211,7 @@ async function waitForCollector(params: {
   currentAgentId?: string;
   config?: OpenClawConfig;
   timeoutMs?: number;
+  waitForAll?: boolean;
   signal?: AbortSignal;
   abortError: () => Error;
 }) {
@@ -222,7 +230,7 @@ async function waitForCollector(params: {
     }
   };
   // Cover the worker read as well as the parked wait; publications during either need a reread.
-  const unsubscribe = onSubagentRegistryPersisted(wake);
+  const unsubscribe = subscribeSubagentRunChanges("persistence", wake);
   params.signal?.addEventListener("abort", wake, { once: true });
   try {
     for (;;) {
@@ -261,7 +269,7 @@ async function waitForCollector(params: {
       }
       const state = read.value;
       if (
-        state.completed.length > 0 ||
+        (!params.waitForAll && state.completed.length > 0) ||
         state.pending.length === 0 ||
         (deadline !== undefined && performance.now() >= deadline)
       ) {
@@ -303,7 +311,13 @@ export function createAgentsWaitTool(opts: {
     parameters: AgentsWaitToolSchema,
     outputSchema: AgentsWaitOutputSchema,
     execute: async (_toolCallId, args, signal) => {
-      const params = args as { ids: string[]; timeoutSeconds?: number };
+      const params = args as { ids: string[]; timeoutSeconds?: number; required?: boolean };
+      if (params.required !== undefined && typeof params.required !== "boolean") {
+        throw new ToolInputError("agents_wait required must be a boolean.");
+      }
+      if (params.required && params.timeoutSeconds !== undefined) {
+        throw new ToolInputError("required agents_wait cannot also specify timeoutSeconds.");
+      }
       if (params.ids.length > MAX_WAIT_IDS) {
         throw new ToolInputError(`agents_wait supports at most ${MAX_WAIT_IDS} ids.`);
       }
@@ -316,17 +330,15 @@ export function createAgentsWaitTool(opts: {
           Boolean(key?.trim()),
         ),
       );
-      const requestedTimeout =
-        typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
-          ? params.timeoutSeconds
-          : 30;
+      const requestedTimeout = asFiniteNumber(params.timeoutSeconds) ?? 30;
       const timeoutSeconds = Math.min(Math.max(0, requestedTimeout), swarm.waitTimeoutSecondsMax);
       const result = await waitForCollector({
         ids,
         currentSessionKeys,
         currentAgentId: opts.agentId,
         config: opts.config,
-        timeoutMs: timeoutSeconds * 1_000,
+        timeoutMs: params.required ? undefined : timeoutSeconds * 1_000,
+        waitForAll: params.required,
         signal,
         abortError: () => createAbortError("agents_wait aborted."),
       });

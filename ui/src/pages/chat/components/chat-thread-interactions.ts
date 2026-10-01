@@ -1,6 +1,7 @@
 // Pane-local search, context menus, selection actions, and presentation resets.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -19,8 +20,8 @@ import type { SessionLinkTarget } from "../../../components/markdown-session-lin
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
-import "../../../components/tooltip.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import "../../../components/tooltip.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type {
   ChatAttachment,
@@ -29,14 +30,14 @@ import type {
   ChatSelectionSource,
   ChatStreamSegment,
 } from "../../../lib/chat/chat-types.ts";
-import { buildCompanionQuestionPrefill } from "../../../lib/chat/companion-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
+import type { PresentationBinding } from "../../../lit/presentation-binding.ts";
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
@@ -52,6 +53,7 @@ import {
   openChatRewindConfirmation,
   type MessageReplyTarget,
 } from "./chat-message.ts";
+import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
 import {
   handleChatSelectionPointerUp,
   isChatSelectionPopupFocused,
@@ -99,11 +101,15 @@ type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
+  /** How the Gateway answered a lookup without a message. */
+  status?: (messageId: string) => ReplyMessageStatus | undefined;
   request: (messageId: string) => void;
   open: (messageId: string) => void;
 };
 
 export type ChatThreadProps = ChatSendStatusActions & {
+  messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
+  onReact?: (messageId: string, emoji: string, remove: boolean) => void;
   branding?: ThemeBranding;
   compactionStatus?: CompactionStatus | null;
   paneId: string;
@@ -113,6 +119,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   presented?: boolean;
   /** Mounted transcript visibility, independent of which split pane owns input. */
   transcriptVisible?: boolean;
+  transcriptPresentation?: PresentationBinding;
   gatewayClient?: GatewayBrowserClient | null;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
@@ -181,6 +188,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
+  onNavigate?: (routeId: "cron", options: { search: string }) => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   onAssistantAttachmentLoaded?: () => void;
@@ -197,7 +205,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   commentAttachments?: readonly ChatAttachment[];
   commentsDisabled?: boolean;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-  onCompanionPrefill?: (question: string) => void;
+  onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
@@ -213,7 +221,7 @@ type TranscriptInteractionProps = Pick<
   | "onForkMessage"
   | "onFocusComposer"
   | "onAddToChat"
-  | "onCompanionPrefill"
+  | "onCompanionSelection"
 >;
 
 function createTranscriptState(): ChatThreadState {
@@ -272,8 +280,9 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   const state = transcriptStates.get(paneId);
   if (state) {
     state.asyncQuestionDrafts = new Map();
-    // Search input belongs to the outgoing transcript. Other fields are pane
-    // preferences or dependency memos and invalidate themselves on new props.
+    // Parked rows must commit fresh bindings on return even when visible props match.
+    state.transcriptRenderDependencies = [];
+    // Search input belongs to the outgoing transcript; pane preferences survive.
     state.searchOpen = false;
     state.searchQuery = "";
     state.searchFocusPending = false;
@@ -457,27 +466,40 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
   if (selection && !selection.isCollapsed) {
     return;
   }
-  const reveal = !group.classList.contains("chat-group--meta-revealed");
+  // Resolve the message before clearing disclosure so a tap on a sibling moves
+  // the actions, while tapping the same message still toggles them off.
+  const bubble = group.classList.contains("chat-group--peer")
+    ? (target.closest(".chat-bubble") ??
+      // Tapping beside an image must reveal its actions without opening the image.
+      [...group.querySelectorAll(".chat-bubble")].find((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+      }))
+    : null;
+  const reveal = bubble
+    ? !bubble.classList.contains("chat-bubble--actions-revealed")
+    : !group.classList.contains("chat-group--meta-revealed");
   for (const revealed of transcript.querySelectorAll(".chat-group--meta-revealed")) {
     revealed.classList.remove("chat-group--meta-revealed");
   }
   group.classList.toggle("chat-group--meta-revealed", reveal);
+  for (const revealed of transcript.querySelectorAll(".chat-bubble--actions-revealed")) {
+    revealed.classList.remove("chat-bubble--actions-revealed");
+  }
+  if (reveal) {
+    bubble?.classList.add("chat-bubble--actions-revealed");
+  }
 }
 
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
   toggleTouchMessageMeta(event);
-  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionPrefill !== "function") {
+  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionSelection !== "function") {
     return;
   }
   handleChatSelectionPointerUp(event, {
     paneId: props.paneId,
     onAddToChat: props.onAddToChat,
-    onAskSideChat: (selection) => {
-      const question = buildCompanionQuestionPrefill(selection);
-      if (question) {
-        props.onCompanionPrefill?.(question);
-      }
-    },
+    onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
   });
 }
 

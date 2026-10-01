@@ -1,4 +1,4 @@
-import { type FSWatcher, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { type FSWatcher, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -14,7 +14,7 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 
 const capturedWatchers = vi.hoisted(() => [] as Array<ReturnType<typeof import("node:fs").watch>>);
-const capturedWatchChanges = vi.hoisted(() => [] as Array<() => void>);
+const capturedWatchEvents = vi.hoisted(() => [] as Array<(eventType?: string) => void>);
 const watcherOperations = vi.hoisted(() => [] as Array<["watch", unknown] | ["close", FSWatcher]>);
 const closedWatchers = vi.hoisted(() => new Set<FSWatcher>());
 
@@ -35,8 +35,8 @@ vi.mock("node:fs", async (importOriginal) => {
         closedWatchers.add(w);
       });
       capturedWatchers.push(w);
-      capturedWatchChanges.push(() => {
-        (cb as (eventType: string, filename: null) => void)("change", null);
+      capturedWatchEvents.push((eventType = "change") => {
+        (cb as (eventType: string, filename: null) => void)(eventType, null);
       });
       return w;
     }) as typeof orig.watch,
@@ -45,6 +45,7 @@ vi.mock("node:fs", async (importOriginal) => {
 
 const tplA = { segments: [{ text: "A" }] };
 const tplB = { output: { default: [{ text: "B" }] } };
+const tplC = { segments: [{ text: "C" }] };
 
 const cleanups: Array<() => void> = [];
 
@@ -62,7 +63,7 @@ afterEach(async () => {
     });
     warnSpy.mockClear();
     capturedWatchers.splice(0);
-    capturedWatchChanges.splice(0);
+    capturedWatchEvents.splice(0);
     watcherOperations.splice(0);
     closedWatchers.clear();
     for (const fn of cleanups.splice(0)) {
@@ -82,6 +83,12 @@ function tmpFile(name: string, contents: string): string {
   const path = join(d, name);
   writeFileSync(path, contents);
   return path;
+}
+
+function atomicSave(path: string, value: unknown): void {
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value));
+  renameSync(tmp, path);
 }
 
 describe("loadUsageBarTemplate", () => {
@@ -264,7 +271,7 @@ describe("loadUsageBarTemplate", () => {
       // Write invalid JSON to trigger the change handler, which sets
       // entry.template = undefined.
       writeFileSync(path, "{ not json");
-      capturedWatchChanges[0]?.();
+      capturedWatchEvents[0]?.();
 
       // The template is now invalid — served as DEFAULT.
       expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
@@ -298,6 +305,63 @@ describe("loadUsageBarTemplate", () => {
       // re-reads from disk and creates a fresh watcher.
       writeFileSync(path, JSON.stringify(tplB));
       expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
+    });
+
+    it("rewatches the path after atomic saves replace the file", () => {
+      const path = tmpFile("t.json", JSON.stringify(tplA));
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
+
+      // The rename invalidates the entry; the next load rereads and rewatches the new inode.
+      atomicSave(path, tplB);
+      expectDefined(capturedWatchEvents[0], "initial watcher")("rename");
+      expect(watcherOperations.map(([kind]) => kind)).toEqual(["watch", "close"]);
+      expect(watcherOperations[1]?.[1]).toBe(capturedWatchers[0]);
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
+      expect(watcherOperations.at(-1)).toEqual(["watch", path]);
+
+      // The replaced inode never reports later saves, so only the fresh watcher can.
+      atomicSave(path, tplC);
+      expectDefined(capturedWatchEvents[1], "replacement watcher")("rename");
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplC);
+      expect(watcherOperations.map(([kind]) => kind)).toEqual([
+        "watch",
+        "close",
+        "watch",
+        "close",
+        "watch",
+      ]);
+      expect(watcherOperations[3]?.[1]).toBe(capturedWatchers[1]);
+    });
+
+    it("rewatches the path after the file is deleted and recreated", () => {
+      const path = tmpFile("t.json", JSON.stringify(tplA));
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
+      const watcherEvents = expectDefined(capturedWatchEvents[0], "initial watcher");
+
+      // Linux reports an unlink as "change" (link count) followed by "rename".
+      rmSync(path);
+      watcherEvents("change");
+      watcherEvents("rename");
+      expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+      expect(watcherOperations.map(([kind]) => kind)).toEqual(["watch", "close"]);
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      writeFileSync(path, JSON.stringify(tplB));
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
+      expect(watcherOperations.at(-1)).toEqual(["watch", path]);
+    });
+
+    it("ignores late events from a watcher that was already invalidated", () => {
+      const path = tmpFile("t.json", JSON.stringify(tplA));
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
+      const watcherEvents = expectDefined(capturedWatchEvents[0], "initial watcher");
+
+      atomicSave(path, tplB);
+      watcherEvents("rename");
+      // Without the guard this repopulates the entry and the next load skips rewatching.
+      watcherEvents("change");
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
+      expect(watcherOperations.map(([kind]) => kind)).toEqual(["watch", "close", "watch"]);
     });
 
     it("does not evict when retrying the same key after a prior miss", () => {

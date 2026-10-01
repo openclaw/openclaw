@@ -17,7 +17,6 @@ import type { ChannelPlugin, ChannelPollResult } from "../../channels/plugins/ty
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
-import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
@@ -34,10 +33,8 @@ import {
   type OutboundDeliveryQueuePolicy,
   type OutboundSendDeps,
 } from "./deliver.js";
-import type {
-  ConversationDeliveryTarget,
-  DurableDeliveryCompletion,
-} from "./delivery-completion.js";
+import type { ConversationDeliveryTarget } from "./delivery-completion.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import {
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,
@@ -350,16 +347,16 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const mirrorText = mirrorProjection.text;
   const mirrorMediaUrls = mirrorProjection.mediaUrls;
   const primaryMediaUrl = mirrorMediaUrls[0] ?? mediaUrl ?? null;
+  const baseResult: MessageSendResult = {
+    channel,
+    to: params.to,
+    via: deliveryMode === "gateway" ? "gateway" : "direct",
+    mediaUrl: primaryMediaUrl,
+    mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+  };
 
   if (params.dryRun) {
-    return {
-      channel,
-      to: params.to,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
-      mediaUrl: primaryMediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-      dryRun: true,
-    };
+    return { ...baseResult, dryRun: true };
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
@@ -485,11 +482,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const sentBeforeError = send.status !== "sent" && sendMayHaveReachedRecipient;
 
     return {
-      channel,
-      to: params.to,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
-      mediaUrl: primaryMediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+      ...baseResult,
       result: results.at(-1),
       deliveryStatus: send.status,
       ...(send.status === "suppressed" ? { suppressionReason: send.reason } : {}),
@@ -529,14 +522,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     },
   });
 
-  return {
-    channel,
-    to: params.to,
-    via: "gateway",
-    mediaUrl: primaryMediaUrl,
-    mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-    result,
-  };
+  return { ...baseResult, result };
 }
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
@@ -546,21 +532,15 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     : await resolveMessageChannelSelection({ cfg, channel: params.channel });
   const { channel, plugin } = prepared;
 
-  const pollInput: PollInput = {
-    question: params.question,
-    options: params.options,
-    maxSelections: params.maxSelections,
-    durationSeconds: params.durationSeconds,
-    durationHours: params.durationHours,
-  };
   const outbound = plugin.outbound;
   if (!outbound?.sendPoll) {
     throw new Error(`Unsupported poll channel: ${channel}`);
   }
   const deliveryMode = outbound.deliveryMode ?? "direct";
-  const normalized = outbound.pollMaxOptions
-    ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
-    : normalizePollInput(pollInput);
+  const normalized = normalizePollInput(
+    params,
+    outbound.pollMaxOptions ? { maxOptions: outbound.pollMaxOptions } : undefined,
+  );
   const buildResult = (
     delivery: Pick<MessagePollResult, "result" | "dryRun">,
   ): MessagePollResult => ({
@@ -624,12 +604,8 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     params: {
+      ...normalized,
       to: params.to,
-      question: normalized.question,
-      options: normalized.options,
-      maxSelections: normalized.maxSelections,
-      durationSeconds: normalized.durationSeconds,
-      durationHours: normalized.durationHours,
       threadId: params.threadId,
       silent: params.silent,
       isAnonymous: params.isAnonymous,

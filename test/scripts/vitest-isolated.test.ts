@@ -155,6 +155,21 @@ describe("isolated Vitest admission", () => {
       isolatedVitestCreateArgs({ ...createOptions(), snapshot: "/owned,escape" }),
     ).toThrow("bind path");
   });
+  it.each([
+    ["test/vitest/vitest.unit-fast.config.ts", "src/plugins/source-checkout-runtime.test.ts"],
+    [
+      "test/vitest/vitest.ui-e2e.config.ts",
+      "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+    ],
+  ])("reserves bounded build capacity for %s", (selectedConfig, selectedFile) => {
+    const args = isolatedVitestCreateArgs({
+      ...createOptions(),
+      argv: ["run", "--config", selectedConfig, selectedFile],
+    });
+    expect(args).toEqual(expect.arrayContaining(["--memory=16g", "--memory-swap=16g"]));
+    expect(args).not.toContain("--memory=8g");
+  });
+
   it("admits only supported host isolation without relabeling shared host files", () => {
     expect(() => verifyIsolatedVitestHost({ rootless: true, selinuxEnabled: false })).not.toThrow();
     expect(() => verifyIsolatedVitestHost({ rootless: false, selinuxEnabled: false })).toThrow(

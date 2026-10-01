@@ -1,8 +1,3 @@
-/**
- * Channel account inspection helpers.
- *
- * Combines plugin inspection hooks, read-only fallbacks, and configured credential status.
- */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccount } from "./account-resolution.js";
@@ -29,9 +24,6 @@ export type ChannelAccountInspectionResult = {
   snapshot: ChannelAccountSnapshot;
 };
 
-/**
- * Inspects one channel account using the plugin hook or read-only fallback.
- */
 export async function inspectChannelAccount(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -47,9 +39,6 @@ export async function inspectChannelAccount(params: {
   );
 }
 
-/**
- * Resolves an inspected channel account plus enabled/configured state for status surfaces.
- */
 export async function resolveInspectedChannelAccount(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;

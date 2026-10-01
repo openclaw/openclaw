@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +8,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseRecorderReady, readScenarioFile, resolveChatTarget } from "./scenario.mjs";
 import { telegramPythonArgs } from "./telegram-runtime.mjs";
-import { startTelegramTestApiProxy } from "./telegram-test-api-proxy.mjs";
+import { startTelegramTestApiProxy, telegramTestApiPath } from "./telegram-test-api-proxy.mjs";
 import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 
 const SKILL_DIR =
@@ -23,7 +23,12 @@ const FOLLOWUP_DRAIN_CONTROL_PRELOAD_PATH = resolve(
   SKILL_DIR,
   "scripts/followup-drain-control-preload.mjs",
 );
-import { currentTelegramRun, withTelegramRun, runTelegramCli } from "./telegram-run-scope.mjs";
+import {
+  currentTelegramRun,
+  withTelegramRun,
+  runTelegramCli,
+  fetchWithLease,
+} from "./telegram-run-scope.mjs";
 const CHILD_ENV_DENIED_PREFIXES = [
   "BWS_",
   "CLAWSWEEPER_",
@@ -187,6 +192,9 @@ function parseArgs(argv) {
       throw new Error("Use --scenario instead of --text/--photo for the driven turn.");
     }
     args.scenario = readScenarioFile(resolve(args.scenarioPath));
+    if (!args.dm && args.scenario.actions.some((action) => action.type === "forwardBurst")) {
+      throw new Error("Scenario forwardBurst actions require --dm.");
+    }
   }
   if (!args.expectPassed) args.expect.push("OPENCLAW_E2E_OK");
   return args;
@@ -220,6 +228,7 @@ Chat selection:
   --dm                direct chat with the leased SUT
   --chat TARGET       TDLib id, username, or supported Telegram link
   Scenario send actions accept forumTopicId for a specific forum topic.
+  Scenario forwardBurst actions require --dm and forward bot-authored text and photo in one TDLib call.
 
 Backends:
   --backend mock          (default) basic deterministic mock-openai
@@ -462,31 +471,9 @@ export function writeConfig(params) {
   return { root, stateDir, workspace, configPath };
 }
 
-export async function fetchWithLease(
-  url,
-  init,
-  lease,
-  fetchImpl = fetch,
-  consume = (response) => response.json(),
-) {
-  const scope = currentTelegramRun();
-  scope.assertActive();
-  lease.assertHealthy();
-  const work = (async () => {
-    const signal = init.signal ? AbortSignal.any([scope.signal, init.signal]) : scope.signal;
-    const response = await fetchImpl(url, { ...init, signal });
-    scope.assertActive();
-    const payload = await consume(response);
-    scope.assertActive();
-    lease.assertHealthy();
-    return { response, payload };
-  })();
-  return await scope.trackIo(work);
-}
-
-async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
-  const { response, payload } = await fetchWithLease(
-    `https://api.telegram.org/bot${token}/test/${method}`,
+export async function requestTelegramTestApi(token, method, body, lease, fetchImpl = fetch) {
+  return await fetchWithLease(
+    `https://api.telegram.org${telegramTestApiPath(`/bot${token}/${method}`)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -495,6 +482,10 @@ async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
     lease,
     fetchImpl,
   );
+}
+
+async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
+  const { response, payload } = await requestTelegramTestApi(token, method, body, lease, fetchImpl);
   lease.assertHealthy();
   if (!response.ok || !payload.ok) {
     throw new Error(payload.description || `${method} failed with status ${response.status}`);
@@ -800,12 +791,12 @@ function processGroupExists(child) {
     return true;
   } catch (error) {
     if (error.code === "ESRCH") return false;
-    // macOS answers EPERM for a signal-0 probe of a group that holds a process we do not own;
-    // the group inventory decides instead of aborting cleanup (2026-09-14, lease left unreleased).
-    if (error.code !== "EPERM" || process.platform !== "darwin") throw error;
-    const groups = execFileSync("ps", ["-axo", "pgid="], { encoding: "utf8" }).trim().split(/\s+/u);
-    if (groups.some((group) => !/^\d+$/u.test(group))) throw error;
-    return groups.includes(String(child.pid));
+    // macOS can report EPERM while an exiting group awaits reap. Keep waiting
+    // for ESRCH; EPERM never confirms cleanup, and setuid ps cannot run confined.
+    if (error.code === "EPERM") {
+      return true;
+    }
+    throw error;
   }
 }
 
@@ -1076,7 +1067,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
   };
   const assertScenarioActionsActive = () => {
     if (readActionFailure()) {
-      throw new Error(`Scenario actions stopped after uncertain send: ${actionFailure.error}`);
+      throw new Error(`Scenario actions stopped after recorder failure: ${actionFailure.error}`);
     }
   };
 
@@ -1370,6 +1361,16 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
           ) {
             break;
           }
+          // The recorder owns native reply attribution. Timed controls must not
+          // overtake a send whose visible reply has not crossed that boundary.
+          const replyBarriers = args.scenario.actions
+            .slice(0, index)
+            .flatMap((prior, priorIndex) =>
+              prior.awaitReply ? [path.join(scenarioBarrierDir, String(priorIndex))] : [],
+            );
+          while (!scenarioActionsStopped() && replyBarriers.some((file) => !fs.existsSync(file))) {
+            await currentTelegramRun().sleep(50);
+          }
           const beganAt = Date.now();
           leaseHealth.assertHealthy();
           if (scenarioActionsStopped()) break;
@@ -1560,7 +1561,15 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
         scratchRemovedAfterExit: true,
         mockRequests: requestRows,
         ...(actionFailure
-          ? { actionFailure: { ...actionFailure, error: redactRunnerText(actionFailure.error) } }
+          ? {
+              actionFailure: {
+                actionType: actionFailure.actionType,
+                actionIndex: actionFailure.actionIndex,
+                status: actionFailure.status,
+                ...(actionFailure.sendOutcome ? { sendOutcome: actionFailure.sendOutcome } : {}),
+                error: redactRunnerText(actionFailure.error),
+              },
+            }
           : {}),
         gatewayActions: gatewayActions.map((action) => ({
           type: action.type,

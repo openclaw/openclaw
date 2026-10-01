@@ -100,10 +100,15 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
     `file:${traversedState}`,
     `file:${traversedState.replace(`${path.sep}..${path.sep}`, `${path.sep}%2e%2e${path.sep}`)}`,
   ];
+  const requireGuard = `require('node:assert/strict').equal(globalThis[Symbol.for('openclaw.test.privateHandoffGuard')], ${JSON.stringify(privatePath)});`;
   for (const livePath of refusedPaths) {
+    // Refuse the probe itself if the runtime did not install the guard.
     const blocked = spawnSync(
       process.execPath,
-      ["-e", `new (require('node:sqlite').DatabaseSync)(${JSON.stringify(livePath)})`],
+      [
+        "-e",
+        `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(livePath)})`,
+      ],
       { env, encoding: "utf8" },
     );
     blockedResults.push(blocked);
@@ -126,7 +131,7 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
       process.execPath,
       [
         "-e",
-        `new (require('node:sqlite').DatabaseSync)(${JSON.stringify(privateDatabase)}).close()`,
+        `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(privateDatabase)}).close()`,
       ],
       { env, encoding: "utf8" },
     );
@@ -139,7 +144,10 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
     ]) {
       const reopened = spawnSync(
         process.execPath,
-        ["-e", `new (require('node:sqlite').DatabaseSync)(${JSON.stringify(uri)}).close()`],
+        [
+          "-e",
+          `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(uri)}).close()`,
+        ],
         { env, encoding: "utf8" },
       );
       expect(reopened.error).toBeUndefined();

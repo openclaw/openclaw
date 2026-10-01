@@ -1,5 +1,5 @@
-// Voice model catalog helpers shared by TTS and realtime voice plugins.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString as normalizeLowercaseString,
   normalizeOptionalString as normalizeString,
@@ -26,14 +26,6 @@ export type VoiceProviderCandidate = {
   provider: string;
   voiceModel?: VoiceModelRef;
 };
-
-type VoiceModelConfig =
-  | string
-  | {
-      primary?: unknown;
-      fallbacks?: unknown;
-      timeoutMs?: unknown;
-    };
 
 function normalizeTimeoutMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -83,12 +75,12 @@ export function voiceProviderSupportsModel(
 
 /** Parse primary/fallback voice model refs from config. */
 export function resolveVoiceModelRefs(config: unknown): VoiceModelRef[] {
-  const voiceModel = config as VoiceModelConfig | undefined;
-  if (typeof voiceModel === "string") {
-    const parsed = parseVoiceModelRef(voiceModel);
+  if (typeof config === "string") {
+    const parsed = parseVoiceModelRef(config);
     return parsed ? [parsed] : [];
   }
-  if (typeof voiceModel !== "object" || voiceModel === null || Array.isArray(voiceModel)) {
+  const voiceModel = asOptionalRecord(config);
+  if (!voiceModel) {
     return [];
   }
   const timeoutMs = normalizeTimeoutMs(voiceModel.timeoutMs);

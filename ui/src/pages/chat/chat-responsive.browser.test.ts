@@ -89,9 +89,8 @@ function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGateway
   });
 }
 
-async function getSharedAppPage(): Promise<Page> {
-  sharedAppPagePromise ??= createSharedAppPage();
-  return await sharedAppPagePromise;
+function getSharedAppPage(): Promise<Page> {
+  return (sharedAppPagePromise ??= createSharedAppPage());
 }
 
 async function createSharedAppPage(): Promise<Page> {
@@ -105,7 +104,8 @@ async function createSharedAppPage(): Promise<Page> {
     page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
     await page.route("https://cdn.example/**", async (route) => {
       const request = route.request();
-      if (request.url() === SHARED_APP_IMAGE_URL) {
+      // Chromium normalizes the escaped dot before sending the image request.
+      if (decodeURI(request.url()) === decodeURI(SHARED_APP_IMAGE_URL)) {
         await route.fulfill({
           contentType: "image/png",
           body: Buffer.from(
@@ -594,7 +594,7 @@ function composerControlsHtml() {
           </details>
           <details class="chat-controls__inline-select chat-controls__permission-picker">
           <summary class="chat-controls__inline-select-trigger chat-controls__permission-trigger" aria-label="Permissions: Guarded">
-            <span class="chat-controls__inline-select-label">Guarded</span>
+            <span class="chat-controls__permission-icon" aria-hidden="true">${iconSvg()}</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__permission-menu">
             <button class="chat-controls__permission-option">Guarded</button>
@@ -1020,7 +1020,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <div class="chat-split-view__cell" style="width: 320px;">
-            <div class="chat-pane__header">
+            <div class="chat-pane__header chat-pane__header--closable">
               <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
               <span class="chat-pane__session-title"
                 ><span class="chat-pane__session-title-text"
@@ -1141,7 +1141,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <div class="chat-split-view__cell" style="width: 640px;">
-            <div class="chat-pane__header">
+            <div class="chat-pane__header chat-pane__header--closable">
               <div class="chat-pane__crumbs">
                 <div class="chat-pane__project-row">
                   <wa-dropdown class="chat-pane__workspace-menu">
@@ -2385,6 +2385,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
     await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
     expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
+    await image.evaluate((element: HTMLImageElement) => element.decode());
     expect(await page.getByText(SHARED_APP_TTS_TEXT, { exact: true }).count()).toBe(1);
     expect(await page.getByText(/MEDIA:/u).count()).toBe(0);
     for (const [fileName, type, , playback] of SHARED_APP_PLAYBACK_MEDIA) {
@@ -3349,7 +3350,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             ".agent-chat__composer-combobox > textarea",
           );
           const selectors = [
-            ".chat-controls__permission-trigger .chat-controls__inline-select-label",
             ".chat-controls__model-trigger .chat-controls__inline-select-label",
             ".chat-controls__effort-trigger .chat-controls__inline-select-label",
           ];
@@ -3371,7 +3371,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         });
         expect(composerFontSizes).toEqual({
-          labels: [14, 14, 14],
+          labels: [14, 14],
           placeholder: 16,
           textarea: 16,
         });
@@ -3865,7 +3865,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           "",
           "chat-queue__item--failed",
           "",
-          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn\'t arrive.</span></span>',
+          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Delivery has not been confirmed. Check the conversation — retry only if your message didn\'t arrive.</span></span>',
         ),
         queueExceptionCellHtml(
           "applying-settings",

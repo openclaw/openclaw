@@ -14,6 +14,7 @@ import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js"
 import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
 import {
   projectWorkerAssistantContent,
+  projectWorkerTextOrImageContent,
   projectWorkerTokenUsage,
 } from "./assistant-message-projection.js";
 
@@ -35,18 +36,6 @@ type WorkerMessageProjectionPurpose = "inference" | "transcript";
 export const WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE =
   "Cloud worker could not preserve authoritative provider replay. " +
   "Stop or reclaim the cloud worker, then retry locally.";
-
-export function cloneTextContent(part: { type: "text"; text: string; textSignature?: string }) {
-  return {
-    type: "text" as const,
-    text: part.text,
-    ...(part.textSignature ? { textSignature: part.textSignature } : {}),
-  };
-}
-
-export function cloneImageContent(part: { type: "image"; data: string; mimeType: string }) {
-  return { type: "image" as const, data: part.data, mimeType: part.mimeType };
-}
 
 function providerReplayUnavailable(
   details: WorkerProviderReplayUnavailable,
@@ -192,9 +181,7 @@ export function toWorkerTranscriptMessage(
     const content =
       typeof message.content === "string"
         ? [{ type: "text" as const, text: message.content }]
-        : message.content.map((part) =>
-            part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-          );
+        : message.content.map(projectWorkerTextOrImageContent);
     return { kind: "complete", message: { role: "user", content, timestamp: message.timestamp } };
   }
   if (message.role === "assistant") {
@@ -211,9 +198,7 @@ export function toWorkerTranscriptMessage(
         role: "toolResult",
         toolCallId: message.toolCallId,
         toolName: message.toolName,
-        content: message.content.map((part) =>
-          part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-        ),
+        content: message.content.map(projectWorkerTextOrImageContent),
         ...(message.details === undefined
           ? {}
           : { details: redactAgentDiagnosticPayload(message.details) }),

@@ -6,11 +6,11 @@ import {
   clearSubagentRunsReadCacheForTest,
   persistSubagentRunsToDisk,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import {
   bindSwarmRunReservation,
-  removeQueuedSwarmRun,
+  holdQueuedSwarmRun,
   reserveSwarmRun,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -28,7 +28,8 @@ import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -91,6 +92,7 @@ async function withFixture(
     context: GatewayRequestContext;
     ownerId: string;
     viewer: GatewayClient;
+    retainedRunIds: string[];
   }) => Promise<void>,
 ) {
   await withOpenClawTestState(
@@ -143,7 +145,13 @@ async function withFixture(
       const context = requestContext(cfg);
       context.getRuntimeConfig = () => getRuntimeConfigSnapshot() ?? cfg;
       try {
-        await run({ cfg, context, ownerId, viewer });
+        await run({
+          cfg,
+          context,
+          ownerId,
+          viewer,
+          retainedRunIds: records.map((entry) => entry.runId),
+        });
       } finally {
         getSessionRowProjection(context)?.dispose();
         clearSubagentRunsReadCacheForTest();
@@ -159,19 +167,23 @@ async function whilePaused(
 ) {
   await initializeSessionReadContext(context);
   const projection = getSessionRowProjection(context)!;
-  const ensure = projection.ensureMaterialized.bind(projection);
+  const prepare = projection.prepareSelection.bind(projection);
   const paused = createDeferredCore();
   const released = createDeferredCore();
-  const readiness = vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-    await ensure();
-    paused.resolve();
-    await released.promise;
-  });
+  const readiness = vi
+    .spyOn(projection, "prepareSelection")
+    .mockImplementationOnce(async (...args) => {
+      const result = await prepare(...args);
+      paused.resolve();
+      await released.promise;
+      return result;
+    });
   const request = start();
   try {
     expect(
       await Promise.race([paused.promise.then(() => "paused"), request.then(() => "responded")]),
     ).toBe("paused");
+    expect(readiness).toHaveBeenCalledOnce();
     await change();
     released.resolve();
     return await request;
@@ -204,7 +216,7 @@ async function afterCommittedChange(
 it.each(["describe", "list"] as const)(
   "captures current registry facts after %s owner publications",
   async (method) => {
-    await withFixture(async ({ context, viewer }) => {
+    await withFixture(async ({ context, viewer, retainedRunIds }) => {
       await describeSession(context, viewer);
       const current = retainedRun("current-memory", {
         childSessionKey: targetKey,
@@ -229,8 +241,12 @@ it.each(["describe", "list"] as const)(
               swarmRequesterSessionKey: targetKey,
               collectorCompletion: { status: "done" },
             });
-            persistSubagentRunsToDisk(new Map([[published.runId, published]]));
+            persistSubagentRunsToDisk(new Map([[published.runId, published]]), [
+              ...retainedRunIds,
+              published.runId,
+            ]);
             subagentRuns.set(current.runId, current);
+            subagentRuns.commitOwnership(current);
           },
         );
         expect(response).toMatchObject({
@@ -589,6 +605,7 @@ it.each(["executor", "reservation"] as const)(
       });
       subagentRuns.set(run.runId, run);
       let claim: string | undefined;
+      const reservationReleases: Promise<void>[] = [];
       if (owner === "executor") {
         claim = claimAgentRunContext(
           run.runId,
@@ -619,15 +636,25 @@ it.each(["executor", "reservation"] as const)(
             if (owner === "executor") {
               releaseAgentRunContext(run.runId, claim);
             } else {
-              expect(removeQueuedSwarmRun(run.runId)).toBe(true);
+              const hold = holdQueuedSwarmRun(run.runId);
+              const withdrawn = hold?.withdraw();
+              if (hold) {
+                reservationReleases.push(hold.release());
+              }
+              expect(withdrawn).toBe(true);
             }
           },
         );
         expect(response).toMatchObject({ session: { hasActiveSubagentRun: undefined } });
       } finally {
         releaseAgentRunContext(run.runId, claim);
-        removeQueuedSwarmRun(run.runId);
+        const hold = holdQueuedSwarmRun(run.runId);
+        if (hold) {
+          hold.withdraw();
+          reservationReleases.push(hold.release());
+        }
         subagentRuns.delete(run.runId);
+        await Promise.all(reservationReleases);
       }
     });
   },

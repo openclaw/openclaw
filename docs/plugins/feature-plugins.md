@@ -187,9 +187,23 @@ operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
 
-The host also exposes session and agent snapshots and operations, plugin page
-navigation, authenticated requests, and subscriptions. Session and agent
-`refresh()` operations fetch new snapshots and reject on failure, so a plugin
+### Host capabilities
+
+Use the host for shared application behavior:
+
+| Capability              | Purpose                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agents`                | Agent snapshots, selection, scope, and refresh.                                                               |
+| `components`            | Host-owned dialogs, pickers, and session dashboards.                                                          |
+| `connection`            | Current connection and operator capabilities.                                                                 |
+| `dock` (optional)       | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
+| `navigation`            | Open plugin pages and build their URLs.                                                                       |
+| `request` and `onEvent` | Authenticated Gateway requests and event subscriptions.                                                       |
+| `sessions`              | Session snapshots, independent queries, navigation, creation, and updates.                                    |
+| `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
+| `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
+
+Session and agent `refresh()` operations fetch new snapshots and reject on failure, so a plugin
 can display an error and offer Retry. `host.sessions.rows` is the current
 filtered, paginated session list. `host.sessions.refresh()` preserves that
 list's filters. Use `host.sessions.observe(query, onChange)` to maintain an
@@ -226,6 +240,21 @@ ownership. Use `mountSelectPicker` for a list of `{ value, label, description? }
 options, a selected `value`, an `accessibleLabel`, and an `onSelect` callback.
 With `searchable: true`, lists longer than eight options show a search field.
 The picker matches option labels, values, and descriptions.
+
+### Dock a conversation
+
+Check `host.dock` before offering a dock action. From a mounted view, use
+`context.host.dock.openSession({ sessionKey, agentId, label, context })` to open
+the named conversation alongside your plugin page. `label` supplies the dock
+tab title; the optional `context` is `{ page, detail? }`, where `page` can be
+your plugin page id and `detail` contains string reference fields.
+
+The host reuses the Home dock's placement controls, chat pane, drafts, and
+attachments. Page navigation keeps the conversation dock open; ending the
+plugin activation closes a dock that activation still owns. Use
+`host.subscribe(...)` to refresh your action when `host.dock.openSessionKey`
+changes. See the [dock contract](/plugins/sdk-subpaths#control-ui-conversation-dock)
+for replacement, visibility, access, and context limits.
 
 ## Build and reload
 

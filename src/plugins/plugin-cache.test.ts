@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
@@ -396,26 +397,31 @@ describe("plugin package facts", () => {
   it("withPluginLifecycleLease refreshes enclosing operation facts while retaining its callbacks", async () => {
     const root = tempDirs.make("plugin-lease-parent-");
     const filePath = path.join(root, "catalog.json");
+    const databasePath = path.join(root, "state.sqlite");
     fs.writeFileSync(filePath, '{"name":"before-install"}');
-    await using cache = createPluginCache();
-    const instance = new PluginInstance("setup-owner");
-    cache.instances.add(instance);
-    const afterWrite = instance.wrap(() => "post-write usable");
-    await withPluginCache(cache, async () => {
-      expect(readPluginCacheJsonFile(filePath)).toMatchObject({
-        ok: true,
-        value: { name: "before-install" },
+    try {
+      await using cache = createPluginCache();
+      const instance = new PluginInstance("setup-owner");
+      cache.instances.add(instance);
+      const afterWrite = instance.wrap(() => "post-write usable");
+      await withPluginCache(cache, async () => {
+        expect(readPluginCacheJsonFile(filePath)).toMatchObject({
+          ok: true,
+          value: { name: "before-install" },
+        });
+        await withPluginLifecycleLease({ path: databasePath }, async () => {
+          fs.writeFileSync(filePath, '{"name":"after-install"}');
+          clearPluginMetadataLifecycleCaches();
+        });
+        expect(readPluginCacheJsonFile(filePath)).toMatchObject({
+          ok: true,
+          value: { name: "after-install" },
+        });
+        expect(afterWrite()).toBe("post-write usable");
       });
-      await withPluginLifecycleLease({ path: path.join(root, "state.sqlite") }, async () => {
-        fs.writeFileSync(filePath, '{"name":"after-install"}');
-        clearPluginMetadataLifecycleCaches();
-      });
-      expect(readPluginCacheJsonFile(filePath)).toMatchObject({
-        ok: true,
-        value: { name: "after-install" },
-      });
-      expect(afterWrite()).toBe("post-write usable");
-    });
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    }
   });
 
   it.each(["regular", "boundary"] as const)(

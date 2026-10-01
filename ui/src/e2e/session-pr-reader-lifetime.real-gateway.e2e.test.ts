@@ -14,12 +14,11 @@ import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
 import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import {
-  ensureProfileForEmail,
   linkEmail,
-  resolveUserProfileId,
   setDisplayName,
   setUserProfileRole,
-} from "../../../src/state/user-profiles.ts";
+} from "../../../src/state/user-profile-writes.worker.ts";
+import { ensureProfileForEmail, resolveUserProfileId } from "../../../src/state/user-profiles.ts";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

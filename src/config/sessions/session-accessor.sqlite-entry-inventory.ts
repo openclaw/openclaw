@@ -5,12 +5,13 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import {
   parseSessionEntryJson,
   sessionEntryInventoryJson,
 } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -27,7 +28,7 @@ export function readSessionEntryStore(
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
   const db = getSessionKysely(database.db);
-  let query = db.selectFrom("session_nodes").selectAll();
+  let query = db.selectFrom("session_nodes").selectAll().select(sessionEntrySnapshotColumns);
   if (options.includeArchived === false) {
     query = query.where("archived_at", "is", null);
   }

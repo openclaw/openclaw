@@ -5,6 +5,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -12,15 +13,16 @@ import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventMetadata,
-  type DiagnosticExecProcessCompletedEvent,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
+import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -301,6 +303,69 @@ describe("sandbox exec preparation failures", () => {
     },
   );
 
+  it.each(["current", "revoked", "reassigned"] as const)(
+    "rechecks a prepared settle tool at final process spawn when its batch is %s",
+    async (state) => {
+      const sessionKey = "agent:main:settle-exec";
+      const claim = {};
+      let currentClaim: object | undefined = claim;
+      const profile = resolveConversationCapabilityProfile({ sessionKey, agentId: "main" });
+      const wrap = createCodingToolsGatewayCaller({
+        agentId: "main",
+        sessionKey,
+        capabilityProfile: {
+          ...profile,
+          policy: { ...profile.policy, requesterPolicySource: "completion-handoff" },
+        },
+        options: {
+          trustedInternalHandoff: {
+            kind: "subagent-completion",
+            sourceSessionKey: "agent:main:subagent:child",
+            targetSessionKey: sessionKey,
+            targetSessionId: "settle-parent",
+            provider: "openai",
+            model: "test-model",
+            settleBatch: {
+              sourceSessionKeys: ["agent:main:subagent:child"],
+              isCurrent: () => currentClaim === claim,
+            },
+          },
+        },
+      });
+      const effect = vi.fn();
+      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+        await Promise.resolve();
+        currentClaim = state === "current" ? claim : state === "reassigned" ? {} : undefined;
+        input.assertCurrent?.();
+        effect();
+        return runtimeManagedRun(input);
+      });
+      const tool = wrap({
+        name: "exec",
+        label: "Exec",
+        description: "Synthetic exec using the production process boundary",
+        parameters: Type.Object({}),
+        execute: async () => {
+          const process = await runTestExecProcess();
+          return { content: [], details: await process.promise };
+        },
+      });
+      const pending = withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey, receiptAuthority: () => true },
+        () =>
+          expectDefined(tool.execute, "Expected the prepared settle exec tool")("settle-exec", {}),
+      );
+      if (state === "current") {
+        await expect(pending).resolves.toMatchObject({ details: { status: "completed" } });
+        expect(effect).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).rejects.toThrow("authority is no longer active");
+        expect(effect).not.toHaveBeenCalled();
+      }
+      expect(supervisorMock.spawn).toHaveBeenCalledOnce();
+    },
+  );
+
   it("keeps turn authority out of process lifetime while preserving foreground updates", async () => {
     const exit = createDeferred<RunExit>();
     const identity = {
@@ -400,7 +465,8 @@ describe("sandbox exec preparation failures", () => {
       createDeferred<Awaited<ReturnType<NonNullable<BashSandboxConfig["buildExecSpec"]>>>>();
     const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
     const onSettledBeforeNotify = vi.fn();
-    const completionEvents: DiagnosticExecProcessCompletedEvent[] = [];
+    const completionEvents: Extract<DiagnosticEventPayload, { type: "exec.process.completed" }>[] =
+      [];
     const unsubscribe = onInternalDiagnosticEvent((event) => {
       if (
         event.type === "exec.process.completed" &&
@@ -678,7 +744,7 @@ describe("runExecProcess PTY fallback", () => {
       });
 
       const event = events.find(
-        (item): item is DiagnosticExecProcessCompletedEvent =>
+        (item): item is Extract<DiagnosticEventPayload, { type: "exec.process.completed" }> =>
           item.type === "exec.process.completed",
       );
       if (!event) {

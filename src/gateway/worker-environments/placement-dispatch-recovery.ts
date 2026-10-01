@@ -14,7 +14,6 @@ import { cleanupPendingWorkspaceResultOrphans } from "./placement-dispatch-orpha
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   placementTurnOwner,
   projectWorkerSessionTurnClaim,
@@ -24,6 +23,7 @@ import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
 } from "./placement-recovery-contract.js";
+import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { boundedWorkerError } from "./worker-error.js";
 
@@ -195,9 +195,13 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     sessionId: string,
     mode: "startup" | "restart" | "runtime",
     environmentId?: string,
+    resultsOnly?: "results-only",
   ): Promise<void> => {
     let facts = await placements.readProjection([sessionId], { current: true });
     const stagedOwners = await recoverPendingWorkspaceResults(deps, facts, environmentId);
+    if (resultsOnly === "results-only") {
+      return;
+    }
     facts = await placements.readProjection([sessionId], { current: true });
     const blocked =
       stagedOwners.has(sessionId) ||
@@ -390,8 +394,8 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       ) {
         continue;
       }
-      await admit([candidate.sessionId], () =>
-        recoverSession(candidate.sessionId, "runtime", environmentId),
+      await admit([candidate.sessionId], (mode) =>
+        recoverSession(candidate.sessionId, "runtime", environmentId, mode),
       );
     }
     if (orphanCleanupPending && environmentId === undefined) {

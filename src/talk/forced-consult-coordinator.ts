@@ -124,9 +124,10 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     });
   const questionsMatch = options.questionsMatch ?? matchRealtimeVoiceConsultQuestions;
 
-  const clearTimer = (stored: StoredForcedConsult<TContext>) => {
+  const stopPending = (stored: StoredForcedConsult<TContext>) => {
     stored.timer?.clear();
     stored.timer = undefined;
+    stored.pending = false;
   };
 
   const scheduleCleanup = (stored: StoredForcedConsult<TContext>) => {
@@ -163,18 +164,13 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     }
   };
 
-  const findMatching = (question: string | undefined) => {
-    if (!question) {
-      return undefined;
-    }
-    return [...state.values()]
-      .toReversed()
-      .find((candidate) =>
-        candidate.questions.some((candidateQuestion) =>
-          questionsMatch(candidateQuestion, question),
-        ),
-      );
-  };
+  const matchesQuestion = (stored: StoredForcedConsult<TContext>, question: string | undefined) =>
+    stored.questions.some((candidate) => questionsMatch(candidate, question));
+
+  const findMatching = (question: string | undefined) =>
+    question
+      ? [...state.values()].findLast((candidate) => matchesQuestion(candidate, question))
+      : undefined;
 
   const rememberStoredQuestion = (
     stored: StoredForcedConsult<TContext>,
@@ -263,7 +259,7 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     clearPending() {
       for (const stored of state.values()) {
         if (stored.pending) {
-          clearTimer(stored);
+          stopPending(stored);
           state.delete(stored.handle.id);
         }
       }
@@ -275,18 +271,11 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       const stored =
         !question && pendingCandidates.length === 1
           ? pendingCandidates[0]
-          : pendingCandidates
-              .toReversed()
-              .find((candidate) =>
-                candidate.questions.some((candidateQuestion) =>
-                  questionsMatch(candidateQuestion, question),
-                ),
-              );
+          : pendingCandidates.findLast((candidate) => matchesQuestion(candidate, question));
       if (!stored?.pending) {
         return undefined;
       }
-      clearTimer(stored);
-      stored.pending = false;
+      stopPending(stored);
       return stored.handle;
     },
     cancelPending(handle) {
@@ -294,8 +283,7 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       if (!stored?.pending) {
         return;
       }
-      clearTimer(stored);
-      stored.pending = false;
+      stopPending(stored);
       state.delete(handle.id);
     },
     recordNativeConsult(args, nativeCallId) {
@@ -303,17 +291,13 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       recordRecentNativeConsult(question);
       // Native calls win over scheduled forced calls when they match a pending
       // question; the pending timer is cleared and the handle remains for dedupe.
-      const pending = [...state.values()]
-        .toReversed()
-        .find(
-          (candidate) =>
-            candidate.pending &&
-            candidate.questions.some((candidateQuestion) =>
-              questionsMatch(candidateQuestion, question),
-            ),
-        );
+      const pending = [...state.values()].findLast(
+        (candidate) => candidate.pending && matchesQuestion(candidate, question),
+      );
       if (pending) {
-        clearTimer(pending);
+        // Clear the timer before matcher callbacks; publish the consumed state afterward.
+        pending.timer?.clear();
+        pending.timer = undefined;
         rememberStoredQuestion(pending, question);
         if (nativeCallId) {
           pending.nativeCallIds.add(nativeCallId);
@@ -343,8 +327,7 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       if (!stored) {
         return;
       }
-      clearTimer(stored);
-      stored.pending = false;
+      stopPending(stored);
       stored.started = true;
     },
     markDelivered(handle) {
@@ -352,8 +335,7 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       if (!stored) {
         return;
       }
-      clearTimer(stored);
-      stored.pending = false;
+      stopPending(stored);
       stored.started = true;
       stored.delivered = true;
       scheduleCleanup(stored);
@@ -363,8 +345,7 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       if (!stored || stored.delivered) {
         return;
       }
-      clearTimer(stored);
-      stored.pending = false;
+      stopPending(stored);
       stored.cancelled = true;
       scheduleCleanup(stored);
     },

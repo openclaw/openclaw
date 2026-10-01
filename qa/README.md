@@ -22,6 +22,28 @@ Operator workflows:
 
 Keep this folder in git. Add new scenarios here before wiring them into automation.
 
+QA-channel flows that assert final replies use `waitForCompletedQaReply` with the
+message returned by `sendInbound`. It waits for the channel's processing
+acknowledgment before reading the retained reply. QA-channel reset also waits for
+pending inbound turns before clearing observations.
+
+Reply-shape scenarios use `transport.waitForCompletedReply` with the inbound
+message and Gateway client. For Crabline Discord, the adapter waits for an
+observed delivery and the channel run queue to become idle. Its local API relay
+keeps REST, Gateway discovery, and resumed WebSockets on the same origin. It
+rewrites only Gateway discovery `url`, READY `resume_gateway_url`, and message
+attachment `url`/`proxy_url` (including referenced messages). Message content,
+embeds, and attachment descriptions pass through unchanged. It records the
+message ID from the final send response, then reads that exact native
+message before checking its text, destination, or quote relation. A deleted final
+fails explicitly; a retained preview cannot replace it, and edits are judged from
+the retained final. QA-channel uses its processing acknowledgment instead.
+Adapters without a completion boundary fail explicitly rather than falling back
+to the first matching outbound observation.
+
+Generated-media scenarios count attachment deliveries separately from text
+progress and check the saved bytes plus the persisted completion reply.
+
 ## Confined repository checkpoint commands
 
 `scripts/qa/repository-checkpoint-admission.ts` adapts the product-owned checkpoint

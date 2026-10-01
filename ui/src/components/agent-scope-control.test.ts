@@ -22,6 +22,24 @@ function createSelection(setScope: (agentId: string | null) => void) {
   } as unknown as AgentSelectionCapability;
 }
 
+async function mountScope(overrides: Partial<Parameters<typeof renderAgentScopeControl>[0]> = {}) {
+  const container = document.body.appendChild(document.createElement("div"));
+  render(
+    renderAgentScopeControl({
+      agents: [
+        { id: "main", name: "Main agent" },
+        { id: "writer", name: "Writer" },
+      ],
+      selection: createSelection(vi.fn()),
+      ...overrides,
+    }),
+    container,
+  );
+  const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
+  await select?.updateComplete;
+  return { container, select };
+}
+
 describe("renderAgentScopeControl", () => {
   it("renders only when multiple configured agents are selectable", () => {
     const container = document.createElement("div");
@@ -49,22 +67,7 @@ describe("renderAgentScopeControl", () => {
   });
 
   it("moves the scope label into the dropdown title without wrapping its options", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(
-      renderAgentScopeControl({
-        agents: [
-          { id: "main", name: "Main agent" },
-          { id: "writer", name: "Writer" },
-        ],
-        selection: createSelection(vi.fn()),
-      }),
-      container,
-    );
-
-    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
-    await select?.updateComplete;
+    const { container, select } = await mountScope();
 
     expect(select?.closest("label")).toBeNull();
     expect(container.querySelector(".agent-scope-control__label")).toBeNull();
@@ -76,25 +79,16 @@ describe("renderAgentScopeControl", () => {
   });
 
   it("includes historical agent ids and maps All agents back to null", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
     const setScope = vi.fn();
-
-    render(
-      renderAgentScopeControl({
-        agents: [
-          { id: "main", name: "Main agent", identity: { emoji: "🦞" } },
-          { id: "writer", name: "Writer" },
-        ],
-        additionalAgentIds: ["retired"],
-        selection: createSelection(setScope),
-      }),
-      container,
-    );
-
-    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
+    const { container, select } = await mountScope({
+      agents: [
+        { id: "main", name: "Main agent", identity: { emoji: "🦞" } },
+        { id: "writer", name: "Writer" },
+      ],
+      additionalAgentIds: ["retired"],
+      selection: createSelection(setScope),
+    });
     expect(select).not.toBeNull();
-    await select?.updateComplete;
     expect(select?.options.map((option) => option.value)).toEqual([
       "",
       "main",
@@ -111,25 +105,15 @@ describe("renderAgentScopeControl", () => {
   });
 
   it("keeps semantic system agents out of roster and historical options", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(
-      renderAgentScopeControl({
-        agents: [
-          { id: "main", kind: "agent", name: "Main agent" },
-          { id: "ordinary-looking-id", kind: "system", name: "System" },
-          { id: "writer", kind: "agent", name: "Writer" },
-        ],
-        additionalAgentIds: ["ordinary-looking-id", "retired"],
-        selection: createSelection(vi.fn()),
-        selectedId: "ordinary-looking-id",
-      }),
-      container,
-    );
-
-    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
-    await select?.updateComplete;
+    const { container, select } = await mountScope({
+      agents: [
+        { id: "main", kind: "agent", name: "Main agent" },
+        { id: "ordinary-looking-id", kind: "system", name: "System" },
+        { id: "writer", kind: "agent", name: "Writer" },
+      ],
+      additionalAgentIds: ["ordinary-looking-id", "retired"],
+      selectedId: "ordinary-looking-id",
+    });
     expect(select?.value).toBe("");
     expect(select?.options.map((option) => option.value)).toEqual([
       "",
@@ -141,51 +125,30 @@ describe("renderAgentScopeControl", () => {
   });
 
   it("uses the first selectable agent when a concrete selector receives a system id", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(
-      renderAgentScopeControl({
-        agents: [
-          { id: "main", kind: "agent", name: "Main agent" },
-          { id: "ordinary-looking-id", kind: "system", name: "System" },
-          { id: "writer", kind: "agent", name: "Writer" },
-        ],
-        selection: createSelection(vi.fn()),
-        allowAll: false,
-        selectedId: "ordinary-looking-id",
-      }),
-      container,
-    );
-
-    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
-    await select?.updateComplete;
+    const { container, select } = await mountScope({
+      agents: [
+        { id: "main", kind: "agent", name: "Main agent" },
+        { id: "ordinary-looking-id", kind: "system", name: "System" },
+        { id: "writer", kind: "agent", name: "Writer" },
+      ],
+      allowAll: false,
+      selectedId: "ordinary-looking-id",
+    });
     expect(select?.value).toBe("main");
     expect(select?.options.map((option) => option.value)).toEqual(["main", "writer"]);
     container.remove();
   });
 
   it("supports a concrete-agent selector without an all-agents option", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
     const set = vi.fn();
     const selection = createSelection(vi.fn());
     selection.set = set;
 
-    render(
-      renderAgentScopeControl({
-        agents: [
-          { id: "main", name: "Main agent" },
-          { id: "writer", name: "Writer" },
-        ],
-        selection,
-        allowAll: false,
-        selectedId: "writer",
-      }),
-      container,
-    );
-
-    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
+    const { container, select } = await mountScope({
+      selection,
+      allowAll: false,
+      selectedId: "writer",
+    });
     expect(select?.value).toBe("writer");
     expect(select?.options.map((option) => option.value)).toEqual(["main", "writer"]);
     select?.onSelect("main");
