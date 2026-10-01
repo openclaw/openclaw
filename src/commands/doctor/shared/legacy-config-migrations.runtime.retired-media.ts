@@ -1,42 +1,18 @@
 // Media and voice compatibility migrations retired from canonical runtime config.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRecord } from "../../../config/legacy.shared.js";
-import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
+import {
+  deleteRetiredPath,
+  moveLegacyConfigKey,
+  visitAgentConfigScopes,
+  visitChannelEntries,
+} from "./legacy-config-record-shared.js";
 
-export function moveVoice(owner: Record<string, unknown>, path: string, changes: string[]): void {
-  if (!Object.hasOwn(owner, "voice")) {
-    return;
-  }
-  if (owner.speakerVoice === undefined) {
-    owner.speakerVoice = owner.voice;
-    changes.push(`Moved ${path}.voice → ${path}.speakerVoice.`);
-  } else {
-    changes.push(`Removed ${path}.voice (${path}.speakerVoice already set).`);
-  }
-  delete owner.voice;
-}
-
-export function migrateDiscordVoice(channels: Record<string, unknown>, changes: string[]): void {
-  const discord = getRecord(channels.discord);
-  if (!discord) {
-    return;
-  }
-  const migrateEntry = (entry: Record<string, unknown>, path: string) => {
+export function migrateDiscordVoice(raw: Record<string, unknown>, changes: string[]): void {
+  visitChannelEntries(raw, "discord", (entry, path) => {
     const realtime = getRecord(getRecord(entry.voice)?.realtime);
-    if (realtime) {
-      moveVoice(realtime, `${path}.voice.realtime`, changes);
-    }
-  };
-  migrateEntry(discord, "channels.discord");
-  const accounts = getRecord(discord.accounts);
-  if (accounts) {
-    for (const [accountId, value] of Object.entries(accounts)) {
-      const account = getRecord(value);
-      if (account) {
-        migrateEntry(account, `channels.discord.accounts.${accountId}`);
-      }
-    }
-  }
+    moveLegacyConfigKey(realtime, "voice", "speakerVoice", `${path}.voice.realtime`, changes);
+  });
 }
 
 export function hasDiscordRealtimeVoice(value: unknown): boolean {

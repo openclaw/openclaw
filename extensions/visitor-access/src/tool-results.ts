@@ -8,6 +8,7 @@ export const visitorInviteDetailsSchema = Type.Object(
   {
     outcome: Type.Union([Type.Literal("invited"), Type.Literal("renewed")]),
     email: Type.String(),
+    grantId: Type.String(),
     githubLogin: Type.Optional(Type.String()),
     expiresAt: expiresAtSchema,
     gatewayAccess: Type.String(),
@@ -40,6 +41,8 @@ export const visitorListDetailsSchema = Type.Object(
       Type.Object(
         {
           email: Type.String(),
+          grantId: Type.Optional(Type.String()),
+          profileId: Type.Optional(Type.String()),
           githubLogin: Type.Optional(Type.String()),
           invitedAt: Type.String(),
           expiresAt: expiresAtSchema,

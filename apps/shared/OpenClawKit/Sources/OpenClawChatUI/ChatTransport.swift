@@ -781,7 +781,7 @@ public enum OpenClawChatLoadedMedia: Sendable {
 /// All pages use the captured route so a reconnect cannot combine two servers.
 public struct OpenClawChatSwarmRouteLease: Sendable {
     public typealias IsEnabled = @Sendable (_ sessionKey: String) async throws -> Bool
-    public typealias ListChildSessions = @Sendable (_ parentKey: String) async throws -> [OpenClawChatSessionEntry]
+    public typealias ListChildSessions = @Sendable (_ parentKey: String) async throws -> OpenClawChatChildSessionsResult
 
     private let isEnabledImpl: IsEnabled
     private let listChildSessionsImpl: ListChildSessions
@@ -798,7 +798,7 @@ public struct OpenClawChatSwarmRouteLease: Sendable {
         try await self.isEnabledImpl(sessionKey)
     }
 
-    public func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+    public func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
         try await self.listChildSessionsImpl(parentKey)
     }
 }
@@ -876,7 +876,7 @@ public protocol OpenClawChatTransport: Sendable {
         search: String?,
         archived: Bool,
         agentID: String?) async throws -> OpenClawChatSessionsListResponse
-    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry]
+    func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease?
     func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease?
@@ -1215,8 +1215,8 @@ extension OpenClawChatTransport {
         throw Self.unsupportedOperation("sessions.list not supported by this transport")
     }
 
-    public func listChildSessions(parentKey _: String) async throws -> [OpenClawChatSessionEntry] {
-        []
+    public func listChildSessions(parentKey _: String) async throws -> OpenClawChatChildSessionsResult {
+        OpenClawChatChildSessionsResult(rows: [], isComplete: true)
     }
 
     /// Existing custom transports retain their own roster scope until they adopt explicit agent routing.

@@ -10,6 +10,7 @@ import {
   listChannelIngressQueueAccountIdsReadOnly,
   type ChannelIngressQueue,
 } from "../channels/message/ingress-queue.js";
+import { importLegacyChannelIngressEntries } from "../channels/message/ingress-queue.migration.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionIdentityEvidenceBatch } from "../config/sessions/session-accessor.js";
@@ -272,6 +273,9 @@ function buildChannelIngressQueueAccess(
     };
     if (mutation) {
       const assertCurrent = () => mutation.assertCurrent();
+      access.assertCurrent = assertCurrent;
+      access.importLegacyEntries = (input) =>
+        importLegacyChannelIngressEntries({ ...input, channelId, stateDir, assertCurrent });
       access.openChannelIngressQueue = (openOptions) =>
         open(openOptions, "read-write", assertCurrent);
     }

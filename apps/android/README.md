@@ -27,6 +27,12 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
 
+## Session snooze
+
+Long-press an eligible session on **Threads** and choose **Snooze**, then **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), or **Next week** (next Monday at 09:00 local). Next week is omitted on Sundays because it matches Tomorrow. Archived, child, and protected sessions cannot be snoozed.
+
+Snoozed sessions leave **Recent**, **Current**, and sidebar recents. Open the **Snoozed** pill to see their **Wakes** times, or long-press and choose **Wake session** to bring one back early. The Gateway saves the wake time across clients. A session wakes at its deadline, when a real message arrives, or when a run completes; pinning or archiving also clears its snooze. Snooze never stops a run, blocks messages, or disables an automation.
+
 ## Camera attachments
 
 Tap **+ → Camera** to open the viewfinder directly. Switch between **Photo** and
@@ -304,6 +310,8 @@ Start a fresh app process before choosing a scene; restarting only the Activity
 reuses the process runtime. Same-scene re-entry retains the selected branch.
 
 For sidebar attention proof, use `openclaw.screenshotScene=attention`. The native drawer contains inactive sessions with multiple questions and execution, plugin, and Gateway-settings approvals. Tap or keyboard-focus an attention icon to inspect the oldest request. The `attention-expiry` scene uses successive short deadlines to exercise live removal without another Gateway event. These fixtures use the normal request parsers and lifecycle owners with synthetic in-memory responses; start a fresh app process between scenes.
+
+For session snooze proof, run `pnpm android:screenshots --snooze-proof before` before adding the feature, then `pnpm android:screenshots --snooze-proof after`. The synthetic `snooze` scene supplies one active and one snoozed session through the production list parser. The capture steps open Threads and both row menus, saving PNGs under `.artifacts/android-snooze-proof/before/` and `after/`. This mode requires no existing ADB devices, starts and stops its own phone emulator, and leaves store screenshots unchanged.
 
 For completed-work proof, use `openclaw.screenshotScene=completed-work`,
 `active-work`, or `work-boundaries`. These scenes use the same Chat screen with

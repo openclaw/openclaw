@@ -10,12 +10,20 @@ import {
 type VisitorProfile = {
   id: string;
   emails: string[];
+  mergedInto?: string | null;
   role?: string;
 };
 
 type VisitorGatewayAccess = {
   describe: (email: string) => string;
   assertInvitable: (email: string) => void;
+  profileId: (email: string) => string | undefined;
+  resolveProfile: (profileId: string) => VisitorProfile | undefined;
+  withProfile: <T>(
+    profileId: string,
+    emails: readonly string[],
+    run: (assertCurrent: () => void) => Promise<T>,
+  ) => Promise<T>;
 };
 
 export type ReadVisitorGatewayAccess = () => Promise<VisitorGatewayAccess>;
@@ -31,14 +39,27 @@ export function createVisitorAccessReader(
     );
     // The profile directory owns verified aliases, including linked identities.
     // A supplied GitHub login is invitation metadata, never an identity binding.
+    const canonical = profiles.filter((profile) => !profile.mergedInto);
     const byEmail = new Map(
-      profiles.flatMap((profile) => profile.emails.map((email) => [email, profile] as const)),
+      canonical.flatMap((profile) => profile.emails.map((email) => [email, profile] as const)),
     );
+    const byId = new Map(canonical.map((profile) => [profile.id, profile]));
     const config = runtime.config.current();
     const roles = config.gateway?.roles;
     const access = (email: string) => describeAccess(byEmail.get(email), roles);
     return {
       describe: (email) => access(email).description,
+      profileId: (email) => byEmail.get(email)?.id,
+      resolveProfile: (profileId) => byId.get(profileId),
+      withProfile(profileId, emails, run) {
+        const withIdentity = runtime.gateway.withUserProfileIdentity;
+        if (!withIdentity) {
+          throw new VisitorAccessError(
+            "This Gateway cannot keep profile bindings current. Update OpenClaw before person-wide revocation.",
+          );
+        }
+        return withIdentity({ profileId, emails }, run);
+      },
       assertInvitable(email) {
         resolveVisitorRole(config);
         const result = access(email);

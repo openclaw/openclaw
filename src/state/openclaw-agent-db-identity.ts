@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
+import {
+  normalizeDatabasePath,
+  readDatabaseIdentityBirthtime,
+} from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type AgentDatabaseOwner = { db: DatabaseSync };
@@ -28,7 +31,7 @@ export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
   const identity = file ? `${file.dev}:${file.ino}` : Symbol("incognito-agent-database");
   identities.set(db, {
     identity,
-    birthtime: file?.birthtimeNs.toString(),
+    birthtime: file ? readDatabaseIdentityBirthtime(file) : undefined,
     incarnation: randomUUID(),
     filename,
   });
