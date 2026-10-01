@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { Root } from "@openclaw/fs-safe";

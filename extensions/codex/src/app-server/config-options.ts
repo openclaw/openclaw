@@ -41,10 +41,7 @@ import {
   assertCodexAppServerCommandHasNoInlineArgs,
   readCodexPluginConfig,
 } from "./config-parsing.js";
-import {
-  parseAllowedApprovalPoliciesFromCodexRequirements,
-  readCodexRequirementsToml,
-} from "./config-requirements.js";
+import { parseCodexRequirementsPolicy, readCodexRequirementsToml } from "./config-requirements.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexConfigEnablesNativeComputerUse,
@@ -209,7 +206,7 @@ export function createCodexAppServerConfig({
     if (
       forcePerCommandApprovals &&
       requirementsToml &&
-      parseAllowedApprovalPoliciesFromCodexRequirements(requirementsToml)?.has("untrusted") ===
+      parseCodexRequirementsPolicy(requirementsToml).allowedApprovalPolicies?.has("untrusted") ===
         false
     ) {
       throw new Error("tools.exec.ask=always requires Codex app-server per-command approvals");

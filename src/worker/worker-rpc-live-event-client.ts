@@ -143,6 +143,9 @@ export class WorkerLiveEventClient {
     this.maxSentSeqValue = Math.max(this.maxSentSeqValue, sentSeq);
     try {
       await this.connection.waitForReady();
+      if (generation !== this.replayGeneration || !this.buffered.includes(entry)) {
+        return;
+      }
       const response = await this.connection.requestLiveEvent({
         runEpoch: this.options.runEpoch,
         lastAckedSeq: entry.resyncFromSeq ?? this.ackedSeqValue,

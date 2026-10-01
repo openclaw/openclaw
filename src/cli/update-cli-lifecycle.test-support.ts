@@ -117,9 +117,9 @@ type UpdateCliLifecycleFixture = {
   mockGatewayHealth: (version: string, connId: string) => void;
   primeNpmChannelTag: (tag: string, version: string | null) => void;
   reportCandidateSteps: <T extends { steps: UpdateRunResult["steps"] }>(
-    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void },
+    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void | Promise<void> },
     result: T,
-  ) => T;
+  ) => Promise<T>;
   setStdoutTty: (value: boolean | undefined) => void;
   setTty: (value: boolean | undefined) => void;
   tempDirs: { make: (prefix: string) => string };

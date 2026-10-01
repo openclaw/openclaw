@@ -3,8 +3,10 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
@@ -108,6 +110,7 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
 }));
 
 describe("subagent registry archive behavior", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let settleRootWork: ReturnType<typeof observeRootWork>;
   let mod: typeof import("./subagent-registry.test-helpers.js");
   let createCanonicalSubagentRunFixture: typeof import("./subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
@@ -903,23 +906,29 @@ describe("subagent registry archive behavior", () => {
   });
 
   it("does not traverse legacy attachment paths after steer restart", async () => {
-    const attachmentsRootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-replace-attachments-"),
-    );
+    const attachmentsRootDir = tempDirs.make("openclaw-replace-attachments-");
     const attachmentsDir = path.join(attachmentsRootDir, "old");
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
 
-    await mod.registerSubagentRun({
-      runId: "run-delete-attachments-old",
+    const runId = "run-delete-attachments-old";
+    addCanonicalSubagentRunForTests({
+      runId,
       childSessionKey: "agent:main:subagent:delete-attachments-old",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "replace attachments",
       cleanup: "delete",
+      createdAt: Date.now(),
+      execution: { status: "running" },
       attachmentsRootDir,
       attachmentsDir,
     });
+    registryState.persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+    const restored = expectDefined(loadSubagentRegistryFromSqlite().get(runId), "legacy run");
+    expect(restored).toMatchObject({ attachmentsRootDir, attachmentsDir });
+    expect(restored.attachmentId).toBeUndefined();
+    subagentRuns.set(runId, restored);
 
     const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delete-attachments-old",

@@ -1,3 +1,4 @@
+import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
 import { extractAssistantTextForPhase } from "../../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
@@ -8,8 +9,12 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
     if (!msg || typeof msg !== "object") {
       return true;
     }
-    const role = (msg as { role?: unknown }).role;
-    return role !== "toolResult" && role !== "tool";
+    const { role, customType } = msg as { role?: unknown; customType?: unknown };
+    return (
+      role !== "toolResult" &&
+      role !== "tool" &&
+      !(role === "custom" && customType === NESTED_TOOL_ACTIVITY_CUSTOM_TYPE)
+    );
   });
 }
 

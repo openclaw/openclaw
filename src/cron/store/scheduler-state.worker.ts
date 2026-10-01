@@ -3,6 +3,7 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+  CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE,
   tryResolveCronJobEffectiveAgentId,
 } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -59,6 +60,9 @@ export function recordSkippedCronRunsInWorker(
             notifications: [],
             logs: [],
           };
+          if (change.kind === "ownerless" && preparation.legacyDefaultAgentId) {
+            throw new Error(CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE);
+          }
           const ownership = new Map(preparation.ownership.map((owner) => [owner.jobId, owner]));
           const failureAlerts = new Map(
             preparation.failureAlerts.map((alert) => [alert.jobId, alert]),
@@ -83,7 +87,11 @@ export function recordSkippedCronRunsInWorker(
                   storePath: input.storeKey,
                   jobId: job.id,
                 }) ||
-                tryResolveCronJobEffectiveAgentId(job, preparation.defaultAgentId)
+                tryResolveCronJobEffectiveAgentId(
+                  job,
+                  preparation.defaultAgentId,
+                  preparation.legacyDefaultAgentId,
+                )
               ) {
                 if (planned) {
                   outcome.rejected.push(job);
@@ -113,7 +121,9 @@ export function recordSkippedCronRunsInWorker(
                 completionStatus: "failed",
                 error:
                   change.kind === "ownerless"
-                    ? CRON_AGENT_SELECTION_REQUIRED_MESSAGE
+                    ? preparation.legacyDefaultAgentId
+                      ? CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE
+                      : CRON_AGENT_SELECTION_REQUIRED_MESSAGE
                     : change.error,
                 ...(change.kind === "ownerless"
                   ? { executionStarted: false }
@@ -227,6 +237,7 @@ export function planCronStartupInWorker(
                 skipAtIfAlreadyRan: true,
                 allowCronMissedRunByLastRun: true,
                 activeInProcess: owner.active,
+                legacyDefaultAgentId: preparation.legacyDefaultAgentId,
               })
             ) {
               continue;

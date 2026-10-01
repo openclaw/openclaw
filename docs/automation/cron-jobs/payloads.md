@@ -57,12 +57,20 @@ Skill collection review runs every 7 days. It is enabled when `skills.workshop.a
   Restrict which tools the job can use, for example `--tools exec,read`. Pass `--tools ""` for an empty allowlist that disables all agent tools, including tools used by a condition trigger.
 </ParamField>
 
-New jobs that can run tools always store an explicit tool policy. Jobs created by an agent
-are capped to the tools available to that creating turn, and the agent cannot widen the
-stored list. Jobs created by an authenticated operator without `--tools` store an
-unrestricted `*` policy; `automations edit --clear-tools` restores that explicit unrestricted
-policy. Existing jobs that predate an explicit tool policy retain their current behavior
-until their tool policy is explicitly edited or the job is recreated.
+New jobs that can run tools always store an explicit tool policy. A job created without
+`--tools` (or with `*`) stores `*`: each run uses the owner session's current tool policy,
+including its group, agent, sandbox, and runtime restrictions. An agent that requests a
+finite list is capped to the tools available to its creating turn and cannot widen the
+stored list. `automations edit --clear-tools` restores `*`. Existing jobs that predate an
+explicit tool policy retain their current behavior until their tool policy is explicitly
+edited or the job is recreated. Agent-created script payloads, condition triggers, and jobs
+whose creator captured Codex app authority store the creating turn's tools instead: scripts
+reach MCP only through servers their list names, and app authority is bound to that list.
+
+Earlier releases saved a copy of the creating turn's tool list on agent-created agent turns.
+That copy could miss tools the creator had, such as the native shell. Those jobs now run with
+their owner conversation's tools, like a `*` job; the stored copy is left as it is. Jobs whose
+creator captured Codex app authority keep using their copy.
 
 Changing an account-bound job to a payload that does not run tools and later back
 to an agent turn preserves its account restriction. A payload conversion does not
@@ -295,7 +303,7 @@ Agent-turn jobs default to the creating conversation when the create request car
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
   </Accordion>
   <Accordion title="Unattended run contract">
-    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing. When the task failed or is blocked, the reply starts with `AUTOMATION_FAILED` on its own line, followed by what failed and what it tried. The scheduler records that run as an error with the remaining text as its error, delivers that text instead of the token when the job announces, and applies the normal retry, failure-alert, and owner-repair policy. Only an exact first line counts; a reply that mentions the token elsewhere is ordinary output.
+    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing. When the task failed or is blocked, the reply starts with `AUTOMATION_FAILED` on its own line, followed by what failed and what it tried. The scheduler records that run as an error with the remaining text as its error, delivers that text instead of the token when the job announces, and applies the normal retry, failure-alert, and owner-repair policy. When the run hands its work to a subagent, the child's settled final answer is classified the same way. Only an exact first line counts; a reply that mentions the token elsewhere is ordinary output.
 
     For trusted scheduled jobs, the job's own instructions win when they intentionally ask for a question or plan, and the agent may remove a job that is no longer needed. External hook turns receive only the common unattended contract; they do not receive that override or self-removal guidance across the external-content boundary.
 

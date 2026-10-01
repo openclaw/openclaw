@@ -7,7 +7,7 @@ import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -18,6 +18,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry as SessionStoreEntry } from "../../config/sessions/types.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { resolveAutoLiveToolResultMaxChars } from "../tool-result-limits.js";
@@ -39,6 +40,7 @@ let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").
 let resolveLiveToolResultAggregateMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars;
 let toolResultWarningDedupe: typeof import("./tool-result-truncation.js").toolResultWarningDedupe;
 let tmpDir: string | undefined;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "tool-result-truncation-test-");
 
 async function loadFreshToolResultTruncationModuleForTest() {
   // Load after each setup so module-level constants and mocks stay isolated
@@ -1528,7 +1530,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
 
 describe("truncateOversizedToolResultsInSession", () => {
   it("truncates SQLite runtime transcripts without treating the marker as a file", async () => {
-    const dir = await createTmpDir();
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "runtime-sqlite-tool-truncation";
     const sessionKey = "agent:main:test";
@@ -1655,7 +1657,7 @@ describe("truncateOversizedToolResultsInSession", () => {
   });
 
   it("reuses frozen provider projection bytes on the recovery branch", async () => {
-    const dir = await createTmpDir();
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "runtime-sqlite-frozen-projection";
     const sessionKey = "agent:main:frozen-projection";
@@ -1721,7 +1723,7 @@ describe("truncateOversizedToolResultsInSession", () => {
   });
 
   it("reduces aggregate-only frozen history on the recovery branch", async () => {
-    const dir = await createTmpDir();
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "runtime-sqlite-frozen-aggregate-recovery";
     const sessionKey = "agent:main:frozen-aggregate-recovery";
@@ -1775,7 +1777,7 @@ describe("truncateOversizedToolResultsInSession", () => {
   });
 
   it("honors SQLite leaf controls when truncating runtime transcripts", async () => {
-    const dir = await createTmpDir();
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "runtime-sqlite-leaf-tool-truncation";
     const sessionKey = "agent:main:test";

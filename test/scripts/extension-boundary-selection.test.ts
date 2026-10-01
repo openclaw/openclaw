@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -141,6 +142,88 @@ describe("extension package PR selection", () => {
     expect(selection.selected.map((row) => row.package)).toEqual(["direct"]);
   });
 
+  it.each(["package", "core", "deleted-public-entry"])(
+    "selects %s changes after the shared base fetch in a depth-one PR checkout",
+    (change) => {
+      const { root, write, git, commit } = fixture();
+      const common = commit();
+      git("checkout", "-qb", "pull-head");
+      if (change === "package") {
+        write("extensions/direct/index.ts", "export const direct = 2;\n");
+      } else if (change === "core") {
+        write("src/current.ts", "export type Value = boolean;\n");
+      } else {
+        rmSync(join(root, "src/plugin-sdk/value.ts"));
+        write("scripts/lib/plugin-sdk-entrypoints.json", '["private"]');
+      }
+      const pullHead = commit();
+      git("checkout", "-B", "main", common);
+      write("extensions/unrelated/index.ts", "export const unrelated = 2;\n");
+      const base = commit();
+      git("-c", "core.hooksPath=/dev/null", "merge", "--no-ff", "-qm", "PR merge", pullHead);
+      const merge = git("rev-parse", "HEAD");
+      git("config", "uploadpack.allowFilter", "true");
+      const checkout = tempDirs.make("boundary-shallow-");
+      const checkoutGit = (...args: string[]) =>
+        execFileSync("git", args, {
+          cwd: checkout,
+          encoding: "utf8",
+          stdio: "pipe",
+        }).trim();
+      checkoutGit(
+        "clone",
+        "--depth=1",
+        "--branch=main",
+        "--no-checkout",
+        pathToFileURL(root).href,
+        ".",
+      );
+      checkoutGit("checkout", "--detach", merge);
+      expect(checkoutGit("rev-parse", "--is-shallow-repository")).toBe("true");
+      expect(() => checkoutGit("cat-file", "-e", `${base}^{commit}`)).toThrow();
+      const env = { GITHUB_EVENT_NAME: "pull_request", OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: base };
+      const missing = resolveExtensionBoundarySelection(checkout, packages, env);
+      expect(missing.mode).toBe("full");
+      const action = execFileSync(
+        process.platform === "win32" ? "python" : "python3",
+        [
+          "-I",
+          "-S",
+          resolve(".github/actions/git-owner/owner.py"),
+          "--policy",
+          resolve(".github/actions/ensure-base-commit/policy.py"),
+        ],
+        {
+          cwd: checkout,
+          encoding: "utf8",
+          env: { ...process.env, BASE_SHA: base, FETCH_REF: "main" },
+        },
+      );
+      expect(action).toContain("Resolved base commit after exact fetch:");
+      expect(checkoutGit("rev-parse", "HEAD")).toBe(merge);
+      expect(checkoutGit("rev-list", "--count", "HEAD")).toBe("1");
+      expect(() => checkoutGit("merge-base", base, "HEAD")).toThrow();
+      const selected = resolveExtensionBoundarySelection(checkout, packages, env);
+      expect(selected.mode).toBe("affected");
+      expect(selected.selected.map((row) => row.package)).toEqual(
+        change === "package"
+          ? ["direct"]
+          : change === "core"
+            ? ["telegram", "codex", "slack"]
+            : ["consumer", "telegram", "codex", "slack"],
+      );
+      expect(missing.reason).toContain("comparison base unavailable in checkout");
+      // Another fetched parent is not the pinned main contribution boundary.
+      checkoutGit("fetch", "--no-tags", "--depth=1", "origin", pullHead);
+      expect(
+        resolveExtensionBoundarySelection(checkout, packages, {
+          ...env,
+          OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: pullHead,
+        }).mode,
+      ).toBe("full");
+    },
+  );
+
   it("keeps schedule, release, the kill switch and uncertain comparisons full", () => {
     const { root, commit } = fixture();
     const base = commit();
@@ -213,6 +296,11 @@ describe("extension package PR selection", () => {
     const step = workflow.jobs["check-additional-shard"].steps.find(
       (entry: { name?: string }) => entry.name === "Run additional check shard",
     );
+    const baseStep = workflow.jobs["check-additional-shard"].steps.find(
+      (entry: { name?: string }) => entry.name === "Ensure additional check comparison base",
+    );
+    expect(baseStep.uses).toBe("./.ci-harness/.github/actions/ensure-base-commit");
+    expect(baseStep.with["base-sha"]).toBe("${{ needs.preflight.outputs.diff_base_revision }}");
     expect(step.env.OPENCLAW_CI_EXTENSION_BOUNDARY_FULL).toBe(
       "${{ vars.OPENCLAW_CI_EXTENSION_BOUNDARY_FULL }}",
     );

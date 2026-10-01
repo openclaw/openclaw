@@ -402,12 +402,8 @@ function isNativeReviewerBaseUrl(value: unknown, hostname: string): boolean {
   if (typeof value !== "string" || !value.trim()) {
     return true;
   }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.hostname.toLowerCase() === hostname;
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value);
+  return url?.protocol === "https:" && url.hostname.toLowerCase() === hostname;
 }
 
 function normalizeCodexModelBackedReviewerPolicyProvider(provider: string): string {

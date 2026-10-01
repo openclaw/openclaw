@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import * as status from "./status.js";
 import {
   createAutoEnabledStatusConfig,
   createCompatChainFixture,
@@ -25,7 +26,6 @@ const mocks = vi.hoisted(() => ({
   facadeIds: vi.fn(),
   runtimeIds: vi.fn(),
 }));
-let status: typeof import("./status.js");
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.config,
@@ -84,9 +84,6 @@ function inspect(id: string, report: ReturnType<typeof createPluginLoadResult>) 
 }
 
 describe("plugin status reports", () => {
-  beforeAll(async () => {
-    status = await import("./status.js");
-  });
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
     for (const mock of Object.values(mocks)) {

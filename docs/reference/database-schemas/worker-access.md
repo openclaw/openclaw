@@ -84,6 +84,19 @@ cleanup leaves history pending when an accepted write's outcome is unknown; a
 later successful receipt does not clear that uncertainty. Stored formats,
 schemas, and path-redaction rules are unchanged.
 
+The canonical worker retains the actual existing-schema ledger connection for
+step and phase mutations. Its first transaction admits integrity and the stable
+table contract; later writes reuse the schema owner's facts and re-admit that
+contract after schema changes, including another feature's lazy table creation.
+Every write retains transaction-held source, ownership metadata, content-version,
+and write-authority checks. Content markers remain current SQLite snapshot reads;
+only their prepared statements are cached.
+Candidate validation warms that writer before snapshot selection and holds the
+existing actor operation through validation and copied-state cleanup, including
+silent copy intervals. Idle inspection and actor drainage include the retained
+writer. The one-shot synchronous API still closes its connection after each call;
+neither path bootstraps or migrates the full runtime schema.
+
 Mutable execution also awaits validation, activation, and inspected Git-target
 phase receipts through that worker. The phase transformation and terminal-row
 no-op behavior stay with the existing ledger kernel. After each receipt wait,
@@ -108,6 +121,16 @@ Finalization reads that receipt through the read worker and rechecks its current
 owner before inspecting and adopting the stopped service. Receipt encoding,
 restart policy, and older-driver behavior are unchanged.
 
+Step progress records start, completion, and warning receipts through that same
+worker and original execution guard. Commands and display wait for the committed
+row. A settled receipt refusal does not bypass owned rollback or temporary Git
+cleanup; recovery still requires current authority. Uncertain writes retain their
+settlement boundary, preserving any original command failure.
+After schema handoff, the old process buffers plain step data until the compatible
+owner can flush it before finalization. Only confirmed receipts leave that buffer;
+an uncertain flush cannot be replayed. Stored formats and warning ordering are
+unchanged.
+
 After state-owner contention, Doctor observes the serving Gateway lease through
 the existing read worker using its captured installation path and environment.
 This finite read retains Doctor's private schema admission and never bootstraps a
@@ -117,8 +140,9 @@ Lease acquisition, transactional checks, and the later foreground retry loop
 retain their synchronous owners.
 
 The installed updater still owns its first upgrade hop. Shipped synchronous
-ledger APIs, effect guards, general command progress, and other finalization writes
-remain with their existing owners until their separate worker cutovers.
+ledger APIs, effect guards, heartbeat and rollback-summary reporting, and other
+finalization writes remain with their existing owners until their separate worker
+cutovers.
 
 Plugin requirement batches prepare their final installed index through the existing
 metadata worker after installation and compensation settle. Preparation seals

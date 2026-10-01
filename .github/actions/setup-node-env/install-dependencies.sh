@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+export PATH="$NODE_BIN:$PATH"
+which node
+node -v
 case "$FROZEN_LOCKFILE" in
-  true) export PNPM_CONFIG_FROZEN_LOCKFILE=true ;;
-  false) ;;
+  true)
+    # Version probes and lifecycle commands also sync pnpm's package-manager lock.
+    export PNPM_CONFIG_FROZEN_LOCKFILE=true
+    LOCKFILE_FLAG="--frozen-lockfile"
+    ;;
+  false) LOCKFILE_FLAG="" ;;
   *)
     echo "::error::Invalid frozen-lockfile input: '$FROZEN_LOCKFILE' (expected true or false)"
     exit 2
     ;;
 esac
-export PATH="$NODE_BIN:$PATH"
-which node
-node -v
 pnpm -v
 
 install_args=(
@@ -21,9 +25,6 @@ install_args=(
   --config.enable-pre-post-scripts=true
   --config.side-effects-cache=true
 )
-if [ "$FROZEN_LOCKFILE" = "true" ]; then
-  install_args+=(--frozen-lockfile)
-fi
 if [ "$DEPENDENCY_CACHE" = "true" ] || {
   [ "${RUNNER_OS:-}" = "Linux" ] &&
     [ "${PNPM_CONFIG_STORE_DIR:-}" = "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store" ]
@@ -32,6 +33,9 @@ if [ "$DEPENDENCY_CACHE" = "true" ] || {
   # inodes. Avoid copying the restored store on Linux filesystems without clones;
   # exact archives also preserve these links. Pnpm falls back to copies as needed.
   export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=hardlink
+fi
+if [ -n "$LOCKFILE_FLAG" ]; then
+  install_args+=("$LOCKFILE_FLAG")
 fi
 # Native pnpm reads these env settings; config flags also support older checkouts.
 append_pnpm_option_arg() {

@@ -2,6 +2,7 @@ import AppKit
 import CryptoKit
 import Observation
 import OpenClawDiscovery
+import OpenClawKit
 import SwiftUI
 
 enum UIStrings {
@@ -531,47 +532,13 @@ enum OnboardingSystemAgentResumeStore {
         components.user = nil
         components.password = nil
         components.queryItems = components.queryItems?.filter { queryItem in
-            !self.isSensitiveQueryItemName(queryItem.name)
+            !GatewayEndpointID.isSensitiveQueryItemName(queryItem.name)
         }
         if components.queryItems?.isEmpty == true {
             components.query = nil
         }
         components.fragment = nil
         return components.string ?? normalized
-    }
-
-    private static func isSensitiveQueryItemName(_ value: String) -> Bool {
-        let normalized = value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .replacingOccurrences(of: "-", with: "_")
-        return [
-            "access_token",
-            "api_key",
-            "apikey",
-            "app_secret",
-            "auth",
-            "auth_token",
-            "authorization",
-            "client_secret",
-            "code",
-            "credential",
-            "hook_token",
-            "id_token",
-            "jwt",
-            "key",
-            "pass",
-            "passwd",
-            "password",
-            "private_key",
-            "refresh_token",
-            "secret",
-            "session",
-            "signature",
-            "token",
-            "x_amz_security_token",
-            "x_amz_signature",
-        ].contains(normalized)
     }
 }
 

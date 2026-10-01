@@ -107,12 +107,10 @@ function resolveCustomBaseUrl(baseUrl: string): string | undefined {
 }
 
 function baseUrlIncludesApiVersion(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    return url.pathname.split("/").some((part) => /^v\d+(?:beta\d*)?$/.test(part));
-  } catch {
-    return /(?:^|\/)v\d+(?:beta\d*)?(?:\/|$)/.test(baseUrl);
-  }
+  const url = URL.parse(baseUrl);
+  return url
+    ? url.pathname.split("/").some((part) => /^v\d+(?:beta\d*)?$/.test(part))
+    : /(?:^|\/)v\d+(?:beta\d*)?(?:\/|$)/.test(baseUrl);
 }
 
 function resolveApiKey(options?: GoogleVertexOptions): string | undefined {

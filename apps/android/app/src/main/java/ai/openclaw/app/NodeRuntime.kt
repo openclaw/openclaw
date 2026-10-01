@@ -90,6 +90,7 @@ import ai.openclaw.app.node.TalkHandler
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
+import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.node.readAndroidPermissionSnapshot
 import ai.openclaw.app.node.resolveGatewayAccentArgb
 import ai.openclaw.app.node.resolveGatewayThemeFamily
@@ -2613,18 +2614,12 @@ class NodeRuntime private constructor(
     problem: GatewayConnectionProblem? = null,
     operation: GatewayConnectionOperation? = null,
   ) {
-    synchronized(gatewayStatusLock) {
+    updateStatus(preserveStandalone = true) {
       // Accepted TLS can finish behind a newer UI request; retain its result below that request's progress.
       if (operation == null || gatewayConnectionOperation == null || gatewayConnectionOperation === operation) {
         gatewayRetirementDisplay = null
       }
-      val standalone = GatewayConnectionDisplay(operatorConnected, statusText, problem)
-      gatewayStandaloneDisplay = standalone
-      val display = gatewayRetirementDisplay ?: standalone
-      _gatewayConnectionDisplay.value = display
-      _isConnected.value = display.isConnected
-      _statusText.value = display.statusText
-      _gatewayConnectionProblem.value = display.problem
+      gatewayStandaloneDisplay = GatewayConnectionDisplay(operatorConnected, statusText, problem)
     }
   }
 
@@ -3078,16 +3073,10 @@ class NodeRuntime private constructor(
 
   fun refreshHealthLogs() = launchGatewayRefresh { refreshHealthLogsFromGateway() }
 
-  val instanceId: StateFlow<String> = prefs.instanceId
-  val displayName: StateFlow<String> = prefs.displayName
   val cameraEnabled: StateFlow<Boolean> = prefs.cameraEnabled
   val locationMode: StateFlow<LocationMode> = prefs.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
-  val preventSleep: StateFlow<Boolean> = prefs.preventSleep
-  val manualHost: StateFlow<String> = prefs.manualHost
-  val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
-  val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
 
   /** Clears setup credentials plus paired device tokens for both Android gateway roles. */
   suspend fun resetGatewaySetupAuth(stableId: String): Boolean =
@@ -3154,16 +3143,6 @@ class NodeRuntime private constructor(
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
   val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
-  val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
-  val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
-    prefs.notificationForwardingMode
-  val notificationForwardingPackages: StateFlow<Set<String>> = prefs.notificationForwardingPackages
-  val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> =
-    prefs.notificationForwardingQuietHoursEnabled
-  val notificationForwardingQuietStart: StateFlow<String> = prefs.notificationForwardingQuietStart
-  val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
-  val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
-    prefs.notificationForwardingMaxEventsPerMinute
 
   private var didAutoConnect = false
 
@@ -4200,9 +4179,6 @@ class NodeRuntime private constructor(
 
   val speakerEnabled: StateFlow<Boolean>
     get() = prefs.speakerEnabled
-
-  val preferredAudioInputDevice: StateFlow<String?>
-    get() = prefs.preferredAudioInputDevice
 
   fun setSpeakerEnabled(value: Boolean) {
     prefs.setSpeakerEnabled(value)
@@ -9136,11 +9112,7 @@ class NodeRuntime private constructor(
   private fun parseMaybeJsonObject(value: String?): JsonObject? {
     val trimmed = value?.trim().orEmpty()
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
-    return try {
-      json.parseToJsonElement(trimmed).asObjectOrNull()
-    } catch (_: Throwable) {
-      null
-    }
+    return parseJsonParamsObject(trimmed)
   }
 
   private fun normalizeLogLevel(value: String?): String? {

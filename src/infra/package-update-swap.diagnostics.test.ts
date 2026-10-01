@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -126,7 +127,7 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
       let transaction: PackageUpdateTransaction | undefined;
       const result = await swapStagedPackageInstall({
         ...f.params,
-        activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+        activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
         onTransaction: (value) => {
           transaction = value;
         },

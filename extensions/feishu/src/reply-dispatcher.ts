@@ -70,10 +70,7 @@ function mergeStreamingFinalText(
   nextText: string,
   appendError: boolean,
 ): string {
-  if (!appendError || !previousText) {
-    return nextText;
-  }
-  if (nextText.startsWith(previousText)) {
+  if (!appendError || !previousText || nextText.startsWith(previousText)) {
     return nextText;
   }
   if (previousText.endsWith(`\n\n${nextText}`)) {
@@ -1060,11 +1057,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (deliveryError !== undefined) {
               completion.reject(
                 createFeishuPartialReplyDeliveryError(
-                  isChannelPartialDeliveryError(deliveryError) && deliveryError instanceof Error
+                  (isChannelPartialDeliveryError(deliveryError) &&
+                    deliveryError instanceof Error) ||
+                    deliveryError instanceof FeishuStreamingFinalizationError
                     ? (deliveryError.cause ?? deliveryError)
-                    : deliveryError instanceof FeishuStreamingFinalizationError
-                      ? (deliveryError.cause ?? deliveryError)
-                      : deliveryError,
+                    : deliveryError,
                   settledResult,
                 ),
               );

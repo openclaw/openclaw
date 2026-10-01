@@ -12,6 +12,7 @@ import {
 } from "../../src/infra/package-update-activation-journal.js";
 import { preparePackageActivationJournal } from "../../src/infra/package-update-activation-prepare.js";
 import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.js";
+import { packageActivationRuntimeForTest } from "../../src/infra/package-update-activation-runtime.test-support.js";
 import { createPackageIntegrityReader } from "../../src/infra/package-update-integrity.js";
 import { createPackageSwapFixture } from "../../src/infra/package-update-swap.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
@@ -129,7 +130,7 @@ it.each(
   let preparedPackage: Awaited<ReturnType<typeof preparePackageActivationJournal>> | undefined;
   let prepareNext: (() => Promise<NonNullable<typeof preparedPackage>>) | undefined;
   const runCommand = (command: string, action: string) =>
-    spawnSync("/bin/sh", ["-c", `exec ${command.replace(/ status$/u, ` ${action}`)}`], {
+    spawnSync("/bin/sh", ["-c", command.replace(/ status$/u, ` ${action}`)], {
       encoding: "utf8",
       timeout: 30_000,
       killSignal: "SIGKILL",
@@ -156,8 +157,13 @@ it.each(
         expect(modules.includes(path.resolve(module)), module).toBe(false);
       }
     }
-    vi.mocked(resolveRuntimeWorkerUrl).mockReturnValue(
-      pathToFileURL(path.join(outDir, runtimeEntry)),
+    const runtimeWorker = await vi.importActual<
+      typeof import("../../src/infra/runtime-worker-url.js")
+    >("../../src/infra/runtime-worker-url.js");
+    vi.mocked(resolveRuntimeWorkerUrl).mockImplementation((entry) =>
+      entry.distWorkerPath === runtimeEntry
+        ? pathToFileURL(path.join(outDir, runtimeEntry))
+        : runtimeWorker.resolveRuntimeWorkerUrl(entry),
     );
     let entry: string;
     if (kind === "managed") {
@@ -189,7 +195,7 @@ it.each(
           preparePackageActivationJournal({
             options: {
               fence: await executor.enter(fixture.packageRoot),
-              nodeRunner: process.execPath,
+              runtime: packageActivationRuntimeForTest(),
               onPrepared: (command) => {
                 const observed = runCommand(command, "status");
                 expect(observed.error).toBeUndefined();

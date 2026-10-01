@@ -1,9 +1,8 @@
 import type { CopilotClient } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  cleanupAttemptTranscriptJournalFixtures,
   createFakeSession,
   createFixture,
   event,
@@ -13,8 +12,6 @@ import type { AttemptResultWithSdkSessionId } from "./attempt-types.js";
 import { runCopilotAttempt } from "./attempt.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CopilotClientPool } from "./runtime.js";
-
-afterEach(cleanupAttemptTranscriptJournalFixtures);
 
 describe("Copilot canonical session identity", () => {
   it("keeps the host session through provider failure, retry, resume, and finalization", async () => {

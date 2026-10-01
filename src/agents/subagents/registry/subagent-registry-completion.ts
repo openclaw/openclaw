@@ -79,7 +79,6 @@ export function resolveLifecycleOutcomeFromRunOutcome(
   return SUBAGENT_ENDED_OUTCOME_OK;
 }
 
-/** Emits the transient presentation event for a newly terminal child run. */
 export async function emitSubagentProgressEndedHook(entry: SubagentRunRecord): Promise<void> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("subagent_progress")) {
@@ -113,7 +112,6 @@ export async function emitSubagentProgressEndedHook(entry: SubagentRunRecord): P
   }
 }
 
-/** Emits the subagent_ended hook once per completed run. */
 export async function emitSubagentEndedHookOnce(params: {
   entry: SubagentRunRecord;
   reason: SubagentLifecycleEndedReason;

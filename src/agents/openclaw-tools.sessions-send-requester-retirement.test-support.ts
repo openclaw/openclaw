@@ -24,7 +24,7 @@ import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-suppo
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
 import * as registryPersistence from "./subagents/registry/subagent-registry-persistence.js";
-import { onSubagentRegistryPersisted } from "./subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
@@ -103,6 +103,8 @@ export function registerSessionsSendRequesterRetirementTests({
         }
         if (request.method === "agent") {
           return {
+            status: "ok",
+            inputProcessingCompleted: true,
             result: {
               payloads: [{ text: "Retired requester's child result delivered" }],
               deliveryStatus: { status: "sent", resultCount: 1 },
@@ -247,7 +249,7 @@ export function registerSessionsSendRequesterRetirementTests({
           );
         expect(requesterCalls()).toHaveLength(0);
         const delivered = createDeferredCore();
-        stopObserving = onSubagentRegistryPersisted(() => {
+        stopObserving = subscribeSubagentRunChanges("persistence", () => {
           const child = getSubagentRunByRunId(runId);
           if (child?.delivery?.status === "delivered" && !child.requesterSettleWake) {
             delivered.resolve();
@@ -359,6 +361,8 @@ export function registerSessionsSendRequesterRetirementTests({
       }
       if (request.method === "agent" && sessionKey === requesterSessionKey) {
         return {
+          status: "ok",
+          inputProcessingCompleted: true,
           result: {
             payloads: [{ text: "Both watched results reached the requester" }],
             deliveryStatus: { status: "sent", resultCount: 1 },
@@ -501,7 +505,7 @@ export function registerSessionsSendRequesterRetirementTests({
       }
       const firstIndex = newestFirst ? 1 : 0;
       const firstSettled = createDeferredCore();
-      stopObserving = onSubagentRegistryPersisted(() => {
+      stopObserving = subscribeSubagentRunChanges("persistence", () => {
         const firstChild = getSubagentRunByRunId(children[firstIndex]!.runId);
         if (!firstChild || firstChild.cleanupCompletedAt !== undefined) {
           firstSettled.resolve();
