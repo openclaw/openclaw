@@ -71,6 +71,7 @@ import {
 } from "./server-plugin-reload.recovery.test-support.js";
 import {
   verifyCandidateResourceCleanup,
+  verifyFailedRecoveryCleanup,
   verifyFreshRegistrationRecovery,
   registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
@@ -155,6 +156,9 @@ it("automatically restores a fresh old registration after candidate registration
 
 it("flushes failed candidate services before closing their shared resources", () =>
   verifyCandidateResourceCleanup(createRecoveryFixture));
+
+it("closes resources opened by a recovery that fails before publication", () =>
+  verifyFailedRecoveryCleanup(createRecoveryFixture));
 
 registerPluginRetainedWorkReloadTests(createRecoveryFixture);
 

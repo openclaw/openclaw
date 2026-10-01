@@ -207,6 +207,38 @@ export async function verifyCandidateResourceCleanup(createFixture: RecoveryFixt
   expect(fixture.siblingStop).not.toHaveBeenCalled();
 }
 
+export async function verifyFailedRecoveryCleanup(createFixture: RecoveryFixtureFactory) {
+  const resources: Array<{ closed: boolean }> = [];
+  const fixture = await createFixture({
+    abortOnCandidateStart: false,
+    candidateStart() {
+      throw new Error("candidate startup refused");
+    },
+    prepareAttached: async () => {
+      if (resources.length === 3) {
+        throw new Error("recovery attachment refused");
+      }
+    },
+    register(api, owner) {
+      if (owner !== "first") {
+        return;
+      }
+      const resource = { closed: false };
+      resources.push(resource);
+      assert(api.lifecycle.onDispose);
+      api.lifecycle.onDispose(() => {
+        resource.closed = true;
+      });
+    },
+  });
+
+  await expect(fixture.reload()).rejects.toThrow("recovery attachment refused");
+
+  expect(resources).toEqual([{ closed: true }, { closed: true }, { closed: true }]);
+  expect(fixture.siblingStart).toHaveBeenCalledOnce();
+  expect(fixture.siblingStop).not.toHaveBeenCalled();
+}
+
 async function verifySelfConsumerReload(
   createFixture: RecoveryFixtureFactory,
   caller:

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   AgentParamsSchema,
+  ArtifactsListParamsSchema,
   EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResultSchema,
   EnvironmentsListResultSchema,
@@ -156,7 +157,7 @@ async function createFakeGateway(): Promise<FakeGateway> {
             protocol: 1,
             server: { version: "sdk-a2", connId: "conn-sdk-a2" },
             features: {
-              methods: ["agent", "agent.wait", "connect", "environments.create"],
+              methods: ["agent", "agent.wait", "artifacts.list", "connect", "environments.create"],
               events: ["agent"],
             },
             snapshot: {
@@ -229,6 +230,24 @@ async function createFakeGateway(): Promise<FakeGateway> {
             startedAt: 123,
             endedAt: 456,
           });
+          return;
+        }
+
+        if (frame.method === "artifacts.list") {
+          assertSchema(ArtifactsListParamsSchema, frame.params ?? {}, "artifacts.list params");
+          expect(frame.params).toEqual({ runId: "run-sdk-e2e" });
+          const result = {
+            artifacts: [
+              {
+                id: "artifact-sdk-e2e",
+                type: "file",
+                title: "sdk-result.txt",
+                download: { mode: "bytes" },
+              },
+            ],
+          };
+          assertSchema(ArtifactsListResultSchema, result, "artifacts.list result");
+          reply(result);
           return;
         }
 
@@ -370,6 +389,17 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
       status: "completed",
       startedAt: 123,
       endedAt: 456,
+    });
+
+    await expect(oc.artifacts.list({ runId: "run-sdk-e2e" })).resolves.toEqual({
+      artifacts: [
+        {
+          id: "artifact-sdk-e2e",
+          type: "file",
+          title: "sdk-result.txt",
+          download: { mode: "bytes" },
+        },
+      ],
     });
 
     const created = await oc.environments.create({
