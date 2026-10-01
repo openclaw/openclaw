@@ -94,12 +94,10 @@ src/gateway/worker-environments/node-worker-workspace-publication.test.ts	2
 src/gateway/worker-environments/node-workspace-transfer-revocation.test.ts	3
 src/infra/approval-handler-runtime.test.ts	3
 src/infra/env.test.ts	2
-src/infra/gateway-lock.roles.test.ts	1
 src/infra/http-body.response.test.ts	2
 src/infra/kysely-sync.test.ts	1
 src/infra/net/fetch-guard.ssrf.test.ts	2
 src/infra/net/provider-websocket.test.ts	1
-src/infra/ports.test-support.ts	2
 src/infra/push-apns-cancellation.test.ts	1
 src/infra/push-apns.test.ts	1
 src/infra/session-cost-usage-cache.worker.test.ts	8
