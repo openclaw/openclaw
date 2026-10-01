@@ -1,7 +1,7 @@
 // Google Meet tests cover bounded Google API error handling.
 import { describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
-import { googleApiError } from "./google-api-errors.js";
+import { googleApiError } from "./google-api.js";
 
 describe("googleApiError", () => {
   it("bounds Google API error bodies without using response.text()", async () => {

@@ -9,7 +9,6 @@ extensions/acpx/src/runtime.ts	2
 extensions/acpx/src/service.ts	1
 extensions/active-memory/config.ts	2
 extensions/active-memory/index.ts	3
-extensions/active-memory/query.ts	2
 extensions/active-memory/transcript-result.ts	2
 extensions/amazon-bedrock-mantle/discovery.ts	2
 extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.ts	3
@@ -1070,7 +1069,7 @@ extensions/workboard/src/command.ts	1
 extensions/workboard/src/store-automation.ts	1
 extensions/workboard/src/store-card-helpers.ts	1
 extensions/workboard/src/store-core.ts	2
-extensions/workboard/src/store-normalizers.ts	10
+extensions/workboard/src/store-normalizers.ts	8
 extensions/workboard/src/store-workflow.ts	2
 extensions/workboard/src/store.ts	1
 extensions/workboard/src/tools.ts	8

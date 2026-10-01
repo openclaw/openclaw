@@ -49,6 +49,7 @@ import {
   resolvePackageRuntimeExtensions,
   resolvePackageSetupSource,
 } from "./package-entry-resolution.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import { formatPosixMode, isPathInside } from "./path-safety.js";
 import {
   parsePluginCacheJson,
@@ -68,7 +69,6 @@ import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
 
 export type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 
-const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
   ".git",
   ".hg",
@@ -245,7 +245,7 @@ function isUnsafePluginCandidate(params: {
 
 function isExtensionFile(filePath: string): boolean {
   const ext = path.extname(filePath);
-  if (!EXTENSION_EXTS.has(ext)) {
+  if (!PUBLIC_SURFACE_SOURCE_EXTENSIONS.some((extension) => extension === ext)) {
     return false;
   }
   if (/\.d\.[cm]?ts$/.test(filePath)) {

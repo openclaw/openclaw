@@ -165,15 +165,13 @@ export class InferenceWorkerClient {
       windowsHide: true,
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
-    let resolveClosed!: () => void;
+    const { promise: closed, resolve: resolveClosed } = Promise.withResolvers<void>();
     const worker: Worker = {
       child,
       ready: false,
       retiring: false,
-      closed: new Promise<void>((resolve) => {
-        resolveClosed = resolve;
-      }),
-      resolveClosed: () => resolveClosed(),
+      closed,
+      resolveClosed,
     };
     this.worker = worker;
     child.on("message", (message: unknown) => this.receive(worker, message));
