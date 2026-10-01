@@ -56,7 +56,6 @@ import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import {
-  currentLiveToolCallIds,
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
   maybeResetToolStream,
@@ -353,7 +352,7 @@ export async function hydrateChatHistory(
         streamReconciliation,
       );
       pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
-      const liveToolIds = currentLiveToolCallIds(state);
+      const liveToolIds = state.toolStreamOrder ?? [];
       if (
         state.chatRunId &&
         (hasVisibleStream || liveToolIds.length > 0) &&
