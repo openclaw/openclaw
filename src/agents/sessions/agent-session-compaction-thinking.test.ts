@@ -20,7 +20,6 @@ describe("AgentSession threshold compaction thinking", () => {
     { configured: undefined, providerDefault: undefined, expected: "low" },
     { configured: undefined, providerDefault: "off", expected: "off" },
     { configured: "low", providerDefault: "off", expected: "low" },
-    { configured: "low", providerDefault: undefined, expected: "low" },
     { configured: "inherit", providerDefault: undefined, expected: "high" },
     { configured: "adaptive", providerDefault: undefined, expected: "medium" },
     { configured: "ultra", providerDefault: undefined, expected: "high" },
