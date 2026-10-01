@@ -68,6 +68,9 @@ import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 const deliveryOutboundRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-outbound.runtime.js"),
 );
+const subagentFollowupRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-followup.runtime.js"),
+);
 export { queueCronMessageToolDeliveryAwareness };
 /** Dispatches cron run output through verified message-tool or direct delivery paths. */
 export async function dispatchCronDelivery(
@@ -696,13 +699,36 @@ export async function dispatchCronDelivery(
       }
     }
   } else if (
-    !params.deliveryRequested &&
+    params.deliveryPlan.mode === "none" &&
     params.spawnOnlyHandoff &&
     !requiresCurrentSessionCompletion
   ) {
-    // Cron cannot resume a parent that only handed off, so the run settles by its children
-    // here instead of reporting ok while their result is dropped.
-    return buildDeliveryState((await finalizeTextDelivery()) ?? undefined);
+    // A no-delivery run whose turn only handed off records its children's result instead
+    // of reporting ok while that result is dropped.
+    const { waitForDescendantSubagentResult } = await subagentFollowupRuntimeLoader.load();
+    const settled = await waitForDescendantSubagentResult({
+      sessionKey: params.runSessionKey,
+      runStartedAt: params.runStartedAt,
+      timeoutMs: params.timeoutMs,
+      abortSignal: params.abortSignal,
+    });
+    if (!settled?.reply) {
+      return buildDeliveryState({
+        kind: "error",
+        error: params.isAborted()
+          ? params.abortReason()
+          : settled
+            ? "cron child-session handoff completed without a final assistant payload"
+            : "cron child-session handoff timed out before producing a final assistant payload",
+        delivered: false,
+      });
+    }
+    if (!isSilentReplyText(settled.reply, SILENT_REPLY_TOKEN)) {
+      outputText = settled.reply;
+      summary = pickSummaryFromOutput(settled.reply) ?? summary;
+      synthesizedText = settled.reply;
+      deliveryPayloads = [{ text: settled.reply }];
+    }
   }
 
   return buildDeliveryState();
