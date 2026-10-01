@@ -194,6 +194,14 @@ the requested version or tag. The generated report includes the applicable next
 step. An already-running older updater cannot gain this diagnostic capture from
 its candidate package.
 
+On Windows, a temporarily locked live package can prevent the updater from renaming
+it into its backup location. The updater retries `EPERM`, `EBUSY`, and `EACCES`
+with bounded backoff (16 attempts and up to 57.75 seconds of waiting), recording
+each retry as a warning. If the rename still fails, the failure names both paths
+and leaves the installed package in place. Close processes holding that installation
+and check its permissions before retrying. This protection belongs to the installed
+updater; a newer candidate cannot add it to an older updater already running.
+
 ## Candidate-owned admission
 
 For package-manager updates, `openclaw update` privately stages the selected
