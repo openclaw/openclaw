@@ -408,6 +408,8 @@
     "custodian-skills/",
     "scripts/check-install-dependency-ownership.mjs",
     "scripts/freebsd-service-inspect.mjs",
+    "scripts/generate-kysely-types.mts",
+    "scripts/lib/direct-run.mjs",
     "scripts/lib/freebsd-service-discovery.d.mts",
     "scripts/lib/freebsd-service-discovery.mjs",
     "scripts/lib/fs-safe-prebuild.mjs",

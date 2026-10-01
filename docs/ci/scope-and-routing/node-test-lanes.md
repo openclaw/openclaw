@@ -135,3 +135,19 @@ Explicit policy watches retain their matching tests in PR CI even when the broad
 tooling or runtime suite is deferred. This includes wrapper dependency checks,
 Gateway client callsite scans, and upgrade-survivor package checks. Unrelated
 deferred tests stay excluded.
+
+PR selection no longer expands the protected regression inventory to every test
+in a changed top-level owner area. Protected tests retain their ordinary changed
+test, mapped owner, and import coverage; additional protected consumers are
+limited to two import edges. The preflight job summary lists every selected file
+and its selection rules. Set repository variable `OPENCLAW_CI_NODE_SELECTION=full`
+to restore the previous PR selection immediately. Hourly main and ordinary
+manual/release plans keep their complete inventories regardless of this variable.
+
+Source-module edits also select six explicit non-import guards: PR wrapper source
+closure, wrapper provisioning, eager import closure, updater swap-fixture
+dependencies, type-suppression inventory, and plugin SDK surface reporting. This
+conservative watch covers new, renamed, and deleted modules and new import edges,
+including dependencies missing from the inventory that should have named them.
+The existing required architecture group still checks source diffs for import
+cycles and topology changes.

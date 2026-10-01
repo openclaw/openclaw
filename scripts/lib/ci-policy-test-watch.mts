@@ -22,6 +22,20 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs,
     sourceOnly: true,
   })),
+  // New or removed modules and new import edges can escape a static inventory.
+  // Watch source edits conservatively: the absent inventory entry cannot own its guard.
+  ...[
+    "test/scripts/pr-wrapper-source-closure.test.ts",
+    "test/scripts/pr-worktree-provision.test.ts",
+    "test/scripts/eager-import-closure.test.ts",
+    "test/scripts/update-restart-module-outcome.test.ts",
+    "test/scripts/type-suppression-inventory.test.ts",
+    "test/scripts/plugin-sdk-surface-report.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    sourceOnly: true,
+    watchGlobs: ["{src,extensions,packages,scripts,ui/src}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+  })),
   {
     testFile: "test/vitest-pr-exempt-retention.test.ts",
     watchGlobs: [

@@ -87,6 +87,7 @@ import {
   writeSessionStoreSeed,
 } from "./agent-session.test-support.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
+import { registerAgentReplyPolicyTests } from "./agent.reply-policy.test-support.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -396,7 +397,6 @@ function expectLastRunProviderModel(provider: string, model: string): void {
   expect(callArgs?.provider).toBe(provider);
   expect(callArgs?.model).toBe(model);
 }
-
 async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
   await agentCommand({ message: "hi", sessionKey }, runtime);
 }
@@ -1899,60 +1899,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("keeps synthetic direct-DM delivery mode out of existing CLI binding facts", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const sessionKey = "agent:main:discord:direct:requester";
-      await writeSessionStoreSeed(store, {
-        [sessionKey]: {
-          sessionId: "requester-session",
-          updatedAt: Date.now(),
-          chatType: "direct",
-          modelProvider: "anthropic",
-          model: "claude-opus-4-6",
-          cliSessionBindings: {
-            "claude-cli": {
-              sessionId: "native-claude-session",
-              messageToolPolicyHash: "automatic-policy-hash",
-            },
-          },
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "discord", to: "user:requester" },
-            origin: { provider: "discord", chatType: "direct", to: "user:requester" },
-          }),
-        },
-      });
-      const cfg = mockConfig(home, store, {
-        models: {
-          "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
-        },
-      });
-      cfg.messages = { visibleReplies: "automatic" };
-
-      const prepared = await prepareAgentCommandExecution(
-        {
-          message: "child completed",
-          sessionKey,
-          sourceReplyDeliveryMode: "message_tool_only",
-          inputProvenance: {
-            kind: "inter_session",
-            sourceSessionKey: "agent:main:subagent:child",
-            sourceTool: "subagent_announce",
-          },
-        },
-        runtime,
-      );
-
-      expect(prepared.opts.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(prepared.opts.cliSessionBindingFacts).toEqual({
-        sourceReplyDeliveryMode: "automatic",
-      });
-      expect(prepared.sessionEntry?.cliSessionBindings?.["claude-cli"]).toMatchObject({
-        sessionId: "native-claude-session",
-        messageToolPolicyHash: "automatic-policy-hash",
-      });
-    });
-  });
+  registerAgentReplyPolicyTests({ withTempHome, mockConfig, runtime });
 
   it("passes resolved session-id resume files to embedded runs", async () => {
     await withTempHome(async (home) => {
@@ -2319,7 +2266,6 @@ describe("agentCommand", () => {
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
       ]);
-
       await runAgentWithSessionKey(sessionKey);
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
       expectLastRunProviderModel("anthropic", "claude-opus-4-6");
@@ -2720,7 +2666,6 @@ describe("agentCommand", () => {
           }),
         },
       ]);
-
       await agentCommand(
         { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
         runtime,

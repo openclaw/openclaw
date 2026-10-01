@@ -530,6 +530,8 @@ if (releaseGate) {
 const includeReleaseOnlyRuntimeTests =
   !mainValidation && (!isCanonicalRepository || (!runtimePullRequest && eventName !== "push"));
 const includePrExemptRuntimeTests = !runtimePullRequest;
+const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
+const nodeSelectionReasons = [];
 let selectedTestTargets;
 if (runtimePullRequest && runNodeFull) {
   if (changedPaths === null) {
@@ -542,6 +544,8 @@ if (runtimePullRequest && runNodeFull) {
     baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
     includeReleaseOnlyRuntimeTests,
     includePrExemptRuntimeTests,
+    selectionMode: nodeSelectionMode,
+    onSelection: (selection) => nodeSelectionReasons.push(selection),
   });
 }
 const uiOwnerScope = {
@@ -1777,6 +1781,35 @@ if (process.env.GITHUB_STEP_SUMMARY) {
           )
           .join("") +
         "\n",
+    );
+  }
+  if (selectedTestTargets) {
+    /** @type {Map<string, Set<string>>} */
+    const reasons = new Map();
+    for (const { rule, targets } of nodeSelectionReasons) {
+      for (const file of targets) {
+        const rules = reasons.get(file) ?? new Set();
+        rules.add(rule);
+        reasons.set(file, rules);
+      }
+    }
+    // Paths are diff-controlled; render them as escaped HTML text, never Markdown.
+    const escape = (value) =>
+      value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `### PR Node test selection (${nodeSelectionMode})\n\n` +
+        `Selected ${selectedTestTargets.length} files; ${changedNodeTestShards?.filter((shard) => !shard.requiresDist).length ?? 0} Node rows. ` +
+        "Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to restore the previous selection.\n\n" +
+        "<details><summary>Selected files and selection rules</summary>\n<pre>" +
+        selectedTestTargets
+          .map((file) =>
+            escape(
+              `${file}\t${[...(reasons.get(file) ?? [])].toSorted((left, right) => left.localeCompare(right)).join(", ")}`,
+            ),
+          )
+          .join("\n") +
+        "</pre>\n</details>\n\n",
     );
   }
   appendFileSync(
