@@ -159,7 +159,8 @@ export async function trackAsyncWork<T>(run: () => T | Promise<T>): Promise<T> {
 /** Captures only work ownership, never the caller's authorization or other async context. */
 export function captureAsyncWorkTracker(): typeof trackAsyncWork {
   const scope = currentWorkScope.getStore();
-  return async (run) => await (scope ? scope.track(run) : runOutsideAsyncWorkScope(run));
+  return async (run) =>
+    await (scope && !scope.isClosing ? scope.track(run) : runOutsideAsyncWorkScope(run));
 }
 
 /** Starts work its caller does not own, so the caller's scope neither waits for it nor closes under it. */
