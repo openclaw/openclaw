@@ -563,7 +563,6 @@ src/node-host/invoke-system-run.ts
 src/node-host/invoke.ts
 src/plugin-sdk/core.ts
 src/plugin-sdk/provider-auth.test.ts
-src/plugin-sdk/provider-stream-shared.test.ts
 src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts
