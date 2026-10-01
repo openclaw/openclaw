@@ -89,6 +89,7 @@
     <string name="native_0a0b7cf7c428c703" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"操作请求"</string>
     <string name="native_0a708e7b03aaf1fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list pins"</string>
     <string name="native_0a93bfca7b918f7e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"重置置顶项"</string>
+    <string name="native_0a9b44a8ee964420" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"唤醒会话 · %1$s"</string>
     <string name="native_0ab0e1629576aecf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"连接到 Gateway 以加载 Skill Workshop 提案。"</string>
     <string name="native_0b0c15d15d686c72" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"设置码未被接受"</string>
     <string name="native_0b184bc5d5341998" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"退出登录"</string>
@@ -137,6 +138,7 @@
     <string name="native_110bc9c13524d99d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"连接到你的 Gateway 以查看设备屏幕。"</string>
     <string name="native_11252dd2410324bc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Get Goal"</string>
     <string name="native_114c9789813fd2b0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw %1$s (%2$s)"</string>
+    <string name="native_117455ae2f5817cf" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
     <string name="native_1196b6c538ecc61a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"修复"</string>
     <string name="native_1196c7b1e0e55580" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"reactions"</string>
     <string name="native_11a6767d5674c7e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"完成"</string>
@@ -158,6 +160,7 @@
     <string name="native_140bedbf9c3f6d56" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无"</string>
     <string name="native_1418848426a1b86e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"脚本载荷保持原样。请使用 CLI 编辑此脚本。"</string>
     <string name="native_143069443a7dd1a3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"进度已清除"</string>
+    <string name="native_143c4e68f28f3aa2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已暂缓的会话将显示在这里。"</string>
     <string name="native_14638daf580b6ee0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android 设置指南"</string>
     <string name="native_146c4d822cea4531" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已禁止 %1$s 个应用转发。"</string>
     <string name="native_1485bc093cdbef6d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已配对设备"</string>
@@ -257,6 +260,7 @@
     <string name="native_21bddf13c6a8d4b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"命令审批"</string>
     <string name="native_21c71243e8cba796" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"应用与 Gateway 使用的协议版本不兼容。请更新两端的 OpenClaw，然后重试。"</string>
     <string name="native_21f30f631394a9da" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"读取最近的照片和媒体"</string>
+    <string name="native_21fbde19cfb095cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"下周"</string>
     <string name="native_225d29f6201e1a63" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聆听"</string>
     <string name="native_2263a54d9ea50d12" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无法读取此图片中的二维码。"</string>
     <string name="native_226c9a1ebc5a9f75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"此地址可能使用了 Tailscale。请打开 Tailscale 并连接到 Gateway 所在的 tailnet，然后重试。请检查 Gateway 所在的电脑是否在线，以及 OpenClaw 是否正在运行。"</string>
@@ -528,6 +532,7 @@
     <string name="native_449f5a775762cdc5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"语音对话"</string>
     <string name="native_4543708d11967ea1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"末页"</string>
     <string name="native_45570472fa4a4da5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"GitHub Identity Status"</string>
+    <string name="native_456a73bbcefb1def" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"明天"</string>
     <string name="native_4578d6b453171ffe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"返回并选择一个会话以打开其仪表板。"</string>
     <string name="native_45989de49fb7f66d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"详情"</string>
     <string name="native_45a64dc17588f2ca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s 在线"</string>
@@ -599,6 +604,7 @@
     <string name="native_4ee252fb736effa2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"公钥"</string>
     <string name="native_4efca0d10c5feb8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"关于"</string>
     <string name="native_4f1bc100d1dccc1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在该图片中未找到设置二维码。请选择由 openclaw qr 生成的二维码，或手动输入设置代码。"</string>
+    <string name="native_4f3c2ef5d308654e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"明天 %1$s"</string>
     <string name="native_4fba8c199338b421" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"不包含在“请求所有权限”中。请打开 Android 设置以选择通知访问权限。"</string>
     <string name="native_4fe3cdd404ea0290" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"permissions"</string>
     <string name="native_5047cfb3b607e7d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"连接 Gateway 以加载节点和已配对设备。"</string>
@@ -610,6 +616,7 @@
     <string name="native_51391bf0ab33e827" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"wake"</string>
     <string name="native_51bc9903f8056c05" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 身份验证需要处理。"</string>
     <string name="native_51bfffbcdbcfbc00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"连接详情"</string>
+    <string name="native_52102940fe58e07e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"暂缓"</string>
     <string name="native_522ff63cdfa8c9a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"毫秒"</string>
     <string name="native_5267f5e646a5a193" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"没有匹配的模型"</string>
     <string name="native_526e0087cc3f254d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"描述"</string>
@@ -783,6 +790,7 @@
     <string name="native_6965fdd9e5a18c87" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera snap"</string>
     <string name="native_69700b7204137c08" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在准备播放…"</string>
     <string name="native_6974b6348bd6f124" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 选择了未知的提供商 %1$s"</string>
+    <string name="native_698eab0611adbd01" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 小时后"</string>
     <string name="native_698ef855b198408f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"delete group"</string>
     <string name="native_69909e834a13b2a8" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"跟随 Android · %1$s"</string>
     <string name="native_69e36568cd8b4659" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"channel"</string>
@@ -997,6 +1005,7 @@
     <string name="native_87b42e40c2a290e0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已批准"</string>
     <string name="native_87bb59ba2f92f2a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"工作区"</string>
     <string name="native_87bf2bc08589f0bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"语音"</string>
+    <string name="native_88096584e4a882be" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已暂缓"</string>
     <string name="native_881473f87df47f9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"连接以管理频道"</string>
     <string name="native_88296ab3d6665a8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Subagents"</string>
     <string name="native_888d1f77d903b80b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"失败: 未检测到安全的 Gateway 端点。请启用 Gateway TLS 或 Tailscale Serve，或使用受信任的私有局域网地址并选择“未加密”。"</string>
@@ -1327,6 +1336,7 @@
     <string name="native_b65ffe0cec61786d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Portal"</string>
     <string name="native_b6df2441064f1416" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要设置"</string>
     <string name="native_b78426f40a794c5d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"未配对"</string>
+    <string name="native_b7af174b039805e0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"于 %1$s 唤醒"</string>
     <string name="native_b7b190b4be0b2385" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 已收到此手机的请求"</string>
     <string name="native_b7b89bf0fd930a9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"没有已配置的模型"</string>
     <string name="native_b7c397f33783abec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"下载前，Gateway 会通过 ClawHub 验证此特定发布版本。审核结果会显示在安装结果中。如果发布版本被阻止或安全验证不可用，则无法安装。"</string>
@@ -1602,6 +1612,7 @@
     <string name="native_db18382a249e0206" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"新建聊天"</string>
     <string name="native_db259fef5236a070" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"连接 Gateway 以更新 Skill Workshop 提案。"</string>
     <string name="native_db4fa8d71b5b2d1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 请求失败。"</string>
+    <string name="native_db7dd4660c80520a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"今晚"</string>
     <string name="native_dbb6cf817820de0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要权限"</string>
     <string name="native_dbcd5e7bb7a0f538" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"浅色"</string>
     <string name="native_dc1c61f0f60f79a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"检查提供商就绪状态\n和已配置的模型。"</string>
@@ -1806,6 +1817,7 @@
     <string name="native_f706757ef3473dbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"写入日历"</string>
     <string name="native_f77d1bb58da886e3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"timeout"</string>
     <string name="native_f793de205ead5ac3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"低"</string>
+    <string name="native_f7a57925f56775fc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"3 小时后"</string>
     <string name="native_f8019af406d12fad" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"屏蔽列表"</string>
     <string name="native_f82a06175cc4d2e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"完整访问权限需要 operator.admin 权限。"</string>
     <string name="native_f83f07be16e27018" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"act"</string>
@@ -1823,6 +1835,7 @@
     <string name="native_f9777b12e8f49df2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pearling"</string>
     <string name="native_f991ae9cb081e1f3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"打开相机，将 openclaw qr 生成的二维码置于取景框内。"</string>
     <string name="native_f9ea3f1540eaa584" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"没有设备"</string>
+    <string name="native_f9f27e61d41ed8a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"没有已暂缓的会话"</string>
     <string name="native_fa0ddca1671f4d61" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"转发通知"</string>
     <string name="native_fa2acef20c1dd52f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"我会将此对话与普通智能体聊天分开。"</string>
     <string name="native_fa664b09af472ec4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"尝试其他搜索或清除当前查询。"</string>
