@@ -1085,6 +1085,11 @@ describe("local SQLite snapshot repository", () => {
     },
   );
 
+  const isFinalRepositorySnapshotTarget = async (targetPath: string, repositoryPath: string) =>
+    path.basename(targetPath) === SNAPSHOT_SQLITE_FILENAME &&
+    path.dirname(path.dirname(targetPath)) === (await fs.realpath(repositoryPath)) &&
+    !path.basename(path.dirname(targetPath)).startsWith(".tmp-");
+
   it("cleans a linked entry when post-link inspection fails", async () => {
     const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
     const publish = directoryDurability.publishFileExclusive;
@@ -1095,11 +1100,7 @@ describe("local SQLite snapshot repository", () => {
       .spyOn(directoryDurability, "publishFileExclusive")
       .mockImplementation(async (options) => {
         const published = await publish(options);
-        if (
-          path.basename(options.targetPath) === SNAPSHOT_SQLITE_FILENAME &&
-          path.dirname(path.dirname(options.targetPath)) === (await fs.realpath(repositoryPath)) &&
-          !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
-        ) {
+        if (await isFinalRepositorySnapshotTarget(options.targetPath, repositoryPath)) {
           linkedArtifactPath = path.resolve(options.targetPath);
         }
         return published;
@@ -1137,10 +1138,7 @@ describe("local SQLite snapshot repository", () => {
           const replaceStaging = async () => {
             if (
               !raced &&
-              path.basename(options.targetPath) === SNAPSHOT_SQLITE_FILENAME &&
-              path.dirname(path.dirname(options.targetPath)) ===
-                (await fs.realpath(repositoryPath)) &&
-              !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
+              (await isFinalRepositorySnapshotTarget(options.targetPath, repositoryPath))
             ) {
               await fs.unlink(options.sourcePath);
               await fs.writeFile(options.sourcePath, "raced staging bytes");
@@ -1181,11 +1179,7 @@ describe("local SQLite snapshot repository", () => {
       .spyOn(directoryDurability, "publishFileExclusive")
       .mockImplementation(async (options) => {
         const targetPath = path.resolve(options.targetPath);
-        if (
-          path.basename(targetPath) === SNAPSHOT_SQLITE_FILENAME &&
-          path.dirname(path.dirname(targetPath)) === (await fs.realpath(repositoryPath)) &&
-          !path.basename(path.dirname(targetPath)).startsWith(".tmp-")
-        ) {
+        if (await isFinalRepositorySnapshotTarget(targetPath, repositoryPath)) {
           racedPath = targetPath;
           await fs.writeFile(targetPath, "racer", { flag: "wx" });
         }

@@ -4,10 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
-import type {
-  FollowupReply,
-  FollowupCompletionOwner,
-} from "../subagents/completion/session-followup-completion.types.js";
+import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
 import {
   runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
@@ -18,9 +15,7 @@ const log = createSubsystemLogger("agents/sessions-send");
 /** Legacy peers observe a run; native child followups consume their retained result. */
 export function startSessionsSendReplyFlow(
   params: Parameters<typeof runSessionsSendA2AFlow>[0] & {
-    runId: string;
     skip: boolean;
-    reply?: FollowupReply;
     completion?: FollowupCompletionOwner;
   },
 ) {
@@ -78,11 +73,7 @@ export function startSessionsSendReplyFlow(
       await runSessionsSendA2AFlow({
         ...params,
         callGateway,
-        roundOneReply: settledReply?.replyText,
-        sourceReplyDelivered: settledReply?.sourceReplyDelivered,
-        settledReply,
-        waitRunId: settledReply || completion ? undefined : params.runId,
-        replyRunId: params.runId,
+        reply: settledReply,
       });
     } finally {
       completion?.close();
@@ -91,7 +82,7 @@ export function startSessionsSendReplyFlow(
   // No caller-owned transcript/resource scope may survive in the detached turn.
   const failed = (error: unknown) => {
     completion?.close(error);
-    log.warn("sessions_send announce flow admission failed", {
+    log.warn("sessions_send reply flow admission failed", {
       runId: params.runId,
       error: formatErrorMessage(error),
     });

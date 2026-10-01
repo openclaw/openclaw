@@ -72,7 +72,6 @@ import {
   prepareSessionsSendFollowup,
   startSessionsSendFollowup,
 } from "./sessions-send-followup.js";
-import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import { normalizeSessionsSendArguments } from "./sessions-send-tool.arguments.js";
@@ -556,7 +555,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, {
           floorSeconds: true,
         }) ?? 0;
-      const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
+      const replyTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = opts?.idempotencyKey ?? crypto.randomUUID();
       let runId: string = idempotencyKey;
       const sameSession = requesterSessionKey === resolvedKey && targetAgentId === requesterAgentId;
@@ -685,14 +684,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 : false;
             return watchRequested ? { watched } : {};
           };
-          const agentMessageContext =
-            requesterIsSubagent || targetIsSubagent
-              ? undefined
-              : buildAgentToAgentMessageContext({
-                  requesterSessionKey: replyRequesterSessionKey,
-                  requesterChannel,
-                  targetSessionKey: displayKey,
-                });
           const inputProvenance = {
             kind: "inter_session" as const,
             sourceSessionKey: replyRequesterSessionKey,
@@ -733,7 +724,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             sourceReplyDeliveryMode: "message_tool_only" as const,
             channel: INTERNAL_MESSAGE_CHANNEL,
             lane: resolveNestedAgentLaneForSession(resolvedKey),
-            extraSystemPrompt: agentMessageContext,
             inputProvenance,
           };
           if (
@@ -788,7 +778,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             sourceOrigin: sameSession ? requesterOrigin : undefined,
             sessionKey: mode || ownChild ? resolvedKey : displayKey,
             sessionStoreTarget: targetSession,
-            deliveryTimeoutMs: announceTimeoutMs,
+            deliveryTimeoutMs: replyTimeoutMs,
             allowActiveRunQueueDelivery: timeoutSeconds === 0,
             expectedSessionId,
           };
@@ -815,9 +805,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             targetSessionKey: resolvedKey,
             targetAgentId,
             displayKey,
-            message,
-            announceTimeoutMs,
-            maxPingPongTurns: isIsolatedCronRequester ? 0 : 5,
+            replyTimeoutMs,
             replyMode,
             requesterSessionKey: replyRequesterSessionKey,
             requesterAgentId,
@@ -841,11 +829,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           // Steering keeps its active owner; an inline child reply is already delivered.
           const delayedDelivery = {
             status: replyMode && start.targetDisposition === "queued" ? "pending" : "skipped",
-            mode: "announce",
           } as const;
           const delivery =
             timeoutSeconds > 0 && targetIsSubagent
-              ? ({ status: "skipped", mode: "announce" } as const)
+              ? ({ status: "skipped" } as const)
               : delayedDelivery;
           recordSessionToolActionFact({
             operation: "send",

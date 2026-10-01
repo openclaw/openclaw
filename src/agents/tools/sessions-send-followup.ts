@@ -244,7 +244,6 @@ export async function startSessionsSendFollowup(
         targetAgentId: request.targetAgentId,
         requesterAgentId: request.requesterAgentId,
         requesterSessionKey: request.requesterSessionKey,
-        maxPingPongTurns: 0,
         replyMode: "one-way",
         notifyRequesterOnWaitFailure: true,
       });
