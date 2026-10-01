@@ -111,11 +111,21 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   if (
     !failureFacts &&
     result.code !== 0 &&
-    ["package-install", "package-install-omit-optional", "package-pack"].includes(name) &&
-    (/(?:^|[\\/])npm(?:\.cmd|\.exe)?$/iu.test(argv[0] ?? "") ||
+    [
+      "package-install",
+      "package-install-prefer-online",
+      "package-install-omit-optional",
+      "package-pack",
+    ].includes(name) &&
+    (/(?:^|[\\/])(?:npm|bun)(?:\.cmd|\.exe)?$/iu.test(argv[0] ?? "") ||
       /\bnpm (?:ERR!|error)(?:\s|$)/u.test(`${result.stderr}\n${result.stdout}`))
   ) {
-    failureFacts = createNpmFailureFacts(result.stdout, result.stderr, env);
+    failureFacts = createNpmFailureFacts(
+      result.stdout,
+      result.stderr,
+      env,
+      /(?:^|[\\/])bun(?:\.exe)?$/iu.test(argv[0] ?? "") ? "bun" : "npm",
+    );
   }
   failureFacts ??= isFailedUpdateStep({
     exitCode: result.code,
@@ -170,6 +180,7 @@ export function normalizeFallbackFailureReason(
   switch (stepName) {
     case "package-install":
     case "package-install-omit-optional":
+    case "package-install-prefer-online":
     case "package-stage":
     case "package-verify":
     case "package-swap":

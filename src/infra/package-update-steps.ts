@@ -7,6 +7,7 @@ import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { isRegistrySourceInstallSpec } from "./install-spec.js";
+import { npmFailurePackageName } from "./npm-error.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
@@ -461,12 +462,23 @@ export async function runGlobalPackageUpdateSteps(params: {
       if (cleanupFailure) {
         return await packageUpdateFailure(cleanupFailure, [...steps, cleanupFailure]);
       }
-      if (installCommandTarget.manager !== "npm") {
+      const npm = updateStep.failureFacts?.find((fact) => fact.npmErrorCode);
+      const resolutionFailure =
+        npm && ["ETARGET", "E404", "EINTEGRITY"].includes(npm.npmErrorCode ?? "");
+      const failedPackage = npm?.packageSpec && npmFailurePackageName(npm.packageSpec);
+      const dependency = failedPackage && failedPackage !== params.packageName;
+      if (
+        installCommandTarget.manager === "pnpm" ||
+        (resolutionFailure && !dependency) ||
+        (installCommandTarget.manager === "bun" && !resolutionFailure)
+      ) {
         return await packageUpdateFailure(updateStep, steps);
       }
+      const preferOnline = Boolean(resolutionFailure && dependency);
       const preparedFallbackInstall = await prepareStagedPackageInstall(
         params.installTarget,
         params.packageName,
+        nativeOptions,
       );
       if (preparedFallbackInstall.failedStep) {
         steps.push(preparedFallbackInstall.failedStep);
@@ -475,25 +487,36 @@ export async function runGlobalPackageUpdateSteps(params: {
       stagedInstall = preparedFallbackInstall.stagedInstall;
       const fallbackStep = await classifyPackageUpdatePermissionFailure(
         await params.runStep({
-          name: "package-install-omit-optional",
+          name: preferOnline ? "package-install-prefer-online" : "package-install-omit-optional",
           argv: [
             ...globalInstallArgs(
               stagedInstall.installTarget,
-              preparedSpec.installSpec,
+              updateInstallSpec,
               undefined,
               stagedInstall.prefix,
               preparedSpec.installCwd,
               npmPreflight.policy ?? undefined,
             ),
-            "--omit=optional",
+            ...(stagedInstall.native?.configArgs ?? []),
+            ...(preferOnline
+              ? installCommandTarget.manager === "bun"
+                ? ["--no-cache"]
+                : ["--prefer-online", "--prefer-offline=false", "--offline=false"]
+              : ["--omit=optional"]),
           ],
-          ...(preparedSpec.installCwd ? { cwd: preparedSpec.installCwd } : {}),
-          ...installEnv,
+          cwd: stagedInstall.native?.projectRoot ?? preparedSpec.installCwd,
+          env: stagedInstall.native?.env ?? commandEnv,
           timeoutMs: workTimeoutMs,
         }),
         params.installTarget,
         params.env,
       );
+      if (preferOnline && !isFailedUpdateStep(fallbackStep)) {
+        updateStep.advisory = {
+          kind: "recoverable-maintenance",
+          message: `Repaired stale package cache for ${npm?.packageSpec}: install succeeded after refreshing registry metadata.`,
+        };
+      }
       steps.push(fallbackStep);
       finalInstallStep = fallbackStep;
     }

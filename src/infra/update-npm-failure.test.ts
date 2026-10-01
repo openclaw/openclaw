@@ -93,8 +93,8 @@ describe("npm install failure reports", () => {
 
   it.each([
     ["ENOSPC", "Free disk space"],
-    ["E404", "Check the configured npm registry"],
-    ["ETARGET", "Check the configured npm registry"],
+    ["E404", "Run npm cache verify"],
+    ["ETARGET", "Run npm cache verify"],
     ["ECONNRESET", "npm failure code: ECONNRESET"],
     ["PRIVATE_IDENTIFIER", "npm failure code: unknown"],
   ])("bounds the first five npm lines for %s", async (code, guidance) => {
@@ -168,3 +168,64 @@ describe("npm install failure reports", () => {
     }
   });
 });
+
+it.each(["package-install", "global update"])(
+  "reports dependency facts with current and released step name %s",
+  async (name) => {
+    const step = await runStep({
+      name: "package-install",
+      argv: ["npm", "install", "-g", "openclaw@latest", "--registry=https://private.invalid"],
+      cwd: "/private/install",
+      env: context.env,
+      runCommand: async () => ({
+        code: 1,
+        stdout: "",
+        stderr:
+          "npm error code ETARGET\nnpm error notarget No matching version found for file-type@22.1.1.\n" +
+          "trailing output\n".repeat(800),
+      }),
+      stepIndex: 0,
+      totalSteps: 1,
+    });
+    expect(step.failureFacts?.[0]).toMatchObject({
+      npmErrorCode: "ETARGET",
+      packageSpec: "file-type@22.1.1",
+    });
+    expect(step.stderrTail).not.toContain("ETARGET");
+    for (const recorded of [false, true]) {
+      const named = { ...step, name };
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "etarget-report",
+          result: {
+            status: "error",
+            mode: "npm",
+            reason: "global-install-failed",
+            before: { version: "2026.9.4" },
+            after: { version: "2026.9.4" },
+            durationMs: 1,
+            steps: recorded ? [] : [named],
+          },
+          ...(recorded
+            ? {
+                recordedRun: {
+                  runId: "etarget-report",
+                  steps: updateRunStepsFromResultStep(named),
+                },
+              }
+            : {}),
+        },
+        context,
+      );
+      expect(report.body).toContain(
+        "Failed phase package-install: exit 1 (ETARGET file-type@22.1.1)",
+      );
+      expect(report.body).toContain("npm cache verify");
+      expect(report.body).toContain("registry/mirror");
+      expect(report.body).toContain("npm view file-type@22.1.1 version");
+      expect(report.body).not.toContain("[redacted-command]");
+      expect(report.body).not.toContain("private.invalid");
+      expect(report.body).not.toContain("/private/install");
+    }
+  },
+);
