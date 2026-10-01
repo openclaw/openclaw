@@ -45,7 +45,7 @@ describe("session startup catch-up", () => {
     vi.useRealTimers();
     resetTranscriptUpdateListener();
     for (const database of startupHarnessDatabases) {
-      database.close();
+      await database.closeShadow();
     }
     startupHarnessDatabases.clear();
     await testState.restoreEnv();
@@ -130,6 +130,38 @@ describe("session startup catch-up", () => {
       corpusPath: `sessions/main/${sessionId}.jsonl`,
     };
   }
+
+  it("excludes system-only cron-base sessions but catches later user content", async () => {
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const sessionId = "cron-base";
+    const sessionKey = "agent:main:cron:synthetic-job";
+    await configureTestSessionStore(storePath);
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: { sessionId, updatedAt: 10 },
+    });
+    const identity = { agentId: "main", sessionId, sessionKey, storePath, cwd: stateDir };
+    await appendSessionTranscriptMessageByIdentity({
+      ...identity,
+      message: {
+        role: "user",
+        content: "Scheduled internal maintenance reminder.",
+        provenance: { kind: "internal_system", sourceTool: "cron" },
+      },
+    });
+    const harness = new SessionStartupCatchupHarness([]);
+    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([]);
+    expect(harness.isSessionsDirty()).toBe(false);
+
+    await appendSessionTranscriptMessageByIdentity({
+      ...identity,
+      message: { role: "user", content: "Remember my favorite fruit is mango." },
+    });
+    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([sessionKey]);
+    expect(harness.isSessionsDirty()).toBe(true);
+  });
 
   it("marks stale indexed session files dirty and schedules catch-up sync", async () => {
     const session = await writeSqliteSession();

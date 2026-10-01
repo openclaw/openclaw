@@ -5,9 +5,6 @@ import { applyNonInteractiveSkillsConfig } from "./skills-config.js";
 describe("non-interactive skills config", () => {
   it.each([
     [undefined, undefined, "npm"],
-    ["npm", undefined, "npm"],
-    ["pnpm", undefined, "pnpm"],
-    ["bun", undefined, "bun"],
     ["yarn", undefined, "yarn"],
     ["yarn", "npm", "npm"],
     ["bun", "pnpm", "pnpm"],

@@ -380,7 +380,7 @@ describe("offline device placement abandonment", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       if (pendingAt === "before") {
         placements.markWorkspaceResultPending(claim);
       } else {
@@ -423,7 +423,7 @@ describe("offline device placement abandonment", () => {
         "Cannot update stale worker workspace result",
       );
       expect(
-        placements.completeWorkerSessionToolOperation({
+        await placements.completeWorkerSessionToolOperation({
           sourceSessionId: claim.sessionId,
           sourceClaimId: claim.claimId,
           toolCallId: "late-tool-result",

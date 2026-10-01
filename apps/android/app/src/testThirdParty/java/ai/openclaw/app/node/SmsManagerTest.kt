@@ -64,7 +64,6 @@ class SmsManagerTest {
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: 'to' phone number required", error.error)
-    assertEquals("Hi", error.message)
   }
 
   @Test

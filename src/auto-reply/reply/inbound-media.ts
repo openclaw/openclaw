@@ -1,5 +1,5 @@
 /** Detects inbound media and audio facts in channel message context. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { isMeaningfulMediaFact, normalizeMediaFacts } from "../../media/media-facts.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 
@@ -28,16 +28,11 @@ export function hasInboundMediaForUnderstanding(ctx: InboundMediaContext): boole
   return meaningfulMedia(ctx).length > 1;
 }
 
-function normalizeMediaType(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  return normalized?.split(";", 1)[0]?.trim().toLowerCase() || undefined;
-}
-
 /** Returns true when the current turn carries structured audio media facts. */
 export function hasInboundAudio(ctx: InboundMediaContext): boolean {
   const isAudio = (type: string | undefined) =>
     type === "audio" || type?.startsWith("audio/") === true;
   return normalizeMediaFacts(ctx.media).some(
-    (media) => media.kind === "audio" || isAudio(normalizeMediaType(media.contentType)),
+    (media) => media.kind === "audio" || isAudio(normalizeMimeType(media.contentType)),
   );
 }

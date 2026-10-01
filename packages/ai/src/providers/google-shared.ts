@@ -126,11 +126,6 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       nextToolCallId: params.nextToolCallId,
     });
   } catch (error) {
-    for (const block of output.content) {
-      if ("index" in block) {
-        delete (block as { index?: number }).index;
-      }
-    }
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
     failTransportStream({ stream, output, error: failure, signal: options?.signal });
   }

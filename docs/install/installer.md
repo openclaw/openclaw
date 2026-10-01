@@ -10,6 +10,13 @@ title: "Installer internals"
 
 OpenClaw ships three installer scripts, served from `openclaw.ai`.
 
+The shell entrypoints in a source checkout share `scripts/install-policy.sh`.
+Run `node scripts/build-installers.mjs` to assemble standalone copies in
+`dist/installers/` before copying, piping, or publishing them. Website sync and
+native builds use these assembled scripts. The npm package keeps both source
+files together for installed updater compatibility. Installing from the website
+never downloads a separate policy helper.
+
 | Script                             | Platform                      | What it does                                                                                                                   |
 | ---------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | [`install.sh`](#installsh)         | macOS / Linux / WSL           | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.                                       |

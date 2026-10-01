@@ -116,7 +116,9 @@ export function tuiSessionActionBlockedMessage(
 ): string {
   return admission.reason === "session-loading"
     ? "session history not ready — wait or retry /session"
-    : disconnectedTuiChatSubmitMessage(local);
+    : local
+      ? "local runtime not ready — message not sent"
+      : "not connected to gateway — message not sent";
 }
 
 export function resolveTuiChatSubmitAdmission(params: {
@@ -162,10 +164,4 @@ export function resolveTuiChatSubmitAdmission(params: {
   return params.pendingSubmit && !params.allowDuringPending
     ? { status: "blocked", reason: "pending" }
     : { status: "allowed" };
-}
-
-function disconnectedTuiChatSubmitMessage(local: boolean): string {
-  return local
-    ? "local runtime not ready — message not sent"
-    : "not connected to gateway — message not sent";
 }

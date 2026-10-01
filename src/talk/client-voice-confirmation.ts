@@ -181,19 +181,12 @@ function resolveApprovedFingerprint(
   const state = confirmationScopes.get(scopeKey);
   const approved = state?.approvedByRun.get(runId);
   const expiresAt = approved?.get(fingerprint);
-  if (!expiresAt || expiresAt < now) {
+  const expired = !expiresAt || expiresAt < now;
+  if (expired || consume) {
     approved?.delete(fingerprint);
-    if (approved?.size === 0) {
-      state?.approvedByRun.delete(runId);
+    if (!expired) {
+      state?.observationsByRun.get(runId)?.delete(fingerprint);
     }
-    if (state) {
-      cleanupConfirmationScope(scopeKey, state);
-    }
-    return false;
-  }
-  if (consume) {
-    approved?.delete(fingerprint);
-    state?.observationsByRun.get(runId)?.delete(fingerprint);
     if (approved?.size === 0) {
       state?.approvedByRun.delete(runId);
     }
@@ -201,7 +194,7 @@ function resolveApprovedFingerprint(
       cleanupConfirmationScope(scopeKey, state);
     }
   }
-  return true;
+  return !expired;
 }
 
 /** Capture host-observed speech before any finalization or persistence can change its challenge. */

@@ -14,6 +14,7 @@ import {
   formatGoogleMeetGatewayError,
   keepTrustedToolAgentId,
   loadGoogleMeetCliModule,
+  loadGoogleMeetCreateModule,
   loadGoogleMeetNodeHostModule,
   loadGoogleMeetPluginHelpers,
   normalizeMode,
@@ -120,17 +121,17 @@ export default definePluginEntry({
 
     registerGatewayMethod("googlemeet.create", async ({ params, client, respond }) => {
       const raw = keepTrustedToolAgentId(asParamRecord(params), client);
-      const helpers = await loadGoogleMeetPluginHelpers();
+      const create = await loadGoogleMeetCreateModule();
       respond(
         true,
         shouldJoinCreatedMeet(raw)
-          ? await helpers.createAndJoinMeetFromParams({
+          ? await create.createAndJoinMeetFromParams({
               config,
               runtime: api.runtime,
               raw,
               ensureRuntime,
             })
-          : await helpers.createMeetFromParams({ config, runtime: api.runtime, raw }),
+          : await create.createMeetFromParams({ config, runtime: api.runtime, raw }),
       );
     });
 

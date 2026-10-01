@@ -1,24 +1,25 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import {
   initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { beginSessionPermissionChange } from "./session-permission-change.js";
+import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
+import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { publishTranscriptFields } from "./session-row-projection-record.js";
+import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -79,30 +80,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       expiresAtMs: now + 1000,
     });
     const peers = profiles.map((profile, index) => {
-      const send = vi.fn();
-      const client = {
-        ...sharingPolicyClient({ user: profile.id }),
-        connId: `row-parity-${index}`,
-        usesSharedGatewayAuth: false,
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: now,
-        },
-        socket: {
-          readyState: WebSocket.OPEN,
-          bufferedAmount: 0,
-          send,
-          close: vi.fn(),
-          terminate: vi.fn(),
-          on: vi.fn(),
-          off: vi.fn(),
-          once: vi.fn(),
-        },
-      } satisfies GatewayWsClient;
-      prepareGatewayRecipientProfile(client);
+      const { client, send } = createSessionRowEventPeer(profile, `row-parity-${index}`, now);
       connection.clients.add(client);
       connection.sessionMessageSubscribers.subscribe(client.connId, key);
       return { client, send };
@@ -310,6 +288,42 @@ it("delivers nested event rows identical to the full list for each viewer and cl
         }
       } finally {
         finishPermissionChange?.();
+      }
+      const captured = projection.describe({ key, agentId: "main" })!;
+      const originalPreview = captured.lastMessagePreview;
+      const preview = "Unchanged preview 🦞 ".repeat(1024);
+      const publishPreview = (lastMessagePreview: string | undefined) =>
+        publishTranscriptFields(
+          captured,
+          { lastMessagePreview, fallbackModel: captured.fallbackModel },
+          cfg,
+          projection.state.rowContext,
+        );
+      const publication = prepareSessionRowPublication(projection, now);
+      const projectRun = createVisibleActiveSessionRunProjector(
+        connection,
+        projection.state.rowContext.projectedAgentRuns,
+      );
+      const present = (index: number) =>
+        publication(peers[index]!.client, projectRun).present(captured, request);
+      publishPreview(preview);
+      const stringify = vi.spyOn(JSON, "stringify");
+      try {
+        const first = present(1);
+        expect(first?.lastMessagePreview).toBe(preview);
+        expect(present(2)).toBe(first);
+        // Recipient cache lookups must not encode the unchanged large preview again.
+        expect(
+          stringify.mock.calls.some(([value]) => Array.isArray(value) && value.includes(preview)),
+        ).toBe(false);
+        publishPreview("Published replacement preview");
+        const replacement = present(1);
+        expect(replacement).not.toBe(first);
+        expect(replacement?.lastMessagePreview).toBe("Published replacement preview");
+        expect(present(2)).toBe(replacement);
+      } finally {
+        stringify.mockRestore();
+        publishPreview(originalPreview);
       }
       expect(prepares).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();

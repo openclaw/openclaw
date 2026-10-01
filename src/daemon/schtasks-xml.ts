@@ -1,17 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { escapeXml } from "../shared/xml.js";
 import { publishServiceFile } from "./service-stage.js";
-
-// Escape XML structure; launcher inputs already reject CR/LF in `assertNoCmdLineBreak`.
-function escapeXmlText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
 
 // XML is required to disable both battery-stop defaults (#59299); the remaining
 // fields mirror the former ONLOGON, least-privilege, single-instance CLI task.
@@ -20,13 +11,13 @@ export function buildScheduledTaskXml(params: {
   taskUser: string | null;
   launchPath: string;
 }): string {
-  const description = escapeXmlText(params.taskDescription);
-  const command = escapeXmlText(params.launchPath);
+  const description = escapeXml(params.taskDescription);
+  const command = escapeXml(params.launchPath);
   const principalLogon = params.taskUser
-    ? `\n      <UserId>${escapeXmlText(params.taskUser)}</UserId>\n      <LogonType>InteractiveToken</LogonType>`
+    ? `\n      <UserId>${escapeXml(params.taskUser)}</UserId>\n      <LogonType>InteractiveToken</LogonType>`
     : "\n      <GroupId>S-1-5-32-545</GroupId>";
   const triggerUser = params.taskUser
-    ? `\n      <UserId>${escapeXmlText(params.taskUser)}</UserId>`
+    ? `\n      <UserId>${escapeXml(params.taskUser)}</UserId>`
     : "";
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">

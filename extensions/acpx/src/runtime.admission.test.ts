@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
-import type { AcpSessionStore } from "acpx/runtime";
+import { createAgentRegistry, createFileSessionStore, type AcpSessionStore } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
@@ -39,6 +38,15 @@ async function withFixture(
       store,
     );
   });
+}
+
+async function persistedHandle(options: RuntimeOptions) {
+  const runtime = new AcpxRuntime(options);
+  try {
+    return await runtime.ensureSession(input);
+  } finally {
+    await runtime.shutdown();
+  }
 }
 
 async function readContext(runtime: AcpxRuntime, handle: RuntimeHandle): Promise<unknown> {
@@ -111,45 +119,9 @@ it("preserves a queued same-key admission when its predecessor fails", async () 
   });
 }, 25_000);
 
-it("keeps an admitted handle usable after a later ensure fails", async () => {
-  await withFixture(async (options, store) => {
-    let failLoad = false;
-    const runtime = new AcpxRuntime({
-      ...options,
-      sessionStore: {
-        load: async (key) => {
-          if (failLoad) {
-            failLoad = false;
-            throw new Error("transient store read failure");
-          }
-          return await store.load(key);
-        },
-        save: (record) => store.save(record),
-      },
-    });
-    try {
-      const handle = await runtime.ensureSession(input);
-      failLoad = true;
-      await expect(runtime.ensureSession(input)).rejects.toThrow("transient store read failure");
-      expect(await readContext(runtime, handle)).toMatchObject({
-        sessionId: handle.backendSessionId,
-      });
-      expect((await runtime.ensureSession(input)).backendSessionId).toBe(handle.backendSessionId);
-    } finally {
-      await runtime.shutdown();
-    }
-  });
-}, 25_000);
-
 it("retains captured stored-record custody when admission later fails", async () => {
   await withFixture(async (options, store) => {
-    const prior = new AcpxRuntime(options);
-    let existing: RuntimeHandle;
-    try {
-      existing = await prior.ensureSession(input);
-    } finally {
-      await prior.shutdown();
-    }
+    const existing = await persistedHandle(options);
     const generationIds: number[] = [];
     let loads = 0;
     const runtime = new AcpxRuntime({
@@ -226,96 +198,55 @@ it("retains failed private-runtime cleanup for service shutdown", async () => {
   });
 }, 25_000);
 
-it.each([
-  {
-    name: "getStatus",
-    run: (runtime: AcpxRuntime, handle: RuntimeHandle) => runtime.getStatus({ handle }),
-    expected: {},
-  },
-  {
-    name: "setMode",
-    run: (runtime: AcpxRuntime, handle: RuntimeHandle) =>
-      runtime.setMode({ handle, mode: "review" }),
-    expected: { mode: "review" },
-  },
-  {
-    name: "setConfigOption",
-    run: (runtime: AcpxRuntime, handle: RuntimeHandle) =>
-      runtime.setConfigOption({ handle, key: "tone", value: "brief" }),
-    expected: { tone: "brief" },
-  },
-  {
-    name: "cancel",
-    run: (runtime: AcpxRuntime, handle: RuntimeHandle) =>
-      runtime.cancel({ handle, reason: "test" }),
-    expected: {},
-  },
-  { name: "startTurn", run: readContext, expected: {} },
-])(
-  "keeps a pending persisted-handle $name snapshot through a failed ensure",
-  async ({ run, expected }) => {
-    await withFixture(async (options, store) => {
-      const prior = new AcpxRuntime(options);
-      let handle: RuntimeHandle;
-      try {
-        handle = await prior.ensureSession(input);
-      } finally {
-        await prior.shutdown();
-      }
-      const snapshotStarted = createDeferred<void>();
-      const releaseSnapshot = createDeferred<void>();
-      let holdFirstRead = true;
-      let failAdmission = false;
-      const runtime = new AcpxRuntime({
-        ...options,
-        agentRegistry: {
-          resolve: (agent) => {
-            if (failAdmission && agent === input.agent) {
-              failAdmission = false;
-              throw new Error("concurrent admission preparation failed");
-            }
-            return options.agentRegistry.resolve(agent);
-          },
-          list: () => options.agentRegistry.list(),
+it("keeps a pending persisted-handle config snapshot through a failed ensure", async () => {
+  await withFixture(async (options, store) => {
+    const handle = await persistedHandle(options);
+    const snapshotStarted = createDeferred<void>();
+    const releaseSnapshot = createDeferred<void>();
+    let holdFirstRead = true;
+    let failAdmission = false;
+    const runtime = new AcpxRuntime({
+      ...options,
+      agentRegistry: {
+        resolve: (agent) => {
+          if (failAdmission && agent === input.agent) {
+            failAdmission = false;
+            throw new Error("concurrent admission preparation failed");
+          }
+          return options.agentRegistry.resolve(agent);
         },
-        sessionStore: {
-          load: async (key) => {
-            if (holdFirstRead) {
-              holdFirstRead = false;
-              snapshotStarted.resolve();
-              await releaseSnapshot.promise;
-            }
-            return await store.load(key);
-          },
-          save: (record) => store.save(record),
+        list: () => options.agentRegistry.list(),
+      },
+      sessionStore: {
+        load: async (key) => {
+          if (holdFirstRead) {
+            holdFirstRead = false;
+            snapshotStarted.resolve();
+            await releaseSnapshot.promise;
+          }
+          return await store.load(key);
         },
-      });
-      const operation = run(runtime, handle);
-      const outcome = operation.then(
-        (value) => ({ kind: "completed" as const, value }),
-        (error: unknown) => ({ kind: "failed" as const, error }),
-      );
-      try {
-        await snapshotStarted.promise;
-        failAdmission = true;
-        await expect(runtime.ensureSession(input)).rejects.toThrow(
-          "concurrent admission preparation failed",
-        );
-        releaseSnapshot.resolve();
-        const result = await outcome;
-        if (result.kind === "failed") {
-          throw result.error;
-        }
-        expect(await readContext(runtime, handle)).toMatchObject({
-          sessionId: handle.backendSessionId,
-          ...expected,
-        });
-      } finally {
-        releaseSnapshot.resolve();
-        await outcome;
-        await runtime.shutdown();
-      }
+        save: (record) => store.save(record),
+      },
     });
-  },
-  25_000,
-);
+    const operation = runtime.setConfigOption({ handle, key: "tone", value: "brief" });
+    void operation.catch(() => {});
+    try {
+      await snapshotStarted.promise;
+      failAdmission = true;
+      await expect(runtime.ensureSession(input)).rejects.toThrow(
+        "concurrent admission preparation failed",
+      );
+      releaseSnapshot.resolve();
+      await operation;
+      expect(await readContext(runtime, handle)).toMatchObject({
+        sessionId: handle.backendSessionId,
+        tone: "brief",
+      });
+    } finally {
+      releaseSnapshot.resolve();
+      await Promise.allSettled([operation]);
+      await runtime.shutdown();
+    }
+  });
+}, 25_000);

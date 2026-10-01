@@ -2,10 +2,7 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  PluginCatalogEntry,
-  PluginsListResult,
-} from "../../packages/gateway-protocol/src/schema/plugins.js";
+import type { PluginCatalogEntry } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -41,7 +38,6 @@ import {
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 export type ManagedPluginCatalogEntry = PluginCatalogEntry;
-export type ManagedPluginCatalog = PluginsListResult;
 
 export type ManagedPluginIconSource = { kind: "file"; path: string; rootPath: string };
 export type ManagedPluginClawHubIconSource = {

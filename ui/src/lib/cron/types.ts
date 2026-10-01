@@ -51,7 +51,7 @@ export type CronFormState = {
   payloadModel: string;
   payloadThinking: string;
   payloadLightContext: boolean;
-  deliveryMode: "none" | "announce" | "webhook";
+  deliveryMode: "" | "none" | "announce" | "webhook";
   deliveryChannel: string;
   deliveryTo: string;
   deliveryAccountId: string;
@@ -80,6 +80,7 @@ export type CronFieldKey =
   | "payloadModel"
   | "payloadThinking"
   | "timeoutSeconds"
+  | "deliveryMode"
   | "deliveryTo"
   | "failureAlertAfter"
   | "failureAlertCooldownSeconds";

@@ -58,7 +58,7 @@ function buildEventStreamFn(events: unknown[]): StreamFn {
 
 function captureWrappedModelId(params: {
   modelId: string;
-  fastMode: boolean | (() => boolean | undefined);
+  fastMode: boolean | "ultrafast" | (() => boolean | "ultrafast" | undefined);
   api?: XaiStreamApi;
   provider?: string;
 }): string {
@@ -135,6 +135,8 @@ it.each([
     }),
   ).toBe(supported);
   expect(captureWrappedModelId({ modelId, fastMode: true })).toBe(target);
+  expect(captureWrappedModelId({ modelId, fastMode: "ultrafast" })).toBe(target);
+  expect(captureWrappedModelId({ modelId, fastMode: () => "ultrafast" })).toBe(target);
   expect(captureWrappedModelId({ modelId, fastMode: false })).toBe(modelId);
 });
 
@@ -380,32 +382,35 @@ describe("xai stream wrappers", () => {
     });
   });
 
-  it("resolves dynamic fast mode in the composed xai provider stream chain", () => {
-    const capturedModelIds: string[] = [];
-    const baseStreamFn: StreamFn = (model) => {
-      capturedModelIds.push(model.id);
-      return {
-        result: async () => ({}),
-        async *[Symbol.asyncIterator]() {},
-      } as unknown as ReturnType<StreamFn>;
-    };
-    let enabled = true;
-    const wrapped = wrapXaiProviderStream({
-      streamFn: baseStreamFn,
-      extraParams: { fastMode: () => enabled },
-    } as never);
-    const model = {
-      api: "openai-responses",
-      provider: "xai",
-      id: "grok-4",
-    } as Model<XaiStreamApi>;
+  it.each([true, "ultrafast"] as const)(
+    "resolves dynamic %s in the composed xai provider stream chain",
+    (initialMode) => {
+      const capturedModelIds: string[] = [];
+      const baseStreamFn: StreamFn = (model) => {
+        capturedModelIds.push(model.id);
+        return {
+          result: async () => ({}),
+          async *[Symbol.asyncIterator]() {},
+        } as unknown as ReturnType<StreamFn>;
+      };
+      let enabled: boolean | "ultrafast" = initialMode;
+      const wrapped = wrapXaiProviderStream({
+        streamFn: baseStreamFn,
+        extraParams: { fastMode: () => enabled },
+      } as never);
+      const model = {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4",
+      } as Model<XaiStreamApi>;
 
-    void wrapped?.(model, { messages: [] } as Context, {});
-    enabled = false;
-    void wrapped?.(model, { messages: [] } as Context, {});
+      void wrapped?.(model, { messages: [] } as Context, {});
+      enabled = false;
+      void wrapped?.(model, { messages: [] } as Context, {});
 
-    expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
-  });
+      expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
+    },
+  );
 
   it("preserves supported strict flags while stripping unsupported reasoning controls", () => {
     const payload = {

@@ -1,4 +1,3 @@
-// Lists available agents and conversation bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";

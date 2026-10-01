@@ -179,8 +179,6 @@ function coerceDelivery(delivery: UnknownRecord) {
   const parsed = parseDeliveryInput(next);
   if (parsed.mode !== undefined) {
     next.mode = parsed.mode;
-  } else if ("mode" in next) {
-    delete next.mode;
   }
   for (const field of ["channel", "to", "threadId", "accountId"] as const) {
     if (next[field] === null) {

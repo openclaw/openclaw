@@ -66,6 +66,10 @@ compatible backup or upgrade OpenClaw for a newer schema.
 
 ## Session SQLite migration
 
+Canonical session-key repair follows complete transcript-owner alias chains, including
+long chains in large databases. It preserves the terminal owner's session key and
+retained transcript history; shortening history is not required to bound the repair's stack.
+
 Runtime session rows and transcripts live in SQLite, by default at
 `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Gateway startup uses
 Doctor's exclusive maintenance owner to migrate legacy session JSON/JSONL files
@@ -84,6 +88,13 @@ including custom paths outside the default agent tree and databases absent from 
 registry. Configured session stores and retained legacy databases are also checked.
 If a configured database still needs a schema migration after `--fix`, Doctor reports
 its path and exits non-zero instead of printing `Doctor complete`.
+
+Before an agent schema migration, Doctor checks database integrity in a read-only
+child process. Long checks print a progress line every 10 seconds with the database
+size, elapsed time, and current phase. Ctrl+C or SIGTERM records the interruption,
+cancels the inspection, and waits for admitted repairs and cleanup before exiting.
+An interrupted check does not authorize the next schema migration; rerun Doctor
+to finish. Pre-migration backups remain available.
 
 `openclaw doctor --session-sqlite <mode>` provides targeted inspection,
 import, validation, and SQLite maintenance. Legacy `sessions.json` files are
@@ -161,6 +172,17 @@ core import completed. Doctor owns the repair and the Gateway keeps serving SQLi
 `inspect` reports the actual SQLite row count even when retained input needs repair.
 Recovery reports include every remaining issue code and distinguish unresolved
 findings from completed validation.
+
+For a zero-byte retained transcript, recovery lists its `.jsonl.bak-<pid>-<timestamp>`
+siblings and verifies the largest backup against the canonical session. Missing
+suffix events use the existing historical importer; current session settings and
+deleted sessions are not replayed. All backup candidates must be covered before
+Doctor archives the empty original with a recoverable warning. The backup files
+remain untouched. Without backups, an identified canonical session with transcript
+rows can establish that the empty source is superseded. If neither source proves
+the history, Doctor preserves the file and names the exact transcript and database
+paths to restore from a verified backup before retrying recovery. Keep moved
+transcripts and their backups together at the reported original paths.
 
 When both a recorded legacy index and its archive are missing, Doctor verifies
 the remaining transcripts against canonical SQLite before reporting that the

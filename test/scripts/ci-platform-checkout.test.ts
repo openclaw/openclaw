@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, expect, it, vi } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import {
   ciCheckoutFixture,
   expectCiCheckoutCleanup,
@@ -58,7 +58,7 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
           "/scripts/changed-lanes.mts",
           "/scripts/lib/merge-head-diff-base.mjs",
         ]
-      : ["/scripts/lib/swift-toolchain.sh"]),
+      : ["/scripts/lib/swift-toolchain.sh", "/scripts/lib/ci-ios-smoke-plan.mjs"]),
   ];
 }
 
@@ -169,6 +169,9 @@ if (process.argv[2] === "sentinel") {
       throw error;
     }
   };
+  // Loaded macOS hosts can drop FSEvents directory notifications entirely.
+  const watch = fs.watch;
+  fs.watch = (target, ...args) => (target === root ? { close() {} } : watch(target, ...args));
 }
 syncFixtureBuiltinExports();
 `
@@ -403,6 +406,15 @@ it.concurrent.each([
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
     };
+    const preflightScripts = {
+      "scripts/ci-build-manifest.mjs": readFileSync("scripts/ci-build-manifest.mjs", "utf8"),
+    };
+    const simulatorScripts = {
+      "scripts/lib/ci-ios-smoke-plan.mjs": readFileSync(
+        "scripts/lib/ci-ios-smoke-plan.mjs",
+        "utf8",
+      ),
+    };
     const releasePolicy = Object.fromEntries(
       [
         "scripts/lib/release-context.mjs",
@@ -474,6 +486,8 @@ it.concurrent.each([
           ...evidenceScripts,
           ...nodeSetupScripts,
           ...platformScripts,
+          ...preflightScripts,
+          ...simulatorScripts,
           ...releasePolicy,
           ...candidateFiles,
         })) {
@@ -654,6 +668,21 @@ it.concurrent.each([
         for (const [name, contents] of Object.entries(platformScripts)) {
           expect(existsSync(path.join(harness, name)), name).toBe(kind === "platform");
           if (kind === "platform") {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
+        }
+        for (const [name, contents] of Object.entries(preflightScripts)) {
+          expect(existsSync(path.join(harness, name)), name).toBe(preflight);
+          if (preflight) {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
+        }
+        for (const [name, contents] of Object.entries(simulatorScripts)) {
+          const ownsSimulator = preflight || kind === "platform";
+          expect(existsSync(path.join(harness, name)), name).toBe(ownsSimulator);
+          if (ownsSimulator) {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+            writeFileSync(path.join(workspace, name), "throw new Error('candidate planner');\n");
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
           }
         }
@@ -928,7 +957,8 @@ process.exitCode = 1;
         expect(readFileSync(path.join(evidence.root, "report.json"), "utf8")).toBe("null");
       }
     } finally {
-      await Promise.all(evidence.pids.map((pid) => waitForDead(pid, 4_000)));
+      // Completion already joined the outer group; the fixture joined its detached owners.
+      expect(evidence.pids.every((pid) => !isProcessAlive(pid))).toBe(true);
       rmSync(evidence.root, { recursive: true, force: true });
     }
   },

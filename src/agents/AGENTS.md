@@ -66,6 +66,10 @@ not just runner noise.
   removals, empty reactions, wrong targets, failures, partial delivery, no-ops,
   and dry runs never qualify. Do not special-case a channel or the fallback
   finalizer.
+- A `final: false` text send to the current source becomes that completion fact
+  only at runtime settlement, when it was the settled turn's last tool batch and
+  the terminal response is empty or `NO_REPLY`. Any tool work after or beside it,
+  including after an asynchronous send, keeps finalization.
 
 ## Verification
 

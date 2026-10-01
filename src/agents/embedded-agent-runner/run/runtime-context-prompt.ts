@@ -1,6 +1,3 @@
-/**
- * Builds runtime context prompt fragments and custom session messages.
- */
 import type { Context, UserMessage } from "../../../llm/types.js";
 import {
   escapeInternalRuntimeContextDelimiters,
@@ -48,7 +45,6 @@ export function appendCurrentInboundContext(
   };
 }
 
-/** Combines inbound context and the current prompt using the channel-provided joiner. */
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
   prompt: string;
@@ -122,7 +118,6 @@ export function buildRuntimeContextMessageContent(runtimeContext: string): strin
   return [INTERNAL_RUNTIME_CONTEXT_BEGIN, runtimeContext, INTERNAL_RUNTIME_CONTEXT_END].join("\n");
 }
 
-/** Creates a non-displayed custom transcript message for runtime context, if any exists. */
 export function buildRuntimeContextCustomMessage(
   runtimeContext: string | undefined,
   fragments?: RuntimeContextFragment[],

@@ -43,8 +43,8 @@ describe("worker placement session events", () => {
         get: () => undefined,
         list: () => [],
         retireSessionPlacement: vi.fn(),
-        pruneOrphanedWorkspaceReconciliations: () => [],
-        listWorkspaceReconciliationOwners: () => [],
+        pruneOrphanedWorkspaceReconciliations: async () => [],
+        listWorkspaceReconciliationOwners: async () => [],
         listPendingWorkspaceResults: () => [],
       } as never,
       environments: {

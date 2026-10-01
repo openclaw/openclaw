@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { asNullableRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
@@ -108,11 +112,7 @@ export function migrateLegacyJsonState<Value>(params: {
 
 function normalizeLegacyVoiceWakeTriggers(input: unknown): string[] {
   const rec = asRecord(input);
-  const triggers = Array.isArray(rec.triggers)
-    ? rec.triggers
-        .flatMap((entry) => (typeof entry === "string" ? [entry.trim()] : []))
-        .filter((entry) => entry.length > 0)
-    : [];
+  const triggers = normalizeTrimmedStringList(rec.triggers);
   return triggers.length > 0 ? triggers : DEFAULT_VOICEWAKE_TRIGGERS;
 }
 
@@ -120,14 +120,22 @@ function importLegacyVoiceWakeMachineState(
   database: DatabaseSync,
   key: string,
   value: unknown,
-): { current: unknown; imported: boolean } {
+  outcome: {
+    change: string;
+    notice: string;
+    matches: (current: unknown) => boolean;
+  },
+): LegacyJsonImportOutcome {
   const db = getNodeSqliteKysely<LegacyVoiceWakeImportDatabase>(database);
   const existing = executeSqliteQueryTakeFirstSync(
     database,
     db.selectFrom("config_machine_state").select("value_json").where("state_key", "=", key),
   );
   if (existing) {
-    return { current: JSON.parse(existing.value_json), imported: false };
+    return {
+      changes: [],
+      ...(outcome.matches(JSON.parse(existing.value_json)) ? {} : { notices: [outcome.notice] }),
+    };
   }
   executeSqliteQuerySync(
     database,
@@ -137,7 +145,7 @@ function importLegacyVoiceWakeMachineState(
       updated_at_ms: Date.now(),
     }),
   );
-  return { current: value, imported: true };
+  return { changes: [outcome.change] };
 }
 
 export function migrateLegacyVoiceWakeSettings(params: {
@@ -150,28 +158,11 @@ export function migrateLegacyVoiceWakeSettings(params: {
     label: "voice wake triggers",
     normalize: normalizeLegacyVoiceWakeTriggers,
     migrate(db, triggers) {
-      const imported = importLegacyVoiceWakeMachineState(
-        db,
-        VOICEWAKE_TRIGGERS_STATE_KEY,
-        triggers,
-      );
-      if (!imported.imported) {
-        return {
-          changes: [],
-          ...(JSON.stringify(imported.current) === JSON.stringify(triggers)
-            ? {}
-            : {
-                notices: [
-                  `Kept shared SQLite voice wake triggers because legacy file differs: ${params.detected.triggersPath}`,
-                ],
-              }),
-        };
-      }
-      return {
-        changes: [
-          `Migrated ${triggers.length} voice wake ${triggers.length === 1 ? "trigger" : "triggers"} → shared SQLite state`,
-        ],
-      };
+      return importLegacyVoiceWakeMachineState(db, VOICEWAKE_TRIGGERS_STATE_KEY, triggers, {
+        change: `Migrated ${triggers.length} voice wake ${triggers.length === 1 ? "trigger" : "triggers"} → shared SQLite state`,
+        notice: `Kept shared SQLite voice wake triggers because legacy file differs: ${params.detected.triggersPath}`,
+        matches: (current) => JSON.stringify(current) === JSON.stringify(triggers),
+      });
     },
   });
 
@@ -181,31 +172,23 @@ export function migrateLegacyVoiceWakeSettings(params: {
     label: "voice wake routing",
     normalize: normalizeVoiceWakeRoutingConfig,
     migrate(db, routingConfig) {
-      const imported = importLegacyVoiceWakeMachineState(db, VOICEWAKE_ROUTING_STATE_KEY, {
-        ...routingConfig,
-        updatedAtMs: Date.now(),
-      });
-      if (!imported.imported) {
-        const existing = normalizeVoiceWakeRoutingConfig(imported.current);
-        const matches =
-          JSON.stringify(existing.defaultTarget) === JSON.stringify(routingConfig.defaultTarget) &&
-          JSON.stringify(existing.routes) === JSON.stringify(routingConfig.routes);
-        return {
-          changes: [],
-          ...(matches
-            ? {}
-            : {
-                notices: [
-                  `Kept shared SQLite voice wake routing because legacy file differs: ${params.detected.routingPath}`,
-                ],
-              }),
-        };
-      }
-      return {
-        changes: [
-          `Migrated voice wake routing config with ${routingConfig.routes.length} ${routingConfig.routes.length === 1 ? "route" : "routes"} → shared SQLite state`,
-        ],
-      };
+      return importLegacyVoiceWakeMachineState(
+        db,
+        VOICEWAKE_ROUTING_STATE_KEY,
+        { ...routingConfig, updatedAtMs: Date.now() },
+        {
+          change: `Migrated voice wake routing config with ${routingConfig.routes.length} ${routingConfig.routes.length === 1 ? "route" : "routes"} → shared SQLite state`,
+          notice: `Kept shared SQLite voice wake routing because legacy file differs: ${params.detected.routingPath}`,
+          matches(current) {
+            const existing = normalizeVoiceWakeRoutingConfig(current);
+            return (
+              JSON.stringify(existing.defaultTarget) ===
+                JSON.stringify(routingConfig.defaultTarget) &&
+              JSON.stringify(existing.routes) === JSON.stringify(routingConfig.routes)
+            );
+          },
+        },
+      );
     },
   });
 
@@ -417,14 +400,10 @@ function normalizeLegacyPluginBindingApprovalEntry(
   input: unknown,
 ): LegacyPluginBindingApprovalEntry | null {
   const entry = asRecord(input);
-  const pluginRoot = typeof entry.pluginRoot === "string" ? entry.pluginRoot.trim() : "";
-  const pluginId = typeof entry.pluginId === "string" ? entry.pluginId.trim() : "";
-  const channel =
-    typeof entry.channel === "string" ? normalizeLowercaseStringOrEmpty(entry.channel) : "";
-  const accountId =
-    typeof entry.accountId === "string" && entry.accountId.trim()
-      ? entry.accountId.trim()
-      : "default";
+  const pluginRoot = normalizeOptionalString(entry.pluginRoot);
+  const pluginId = normalizeOptionalString(entry.pluginId);
+  const channel = normalizeLowercaseStringOrEmpty(entry.channel);
+  const accountId = normalizeOptionalString(entry.accountId) ?? "default";
   if (!pluginRoot || !pluginId || !channel) {
     return null;
   }
@@ -472,6 +451,34 @@ function pluginBindingApprovalRow(entry: LegacyPluginBindingApprovalEntry) {
   };
 }
 
+function importMissingLegacyBindings<Entry>(params: {
+  entries: Entry[];
+  existingByKey: ReadonlyMap<string, string>;
+  key: (entry: Entry) => string;
+  json: (entry: Entry) => string;
+  insert: (entries: Entry[]) => void;
+  migrated: (count: number) => string;
+  conflicts: (count: number) => string;
+}): LegacyJsonImportOutcome {
+  const toInsert: Entry[] = [];
+  let conflictCount = 0;
+  for (const entry of params.entries) {
+    const existingJson = params.existingByKey.get(params.key(entry));
+    if (existingJson === undefined) {
+      toInsert.push(entry);
+    } else if (existingJson !== params.json(entry)) {
+      conflictCount += 1;
+    }
+  }
+  if (toInsert.length > 0) {
+    params.insert(toInsert);
+  }
+  return {
+    changes: toInsert.length > 0 ? [params.migrated(toInsert.length)] : [],
+    ...(conflictCount > 0 ? { notices: [params.conflicts(conflictCount)] } : {}),
+  };
+}
+
 export function migrateLegacyPluginBindingApprovals(params: {
   detected: LegacyStateDetection["pluginBindingApprovals"];
   stateDir: string;
@@ -514,39 +521,24 @@ export function migrateLegacyPluginBindingApprovals(params: {
             ] as const,
         ),
       );
-      const approvalsToInsert: LegacyPluginBindingApprovalEntry[] = [];
-      let conflictCount = 0;
-      for (const approval of approvals) {
-        const existingApprovalJson = existingByKey.get(pluginBindingApprovalScopeKey(approval));
-        if (existingApprovalJson === undefined) {
-          approvalsToInsert.push(approval);
-        } else if (existingApprovalJson !== JSON.stringify(pluginBindingApprovalRow(approval))) {
-          conflictCount += 1;
-        }
-      }
-      if (approvalsToInsert.length > 0) {
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .insertInto("plugin_binding_approvals")
-            .values(approvalsToInsert.map(pluginBindingApprovalRow)),
-        );
-      }
-      return {
-        changes:
-          approvalsToInsert.length > 0
-            ? [
-                `Migrated ${approvalsToInsert.length} plugin binding ${approvalsToInsert.length === 1 ? "approval" : "approvals"} → shared SQLite state`,
-              ]
-            : [],
-        ...(conflictCount > 0
-          ? {
-              notices: [
-                `Kept shared SQLite plugin binding approvals because ${conflictCount} ${conflictCount === 1 ? "legacy approval conflicts" : "legacy approvals conflict"}: ${params.detected.sourcePath}`,
-              ],
-            }
-          : {}),
-      };
+      return importMissingLegacyBindings({
+        entries: approvals,
+        existingByKey,
+        key: pluginBindingApprovalScopeKey,
+        json: (approval) => JSON.stringify(pluginBindingApprovalRow(approval)),
+        insert(approvalsToInsert) {
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .insertInto("plugin_binding_approvals")
+              .values(approvalsToInsert.map(pluginBindingApprovalRow)),
+          );
+        },
+        migrated: (count) =>
+          `Migrated ${count} plugin binding ${count === 1 ? "approval" : "approvals"} → shared SQLite state`,
+        conflicts: (count) =>
+          `Kept shared SQLite plugin binding approvals because ${count} ${count === 1 ? "legacy approval conflicts" : "legacy approvals conflict"}: ${params.detected.sourcePath}`,
+      });
     },
   });
 }
@@ -573,8 +565,7 @@ function normalizeLegacyCurrentConversationBindingRecord(
     return null;
   }
   const conversation = normalizeConversationRef(record.conversation);
-  const targetSessionKey =
-    typeof record.targetSessionKey === "string" ? record.targetSessionKey.trim() : "";
+  const targetSessionKey = normalizeOptionalString(record.targetSessionKey);
   if (!targetSessionKey) {
     return null;
   }
@@ -647,41 +638,24 @@ export function migrateLegacyCurrentConversationBindings(params: {
       const existingByKey = new Map(
         existing.map((row) => [row.binding_key, row.record_json] as const),
       );
-      const recordsToInsert: SessionBindingRecord[] = [];
-      let conflictCount = 0;
-      for (const record of records) {
-        const existingRecordJson = existingByKey.get(
-          currentConversationBindingKey(record.conversation),
-        );
-        if (existingRecordJson === undefined) {
-          recordsToInsert.push(record);
-        } else if (existingRecordJson !== JSON.stringify(record)) {
-          conflictCount += 1;
-        }
-      }
-      if (recordsToInsert.length > 0) {
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .insertInto("current_conversation_bindings")
-            .values(recordsToInsert.map(currentConversationBindingRow)),
-        );
-      }
-      return {
-        changes:
-          recordsToInsert.length > 0
-            ? [
-                `Migrated ${recordsToInsert.length} current-conversation ${recordsToInsert.length === 1 ? "binding" : "bindings"} → shared SQLite state`,
-              ]
-            : [],
-        ...(conflictCount > 0
-          ? {
-              notices: [
-                `Kept shared SQLite current-conversation bindings because ${conflictCount} ${conflictCount === 1 ? "legacy binding conflicts" : "legacy bindings conflict"}: ${params.detected.sourcePath}`,
-              ],
-            }
-          : {}),
-      };
+      return importMissingLegacyBindings({
+        entries: records,
+        existingByKey,
+        key: (record) => currentConversationBindingKey(record.conversation),
+        json: (record) => JSON.stringify(record),
+        insert(recordsToInsert) {
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .insertInto("current_conversation_bindings")
+              .values(recordsToInsert.map(currentConversationBindingRow)),
+          );
+        },
+        migrated: (count) =>
+          `Migrated ${count} current-conversation ${count === 1 ? "binding" : "bindings"} → shared SQLite state`,
+        conflicts: (count) =>
+          `Kept shared SQLite current-conversation bindings because ${count} ${count === 1 ? "legacy binding conflicts" : "legacy bindings conflict"}: ${params.detected.sourcePath}`,
+      });
     },
   });
 }

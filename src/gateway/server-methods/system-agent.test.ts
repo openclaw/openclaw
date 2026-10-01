@@ -22,6 +22,7 @@ import * as setupAdmission from "./setup-admission.js";
 import type { SystemAgentChatSession } from "./system-agent.js";
 import {
   callChat,
+  defaultClient,
   inferenceFallbackMocks,
   makeContext,
   makeRespond,
@@ -116,7 +117,7 @@ describe("openclaw.setup", () => {
           sessionId,
           authChoice: "custom-api-key",
         },
-        client: { internal: { isLocalClient } },
+        client: { ...defaultClient, internal: { isLocalClient } },
         context,
         respond,
       } as never);

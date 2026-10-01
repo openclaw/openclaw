@@ -111,7 +111,6 @@ export async function startGatewayCoreRuntime(input: {
     broadcastToConnIds,
     controlUiBasePath,
     workerEnvironmentService,
-    workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
     desktopSessionRegistry,
     gatewayComputerService,
@@ -412,7 +411,7 @@ export async function startGatewayCoreRuntime(input: {
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy" &&
             !descriptor.name.startsWith("environments.session."))) &&
-        (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
+        (workerPlacementControlAvailable || descriptor.name !== "sessions.dispatch") &&
         (workerPlacementControlAvailable ||
           (descriptor.name !== "sessions.reclaim" && descriptor.name !== "sessions.move")) &&
         (workerEnvironmentService ||
@@ -445,10 +444,10 @@ export async function startGatewayCoreRuntime(input: {
       listPluginNodeCapabilities(pluginRuntime.registry),
       isCoreCanvasHostEnabled(getRuntimeConfig()),
     );
-  const prepareAttachedPluginRuntime = async (loaded: {
-    pluginRegistry: typeof pluginRuntime.registry;
-    gatewayMethods: string[];
-  }) => {
+  const prepareAttachedPluginRuntime = async (
+    loaded: { pluginRegistry: typeof pluginRuntime.registry; gatewayMethods: string[] },
+    trackActivationCleanup: (completion: Promise<void>) => void,
+  ) => {
     const { activatePluginRegistry } = await import("../plugins/loader-shared.js");
     const nextMethodRegistry = buildAttachedGatewayMethodRegistry(loaded.pluginRegistry);
     const nextMethods = uniqueStrings([
@@ -467,6 +466,7 @@ export async function startGatewayCoreRuntime(input: {
           "gateway-bindable",
           runtime.pluginWorkspaceDir,
           pluginRuntime.registry,
+          trackActivationCleanup,
         );
         pluginRuntime.publish(loaded.pluginRegistry);
         pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;

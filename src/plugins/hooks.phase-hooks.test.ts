@@ -1,349 +1,155 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
 import { createHookRunner } from "./hooks.js";
-import { addStaticTestHooks } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import type { PluginRegistry } from "./registry.js";
-import type {
-  PluginHookBeforeModelResolveResult,
-  PluginHookBeforePromptBuildResult,
-} from "./types.js";
+import type { PluginHookBeforePromptBuildResult, PluginHookRegistration } from "./types.js";
 
-describe("phase hooks merger", () => {
-  let registry: PluginRegistry;
+type PromptHook = Pick<
+  PluginHookRegistration<"before_prompt_build">,
+  "handler" | "requiresToolAuthority" | "priority"
+>;
+const event = { prompt: "test", messages: [] };
+function promptRunner(hooks: PromptHook[]) {
+  const registry = createEmptyPluginRegistry();
+  registry.typedHooks.push(
+    ...hooks.map((hook) => ({
+      pluginId: "test",
+      hookName: "before_prompt_build" as const,
+      source: "test",
+      ...hook,
+    })),
+  );
+  return createHookRunner(registry);
+}
+const authority = {
+  toolAuthorityFingerprint: "turn-authority",
+  activeToolNames: ["message"],
+  assertHostActive: () => undefined,
+};
 
-  beforeEach(() => {
-    registry = createEmptyPluginRegistry();
-  });
-
-  async function runPhaseHook(params: {
-    hookName: "before_model_resolve" | "before_prompt_build";
-    hooks: ReadonlyArray<{
-      pluginId: string;
-      result: PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult;
-      priority?: number;
-    }>;
-  }) {
-    addStaticTestHooks(registry, {
-      hookName: params.hookName,
-      hooks: [...params.hooks],
+describe("prompt phase hooks", () => {
+  it("merges context in priority order while keeping the first system prompt", async () => {
+    const context = (suffix: string): PluginHookBeforePromptBuildResult => ({
+      systemPrompt: `system ${suffix}`,
+      prependContext: `context ${suffix}`,
+      prependSystemContext: `prepend ${suffix}`,
+      appendSystemContext: `append ${suffix}`,
     });
-    const runner = createHookRunner(registry);
-    if (params.hookName === "before_model_resolve") {
-      return await runner.runBeforeModelResolve({ prompt: "test" }, {});
-    }
-    return await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
-  }
+    const runner = promptRunner([
+      { priority: 1, handler: () => context("B") },
+      { priority: 10, handler: () => context("A") },
+    ]);
+    await expect(runner.runBeforePromptBuild(event, {})).resolves.toStrictEqual({
+      systemPrompt: "system A",
+      prependContext: "context A\n\ncontext B",
+      appendContext: undefined,
+      prependSystemContext: "prepend A\n\nprepend B",
+      appendSystemContext: "append A\n\nappend B",
+    });
+  });
 
   it.each([
-    {
-      name: "before_model_resolve keeps higher-priority override values",
-      hookName: "before_model_resolve" as const,
-      hooks: [
-        { pluginId: "low", result: { modelOverride: "demo-low-priority-model" }, priority: 1 },
-        {
-          pluginId: "high",
-          result: {
-            modelOverride: "demo-high-priority-model",
-            providerOverride: "demo-provider",
-          },
-          priority: 10,
-        },
-      ],
-      expected: {
-        modelOverride: "demo-high-priority-model",
-        providerOverride: "demo-provider",
-      },
-    },
-    {
-      name: "before_prompt_build concatenates prependContext and preserves systemPrompt precedence",
-      hookName: "before_prompt_build" as const,
-      hooks: [
-        {
-          pluginId: "high",
-          result: { prependContext: "context A", systemPrompt: "system A" },
-          priority: 10,
-        },
-        {
-          pluginId: "low",
-          result: { prependContext: "context B", systemPrompt: "system B" },
-          priority: 1,
-        },
-      ],
-      expected: {
-        prependContext: "context A\n\ncontext B",
-        systemPrompt: "system A",
-      },
-    },
-    {
-      name: "before_prompt_build concatenates prependSystemContext and appendSystemContext",
-      hookName: "before_prompt_build" as const,
-      hooks: [
-        {
-          pluginId: "first",
-          result: {
-            prependSystemContext: "prepend A",
-            appendSystemContext: "append A",
-          },
-          priority: 10,
-        },
-        {
-          pluginId: "second",
-          result: {
-            prependSystemContext: "prepend B",
-            appendSystemContext: "append B",
-          },
-          priority: 1,
-        },
-      ],
-      expected: {
-        prependSystemContext: "prepend A\n\nprepend B",
-        appendSystemContext: "append A\n\nappend B",
-      },
-    },
-    {
-      name: "before_prompt_build intersects tool restrictions from every hook",
-      hookName: "before_prompt_build" as const,
-      hooks: [
-        {
-          pluginId: "high",
-          result: { toolsAllow: ["group:fs", "web_*"] as string[] },
-          priority: 10,
-        },
-        {
-          pluginId: "low",
-          result: { toolsAllow: ["read", "web_search"] as string[] },
-          priority: 1,
-        },
-      ],
-      expected: {
-        toolsAllow: ["read", "web_search"],
-      },
-    },
-    {
-      name: "before_prompt_build keeps an explicit empty restriction",
-      hookName: "before_prompt_build" as const,
-      hooks: [
-        {
-          pluginId: "high",
-          result: { toolsAllow: [] as string[] },
-          priority: 10,
-        },
-        {
-          pluginId: "low",
-          result: { toolsAllow: ["read"] as string[] },
-          priority: 1,
-        },
-      ],
-      expected: {
-        toolsAllow: [],
-      },
-    },
-    {
-      name: "before_prompt_build fails closed for malformed tool restrictions",
-      hookName: "before_prompt_build" as const,
-      hooks: [
-        {
-          pluginId: "invalid",
-          result: { toolsAllow: null as unknown as string[] },
-        },
-      ],
-      expected: {
-        toolsAllow: [],
-      },
-    },
-    {
-      name: "before_prompt_build rejects mixed-type tool restrictions",
-      hookName: "before_prompt_build" as const,
-      hooks: [
-        {
-          pluginId: "invalid",
-          result: { toolsAllow: ["*", null] as unknown as string[] },
-        },
-      ],
-      expected: {
-        toolsAllow: [],
-      },
-    },
-  ] as const)("$name", async ({ hookName, hooks, expected }) => {
-    const result = await runPhaseHook({ hookName, hooks });
-    expect(result).toStrictEqual(
-      hookName === "before_model_resolve"
-        ? expected
-        : {
-            systemPrompt: undefined,
-            prependContext: undefined,
-            appendContext: undefined,
-            prependSystemContext: undefined,
-            appendSystemContext: undefined,
-            ...expected,
-          },
-    );
+    { name: "explicit empty", toolsAllow: [] },
+    { name: "non-array", toolsAllow: null as unknown as string[] },
+    { name: "mixed-type array", toolsAllow: ["*", null] as unknown as string[] },
+  ])("keeps $name tool restrictions closed", async ({ toolsAllow }) => {
+    const runner = promptRunner([
+      { handler: () => ({ toolsAllow }) },
+      { handler: () => ({ toolsAllow: ["read"] }) },
+    ]);
+    await expect(runner.runBeforePromptBuild(event, {})).resolves.toStrictEqual({
+      systemPrompt: undefined,
+      prependContext: undefined,
+      appendContext: undefined,
+      prependSystemContext: undefined,
+      appendSystemContext: undefined,
+      toolsAllow: [],
+    });
   });
 
-  it("accepts a frozen toolsAllow returned by a plugin", async () => {
-    const result = await runPhaseHook({
-      hookName: "before_prompt_build",
-      hooks: [
-        {
-          pluginId: "frozen",
-          result: { toolsAllow: Object.freeze(["read"]) as unknown as string[] },
-        },
-      ],
-    });
-
-    expect(result).toMatchObject({ toolsAllow: ["read"] });
-  });
-
-  it("preserves overlapping glob restrictions for concrete-surface evaluation", async () => {
-    const result = await runPhaseHook({
-      hookName: "before_prompt_build",
-      hooks: [
-        { pluginId: "prefix", result: { toolsAllow: ["web_*"] } },
-        { pluginId: "suffix", result: { toolsAllow: ["*_search"] } },
-      ],
-    });
-    const toolsAllow = (result as PluginHookBeforePromptBuildResult | undefined)?.toolsAllow;
-
+  it("preserves overlapping frozen restrictions for the concrete tool surface", async () => {
+    const runner = promptRunner([
+      {
+        handler: () => ({
+          toolsAllow: Object.freeze(["group:fs", "web_*"]) as unknown as string[],
+        }),
+      },
+      { handler: () => ({ toolsAllow: ["read", "*_search"] }) },
+    ]);
+    const toolsAllow = (await runner.runBeforePromptBuild(event, {}))?.toolsAllow;
     expect(toolsAllow).toBeDefined();
-    expect(readToolAllowlistIntersection(toolsAllow ?? [])).toEqual([["web_*"], ["*_search"]]);
+    expect(readToolAllowlistIntersection(toolsAllow ?? [])).toEqual([
+      ["group:fs", "web_*"],
+      ["read", "*_search"],
+    ]);
     expect(
       applyEmbeddedAttemptToolsAllow(
-        [{ name: "web_search" }, { name: "web_fetch" }, { name: "memory_search" }],
+        [
+          { name: "read" },
+          { name: "web_search" },
+          { name: "web_fetch" },
+          { name: "memory_search" },
+        ],
         toolsAllow,
       ),
-    ).toEqual([{ name: "web_search" }]);
+    ).toEqual([{ name: "read" }, { name: "web_search" }]);
   });
 
-  it("dispatches authorized enrichment only after the host supplies the final tool surface", async () => {
-    const enrichment = vi.fn((_event, ctx) => {
+  it("enriches only after host authorization and expires the supplied authority", async () => {
+    const enrichment = vi.fn<PromptHook["handler"]>((_event, ctx) => {
       expect(ctx.toolAuthority?.allows("memory_search")).toBe(false);
       expect(ctx.toolAuthority?.allows("message")).toBe(true);
       return { prependContext: "authorized context", systemPrompt: "ignored override" };
     });
-    registry.typedHooks.push(
-      {
-        pluginId: "restrictor",
-        hookName: "before_prompt_build",
-        handler: () => ({ toolsAllow: ["message"] }),
-        source: "test",
-      },
-      {
-        pluginId: "enricher",
-        hookName: "before_prompt_build",
-        handler: enrichment,
-        requiresToolAuthority: true,
-        source: "test",
-      },
-    );
-    const runner = createHookRunner(registry);
-    const event = { prompt: "test", messages: [] };
-
+    const runner = promptRunner([
+      { handler: () => ({ toolsAllow: ["message"] }) },
+      { requiresToolAuthority: true, handler: enrichment },
+    ]);
     await expect(runner.runBeforePromptBuild(event, {})).resolves.toMatchObject({
       toolsAllow: ["message"],
     });
     expect(enrichment).not.toHaveBeenCalled();
+    await expect(runner.runAuthorizedPromptBuild(event, {}, authority)).resolves.toEqual({
+      prependContext: "authorized context",
+    });
+    const retained = enrichment.mock.calls[0]?.[1].toolAuthority;
+    expect(() => retained?.assertActive()).toThrow("no longer active");
+  });
 
-    const result = await runner.runAuthorizedPromptBuild(
+  it("rejects stale enrichment and never starts its successor after host authority closes", async () => {
+    const started = createDeferred();
+    const gate = createDeferred();
+    const later = vi.fn(() => ({ prependContext: "later context" }));
+    const runner = promptRunner([
+      {
+        requiresToolAuthority: true,
+        handler: async () => {
+          started.resolve();
+          await gate.promise;
+          return { prependContext: "stale context" };
+        },
+      },
+      { requiresToolAuthority: true, handler: later },
+    ]);
+    let active = true;
+    const run = runner.runAuthorizedPromptBuild(
       event,
       {},
       {
-        toolAuthorityFingerprint: "turn-authority",
-        activeToolNames: ["message"],
-        assertHostActive: () => undefined,
-      },
-    );
-    const retainedAuthority = enrichment.mock.calls[0]?.[1].toolAuthority;
-
-    expect(result).toEqual({ prependContext: "authorized context" });
-    expect(() => retainedAuthority?.assertActive()).toThrow("no longer active");
-  });
-
-  it("rejects enrichment that finishes after the host authority closes", async () => {
-    let releaseEnrichment: () => void = () => {
-      throw new Error("enrichment gate was not initialized");
-    };
-    const enrichmentGate = new Promise<void>((resolve) => {
-      releaseEnrichment = resolve;
-    });
-    const enrichment = vi.fn(async () => {
-      await enrichmentGate;
-      return { prependContext: "stale authorized context" };
-    });
-    registry.typedHooks.push({
-      pluginId: "enricher",
-      hookName: "before_prompt_build",
-      handler: enrichment,
-      requiresToolAuthority: true,
-      source: "test",
-    });
-    const runner = createHookRunner(registry);
-    let hostActive = true;
-    const run = runner.runAuthorizedPromptBuild(
-      { prompt: "test", messages: [] },
-      {},
-      {
-        toolAuthorityFingerprint: "turn-authority",
-        activeToolNames: ["memory_search"],
+        ...authority,
         assertHostActive: () => {
-          if (!hostActive) {
+          if (!active) {
             throw new Error("host turn authority is no longer active");
           }
         },
       },
     );
-    await vi.waitFor(() => {
-      expect(enrichment).toHaveBeenCalledOnce();
-    });
-
-    hostActive = false;
-    releaseEnrichment();
-
+    await started.promise;
+    active = false;
+    gate.resolve();
     await expect(run).rejects.toThrow("host turn authority is no longer active");
-  });
-
-  it("does not start a later authorized handler after host authority closes", async () => {
-    let hostActive = true;
-    const firstEnrichment = vi.fn(async () => {
-      hostActive = false;
-      return { prependContext: "first context" };
-    });
-    const laterEnrichment = vi.fn(() => ({ prependContext: "stale later context" }));
-    registry.typedHooks.push(
-      {
-        pluginId: "first-enricher",
-        hookName: "before_prompt_build",
-        handler: firstEnrichment,
-        requiresToolAuthority: true,
-        source: "test",
-      },
-      {
-        pluginId: "later-enricher",
-        hookName: "before_prompt_build",
-        handler: laterEnrichment,
-        requiresToolAuthority: true,
-        source: "test",
-      },
-    );
-    const runner = createHookRunner(registry);
-
-    await expect(
-      runner.runAuthorizedPromptBuild(
-        { prompt: "test", messages: [] },
-        {},
-        {
-          toolAuthorityFingerprint: "turn-authority",
-          activeToolNames: ["memory_search"],
-          assertHostActive: () => {
-            if (!hostActive) {
-              throw new Error("host turn authority is no longer active");
-            }
-          },
-        },
-      ),
-    ).rejects.toThrow("host turn authority is no longer active");
-    expect(firstEnrichment).toHaveBeenCalledOnce();
-    expect(laterEnrichment).not.toHaveBeenCalled();
+    expect(later).not.toHaveBeenCalled();
   });
 });

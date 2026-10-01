@@ -32,8 +32,6 @@ func (docChunkTranslator) TranslateRaw(_ context.Context, text, _, _ string) (st
 	}
 }
 
-func (docChunkTranslator) Close() {}
-
 type docLeafFallbackTranslator struct{}
 
 func (docLeafFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -51,8 +49,6 @@ func (docLeafFallbackTranslator) TranslateRaw(_ context.Context, text, _, _ stri
 	return text, nil
 }
 
-func (docLeafFallbackTranslator) Close() {}
-
 type docFrontmatterTranslator struct{}
 
 func (docFrontmatterTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -67,8 +63,6 @@ func (docFrontmatterTranslator) Translate(_ context.Context, text, _, _ string) 
 func (docFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	return "extra text outside tagged sections", nil
 }
-
-func (docFrontmatterTranslator) Close() {}
 
 type docFrontmatterFallbackTranslator struct{}
 
@@ -101,8 +95,6 @@ func (docFrontmatterFallbackTranslator) TranslateRaw(_ context.Context, text, _,
 	return text, nil
 }
 
-func (docFrontmatterFallbackTranslator) Close() {}
-
 type docWrappedLeafTranslator struct{}
 
 func (docWrappedLeafTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -121,8 +113,6 @@ func (docWrappedLeafTranslator) TranslateRaw(_ context.Context, text, _, _ strin
 	}, "\n"), nil
 }
 
-func (docWrappedLeafTranslator) Close() {}
-
 type docComponentLeafFallbackTranslator struct{}
 
 func (docComponentLeafFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -135,8 +125,6 @@ func (docComponentLeafFallbackTranslator) TranslateRaw(_ context.Context, text, 
 	}
 	return text, nil
 }
-
-func (docComponentLeafFallbackTranslator) Close() {}
 
 type docPromptBudgetTranslator struct {
 	rawInputs []string
@@ -155,8 +143,6 @@ func (t *docPromptBudgetTranslator) TranslateRaw(_ context.Context, text, _, _ s
 	return replacer.Replace(text), nil
 }
 
-func (t *docPromptBudgetTranslator) Close() {}
-
 type boundaryWrapperTranslator struct{}
 
 func (boundaryWrapperTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -170,8 +156,6 @@ func (boundaryWrapperTranslator) TranslateRaw(_ context.Context, text, _, _ stri
 	return strings.NewReplacer("First item", "Erster Eintrag", "Second item", "Zweiter Eintrag").Replace(text), nil
 }
 
-func (boundaryWrapperTranslator) Close() {}
-
 type oversizedBlockTranslator struct {
 	rawInputs []string
 }
@@ -184,8 +168,6 @@ func (t *oversizedBlockTranslator) TranslateRaw(_ context.Context, text, _, _ st
 	t.rawInputs = append(t.rawInputs, text)
 	return strings.ReplaceAll(text, "Line ", "Translated line "), nil
 }
-
-func (t *oversizedBlockTranslator) Close() {}
 
 type singletonFenceRetryTranslator struct {
 	rawInputs []string
@@ -202,8 +184,6 @@ func (t *singletonFenceRetryTranslator) TranslateRaw(_ context.Context, text, _,
 	}
 	return strings.ReplaceAll(text, "Line ", "Translated line "), nil
 }
-
-func (t *singletonFenceRetryTranslator) Close() {}
 
 type fencedLiteralMaskingTranslator struct {
 	rawInputs []string
@@ -226,8 +206,6 @@ func (t *fencedLiteralMaskingTranslator) TranslateRaw(_ context.Context, text, _
 	).Replace(text), nil
 }
 
-func (t *fencedLiteralMaskingTranslator) Close() {}
-
 type docSyntaxMaskingTranslator struct {
 	rawInputs []string
 }
@@ -243,8 +221,6 @@ func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ 
 	return translated, nil
 }
 
-func (t *docSyntaxMaskingTranslator) Close() {}
-
 type accidentalListMarkerTranslator struct{}
 
 func (accidentalListMarkerTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -255,8 +231,6 @@ func (accidentalListMarkerTranslator) TranslateRaw(_ context.Context, text, _, _
 	return strings.ReplaceAll(text, "September begins the standard rate.", "1. September beginnt der Standardtarif."), nil
 }
 
-func (accidentalListMarkerTranslator) Close() {}
-
 type translatedOrdinalTranslator struct{}
 
 func (translatedOrdinalTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -266,8 +240,6 @@ func (translatedOrdinalTranslator) Translate(_ context.Context, text, _, _ strin
 func (translatedOrdinalTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	return strings.NewReplacer("1st failure", "1. Fehler", "2nd failure", "2. Fehler").Replace(text), nil
 }
-
-func (translatedOrdinalTranslator) Close() {}
 
 type duplicateFirstFencedPlaceholderTranslator struct {
 	rawCalls int
@@ -287,8 +259,6 @@ func (t *duplicateFirstFencedPlaceholderTranslator) TranslateRaw(_ context.Conte
 	}
 	return strings.ReplaceAll(text, "Human prose.", "Prosa humana."), nil
 }
-
-func (t *duplicateFirstFencedPlaceholderTranslator) Close() {}
 
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 
 const TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES = 2_048;
@@ -23,18 +24,11 @@ type TopicNameStoreState = {
   store: TopicNameStore;
   hydrated: boolean;
   hydratePromise?: Promise<void>;
-  persistentStore: TopicNamePersistentStore;
+  persistentStore: PluginStateKeyedStore<TopicEntry>;
 };
 
 type TopicNameCacheState = {
   stores: Map<string, TopicNameStoreState>;
-};
-
-type TopicNamePersistentStore = {
-  register(key: string, value: TopicEntry): Promise<void>;
-  entries(): Promise<Array<{ key: string; value: TopicEntry }>>;
-  delete(key: string): Promise<boolean>;
-  clear(): Promise<void>;
 };
 
 function createTopicNameStoreState(namespace: string): TopicNameStoreState {

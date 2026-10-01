@@ -17,7 +17,7 @@ import {
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { publishPluginSourceAdmission } from "./plugin-source-admission-store.js";
+import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import { createInstalledPluginIndexCandidate as createCandidate } from "./test-helpers/installed-plugin-index.js";
 
 const temp = useAutoCleanupTempDirTracker((cleanup) =>
@@ -79,7 +79,10 @@ describe("installed plugin index policy refresh", () => {
       Object.keys((await readPersistedInstalledPluginIndex({ stateDir }))!.installRecords),
     ).toEqual(["orphaned", "package"]);
     expect(
-      await publishPluginSourceAdmission({ ...publication, stateDir, receipt: latestAdmission }),
+      await createPluginSourceAdmissionPublisher({ stateDir })!({
+        ...publication,
+        receipt: latestAdmission,
+      }),
     ).toBe(true);
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),

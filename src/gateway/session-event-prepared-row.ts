@@ -136,11 +136,25 @@ export async function drainSessionEventPublications(projection: SessionRowProjec
   await publicationOwners.get(projection)?.drain();
 }
 
+export async function withPreparedEventRow(
+  projection: SessionRowProjection | undefined,
+  query: { key: string; agentId: string; storePath?: string } | undefined,
+  publish: (read?: SessionRowReadView) => void,
+) {
+  if (!projection || !query) {
+    publish();
+    return;
+  }
+  await sessionEventPublicationRows(projection).withReadyRows(() => [query], publish, {
+    includeAncestors: true,
+  });
+}
+
 export async function withPreparedSessionEventRow(
   projection: SessionRowProjection | undefined,
   sessionKey: string,
   eventAgentId: string | undefined,
-  publish: () => void,
+  publish: (read?: SessionRowReadView) => void,
 ) {
   if (!projection) {
     publish();
@@ -152,11 +166,7 @@ export async function withPreparedSessionEventRow(
     eventAgentId,
   )?.[1];
   if (routingAgentId) {
-    await sessionEventPublicationRows(projection).withReadyRows(
-      () => [{ key: sessionKey, agentId: routingAgentId }],
-      () => publish(),
-      { includeAncestors: true },
-    );
+    await withPreparedEventRow(projection, { key: sessionKey, agentId: routingAgentId }, publish);
     return;
   }
   do {

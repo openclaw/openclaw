@@ -10,6 +10,7 @@ import {
 
 vi.mock("../auth-profiles/external-cli-sync.js", () => ({
   listExternalCliSyncProviderIds: () => [],
+  readExternalCliBootstrapCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
 }));
 

@@ -1,97 +1,42 @@
-// Isolated auth session flag tests cover auth isolation for scheduled agent sessions.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  clearFastTestEnv,
+  makeIsolatedAgentJobFixture,
+  makeIsolatedAgentParamsFixture,
+} from "./isolated-agent/job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
+import {
   loadRunCronIsolatedAgentTurn,
-  makeCronSession,
   resolveConfiguredModelRefMock,
-  resolveCronSessionMock,
   resolveSessionAuthSelectionMock,
-  resetRunCronIsolatedAgentTurnHarness,
-  restoreFastTestEnv,
 } from "./isolated-agent/run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+setupRunCronIsolatedAgentTurnSuite();
 
-type RunCronIsolatedAgentTurnParams = Parameters<typeof runCronIsolatedAgentTurn>[0];
-
-function makeParams(
-  overrides?: Partial<RunCronIsolatedAgentTurnParams>,
-): RunCronIsolatedAgentTurnParams {
-  return {
-    cfg: {
-      auth: {
-        profiles: {
-          "openrouter:default": {
-            provider: "openrouter",
-            mode: "api_key",
-          },
-        },
-        order: { openrouter: ["openrouter:default"] },
-      },
-    },
-    deps: {} as never,
-    job: {
-      id: "cron-auth-flag",
-      name: "Auth Flag",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "isolated" as const,
-      state: {},
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "hi" },
-      delivery: { mode: "none" as const },
-    },
-    message: "hi",
-    sessionKey: "cron:auth-flag-1",
-    lane: "cron" as const,
-    ...overrides,
-  };
-}
-
-describe("isolated cron auth selection isNewSession (#62783)", () => {
-  let previousFastTestEnv: string | undefined;
-
-  beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
-    resetRunCronIsolatedAgentTurnHarness();
+describe("isolated cron auth selection (#62783)", () => {
+  it("preserves auth selection despite a fresh isolated session", async () => {
     resolveConfiguredModelRefMock.mockReturnValue({
       provider: "openrouter",
       model: "moonshotai/kimi-k2.5",
     });
-    resolveCronSessionMock.mockReturnValue(
-      makeCronSession({
-        isNewSession: true,
-        sessionEntry: {
-          sessionId: "main-session",
-          updatedAt: 0,
-          systemSent: false,
-          skillsSnapshot: undefined,
-        },
-      }),
-    );
     resolveSessionAuthSelectionMock.mockResolvedValue({
       profileId: "openrouter:default",
       source: "auto",
       routeRequirement: "api-key",
     });
-  });
-
-  afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
-  });
-
-  it("passes isNewSession=false when sessionTarget is isolated", async () => {
-    await runCronIsolatedAgentTurn(makeParams());
-
-    const openRouterCall = resolveSessionAuthSelectionMock.mock.calls.find(
-      (call) => call[0]?.provider === "openrouter",
+    await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        cfg: {
+          auth: {
+            profiles: { "openrouter:default": { provider: "openrouter", mode: "api_key" } },
+            order: { openrouter: ["openrouter:default"] },
+          },
+        },
+        job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" } }),
+      }),
     );
-    if (!openRouterCall) {
-      throw new Error("resolveSessionAuthSelection was not called with provider openrouter");
-    }
-    expect(openRouterCall[0]?.isNewSession).toBe(false);
+    expect(resolveSessionAuthSelectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openrouter", isNewSession: false }),
+    );
   });
 });

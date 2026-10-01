@@ -93,6 +93,7 @@ export function synthesizeOrphanInstall(params: {
     agentId: params.agentId,
     workspace: params.workspace ?? "",
     agentConfigDigest: "sha256:missing",
+    agentOrigin: "created",
     agentOwnedPaths: [],
     status: "partial",
     addedAtMs: updatedAtMs,

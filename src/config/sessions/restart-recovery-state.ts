@@ -309,19 +309,16 @@ export function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[]
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const runIds: string[] = [];
+  const runIds = new Set<string>();
   for (const item of value) {
     const runId = normalizeRunId(item);
     if (!runId) {
       continue;
     }
-    const previousIndex = runIds.indexOf(runId);
-    if (previousIndex >= 0) {
-      runIds.splice(previousIndex, 1);
-    }
-    runIds.push(runId);
+    runIds.delete(runId);
+    runIds.add(runId);
   }
-  const bounded = runIds.slice(-MAX_TERMINAL_RUN_IDS);
+  const bounded = [...runIds].slice(-MAX_TERMINAL_RUN_IDS);
   return bounded.length > 0 ? bounded : undefined;
 }
 
@@ -366,14 +363,12 @@ export function normalizeRestartRecoveryEntryFields(
       ? entry.restartRecoveryDeliveryMediaUrls
       : deliveryMediaUrls,
   );
-  assign(
+  for (const key of [
     "restartRecoveryDisableMessageTool",
-    entry.restartRecoveryDisableMessageTool === true ? true : undefined,
-  );
-  assign(
     "restartRecoverySuppressTextDelivery",
-    entry.restartRecoverySuppressTextDelivery === true ? true : undefined,
-  );
+  ] as const) {
+    assign(key, entry[key] === true ? true : undefined);
+  }
   assign(
     "restartRecoveryBeforeAgentReplyState",
     entry.restartRecoveryBeforeAgentReplyState === "admitted" ||

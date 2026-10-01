@@ -1,4 +1,3 @@
-// `openclaw plugins update` command implementation for tracked npm plugins and hook packs.
 import { isDeepStrictEqual } from "node:util";
 import type { PluginsRefreshResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -63,6 +62,7 @@ import { VERSION } from "../version.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
+import { createPluginInstallLogger } from "./plugins-command-helpers.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
@@ -133,15 +133,6 @@ function shouldPreserveEmptyPlugins(params: {
       Object.keys(plugins).some((key) => key !== "installs") ||
       containsConfigIncludeDirective(parsedPlugins)),
   );
-}
-
-function projectUpdaterResultOntoSourceConfig(params: {
-  runtimeBase: OpenClawConfig;
-  sourceBase: OpenClawConfig;
-  updatedConfig: OpenClawConfig;
-}): OpenClawConfig {
-  const updatePatch = createMergePatch(params.runtimeBase, params.updatedConfig);
-  return applyMergePatch(params.sourceBase, updatePatch) as OpenClawConfig;
 }
 
 export type RunPluginUpdateCommandParams = {
@@ -263,8 +254,7 @@ async function runPluginUpdateCommandUnlocked(
   // mutation-start snapshot so concurrent config changes cannot be resurrected.
   const cfg = mutationSnapshot?.snapshot.runtimeConfig ?? getRuntimeConfig();
   const sourceCfg = mutationSnapshot?.snapshot.sourceConfig ?? cfg;
-  const persistedPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-  const pluginInstallRecords = persistedPluginInstallRecords;
+  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);
   const sourceCfgWithPluginInstallRecords = withPluginInstallRecords(
     sourceCfg,
@@ -301,10 +291,7 @@ async function runPluginUpdateCommandUnlocked(
     configChannel: configuredUpdateChannel,
     currentVersion: VERSION,
   });
-  const logger = {
-    info: (msg: string) => defaultRuntime.log(msg),
-    warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
-  };
+  const logger = createPluginInstallLogger();
   if (params.opts.dangerouslyForceUnsafeInstall) {
     defaultRuntime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING));
   }
@@ -545,7 +532,7 @@ async function runPluginUpdateCommandUnlocked(
           installOwners: packageUpdateIds,
         });
         if (
-          !isDeepStrictEqual(currentInstallRecords, persistedPluginInstallRecords) ||
+          !isDeepStrictEqual(currentInstallRecords, pluginInstallRecords) ||
           !currentSnapshot.ok ||
           !isDeepStrictEqual([...currentSnapshot.value], [...packageUpdateSnapshot])
         ) {
@@ -560,11 +547,10 @@ async function runPluginUpdateCommandUnlocked(
       const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
       const shouldPersistPluginInstallIndex =
         pluginResult.changed || Object.keys(pluginInstallRecords).length > 0;
-      const sourceShapedUpdateConfig = projectUpdaterResultOntoSourceConfig({
-        runtimeBase: cfgWithPluginInstallRecords,
-        sourceBase: sourceCfgWithPluginInstallRecords,
-        updatedConfig: hookResult.config,
-      });
+      const sourceShapedUpdateConfig = applyMergePatch(
+        sourceCfgWithPluginInstallRecords,
+        createMergePatch(cfgWithPluginInstallRecords, hookResult.config),
+      ) as OpenClawConfig;
       // Plugin install records live in the persisted index. Preserve an authored
       // empty plugins section so include ownership does not become a false mutation.
       let nextConfig = withoutPluginInstallRecords(sourceShapedUpdateConfig, {
@@ -617,7 +603,7 @@ async function runPluginUpdateCommandUnlocked(
             isDeepStrictEqual(nextConfig, sourceSnapshot?.snapshot.sourceConfig ?? sourceCfg)
           ) {
             await commitPluginInstallRecordsOnly({
-              previousInstallRecords: persistedPluginInstallRecords,
+              previousInstallRecords: pluginInstallRecords,
               nextInstallRecords: nextPluginInstallRecords,
               nextConfig,
               verifyConfigFresh: async () => {
@@ -629,7 +615,7 @@ async function runPluginUpdateCommandUnlocked(
             });
           } else {
             await commitPluginInstallRecordsWithConfig({
-              previousInstallRecords: persistedPluginInstallRecords,
+              previousInstallRecords: pluginInstallRecords,
               nextInstallRecords: nextPluginInstallRecords,
               nextConfig,
               baseHash: sourceSnapshot?.snapshot.hash,

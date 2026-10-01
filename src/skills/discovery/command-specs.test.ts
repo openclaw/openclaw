@@ -27,8 +27,11 @@ vi.mock("../../plugins/bundle-commands.js", () => ({
 }));
 
 vi.mock("../loading/workspace-skill-loader.js", () => ({
-  filterWorkspaceSkills: (entries: SkillEntry[]) => entries,
   loadVisibleSkills: () => [],
+}));
+
+vi.mock("../loading/workspace-skill-filter.js", () => ({
+  filterSkillEntries: (entries: SkillEntry[]) => entries,
 }));
 
 beforeEach(() => {

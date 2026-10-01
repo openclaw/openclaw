@@ -18,6 +18,8 @@ import type {
 } from "./cli-output-contracts.js";
 import {
   isClaudeSubagentRecord,
+  isClaudeToolResultBlockType,
+  isClaudeToolUseBlockType,
   isGeminiStreamJsonDialect,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
@@ -169,12 +171,8 @@ export function projectCliTaggedReasoning(params: {
   return text;
 }
 
-export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
-  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
-}
-
 function isClaudeAssistantToolResultBlockType(type: unknown): boolean {
-  return typeof type === "string" && type.endsWith("_tool_result") && type !== "tool_result";
+  return isClaudeToolResultBlockType(type) && type !== "tool_result";
 }
 
 function isClaudeToolResultError(content: unknown): boolean {
@@ -361,10 +359,6 @@ function beginClaudeContentBlock(tracker: ThinkingTracker, index: unknown): void
   tracker.nextSyntheticBlockIndex += 1;
 }
 
-function stopClaudeContentBlock(tracker: ThinkingTracker): void {
-  tracker.currentSyntheticBlockIndex = undefined;
-}
-
 function resolveClaudeContentBlockIndex(tracker: ThinkingTracker, index: unknown): number | null {
   if (typeof index === "number") {
     tracker.nextSyntheticBlockIndex = Math.max(tracker.nextSyntheticBlockIndex, index + 1);
@@ -406,15 +400,6 @@ function readThinkingProgressTokens(delta: Record<string, unknown>): number | un
   return asPositiveFiniteNumber(delta.estimated_tokens);
 }
 
-function emitClaudeThinkingProgress(
-  tracker: ThinkingTracker,
-  progressTokensDelta: number,
-  onThinkingProgress: (progress: CliThinkingProgress) => void,
-): void {
-  tracker.progressTokens += progressTokensDelta;
-  onThinkingProgress({ progressTokens: tracker.progressTokens });
-}
-
 export function dispatchClaudeCliThinking(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -443,7 +428,7 @@ export function dispatchClaudeCliThinking(params: {
       return;
     }
     if (event.type === "content_block_stop") {
-      stopClaudeContentBlock(tracker);
+      tracker.currentSyntheticBlockIndex = undefined;
       return;
     }
     if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
@@ -456,8 +441,10 @@ export function dispatchClaudeCliThinking(params: {
       return;
     }
     const progressTokensDelta = readThinkingProgressTokens(event.delta);
-    if (progressTokensDelta !== undefined && params.onThinkingProgress) {
-      emitClaudeThinkingProgress(tracker, progressTokensDelta, params.onThinkingProgress);
+    const onThinkingProgress = params.onThinkingProgress;
+    if (progressTokensDelta !== undefined && onThinkingProgress) {
+      tracker.progressTokens += progressTokensDelta;
+      onThinkingProgress({ progressTokens: tracker.progressTokens });
       return;
     }
     // signature_delta carries opaque continuation material; the Claude CLI owns

@@ -8,7 +8,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildDevicePairPairingQrChannelData } from "./pairing-qr-channel-data.js";
 type NotifyModule = typeof import("./notify.js");
 
 const loadDevicePairApiModule = createLazyRuntimeModule(() => import("./api.js"));
@@ -450,12 +449,8 @@ export default definePluginEntry({
         const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
           ? ctx.gatewayClientScopes
           : undefined;
-        const {
-          buildMissingPairingScopeReply,
-          buildMissingSetupHandoffScopeReply,
-          resolveAuthLabel,
-          resolvePairingCommandAuthState,
-        } = await loadPairCommandAuthModule();
+        const { resolveAuthLabel, resolvePairingCommandAuthState } =
+          await loadPairCommandAuthModule();
         const authState = resolvePairingCommandAuthState({
           channel: ctx.channel,
           gatewayClientScopes,
@@ -471,7 +466,7 @@ export default definePluginEntry({
         );
 
         if (authState.isMissingPairingPrivilege) {
-          return buildMissingPairingScopeReply();
+          return { text: "⚠️ This command requires operator.pairing." };
         }
         assertOwnerCurrent?.();
 
@@ -531,7 +526,9 @@ export default definePluginEntry({
         }
 
         if (authState.isMissingSetupHandoffPrivilege) {
-          return buildMissingSetupHandoffScopeReply();
+          return {
+            text: "⚠️ Setup code handoff includes Talk secrets and requires operator.talk.secrets.",
+          };
         }
 
         const authLabelResult = resolveAuthLabel(api.config);
@@ -659,10 +656,9 @@ export default definePluginEntry({
                   markdown: true,
                 }).join("\n"),
               ].join("\n"),
-              channelData: buildDevicePairPairingQrChannelData({
-                setupCode,
-                expiresAtMs: payload.expiresAtMs,
-              }),
+              channelData: {
+                openclawPairingQr: { setupCode, expiresAtMs: payload.expiresAtMs },
+              },
               sensitiveMedia: true,
             };
           }

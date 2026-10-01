@@ -1,6 +1,6 @@
 // Builds script-disabled npm install commands and env.
 import type { NpmProjectInstallEnvOptions } from "./npm-install-env.js";
-import { createNpmProjectInstallEnv } from "./npm-install-env.js";
+import { createNpmProjectInstallEnv, findExplicitNpmConfigKeys } from "./npm-install-env.js";
 
 type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
   ignoreWorkspaces?: boolean;
@@ -47,6 +47,15 @@ export function createSafeNpmInstallEnv(
       npm_config_progress: "false",
       npm_config_yes: "true",
     });
+  }
+  // npm 12 changed these defaults from all to none. Preserve npm 11 behavior
+  // only when the operator has not set a policy through env or npmrc.
+  const sourcePolicies = findExplicitNpmConfigKeys(nextEnv, ["allow-git", "allow-remote"], options);
+  if (!sourcePolicies.has("allow-git")) {
+    nextEnv.npm_config_allow_git = "all";
+  }
+  if (!sourcePolicies.has("allow-remote")) {
+    nextEnv.npm_config_allow_remote = "all";
   }
   return nextEnv;
 }

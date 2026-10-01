@@ -10,7 +10,7 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import * as subagentRegistryState from "../agents/subagents/registry/subagent-registry-state.js";
 import { canonicalSubagentRunFixtures } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import type { SubagentRunFixture } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,

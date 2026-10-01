@@ -10,6 +10,7 @@ import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ss
 import {
   asPositiveSafeInteger,
   asRecord,
+  filterStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
@@ -73,11 +74,7 @@ function normalizeLmstudioModelKey(modelId: string): string {
 }
 
 function resolveRequestedContextLength(model: StreamModel): number | undefined {
-  const withContextTokens = model as StreamModel & { contextTokens?: unknown };
-  return (
-    asPositiveSafeInteger(withContextTokens.contextTokens) ??
-    asPositiveSafeInteger(model.contextWindow)
-  );
+  return asPositiveSafeInteger(model.contextTokens) ?? asPositiveSafeInteger(model.contextWindow);
 }
 
 function resolveModelHeaders(model: StreamModel): Record<string, string> | undefined {
@@ -96,10 +93,8 @@ function shouldPreloadLmstudioModels(value: unknown): boolean {
 function withLmstudioUsageCompat(model: StreamModel): StreamModel {
   const compat = model.compat && typeof model.compat === "object" ? model.compat : {};
   const unsupportedToolSchemaKeywords =
-    "unsupportedToolSchemaKeywords" in compat && Array.isArray(compat.unsupportedToolSchemaKeywords)
-      ? compat.unsupportedToolSchemaKeywords.filter(
-          (keyword): keyword is string => typeof keyword === "string",
-        )
+    "unsupportedToolSchemaKeywords" in compat
+      ? filterStringEntries(compat.unsupportedToolSchemaKeywords)
       : [];
   const normalizedCompat = {
     ...compat,

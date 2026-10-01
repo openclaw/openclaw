@@ -6,17 +6,17 @@ type RealtimeAudioSerializer = ConstructorParameters<typeof RealtimeAudioPacer>[
 
 function createTwilioSerializer(streamSid: string): RealtimeAudioSerializer {
   return {
-    media: (payload) => JSON.stringify({ event: "media", streamSid, media: { payload } }),
-    clear: () => JSON.stringify({ event: "clear", streamSid }),
-    mark: (name) => JSON.stringify({ event: "mark", streamSid, mark: { name } }),
+    serializeMedia: (payload) => JSON.stringify({ event: "media", streamSid, media: { payload } }),
+    serializeClear: () => JSON.stringify({ event: "clear", streamSid }),
+    serializeMark: (name) => JSON.stringify({ event: "mark", streamSid, mark: { name } }),
   };
 }
 
 function createCompactSerializer(): RealtimeAudioSerializer {
   return {
-    media: (payload) => payload,
-    clear: () => "clear",
-    mark: (name) => `mark:${name}`,
+    serializeMedia: (payload) => payload,
+    serializeClear: () => "clear",
+    serializeMark: (name) => `mark:${name}`,
   };
 }
 

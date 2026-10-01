@@ -52,12 +52,38 @@ describe("session descriptor reads", () => {
     expect(h.read).toHaveBeenCalledTimes(1);
   });
 
+  it("shares the implied agent scope while isolating a contradictory agent", async () => {
+    const h = harness();
+    const pending = createDeferred<{ session: GatewaySessionRow }>();
+    h.read.mockReturnValueOnce(pending.promise);
+    const reads = [
+      h.sessions.describe({ key }),
+      h.sessions.describe({ key, agentId: "main" }),
+      h.sessions.describe({ key, agentId: " MAIN " }),
+    ];
+    expect(h.read).toHaveBeenCalledTimes(1);
+    const other = { ...initial, sessionId: "other-agent" };
+    h.read.mockResolvedValueOnce({ session: other });
+    expect(await h.sessions.describe({ key, agentId: "other" })).toEqual({ session: other });
+    pending.resolve({ session: initial });
+    expect(await Promise.all(reads)).toEqual([
+      { session: initial },
+      { session: initial },
+      { session: initial },
+    ]);
+    expect(h.read).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps session, agent, preview parameters and request timeout distinct", async () => {
     const h = harness();
     for (const params of [
       { key },
       { key: "agent:main:other" },
       { key, agentId: "work" },
+      { key: "global" },
+      { key: "global", agentId: "main" },
+      { key: "local" },
+      { key: "local", agentId: "main" },
       { key, includeDerivedTitles: true },
       { key, includeLastMessage: true },
     ]) {
@@ -65,7 +91,7 @@ describe("session descriptor reads", () => {
       await h.sessions.describe({ ...params });
     }
     await h.sessions.describe({ key }, { timeoutMs: 30_000 });
-    expect(h.read).toHaveBeenCalledTimes(6);
+    expect(h.read).toHaveBeenCalledTimes(10);
   });
 
   it("preserves the runtime sample time when reusing a running descriptor", async () => {

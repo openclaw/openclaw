@@ -1,15 +1,10 @@
 // Lazy gateway RPC facade and shared Commander options for CLI subcommands.
 import type { Command } from "commander";
-import type {
-  GatewayClientMode,
-  GatewayClientName,
-} from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { OperatorScope } from "../gateway/operator-scopes.js";
-import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
+import type { GatewayRpcExtraOptions } from "./gateway-rpc.runtime.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 export type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
@@ -61,16 +56,7 @@ export async function callGatewayFromCli(
   method: string,
   opts: GatewayRpcOpts,
   params?: unknown,
-  extra?: {
-    clientName?: GatewayClientName;
-    mode?: GatewayClientMode;
-    deviceIdentity?: DeviceIdentity | null;
-    signal?: AbortSignal;
-    expectFinal?: boolean;
-    progress?: boolean;
-    scopes?: OperatorScope[];
-    sharedStateMode?: "read-only";
-  },
+  extra?: GatewayRpcExtraOptions,
 ) {
   return await callGatewayFromCliWithTransport(method, opts, params, extra);
 }

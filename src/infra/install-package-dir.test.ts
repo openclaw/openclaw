@@ -8,6 +8,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   copyPackageDirInstallTransactionRequest,
@@ -800,14 +801,13 @@ describe("installPackageDir", () => {
 
     expect(result).toEqual({ ok: true });
     const installOptions = expectRunCommandCallForArgv(
-      [
-        "npm",
+      expectedNpmCommand([
         "install",
         "--omit=dev",
         "--loglevel=error",
         "--ignore-scripts",
         "--workspaces=false",
-      ],
+      ]),
       (options) => options.env?.npm_config_global === "false",
     );
     const env = installOptions.env ?? {};

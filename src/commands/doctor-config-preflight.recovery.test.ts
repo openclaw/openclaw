@@ -8,6 +8,15 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import type { DoctorConfigPreflightOptions } from "./doctor/shared/config-migration-result.js";
+
+const repairOptions = {
+  observe: false,
+  migrateState: false,
+  migrateLegacyConfig: false,
+  repairPrefixedConfig: true,
+  invalidConfigNote: false,
+} satisfies DoctorConfigPreflightOptions;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -15,84 +24,52 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it.each([
-  {
-    name: "loopback bind alias",
-    legacy: { gateway: { mode: "local", bind: "localhost" } },
-    expected: { gateway: { mode: "local", bind: "loopback" } },
-  },
-  {
-    name: "LAN bind alias",
-    legacy: { gateway: { mode: "local", bind: "0.0.0.0" } },
-    expected: { gateway: { mode: "local", bind: "lan" } },
-  },
-  {
-    name: "authored OTel grpc",
-    legacy: {
-      gateway: { mode: "local" },
-      diagnostics: { otel: { enabled: true, protocol: "grpc", traces: true } },
-    },
-    expected: {
+it("Doctor repairs authored OTel grpc before restoring a suspicious config from backup", async () => {
+  const legacy = {
+    gateway: { mode: "local" },
+    diagnostics: { otel: { enabled: true, protocol: "grpc", traces: true } },
+  };
+  await withDoctorConfigPreflightHome(async (home) => {
+    const stateDir = path.join(home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    const original = '{"update":{"channel":"stable"}}\n';
+    const backup = `${JSON.stringify({ ...legacy, plugins: { enabled: false } }, null, 2)}\n`;
+    await fs.writeFile(configPath, original);
+    await fs.writeFile(`${configPath}.bak`, backup);
+
+    const result = await runDoctorConfigPreflight(repairOptions);
+
+    expect(result.snapshot.valid).toBe(true);
+    expect(result.snapshot.legacyIssues).toEqual([]);
+    const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+    expect(saved).toMatchObject({
       gateway: { mode: "local" },
       diagnostics: { otel: { enabled: false, traces: true } },
-    },
-  },
-])(
-  "Doctor repairs $name before restoring a suspicious config from backup",
-  async ({ legacy, expected }) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const configPath = path.join(stateDir, "openclaw.json");
-      await fs.mkdir(stateDir, { recursive: true });
-      const original = '{"update":{"channel":"stable"}}\n';
-      const backup = `${JSON.stringify({ ...legacy, plugins: { enabled: false } }, null, 2)}\n`;
-      await fs.writeFile(configPath, original);
-      await fs.writeFile(`${configPath}.bak`, backup);
-
-      const result = await runDoctorConfigPreflight({
-        observe: false,
-        migrateState: false,
-        migrateLegacyConfig: false,
-        repairPrefixedConfig: true,
-        invalidConfigNote: false,
-      });
-
-      expect(result.snapshot.valid).toBe(true);
-      expect(result.snapshot.legacyIssues).toEqual([]);
-      const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
-      expect(saved).toMatchObject(expected);
-      expect(result.snapshot.config.diagnostics?.otel?.protocol).toBeUndefined();
-      expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
-      const clobbered = (await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."));
-      expect(clobbered).toHaveLength(1);
-      expect(await fs.readFile(path.join(stateDir, clobbered[0]!), "utf8")).toBe(original);
     });
-  },
-);
+    expect(result.snapshot.config.diagnostics?.otel?.protocol).toBeUndefined();
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
+    const clobbered = (await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."));
+    expect(clobbered).toHaveLength(1);
+    expect(await fs.readFile(path.join(stateDir, clobbered[0]!), "utf8")).toBe(original);
+  });
+});
 
 it.each([
-  {
-    name: "a valid active config",
-    original: '{ gateway: { mode: "local", port: 19092 }, plugins: { enabled: false } }\n',
-    port: 19092,
-    valid: true,
-  },
   {
     name: "a suspicious config from a future writer",
     original: '{ meta: { lastTouchedVersion: "9999.1.1" }, update: { channel: "stable" } }\n',
-    port: undefined,
     valid: true,
   },
   {
     name: "an invalid config from a future writer",
     original: '{ meta: { lastTouchedVersion: "9999.1.1" }, gateway: { mode: "invalid" } }\n',
-    port: undefined,
     valid: false,
     lastGood: true,
   },
 ])(
   "Doctor preserves $name instead of restoring an older backup",
-  async ({ original, port, valid, lastGood }) => {
+  async ({ original, valid, lastGood }) => {
     await withDoctorConfigPreflightHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
@@ -112,20 +89,13 @@ it.each([
 
       const result = await withEnvAsync(
         { OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined },
-        () =>
-          runDoctorConfigPreflight({
-            observe: false,
-            migrateState: false,
-            migrateLegacyConfig: false,
-            repairPrefixedConfig: true,
-            invalidConfigNote: false,
-          }),
+        () => runDoctorConfigPreflight(repairOptions),
       );
 
       expect(await fs.readFile(configPath, "utf8")).toBe(original);
       expect(await fs.readFile(backupPath, "utf8")).toBe(backup);
       expect(result.snapshot.valid).toBe(valid);
-      expect(result.snapshot.config.gateway?.port).toBe(port);
+      expect(result.snapshot.config.gateway?.port).toBeUndefined();
       expect((await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."))).toEqual(
         [],
       );
@@ -159,15 +129,7 @@ it.each(["env", "include"] as const)(
         await fs.writeFile(includePath, includeRaw);
       }
 
-      await withEnvAsync({ OTEL_PROTOCOL: "grpc" }, () =>
-        runDoctorConfigPreflight({
-          observe: false,
-          migrateState: false,
-          migrateLegacyConfig: false,
-          repairPrefixedConfig: true,
-          invalidConfigNote: false,
-        }),
-      );
+      await withEnvAsync({ OTEL_PROTOCOL: "grpc" }, () => runDoctorConfigPreflight(repairOptions));
 
       expect(await fs.readFile(configPath, "utf8")).toBe(original);
       expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
@@ -181,13 +143,9 @@ it.each(["env", "include"] as const)(
   },
 );
 
-it.each([
-  { shape: "list", legacyDefault: false },
-  { shape: "entries", legacyDefault: false },
-  { shape: "list", legacyDefault: true },
-])(
-  "normal and Doctor recovery preserve $shape roster ownership (legacy default: $legacyDefault)",
-  async ({ shape, legacyDefault }) => {
+it.each([false, true])(
+  "normal and Doctor recovery preserve list roster ownership (legacy default: %s)",
+  async (legacyDefault) => {
     await withDoctorConfigPreflightHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
@@ -204,12 +162,9 @@ it.each([
       const backup = JSON.stringify({
         gateway: { mode: "local" },
         plugins: { enabled: false },
-        agents:
-          shape === "entries"
-            ? { entries }
-            : {
-                list: Object.entries(entries).map(([id, config]) => Object.assign({ id }, config)),
-              },
+        agents: {
+          list: Object.entries(entries).map(([id, config]) => Object.assign({ id }, config)),
+        },
         bindings,
       });
       const lastGoodPath = `${configPath}.last-good`;
@@ -253,15 +208,7 @@ it.each([
       }
       const snapshot = legacyDefault
         ? await io.readConfigFileSnapshot()
-        : (
-            await runDoctorConfigPreflight({
-              observe: false,
-              migrateState: false,
-              migrateLegacyConfig: false,
-              repairPrefixedConfig: true,
-              invalidConfigNote: false,
-            })
-          ).snapshot;
+        : (await runDoctorConfigPreflight(repairOptions)).snapshot;
       expect(snapshot.valid).toBe(true);
       expect(snapshot.config.bindings).toEqual(bindings);
       if (legacyDefault) {

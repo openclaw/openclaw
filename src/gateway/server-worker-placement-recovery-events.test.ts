@@ -187,8 +187,8 @@ async function withRecoveryRuntime(
         retireSessionPlacement: ({ sessionId }: { sessionId: string }) => {
           placements.delete(sessionId);
         },
-        pruneOrphanedWorkspaceReconciliations: () => [],
-        listWorkspaceReconciliationOwners: () => [],
+        pruneOrphanedWorkspaceReconciliations: async () => [],
+        listWorkspaceReconciliationOwners: async () => [],
         listPendingWorkspaceResults: () => [],
       } as never,
       environments: environments as never,

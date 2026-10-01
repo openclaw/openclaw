@@ -30,13 +30,8 @@ export async function transcribeFirstAudio(params: {
     return undefined;
   }
 
-  const attachments = normalizeMediaAttachments(ctx);
-  if (!attachments || attachments.length === 0) {
-    return undefined;
-  }
-
-  const firstAudio = attachments.find(
-    (att) => att && isAudioAttachment(att) && !att.alreadyTranscribed,
+  const firstAudio = normalizeMediaAttachments(ctx).find(
+    (att) => isAudioAttachment(att) && !att.alreadyTranscribed,
   );
 
   if (!firstAudio) {

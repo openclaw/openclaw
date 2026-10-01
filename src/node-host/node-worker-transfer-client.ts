@@ -4,7 +4,6 @@ import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
-import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { boundedWorkerError } from "../gateway/worker-environments/worker-error.js";
@@ -59,6 +58,7 @@ import {
   type NodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
 import { withNodeWorkerUploadSnapshot } from "./node-worker-upload-snapshot.js";
+import { createNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
 import {
   captureManifest,
   readWorkspaceManifest,
@@ -285,7 +285,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
     throw new Error("Invalid worker attachment manifest");
   }
   params.setStage("materialize");
-  const stagingWorkspace = await tempWorkspace({
+  const stagingWorkspace = await createNodeWorkerTempWorkspace({
     rootDir: path.dirname(params.workspaceDir),
     prefix: `.${path.basename(params.workspaceDir)}.workspace-transfer-`,
   });

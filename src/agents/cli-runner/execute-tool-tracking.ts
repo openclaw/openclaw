@@ -570,9 +570,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     const pending = pendingMessagingCalls.release(event.toolCallId);
     if (pending) {
       commitMessagingToolResult({
-        toolName: pending.toolName,
-        target: pending.target,
-        args: pending.args,
+        ...pending,
         result: event.result,
         isError: event.isError,
       });

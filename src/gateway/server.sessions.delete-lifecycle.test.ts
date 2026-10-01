@@ -15,6 +15,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -27,6 +28,7 @@ import {
   acpManagerMocks,
   browserSessionTabMocks,
   bundleMcpRuntimeMocks,
+  sessionLifecycleHookMocks,
   writeSingleLineSession,
   sessionStoreEntry,
   directSessionReq,
@@ -229,6 +231,12 @@ test("sessions.delete removes a locked plugin-owned session from its persisted a
   for (const sessionId of [canonicalSessionId, aliasSessionId]) {
     await replaceTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
       { type: "session", id: sessionId, content: sessionId },
+      {
+        type: "message",
+        id: `${sessionId}-message`,
+        parentId: null,
+        message: { role: "user", content: `content for ${sessionId}` },
+      },
     ]);
   }
 
@@ -253,6 +261,25 @@ test("sessions.delete removes a locked plugin-owned session from its persisted a
       loadTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }),
     ).resolves.toEqual([]);
   }
+  const endCall = sessionLifecycleHookMocks.runSessionEnd.mock.calls.at(0);
+  if (!endCall) {
+    throw new Error("expected session_end hook call");
+  }
+  const [endEvent, endContext] = endCall;
+  const endedTranscript = readAttachedSessionEndTranscriptSourceForTest(endContext);
+  expect(endedTranscript.available).toBe(true);
+  if (!endedTranscript.available || !endEvent?.sessionId) {
+    throw new Error("expected archived ended transcript source");
+  }
+  await expect(
+    endedTranscript.readTail({ maxMessages: 10, maxBytes: 64 * 1_024 }),
+  ).resolves.toMatchObject({
+    messages: [
+      expect.objectContaining({ role: "user", content: `content for ${endEvent.sessionId}` }),
+    ],
+    totalMessages: 1,
+    truncated: false,
+  });
 });
 
 test.each(["session id", "updated at"] as const)(
@@ -386,6 +413,7 @@ test("sessions.delete includes cleanup-owned row changes in its guarded deletion
 });
 
 test("sessions.delete serializes a patch behind asynchronous runtime cleanup", async () => {
+  const patchPreparation = await import("./server-methods/sessions-patch-expectations.js");
   const sessionKey = "agent:main:subagent:worker";
   const sessionId = "sess-subagent";
   const updatedAt = 1_737_600_000_000;
@@ -413,37 +441,37 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
   await runtimeCleanupStarted;
   let patchSettled = false;
   const { promise: patchPreflight, resolve: markPatchPreflight } = createDeferred();
-  const patch = directSessionReq(
-    "sessions.patch",
-    {
-      key: sessionKey,
-      label: "updated during cleanup",
-    },
-    {
-      context: {
-        workerSessionPlacementService: {
-          getMany(sessionIds: readonly string[]) {
-            if (sessionIds.includes(sessionId)) {
-              markPatchPreflight();
-            }
-            return new Map();
-          },
-        },
-      },
-    },
-  ).then((result) => {
+  const prepareTargets = patchPreparation.prepareSessionPatchTargets;
+  // Placement reads also run during fixture initialization, before patch captures its target.
+  const preflight = vi
+    .spyOn(patchPreparation, "prepareSessionPatchTargets")
+    .mockImplementation((input) => {
+      const prepared = prepareTargets(input);
+      markPatchPreflight();
+      return prepared;
+    });
+  const patch = directSessionReq("sessions.patch", {
+    key: sessionKey,
+    label: "updated during cleanup",
+  }).then((result) => {
     patchSettled = true;
     return result;
   });
-  await patchPreflight;
-  expect(patchSettled).toBe(false);
-  releaseRuntimeCleanup();
+  try {
+    await patchPreflight;
+    expect(patchSettled).toBe(false);
+    releaseRuntimeCleanup();
 
-  const [deleted, patched] = await Promise.all([deletion, patch]);
-  expect(deleted.ok).toBe(true);
-  expect(patched.ok).toBe(false);
-  expect(patched.error?.message).toBe(`Session ${sessionKey} changed before patch. Retry.`);
-  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    const [deleted, patched] = await Promise.all([deletion, patch]);
+    expect(deleted.ok).toBe(true);
+    expect(patched.ok).toBe(false);
+    expect(patched.error?.message).toBe(`Session ${sessionKey} changed before patch. Retry.`);
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  } finally {
+    releaseRuntimeCleanup();
+    await Promise.allSettled([deletion, patch]);
+    preflight.mockRestore();
+  }
 });
 
 test("sessions.delete keeps lifecycle admission blocked through session unbinding", async () => {

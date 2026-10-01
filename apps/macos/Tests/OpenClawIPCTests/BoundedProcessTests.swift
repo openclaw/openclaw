@@ -4,6 +4,7 @@ import Subprocess
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 struct BoundedProcessTests {
     @Test func `timeout terminates the helper before joining a suspended observer`() async throws {
         let held = AsyncStream.makeStream(of: (ChildProcessExit, CheckedContinuation<Void, Never>).self)
@@ -311,16 +312,12 @@ struct BoundedProcessTests {
     }
 
     /// `echo $$ > file` creates the file and writes to it in two steps, so a single
-    /// read can observe a missing *or* empty file. Poll until it parses, and only
-    /// then fall back to the recording read so a genuine absence still fails.
-    private func waitForPID(in file: URL) async throws -> pid_t {
-        let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline {
-            if let value = self.pollPID(from: file) {
-                return value
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+    /// read can observe a missing *or* empty file. Poll until it parses before recording the read.
+    private func waitForPID(
+        in file: URL,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws -> pid_t
+    {
+        try await TestWait.state("process PID file", sourceLocation: sourceLocation) { self.pollPID(from: file) != nil }
         let text = try String(contentsOf: file, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return try #require(pid_t(text))

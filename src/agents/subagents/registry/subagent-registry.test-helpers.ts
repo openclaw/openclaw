@@ -1,14 +1,12 @@
 export * from "./subagent-registry.js";
 export {
   buildSubagentSessionListReadIndex,
-  countActiveDescendantRuns,
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
   getSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
-  hasDescendantRunAwaitingSettle,
   isSubagentRunLive,
   isSubagentSessionRunActive,
   listSubagentRunsForController,
@@ -25,6 +23,7 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type RegistryTestApi = {
@@ -37,7 +36,7 @@ type RegistryTestApi = {
     suppressSessionEffects?: boolean;
   }): Promise<number>;
   releaseSubagentRun(runId: string): void;
-  resetSubagentRegistryForTests(opts?: { persist?: boolean }): void;
+  resetSubagentRegistryForTests(): Promise<void>;
   testing: {
     failQueuedSubagentRun(runId: string, error: string): boolean;
     sweepOnceForTests(): Promise<void>;
@@ -52,7 +51,15 @@ function getRegistryTestApi(): RegistryTestApi {
 }
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
-  getRegistryTestApi().resetSubagentRegistryForTests(opts);
+  // Fixture state resets synchronously; the file runner joins accepted sweeps before retirement.
+  void getRegistryTestApi().resetSubagentRegistryForTests();
+  if (opts?.persist !== false) {
+    try {
+      saveSubagentRegistryToSqlite(new Map());
+    } catch {
+      // Reset remains best-effort for fixtures that deliberately refuse writes.
+    }
+  }
 }
 
 export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {

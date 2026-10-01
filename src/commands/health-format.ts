@@ -1,4 +1,3 @@
-/** Shared CLI formatting for gateway health failures, channels, and delivery queues. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -34,7 +33,6 @@ const formatKv = (line: string, rich: boolean) => {
   return `${colorize(rich, theme.muted, `${key}:`)} ${colorize(rich, valueColor, value)}`;
 };
 
-/** Formats thrown health errors with rich detail lines when terminal color is enabled. */
 export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
   const rich = opts.rich ?? isRich();
   const raw = String(err);
@@ -143,7 +141,6 @@ function formatPluginDiagnostic(text: string, maxChars: number): string {
   return truncateUtf16Safe(redactToolPayloadText(normalized), maxChars);
 }
 
-/** Formats terse channel and actionable plugin health lines for shared CLI surfaces. */
 export const formatHealthChannelLines = (
   summary: HealthSummary,
   opts: {
@@ -301,7 +298,6 @@ export const formatHealthChannelLines = (
   return lines;
 };
 
-/** Formats dead-lettered and pressured delivery queue entries for text health output. */
 export function formatDeliveryQueueHealthLine(
   summary: HealthSummary,
   now = Date.now(),

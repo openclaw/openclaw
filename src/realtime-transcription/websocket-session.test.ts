@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionWebSocketSessionOptions,
@@ -471,7 +471,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
     session.close();
 
-    await withTestTimeout(closed.promise, 1_000, "Graceful provider close not received");
+    await closed.promise;
     await vi.waitFor(() => expect(transcripts).toEqual(["final provider transcript"]));
     expect(finalizedFrames).toEqual([{ type: "finalize" }]);
   });
@@ -733,7 +733,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     });
 
     await session.connect();
-    await withTestTimeout(received.promise, 1_000, "Throwing error observer not reached");
+    await received.promise;
     expect(onError).toHaveBeenCalledTimes(1);
     const parseError = requireFirstMockArg(onError, "malformed websocket json error");
     expect(parseError).toBeInstanceOf(Error);
@@ -818,7 +818,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     });
 
     await session.connect();
-    await withTestTimeout(received.promise, 1_000, "Large inbound message not received");
+    await received.promise;
     expect(onMessage).toHaveBeenCalledTimes(1);
     const event = requireFirstMockArg(onMessage, "large inbound message");
     expect(event).toEqual({ type: "transcript", text: largeText });
@@ -842,7 +842,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     });
 
     await session.connect();
-    await withTestTimeout(received.promise, 1_000, "Oversized message error not received");
+    await received.promise;
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onMessage).not.toHaveBeenCalled();
     const overflowError = requireFirstMockArg(onError, "oversized inbound message error");

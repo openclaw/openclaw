@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -231,13 +232,11 @@ function waitForFeishuWsCycleEnd(params: {
         return;
       }
       settled = true;
-      if (handleAbort) {
-        params.abortSignal?.removeEventListener("abort", handleAbort);
-      }
+      params.abortSignal?.removeEventListener("abort", handleAbort);
       resolve(result);
     };
 
-    const handleAbort: (() => void) | undefined = () => finish("abort");
+    const handleAbort = () => finish("abort");
     params.abortSignal?.addEventListener("abort", handleAbort, { once: true });
     if (params.abortSignal?.aborted) {
       finish("abort");
@@ -268,10 +267,7 @@ export async function monitorWebSocket({
 
     let wsClient: Lark.WSClient | undefined;
     try {
-      let reportTerminalError: (err: Error) => void = () => {};
-      const terminalError = new Promise<Error>((resolve) => {
-        reportTerminalError = resolve;
-      });
+      const { promise: terminalError, resolve: reportTerminalError } = createDeferred<Error>();
       const handleWsError = (err: Error) => {
         if (isFeishuWsTerminalError(err)) {
           reportTerminalError(err);

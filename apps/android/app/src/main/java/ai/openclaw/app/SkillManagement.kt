@@ -182,9 +182,10 @@ internal fun formatClawHubInstallMessage(
 internal fun isClawHubSkillInstalled(
   skills: List<GatewaySkillSummary>,
   slug: String,
+  version: String? = null,
 ): Boolean {
   val reference = parseClawHubSkillReference(slug) ?: return false
-  return skills.any { it.matchesClawHubReference(reference) }
+  return skills.any { it.matchesClawHubReference(reference) && (version == null || it.clawHubInstalledVersion == version) }
 }
 
 internal fun isClawHubSkillInstalled(
@@ -194,9 +195,7 @@ internal fun isClawHubSkillInstalled(
   if (!searchResult.canReadDetails) {
     isClawHubSkillInstalledByReference(skills, searchResult.reference)
   } else {
-    searchResult.version?.let { version ->
-      isClawHubSkillInstalled(skills, searchResult.reference, version)
-    } ?: isClawHubSkillInstalled(skills, searchResult.reference)
+    isClawHubSkillInstalled(skills, searchResult.reference, searchResult.version)
   }
 
 /**
@@ -211,15 +210,6 @@ internal fun isClawHubSkillInstalledByReference(
   if (reference.isEmpty()) return false
   return skills.any { it.clawHubValid && it.clawHubRequestedReference == reference }
 }
-
-internal fun isClawHubSkillInstalled(
-  skills: List<GatewaySkillSummary>,
-  slug: String,
-  version: String,
-): Boolean =
-  parseClawHubSkillReference(slug)?.let { reference ->
-    skills.any { it.matchesClawHubReference(reference) && it.clawHubInstalledVersion == version }
-  } ?: false
 
 internal fun isClawHubSkillOperationActive(
   activeSlugs: Set<String>,

@@ -82,13 +82,6 @@ export function takePipePrefix(socket: Socket): Buffer {
   return buffered;
 }
 
-/** Restore the pre-transfer buffer ahead of bytes read from the received handle. */
-export function restorePipePrefix(socket: Socket, prefix: Buffer): void {
-  if (prefix.length > 0) {
-    socket.unshift(prefix);
-  }
-}
-
 /** Publish stream data and EOF after the caller's readiness continuation. */
 export function releasePipe(socket: Socket): void {
   const held = restoreReader(socket);

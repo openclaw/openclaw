@@ -1,4 +1,4 @@
-import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
@@ -22,11 +22,9 @@ export function scheduleGatewayIdleTask(params: {
   log: { warn: (message: string) => void };
   errorMessage: string;
 }): GatewayIdleTaskHandle {
-  const { scheduler } = params;
-  let stopped = false;
-  let job: GatewayScheduledJob | undefined;
-  let running: Promise<void> | undefined;
-  const isClosing = () => stopped || params.isClosing() || getGatewayRestartDrainSignal().aborted;
+  const scheduler = params.scheduler.scope();
+  const isClosing = () =>
+    scheduler.signal.aborted || params.isClosing() || getGatewayRestartDrainSignal().aborted;
   const run = async () => {
     if (isClosing()) {
       return;
@@ -45,7 +43,7 @@ export function scheduleGatewayIdleTask(params: {
     if (isClosing()) {
       return;
     }
-    job = scheduler.schedule({
+    scheduler.schedule({
       id: params.id,
       delayMs,
       run: () => {
@@ -61,8 +59,7 @@ export function scheduleGatewayIdleTask(params: {
           schedule(params.retryDelayMs);
           return undefined;
         }
-        // Publish the join before callbacks can synchronously initiate shutdown.
-        running = Promise.resolve()
+        return Promise.resolve()
           .then(() => admission.run(run))
           .catch((error: unknown) => {
             if (!isGatewayRestartDrainError(error)) {
@@ -71,18 +68,12 @@ export function scheduleGatewayIdleTask(params: {
           })
           .finally(() => {
             admission.release();
-            running = undefined;
           });
-        return running;
       },
     });
   };
   schedule(params.delayMs);
   return {
-    stop: () => {
-      stopped = true;
-      job?.cancel();
-      return running;
-    },
+    stop: scheduler.stop,
   };
 }

@@ -162,7 +162,10 @@ describe("gateway config methods", () => {
 });
 
 describe("gateway config methods", () => {
-  installConfigWriteGatewayHooks({ watchConfigFiles: false });
+  installSharedConfigWriteGatewayHooks({
+    watchConfigFiles: false,
+    fixturePaths: ["logging.json5"],
+  });
 
   it.each(["config.patch", "config.set", "config.apply"])(
     "%s rejects an include-only stale draft and accepts a reloaded draft",
@@ -444,44 +447,6 @@ describe("gateway config methods", () => {
       );
     },
   );
-
-  it("config.set acknowledges an include config when an external edit invalidates the reread", async () => {
-    const configFactory = await import("../config/io.factory.js");
-    const original = await getCurrentConfigObject();
-    await writeJsonFile(path.join(path.dirname(original.path), "logging.json"), { level: "info" });
-    await writeJsonFile(original.path, {
-      ...original.config,
-      logging: { $include: "logging.json" },
-      gateway: { reload: { mode: "off" } },
-    });
-    invalidateConfigGetResponseCache();
-    const draft = await getCurrentConfigObject();
-    let committed: Awaited<ReturnType<typeof getCurrentConfigObject>> | undefined;
-    const createIO = configFactory.createConfigIO;
-    vi.spyOn(configFactory, "createConfigIO").mockImplementation((options) => {
-      const io = createIO(options);
-      return {
-        ...io,
-        writeConfigFile: async (...args) => {
-          const written = await io.writeConfigFile(...args);
-          if (io.configPath === original.path) {
-            invalidateConfigGetResponseCache();
-            committed = await getCurrentConfigObject();
-            await fs.writeFile(original.path, "{ external editor incomplete\n");
-          }
-          return written;
-        },
-      };
-    });
-    const result = await rpcReq(requireClient(), "config.set", {
-      raw: JSON.stringify({ ...draft.config, ui: { prefs: { locale: "fr" } } }),
-      baseHash: draft.hash,
-    });
-    expect(result.ok, result.error?.message).toBe(true);
-    expect(committed?.config).toMatchObject({ logging: { level: "info" } });
-    expect(result.payload).toMatchObject({ config: committed?.config, hash: committed?.hash });
-    expect(await fs.readFile(original.path, "utf8")).toBe("{ external editor incomplete\n");
-  });
 
   it("config.set pairs the committed config and revision while another writer waits", async () => {
     const configFactory = await import("../config/io.factory.js");

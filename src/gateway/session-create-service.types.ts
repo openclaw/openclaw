@@ -123,6 +123,8 @@ export type CreateGatewaySessionParams = {
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   incognito?: boolean;
   visibility?: SessionVisibility;
+  /** Trusted creation default; existing keyed sessions retain their current visibility. */
+  defaultVisibility?: SessionVisibility;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;

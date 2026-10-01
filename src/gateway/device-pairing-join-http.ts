@@ -6,12 +6,6 @@ import { AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN, type AuthRateLimiter } from "./auth-
 import { sendJson } from "./http-common.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
 
-const NOT_FOUND_BODY = { error: "not_found" } as const;
-
-function sendJoinNotFound(res: ServerResponse): void {
-  sendJson(res, 404, NOT_FOUND_BODY);
-}
-
 /** Handle the core-owned /j namespace before hooks, plugins, and the Control UI SPA. */
 export async function handleDevicePairingJoinHttpRequest(params: {
   req: IncomingMessage;
@@ -46,7 +40,7 @@ export async function handleDevicePairingJoinHttpRequest(params: {
         : null;
       if (!payload) {
         params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN);
-        sendJoinNotFound(params.res);
+        sendJson(params.res, 404, { error: "not_found" });
         return;
       }
 

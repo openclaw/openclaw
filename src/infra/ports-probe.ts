@@ -1,4 +1,3 @@
-// Probes local ports and reports listener availability.
 import net from "node:net";
 import { isErrno, toErrorObject } from "./errors.js";
 import type { PortUsageStatus } from "./ports-types.js";

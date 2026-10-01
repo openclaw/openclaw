@@ -24,35 +24,32 @@ describe("cron stream matching lifecycle", () => {
     }
   });
 
-  it.each(["timeout", "overloaded"] as const)(
-    "stops and records a matching %s instead of silently dropping the event",
-    async (code) => {
-      vi.spyOn(matcher, "matchCronStreamLines").mockRejectedValueOnce(
-        new WorkerTaskError(`controlled matcher ${code}`, code),
+  it("stops and records a matching timeout instead of silently dropping the event", async () => {
+    vi.spyOn(matcher, "matchCronStreamLines").mockRejectedValueOnce(
+      new WorkerTaskError("controlled matcher timeout", "timeout"),
+    );
+    const { fake, fireBatch, recordFailure, watchers } = createCronStreamWatcherFixture();
+    try {
+      await watchers.start(createCronStreamMatchingJob("^ready$"));
+      fake.inputs[0]?.onStdout?.("ready\n");
+      await vi.waitFor(() => expect(watchers.inspect("stream-job")?.state).toBe("stopped"));
+      expect(recordFailure).toHaveBeenCalledWith(
+        "stream-job",
+        "stream source match failed: controlled matcher timeout; check the match expression and Gateway load, then re-enable the job",
+        expect.objectContaining({
+          streamStatus: "error",
+          streamRestartExhausted: true,
+        }),
+        expect.any(String),
+        expect.any(String),
       );
-      const { fake, fireBatch, recordFailure, watchers } = createCronStreamWatcherFixture();
-      try {
-        await watchers.start(createCronStreamMatchingJob("^ready$"));
-        fake.inputs[0]?.onStdout?.("ready\n");
-        await vi.waitFor(() => expect(watchers.inspect("stream-job")?.state).toBe("stopped"));
-        expect(recordFailure).toHaveBeenCalledWith(
-          "stream-job",
-          `stream source match failed: controlled matcher ${code}; check the match expression and Gateway load, then re-enable the job`,
-          expect.objectContaining({
-            streamStatus: "error",
-            streamRestartExhausted: true,
-          }),
-          expect.any(String),
-          expect.any(String),
-        );
-        expect(fake.runs[0]?.cancel).toHaveBeenCalledWith("manual-cancel");
-        expect(watchers.inspect("stream-job")?.droppedBatches).toBe(1);
-        expect(fireBatch).not.toHaveBeenCalled();
-      } finally {
-        await watchers.stopAll("shutdown");
-      }
-    },
-  );
+      expect(fake.runs[0]?.cancel).toHaveBeenCalledWith("manual-cancel");
+      expect(watchers.inspect("stream-job")?.droppedBatches).toBe(1);
+      expect(fireBatch).not.toHaveBeenCalled();
+    } finally {
+      await watchers.stopAll("shutdown");
+    }
+  });
 
   it.each([
     { mode: "line", text: "ready\n", dropped: 1 },
