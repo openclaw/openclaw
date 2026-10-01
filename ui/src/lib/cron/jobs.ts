@@ -1,12 +1,56 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  readCanonicalCronListPage,
-  resolveCronListPageNextOffset,
-} from "../../../../src/cron/service/list-page-validation.js";
 import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { getCronJobPayload } from "./payload.ts";
 import type { CronJobsState } from "./types.ts";
+
+export function readCanonicalCronJobsPage<Row>(
+  value: CronJobsListResult<Row>,
+  requestedLimit: number,
+): CronJobsListResult<Row> {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.jobs) ||
+    typeof value.snapshotRevision !== "string" ||
+    value.snapshotRevision.length === 0 ||
+    typeof value.total !== "number" ||
+    !Number.isSafeInteger(value.total) ||
+    value.total < 0 ||
+    typeof value.offset !== "number" ||
+    !Number.isSafeInteger(value.offset) ||
+    value.offset < 0 ||
+    typeof value.limit !== "number" ||
+    !Number.isSafeInteger(value.limit) ||
+    value.limit < 1 ||
+    value.limit > requestedLimit ||
+    value.jobs.length > value.limit ||
+    typeof value.hasMore !== "boolean" ||
+    (value.nextOffset !== null &&
+      (typeof value.nextOffset !== "number" ||
+        !Number.isSafeInteger(value.nextOffset) ||
+        value.nextOffset < 0))
+  ) {
+    throw new Error("cron.list returned an invalid inventory page");
+  }
+  return value;
+}
+
+export function assertCanonicalCronJobsCursor(
+  page: CronJobsListResult<unknown>,
+  requestedOffset: number,
+) {
+  const nextOffset = requestedOffset + page.jobs.length;
+  if (
+    page.offset !== requestedOffset ||
+    !Number.isSafeInteger(nextOffset) ||
+    nextOffset > page.total ||
+    (page.hasMore
+      ? page.nextOffset !== nextOffset || nextOffset <= requestedOffset || nextOffset >= page.total
+      : page.nextOffset !== null || nextOffset !== page.total)
+  ) {
+    throw new Error("cron.list returned an invalid inventory page");
+  }
+}
 
 function queueCronJobsSnapshotRecovery<Row>(state: CronJobsState<Row>, tableFilters: boolean) {
   if (state.cronJobsReloadPending) {
@@ -141,7 +185,7 @@ async function loadCronJobsProjectionPage<Row>(
       sortBy: state.cronJobsSortBy,
       sortDir: state.cronJobsSortDir,
     });
-    const page = readCanonicalCronListPage<Row>(res, state.cronJobsLimit);
+    const page = readCanonicalCronJobsPage<Row>(res, state.cronJobsLimit);
     if (
       append &&
       (page.snapshotRevision !== state.cronJobsSnapshotRevision ||
@@ -152,7 +196,7 @@ async function loadCronJobsProjectionPage<Row>(
       queueCronJobsSnapshotRecovery(state, opts?.tableFilters === true);
       return;
     }
-    resolveCronListPageNextOffset(page, offset);
+    assertCanonicalCronJobsCursor(page, offset);
     const jobs = projection.readRows(page.jobs);
     state.cronJobs = append ? [...state.cronJobs, ...jobs] : jobs;
     state.cronJobsSnapshotRevision = page.snapshotRevision;

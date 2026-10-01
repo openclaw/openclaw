@@ -1,17 +1,14 @@
-import {
-  isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
-} from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { REDACTED_SENTINEL } from "../../../src/config/redact-sentinel.js";
 import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import "../components/tooltip.ts";
+import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
+import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
 import { setControlValidity } from "./config-form.scalar-edit.ts";
 import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
@@ -334,7 +331,7 @@ export function renderSegmentedControl(params: {
   onSelect: (value: unknown) => boolean | void;
 }): TemplateResult {
   const selectedIndex = params.options.findIndex((option) =>
-    jsonSchemaValuesEqual(option, params.resolvedValue),
+    configValuesEqual(option, params.resolvedValue),
   );
   return renderSettingsSegmented({
     value: selectedIndex < 0 ? "" : String(selectedIndex),
@@ -394,7 +391,7 @@ export function renderJsonTextareaControl(params: {
       message = t("configForm.invalidJson");
     } else if (raw) {
       try {
-        if (!isJsonSchemaValueValid(params.schema, JSON.parse(raw))) {
+        if (!isSupportedConfigValueValid(params.schema, JSON.parse(raw))) {
           message = t("configForm.invalidJson");
         }
       } catch {
@@ -427,7 +424,7 @@ export function renderJsonTextareaControl(params: {
           // so identity churn with identical bytes must not erase in-progress
           // (possibly not-yet-valid) JSON the operator is typing.
           ((!Object.is(previous.sourceValue, params.sourceValue) &&
-            !jsonSchemaValuesEqual(previous.sourceValue, params.sourceValue)) ||
+            !configValuesEqual(previous.sourceValue, params.sourceValue)) ||
             previous.fallback !== renderedFallback ||
             previous.pathKey !== pathKey)
         ) {

@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { REDACTED_SENTINEL } from "../../../../src/config/redact-sentinel.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { REDACTED_SENTINEL } from "../config-form-utils.ts";
 import {
   createConfigCapabilityHarness,
   createConfigServerMock,

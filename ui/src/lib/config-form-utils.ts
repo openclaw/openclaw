@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { REDACTED_SENTINEL } from "../../../src/config/redact-sentinel.js";
 import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { translateActive } from "../i18n/lib/translate.ts";
@@ -146,6 +145,8 @@ export function humanize(raw: string) {
 export function serializeConfigForm(form: Record<string, unknown>): string {
   return `${JSON.stringify(form, null, 2).trimEnd()}\n`;
 }
+
+export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 
 /** True when a form subtree still carries server-redacted secret placeholders. */
 export function containsRedactedSentinel(value: unknown): boolean {

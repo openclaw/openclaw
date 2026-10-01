@@ -23,7 +23,7 @@ it.each([
   "src/config/zod-schema.cloud-workers.ts",
   "src/config/media-audio-field-metadata.ts",
   "src/config/talk-defaults.ts",
-  "src/shared/fnv1a.ts",
+  "ui/src/lib/fnv1a.ts",
 ])("runs control-ui localization checks for %s", (file) => {
   expect(detectChangedScope([file]).runControlUiI18n).toBe(true);
 });

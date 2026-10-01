@@ -1,9 +1,9 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { REDACTED_SENTINEL } from "../../../../src/config/redact-sentinel.js";
 import { isSecretRefObject } from "../../components/config-form.node.shared.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 
 registerPluginManagementEnglish();
 

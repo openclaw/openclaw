@@ -3,7 +3,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { escapeRegExp } from "../../../src/shared/regexp.js";
 import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -24,8 +23,6 @@ const CHANNEL_LABELS = new Map<string, string>([
   ["email", "Email"],
   ["sms", "SMS"],
 ]);
-
-const KNOWN_CHANNEL_KEYS = [...CHANNEL_LABELS.keys()];
 
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
@@ -157,11 +154,9 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
-type SessionTypedKind = "subagent" | "automation";
-
 type SessionKeyInfo = {
   /** Typed-session identity; display branching keys off this, not label text. */
-  kind?: SessionTypedKind;
+  kind?: "subagent" | "automation";
   /** Catalog-backed prefix for typed sessions. Empty for others. */
   prefix: string;
   /** Human-readable fallback when no label / displayName is available. */
@@ -183,13 +178,6 @@ function withAccountDisambiguator(name: string, accountId: string | undefined): 
   }
   const suffix = ` · ${accountId}`;
   return name.endsWith(suffix) ? name : `${name}${suffix}`;
-}
-
-/** Typed-session prefixes come from the i18n catalog (RFC 0026). */
-function typedSessionPrefix(kind: SessionTypedKind): string {
-  return kind === "subagent"
-    ? t("sessionsView.subagentPrefix")
-    : t("sessionsView.automationPrefix");
 }
 
 type SessionDisplayRow = {
@@ -216,14 +204,14 @@ function parseSessionKey(key: string): SessionKeyInfo {
   }
 
   if (key.includes(":subagent:")) {
-    const prefix = typedSessionPrefix("subagent");
+    const prefix = t("sessionsView.subagentPrefix");
     return { kind: "subagent", prefix, fallbackName: prefix };
   }
 
   // Automation (cron) job. Session keys keep the `cron:` prefix; only the
   // display strings use the Automations feature name.
   if (normalized.startsWith("cron:") || key.includes(":cron:")) {
-    const prefix = typedSessionPrefix("automation");
+    const prefix = t("sessionsView.automationPrefix");
     return { kind: "automation", prefix, fallbackName: prefix };
   }
 
@@ -261,9 +249,9 @@ function parseSessionKey(key: string): SessionKeyInfo {
 
   // Channel-prefixed keys like "telegram:123": durable session rows written by
   // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
-  for (const ch of KNOWN_CHANNEL_KEYS) {
+  for (const [ch, label] of CHANNEL_LABELS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${formatSessionChannelLabel(ch)} Session` };
+      return { prefix: "", fallbackName: `${label} Session` };
     }
   }
 
@@ -309,7 +297,7 @@ export function resolveSessionDisplayName(
       kind === "automation"
         ? rawName.replace(/^cron(\s+job)?:\s*/i, "").trim() || rawName
         : rawName;
-    const prefixPattern = new RegExp(`^${escapeRegExp(prefix)}\\s*`, "i");
+    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i");
     if (kind === "subagent" && options.includeSubagentPrefix === false) {
       return name.replace(prefixPattern, "").trim() || fallbackName;
     }

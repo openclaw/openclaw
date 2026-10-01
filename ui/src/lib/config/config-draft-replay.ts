@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { REDACTED_SENTINEL } from "../../../../src/config/redact-sentinel.js";
-import { isSensitiveLeafValue, removePathValue, setPathValue } from "../config-form-utils.ts";
+import {
+  isSensitiveLeafValue,
+  REDACTED_SENTINEL,
+  removePathValue,
+  setPathValue,
+} from "../config-form-utils.ts";
 
 export function replayConfigDraftEdits(
   submitted: Record<string, unknown> | null,

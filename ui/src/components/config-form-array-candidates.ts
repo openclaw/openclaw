@@ -1,10 +1,8 @@
 import {
-  isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
-} from "@openclaw/normalization-core/json-schema";
-import {
   arrayConstraintCandidates,
+  configValuesEqual,
   defaultValue,
+  isSupportedConfigValueValid,
   MAX_AUTO_ARRAY_DEFAULT_ITEMS,
   NO_SAFE_DEFAULT,
 } from "./config-form.constraints.ts";
@@ -18,7 +16,7 @@ type ArrayAddCandidates = {
 function extendsArrayValue(value: readonly unknown[], candidate: readonly unknown[]): boolean {
   return (
     candidate.length > value.length &&
-    value.every((entry, index) => jsonSchemaValuesEqual(entry, candidate[index]))
+    value.every((entry, index) => configValuesEqual(entry, candidate[index]))
   );
 }
 
@@ -60,19 +58,20 @@ export function arrayAddCandidates(params: {
     generatedCandidate !== undefined &&
     !uniqueItems &&
     (maximumItems === undefined || generatedCandidate.length <= maximumItems) &&
-    (generatedCandidate.length < minimumItems || isJsonSchemaValueValid(schema, generatedCandidate))
+    (generatedCandidate.length < minimumItems ||
+      isSupportedConfigValueValid(schema, generatedCandidate))
       ? generatedCandidate
       : undefined;
 
-  const currentValueValid = isJsonSchemaValueValid(schema, value);
+  const currentValueValid = isSupportedConfigValueValid(schema, value);
   const constrainedCandidate = arrayConstraintCandidates(schema).find(
     (candidate) =>
-      isJsonSchemaValueValid(schema, candidate) &&
+      isSupportedConfigValueValid(schema, candidate) &&
       (isUnset || !currentValueValid || extendsArrayValue(value, candidate)),
   );
   const wholeArrayDefault =
     constrainedCandidate ??
-    (isUnset && isRequired && maximumItems === 0 && isJsonSchemaValueValid(schema, [])
+    (isUnset && isRequired && maximumItems === 0 && isSupportedConfigValueValid(schema, [])
       ? []
       : undefined);
   const atomicCandidate = wholeArrayDefault && structuredClone(wholeArrayDefault);

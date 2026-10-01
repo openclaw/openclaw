@@ -1,10 +1,10 @@
-import { isJsonSchemaValueValid } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
+import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import type { ConfigNodeRenderer, ConfigNodeRenderParams } from "./config-form.node.shared.ts";
 import { configFieldId, schemaType } from "./config-form.shared.ts";
 
@@ -38,7 +38,7 @@ export function resolveStructuredDraftInitialValue(
   ) {
     initialValue = structuredClone(schemaDefault);
   }
-  return isJsonSchemaValueValid(params.schema, initialValue) ? undefined : initialValue;
+  return isSupportedConfigValueValid(params.schema, initialValue) ? undefined : initialValue;
 }
 
 class ConfigFormStructuredDraft extends OpenClawLightDomElement {
@@ -93,7 +93,7 @@ class ConfigFormStructuredDraft extends OpenClawLightDomElement {
 
     this.draftValue = candidate as Record<string, unknown> | unknown[];
     this.error = "";
-    if (!isJsonSchemaValueValid(props.params.schema, candidate)) {
+    if (!isSupportedConfigValueValid(props.params.schema, candidate)) {
       return true;
     }
     if (props.params.onPatch(rootPath, candidate) !== false) {

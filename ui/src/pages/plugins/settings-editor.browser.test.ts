@@ -1,7 +1,7 @@
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import { REDACTED_SENTINEL } from "../../../../src/config/redact-sentinel.js";
+import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { PluginSettingsEditor } from "./settings-editor.ts";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
 import "../../styles.css";

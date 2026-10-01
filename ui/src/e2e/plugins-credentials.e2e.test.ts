@@ -1,7 +1,7 @@
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import { REDACTED_SENTINEL } from "../../../src/config/redact-sentinel.js";
+import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
-import { REDACTED_SENTINEL } from "../../../../src/config/redact-sentinel.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";

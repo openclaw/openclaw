@@ -1,10 +1,10 @@
-import { isJsonSchemaValueValid } from "@openclaw/normalization-core/json-schema";
 import { describe, expect, it, vi } from "vitest";
 // Control UI tests cover schema composition that changes field requiredness.
 import {
   renderAnalyzedFormFixture,
   renderObjectFixture,
 } from "../test-helpers/config-form-fixtures.ts";
+import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { analyzeConfigSchema } from "./config-form.ts";
 
 describe("config form composition integrity", () => {
@@ -36,14 +36,14 @@ describe("config form composition integrity", () => {
 
     expect(analysis.unsupportedPaths).toEqual([]);
     expect(
-      isJsonSchemaValueValid(analysis.schema ?? {}, {
+      isSupportedConfigValueValid(analysis.schema ?? {}, {
         github: { token: "secret" },
         people: ["alice"],
         peopleFile: "people.json",
       }),
     ).toBe(false);
     expect(
-      isJsonSchemaValueValid(analysis.schema ?? {}, {
+      isSupportedConfigValueValid(analysis.schema ?? {}, {
         github: { token: "secret" },
         people: ["alice"],
       }),
@@ -292,13 +292,13 @@ describe("config form composition integrity", () => {
     expect(composedArrayItems.schema?.properties?.codes?.allOf?.[0]?.type).toBe("array");
     const nullableCodes = composedArrayItems.schema?.properties?.nullableCodes;
     expect(nullableCodes?.allOf?.[0]?.nullable).toBe(true);
-    expect(isJsonSchemaValueValid(nullableCodes ?? {}, null)).toBe(true);
+    expect(isSupportedConfigValueValid(nullableCodes ?? {}, null)).toBe(true);
     const nullOnlyCodes = composedArrayItems.schema?.properties?.nullOnlyCodes;
     expect(nullOnlyCodes?.allOf?.[0]?.type).toEqual(["null"]);
-    expect(isJsonSchemaValueValid(nullOnlyCodes ?? {}, null)).toBe(true);
-    expect(isJsonSchemaValueValid(nullOnlyCodes ?? {}, ["123"])).toBe(false);
+    expect(isSupportedConfigValueValid(nullOnlyCodes ?? {}, null)).toBe(true);
+    expect(isSupportedConfigValueValid(nullOnlyCodes ?? {}, ["123"])).toBe(false);
     const nestedConflict = composedArrayItems.schema?.properties?.nestedConflict;
-    expect(isJsonSchemaValueValid(nestedConflict ?? {}, ["123"])).toBe(false);
+    expect(isSupportedConfigValueValid(nestedConflict ?? {}, ["123"])).toBe(false);
   });
 
   it("does not clear fields required through allOf", () => {

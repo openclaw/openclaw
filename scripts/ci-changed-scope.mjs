@@ -157,7 +157,7 @@ const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_I18N_PRODUCTION_SOURCE_RE =
-  /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|src\/shared\/fnv1a\.ts|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
+  /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
 const CONTROL_UI_HARD_GENERATED_I18N_RE =
   /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
 const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;

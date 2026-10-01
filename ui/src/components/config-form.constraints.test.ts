@@ -1,14 +1,12 @@
 // @vitest-environment node
-import {
-  isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
-} from "@openclaw/normalization-core/json-schema";
 import { describe, expect, it } from "vitest";
 import {
   arrayInputConstraints,
   canApplyArrayCandidate,
   canApplyObjectCandidate,
+  configValuesEqual,
   defaultValue,
+  isSupportedConfigValueValid,
   NO_SAFE_DEFAULT,
   normalizeNumericValue,
   numericInputConstraints,
@@ -126,12 +124,12 @@ describe("config form schema constraints", () => {
     };
     expect(numericInputConstraints(schema).min).toBe(10_000_000_000_000_002);
     expect(defaultValue(schema)).toBe(10_000_000_000_000_002);
-    expect(isJsonSchemaValueValid({ type: "number", multipleOf: 3 }, 10_000_000_000_000_000)).toBe(
-      false,
-    );
-    expect(isJsonSchemaValueValid({ type: "number", multipleOf: 3 }, 10_000_000_000_000_002)).toBe(
-      true,
-    );
+    expect(
+      isSupportedConfigValueValid({ type: "number", multipleOf: 3 }, 10_000_000_000_000_000),
+    ).toBe(false);
+    expect(
+      isSupportedConfigValueValid({ type: "number", multipleOf: 3 }, 10_000_000_000_000_002),
+    ).toBe(true);
 
     const decimalSchema = {
       type: "number",
@@ -140,11 +138,11 @@ describe("config form schema constraints", () => {
     };
     expect(numericInputConstraints(decimalSchema).min).toBe(10_000_000_000_000_010);
     expect(defaultValue(decimalSchema)).toBe(10_000_000_000_000_010);
-    expect(isJsonSchemaValueValid({ type: "number", multipleOf: 10 }, 10_000_000_000_000_002)).toBe(
-      false,
-    );
-    expect(isJsonSchemaValueValid({ type: "number", multipleOf: 0.1 }, 0.3)).toBe(true);
-    expect(isJsonSchemaValueValid({ type: "number", multipleOf: 0.1 }, 0.2 + 0.1)).toBe(true);
+    expect(
+      isSupportedConfigValueValid({ type: "number", multipleOf: 10 }, 10_000_000_000_000_002),
+    ).toBe(false);
+    expect(isSupportedConfigValueValid({ type: "number", multipleOf: 0.1 }, 0.3)).toBe(true);
+    expect(isSupportedConfigValueValid({ type: "number", multipleOf: 0.1 }, 0.2 + 0.1)).toBe(true);
     expect(
       numericInputConstraints({ type: "number", minimum: -10, maximum: -10, multipleOf: 3 }),
     ).toMatchObject({ min: -9, max: -12 });
@@ -289,18 +287,24 @@ describe("config form schema constraints", () => {
     for (let depth = 0; depth < 40; depth += 1) {
       deeplyComposed = { allOf: [deeplyComposed] };
     }
-    expect(isJsonSchemaValueValid(deeplyComposed, "ok")).toBe(true);
-    expect(isJsonSchemaValueValid(deeplyComposed, "x")).toBe(false);
-    expect(isJsonSchemaValueValid({ type: "string", nullable: true }, null)).toBe(true);
-    expect(isJsonSchemaValueValid({ type: "string", nullable: true, const: "fixed" }, null)).toBe(
-      false,
-    );
+    expect(isSupportedConfigValueValid(deeplyComposed, "ok")).toBe(true);
+    expect(isSupportedConfigValueValid(deeplyComposed, "x")).toBe(false);
+    expect(isSupportedConfigValueValid({ type: "string", nullable: true }, null)).toBe(true);
     expect(
-      isJsonSchemaValueValid({ nullable: true, allOf: [{ type: "string", const: "fixed" }] }, null),
+      isSupportedConfigValueValid({ type: "string", nullable: true, const: "fixed" }, null),
     ).toBe(false);
-    expect(isJsonSchemaValueValid({ nullable: true, enum: ["fixed"] }, null)).toBe(false);
     expect(
-      isJsonSchemaValueValid({ nullable: true, enum: ["fixed"], enumIncludesNull: true }, null),
+      isSupportedConfigValueValid(
+        { nullable: true, allOf: [{ type: "string", const: "fixed" }] },
+        null,
+      ),
+    ).toBe(false);
+    expect(isSupportedConfigValueValid({ nullable: true, enum: ["fixed"] }, null)).toBe(false);
+    expect(
+      isSupportedConfigValueValid(
+        { nullable: true, enum: ["fixed"], enumIncludesNull: true },
+        null,
+      ),
     ).toBe(true);
     expect(defaultValue({ type: "string", nullable: true, default: null })).toBeNull();
 
@@ -309,9 +313,9 @@ describe("config form schema constraints", () => {
       deeplyNested = { child: deeplyNested };
     }
     const duplicate = structuredClone(deeplyNested);
-    expect(jsonSchemaValuesEqual(deeplyNested, duplicate)).toBe(true);
+    expect(configValuesEqual(deeplyNested, duplicate)).toBe(true);
     expect(
-      isJsonSchemaValueValid(
+      isSupportedConfigValueValid(
         {
           type: "array",
           uniqueItems: true,
@@ -326,8 +330,8 @@ describe("config form schema constraints", () => {
     const second: Record<string, unknown> = {};
     first.next = second;
     second.next = first;
-    expect(jsonSchemaValuesEqual(selfCycle, selfCycle)).toBe(false);
-    expect(jsonSchemaValuesEqual(selfCycle, first)).toBe(false);
+    expect(configValuesEqual(selfCycle, selfCycle)).toBe(false);
+    expect(configValuesEqual(selfCycle, first)).toBe(false);
   });
 
   it("collects required object properties from nested allOf schemas", () => {
@@ -346,8 +350,8 @@ describe("config form schema constraints", () => {
     expect(requiredPropertyKeys(schema)).toEqual(new Set(["direct", "composed", "nested"]));
     const countSchema = objectPropertySchema(schema, "count");
     expect(countSchema).toBeDefined();
-    expect(countSchema && isJsonSchemaValueValid(countSchema, 1)).toBe(false);
-    expect(countSchema && isJsonSchemaValueValid(countSchema, 2)).toBe(true);
+    expect(countSchema && isSupportedConfigValueValid(countSchema, 1)).toBe(false);
+    expect(countSchema && isSupportedConfigValueValid(countSchema, 2)).toBe(true);
   });
 
   it("respects branch-local additional-properties scopes for composed properties", () => {
@@ -445,7 +449,7 @@ describe("config form schema constraints", () => {
       }),
     ).toBe(NO_SAFE_DEFAULT);
     expect(
-      isJsonSchemaValueValid(
+      isSupportedConfigValueValid(
         {
           type: "object",
           properties: {},

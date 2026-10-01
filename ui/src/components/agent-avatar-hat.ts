@@ -1,6 +1,6 @@
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
-import { fnv1aUtf16 } from "../../../src/shared/fnv1a.js";
 import { isReservedSystemAgentId } from "../../../src/system-agent/agent-id.js";
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 
 // One roll per agent and page load keeps every avatar surface in agreement.
 const LOAD_SALT = Math.trunc(Math.random() * 0xffffffff);

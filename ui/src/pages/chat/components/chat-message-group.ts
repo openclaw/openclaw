@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { groupToolCalls, type ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
-import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { icons } from "../../../components/icons.ts";
 import { personActivityLink, renderPersonName } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
@@ -19,6 +18,7 @@ import {
   readPreparedActivity,
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";

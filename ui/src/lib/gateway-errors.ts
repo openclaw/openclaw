@@ -8,16 +8,13 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 
 function hasGatewayErrorDetail(err: unknown, expectedCode: string, detailCode: string): boolean {
   const error = asRecord(err);
-  if (!error) {
-    return false;
-  }
   const code =
-    typeof error.gatewayCode === "string"
+    typeof error?.gatewayCode === "string"
       ? error.gatewayCode
-      : typeof error.code === "string"
+      : typeof error?.code === "string"
         ? error.code
         : null;
-  return code === expectedCode && asRecord(error.details)?.code === detailCode;
+  return code === expectedCode && asRecord(error?.details)?.code === detailCode;
 }
 
 /** Identifies an expired process-local wizard session without parsing public copy. */
@@ -38,13 +35,12 @@ export function isSetupAdmissionBusyError(err: unknown): boolean {
 }
 
 export function isMissingOperatorReadScopeError(err: unknown): boolean {
-  // Structural check, not instanceof: under isolate:false a custom element
-  // registered by an earlier test file keeps its own module registry, so class
-  // identity diverges while the error shape (name + details) stays stable.
-  if (!(err instanceof Error) || err.name !== "GatewayRequestError") {
-    return false;
-  }
-  return readMissingScopeError(err)?.missingScope === "operator.read";
+  // Retained custom elements can hold an earlier client error class.
+  return (
+    err instanceof Error &&
+    err.name === "GatewayRequestError" &&
+    readMissingScopeError(err)?.missingScope === "operator.read"
+  );
 }
 
 export function isArchiveAccessDeniedError(err: unknown): boolean {

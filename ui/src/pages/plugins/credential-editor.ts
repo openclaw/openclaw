@@ -6,7 +6,6 @@ import type {
   PluginCredentialInspection,
   PluginsCredentialsInspectResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-credentials.ts";
-import { REDACTED_SENTINEL } from "../../../../src/config/redact-sentinel.js";
 import {
   isSecretRef,
   isValidSecretRef,
@@ -17,6 +16,7 @@ import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";

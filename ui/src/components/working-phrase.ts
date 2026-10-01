@@ -4,8 +4,8 @@
 // UI does not have. Decorative only — the row keeps its sr-only "Working…".
 import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
-import { fnv1aUtf16 } from "../../../src/shared/fnv1a.js";
 import { t } from "../i18n/index.ts";
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
 

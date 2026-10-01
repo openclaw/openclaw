@@ -1,13 +1,14 @@
-import {
-  isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
-} from "@openclaw/normalization-core/json-schema";
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { i18n, t } from "../i18n/index.ts";
-import { normalizeNumericValue, numericInputConstraints } from "./config-form.constraints.ts";
+import {
+  configValuesEqual,
+  isSupportedConfigValueValid,
+  normalizeNumericValue,
+  numericInputConstraints,
+} from "./config-form.constraints.ts";
 import {
   configEnumOptionLabel,
   formatConfigValueText,
@@ -51,10 +52,10 @@ function coerceTextInputValue(
 ): string | number | boolean | undefined {
   const trimmed = value.trim();
   const variants = schema.anyOf ?? schema.oneOf ?? [];
-  const stringCandidateValid = isJsonSchemaValueValid(schema, value);
+  const stringCandidateValid = isSupportedConfigValueValid(schema, value);
   const currentBranch = editHint ? editHint.branch : scalarValueBranch(currentValue);
   const booleanCandidate = trimmed === "true" ? true : trimmed === "false" ? false : undefined;
-  if (booleanCandidate !== undefined && isJsonSchemaValueValid(schema, booleanCandidate)) {
+  if (booleanCandidate !== undefined && isSupportedConfigValueValid(schema, booleanCandidate)) {
     let booleanBranchValid = false;
     let explicitBooleanBranchValid = false;
     for (const variant of variants) {
@@ -62,7 +63,7 @@ function coerceTextInputValue(
         schemaType(variant) === "boolean" ||
         typeof variant.const === "boolean" ||
         variant.enum?.some((entry) => typeof entry === "boolean");
-      if (!booleanBranch || !isJsonSchemaValueValid(variant, booleanCandidate)) {
+      if (!booleanBranch || !isSupportedConfigValueValid(variant, booleanCandidate)) {
         continue;
       }
       booleanBranchValid = true;
@@ -84,7 +85,7 @@ function coerceTextInputValue(
       continue;
     }
     const candidate = coerceConfigFormNumberString(value, type === "integer");
-    if (typeof candidate === "number" && isJsonSchemaValueValid(schema, candidate)) {
+    if (typeof candidate === "number" && isSupportedConfigValueValid(schema, candidate)) {
       numberCandidate = candidate;
       break;
     }
@@ -104,7 +105,7 @@ function coerceTextInputValue(
 }
 
 function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams["schema"]): string {
-  return isJsonSchemaValueValid(schema, value) ? "" : t("configForm.invalidNumber");
+  return isSupportedConfigValueValid(schema, value) ? "" : t("configForm.invalidNumber");
 }
 
 type NumericInputState = { parsed?: number; message: string };
@@ -146,7 +147,7 @@ function createScalarValueCommitter(
   // Input and change may run before the patched draft is rendered.
   let patchedValue = value;
   return (target: HTMLInputElement, candidate: unknown, skipUnchanged = false): boolean => {
-    if (skipUnchanged && jsonSchemaValuesEqual(patchedValue, candidate)) {
+    if (skipUnchanged && configValuesEqual(patchedValue, candidate)) {
       return true;
     }
     if (onPatch(path, candidate) !== false) {
@@ -219,7 +220,7 @@ export function renderTextInput(
   ].join(":");
   const textInputState = (raw: string, editHint: ScalarEditHint) => {
     const candidate = coerceTextInputValue(raw, schema, effectiveValue, editHint);
-    const valid = isJsonSchemaValueValid(schema, candidate);
+    const valid = isSupportedConfigValueValid(schema, candidate);
     const clearOptional = raw === "" && !params.isRequired && !valid;
     return {
       candidate: clearOptional ? undefined : candidate,
@@ -399,7 +400,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
     const current = Number(effectiveValue);
     const base = Number.isFinite(current) ? current : 0;
     const candidate = normalizeNumericValue(base + direction * numericStep, schema);
-    if (isJsonSchemaValueValid(schema, candidate)) {
+    if (isSupportedConfigValueValid(schema, candidate)) {
       onPatch(path, candidate);
     }
   };
@@ -520,7 +521,7 @@ export function renderSelect(
   const { label, helpId } = field;
   const usingDefault = value === undefined && schema.default !== undefined;
   const resolvedValue = usingDefault ? schema.default : value;
-  const currentIndex = options.findIndex((option) => jsonSchemaValuesEqual(option, resolvedValue));
+  const currentIndex = options.findIndex((option) => configValuesEqual(option, resolvedValue));
   const unset = "__unset__";
   const nullValue = "__null__";
   const canSelectNull = schema.nullable && schema.enumIncludesNull;

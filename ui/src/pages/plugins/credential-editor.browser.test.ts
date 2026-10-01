@@ -1,9 +1,9 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCredentialInspection } from "../../../../packages/gateway-protocol/src/schema/plugin-credentials.ts";
-import { REDACTED_SENTINEL } from "../../../../src/config/redact-sentinel.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
+import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import {
   PluginCredentialEditor,

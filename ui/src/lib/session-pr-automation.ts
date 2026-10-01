@@ -1,9 +1,6 @@
-import {
-  readCanonicalCronListPage,
-  resolveCronListPageNextOffset,
-} from "../../../src/cron/service/list-page-validation.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../api/types.ts";
+import { assertCanonicalCronJobsCursor, readCanonicalCronJobsPage } from "./cron/jobs.ts";
 import {
   CI_AUTOMATION_OPTIONS,
   ciAutomationDeclarationKey,
@@ -41,8 +38,8 @@ export async function loadCiAutomationJobs(
       },
       { signal },
     );
-    const page = readCanonicalCronListPage<CronJob>(response, 200);
-    resolveCronListPageNextOffset(page, offset);
+    const page = readCanonicalCronJobsPage(response, 200);
+    assertCanonicalCronJobsCursor(page, offset);
     if (revision && revision !== page.snapshotRevision) {
       throw new Error("Automation inventory changed. Refresh and try again.");
     }

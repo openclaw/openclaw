@@ -4,7 +4,7 @@ import {
   type RelativeTimeUnit,
 } from "@openclaw/normalization-core";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { DurationPart } from "../../../src/infra/format-time/format-duration-internal.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
@@ -215,7 +215,10 @@ export function formatList(values?: Array<string | null | undefined>): string {
 }
 
 export function clampText(value: string, max = 120): string {
-  return truncateWithMarker(value, max, { marker: "…", reserve: 1, trimEnd: false });
+  if (value.length <= max) {
+    return value;
+  }
+  return `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }
 
 export function truncateText(

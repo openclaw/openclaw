@@ -1,7 +1,7 @@
-import { isJsonSchemaValueValid } from "@openclaw/normalization-core/json-schema";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { analyzeConfigSchema } from "../../ui/src/components/config-form.analyze.js";
+import { isSupportedConfigValueValid } from "../../ui/src/components/config-form.constraints.js";
 import type { JsonSchema } from "../../ui/src/components/config-form.shared.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 
@@ -134,7 +134,9 @@ describe("generated config schema Control UI contract", () => {
       const analyzedSchema = analysis.schema ? schemaAtPath(analysis.schema, path) : undefined;
       return literals
         .filter((literal) => Value.Check(schema as never, literal))
-        .filter((literal) => !analyzedSchema || !isJsonSchemaValueValid(analyzedSchema, literal))
+        .filter(
+          (literal) => !analyzedSchema || !isSupportedConfigValueValid(analyzedSchema, literal),
+        )
         .map(() => path);
     });
 

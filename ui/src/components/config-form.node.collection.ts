@@ -1,7 +1,3 @@
-import {
-  isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
-} from "@openclaw/normalization-core/json-schema";
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { Directive, directive } from "lit/directive.js";
@@ -22,6 +18,8 @@ import {
   arrayInputConstraints,
   canApplyArrayCandidate,
   canApplyObjectCandidate,
+  configValuesEqual,
+  isSupportedConfigValueValid,
   isObjectPropertyNameValid,
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
@@ -269,7 +267,7 @@ function renderArrayContent(
       const nextValue = [...arrayValue, candidate];
       return (
         (maximumItems === undefined || nextValue.length <= maximumItems) &&
-        (nextValue.length < minimumItems || isJsonSchemaValueValid(schema, nextValue))
+        (nextValue.length < minimumItems || isSupportedConfigValueValid(schema, nextValue))
       );
     },
   };
@@ -369,12 +367,11 @@ function renderArrayContent(
           const nextValue = [...arrayValue, event.detail.value];
           const canApply =
             !(
-              uniqueItems &&
-              arrayValue.some((item) => jsonSchemaValuesEqual(item, event.detail.value))
+              uniqueItems && arrayValue.some((item) => configValuesEqual(item, event.detail.value))
             ) &&
             (maximumItems === undefined || arrayValue.length < maximumItems) &&
-            isJsonSchemaValueValid(nextItemSchema, event.detail.value) &&
-            (nextValue.length < minimumItems || isJsonSchemaValueValid(schema, nextValue));
+            isSupportedConfigValueValid(nextItemSchema, event.detail.value) &&
+            (nextValue.length < minimumItems || isSupportedConfigValueValid(schema, nextValue));
           let accepted = false;
           if (canApply) {
             accepted = patch(nextValue, [...rowIdentities, Symbol("array-row")]);

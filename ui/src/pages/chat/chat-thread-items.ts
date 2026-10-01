@@ -5,7 +5,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
-import { fnv1aUtf16 } from "../../../../src/shared/fnv1a.js";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
@@ -19,6 +18,7 @@ import {
   extractToolPreview,
   type CanvasToolPreview,
 } from "../../lib/chat/tool-cards.ts";
+import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
 import {
   messageRecoveryKey,
