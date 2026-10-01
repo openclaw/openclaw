@@ -2,19 +2,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 
 const require = createRequire(import.meta.url);
-
-export function copyNativeCompilerPackage(source: string, destination: string) {
-  fs.cpSync(source, destination, {
-    recursive: true,
-    dereference: true,
-    mode: fs.constants.COPYFILE_FICLONE,
-    // Sibling Vitest threads may fork during this copy. Keep files on libuv's
-    // close-on-exec path so children cannot inherit writable executable descriptors.
-    filter: () => true,
-  });
-}
 
 /** Availability only; integration assertions still verify the actual kernel scope. */
 export function hasSemanticTestBackend(): boolean {
@@ -59,7 +49,7 @@ export function materializeNativeCompiler(rootDir: string) {
     const source = path.dirname(owner.resolve(`${name}/package.json`));
     const destination = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
-    copyNativeCompilerPackage(source, destination);
+    copyTreeCloseOnExec(source, destination, { dereference: true });
   }
   const bin = path.join(root, "node_modules/.bin/tsgo");
   fs.mkdirSync(path.dirname(bin), { recursive: true });

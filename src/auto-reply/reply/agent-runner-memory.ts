@@ -489,12 +489,11 @@ async function estimateProviderPromptTokens(
     : undefined;
 }
 
-async function estimatePromptTokensFromSessionTranscript(params: {
-  agentId?: string;
+async function estimatePromptTokensFromSessionTranscript({
+  abortSignal,
+  ...params
+}: Parameters<typeof readPreflightTranscriptContextMessages>[0] & {
   abortSignal?: AbortSignal;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
   contextWindowTokens: number;
 }): Promise<TranscriptTokenEstimate | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
@@ -550,10 +549,9 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     const messages = await readPreflightTranscriptContextMessages(
       {
         ...params,
-        agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
         sessionId,
       },
-      params.abortSignal,
+      abortSignal,
     );
     const estimatedTokens = await estimateProviderPromptTokens(
       messages,
@@ -572,7 +570,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       transcriptByteSize: snapshot.byteSize,
     };
   } catch (error) {
-    params.abortSignal?.throwIfAborted();
+    abortSignal?.throwIfAborted();
     return error instanceof SessionTranscriptReadFenceError ? Promise.reject(error) : undefined;
   }
 }

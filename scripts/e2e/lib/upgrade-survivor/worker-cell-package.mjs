@@ -215,12 +215,22 @@ async function main() {
     writeJson(path.join(artifacts, "candidate-package-identity.json"), expected);
   } else if (mode === "installed") {
     const expected = readJson(path.join(artifacts, "candidate-package-identity.json"));
-    assert.equal(
-      hash(fs.readFileSync(candidateTarball)),
-      expected.sha256,
-      "Candidate tarball changed",
-    );
-    const actual = readWorkerCellPackageIdentity(packageRoot);
+    let tarballBytes;
+    try {
+      tarballBytes = fs.readFileSync(candidateTarball);
+    } catch (cause) {
+      throw new Error("Candidate tarball changed: cannot read the frozen tarball", { cause });
+    }
+    assert.equal(hash(tarballBytes), expected.sha256, "Candidate tarball changed");
+    let actual;
+    try {
+      actual = readWorkerCellPackageIdentity(packageRoot);
+    } catch (cause) {
+      throw new Error(
+        "Installed application payload differs from the frozen tarball: cannot read the installed package",
+        { cause },
+      );
+    }
     assertWorkerCellPackageIdentity(actual, {
       version: expected.version,
       buildInfo: expected.buildInfo,

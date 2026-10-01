@@ -14,8 +14,8 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import {
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import {
@@ -78,10 +78,10 @@ export async function collectMissingPluginInstallPayloads(params: {
       continue;
     }
     const officialNpmSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record })
+      ? resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.npmSpec
       : undefined;
     const officialClawHubSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
+      ? resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record })?.clawhubSpec
       : undefined;
     if (normalizedPluginConfig && params.config) {
       const enableState = resolveEffectiveEnableState({

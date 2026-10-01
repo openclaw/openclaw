@@ -68,6 +68,7 @@ type GatewaySessionStoreLookupParams = {
   cfg: OpenClawConfig;
   key: string;
   agentId?: string;
+  preserveQualifiedAddress?: boolean;
   clone?: boolean;
   projection?: SessionEntryListScope["projection"];
   readConsistency?: SessionEntryListScope["readConsistency"];
@@ -92,7 +93,7 @@ function storeReadOptions(
 ): GatewaySessionStoreRead["options"] {
   return {
     readOnly,
-    ...(params.exactRead ? { exactKeys: keys } : {}),
+    ...(params.exactRead || params.preserveQualifiedAddress ? { exactKeys: keys } : {}),
     ...(params.listCandidatesOnly ? { listKeys: keys } : {}),
     ...(params.projection ? { projection: params.projection } : {}),
     ...(params.readConsistency ? { readConsistency: params.readConsistency } : {}),
@@ -140,6 +141,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
   const parsed = parseAgentSessionKey(params.key);
   const legacyAgentId = normalizeAgentId(parsed?.agentId);
   if (
+    params.preserveQualifiedAddress ||
     !parsed ||
     isIncognitoSessionKey(params.key) ||
     legacyAgentId !== DEFAULT_AGENT_ID ||
@@ -217,6 +219,7 @@ function prepareGatewaySessionStoreTarget(
     cfg: params.cfg,
     sessionKey: key,
     agentId: params.agentId,
+    preserveQualifiedAddress: params.preserveQualifiedAddress,
   });
   if (isIncognitoSessionKey(canonicalKey)) {
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
@@ -245,7 +248,9 @@ function prepareGatewaySessionStoreTarget(
       }),
     };
   }
-  const storeKeys = buildGatewaySessionStoreScanTargets({ ...params, canonicalKey, agentId });
+  const storeKeys = params.preserveQualifiedAddress
+    ? [canonicalKey]
+    : buildGatewaySessionStoreScanTargets({ ...params, canonicalKey, agentId });
   const lookup = prepareGatewaySessionStoreLookup({ ...params, canonicalKey, agentId }, storeKeys);
   return {
     reads: lookup.reads,
@@ -333,20 +338,17 @@ export function createGatewaySessionLineageReader(cfg: OpenClawConfig) {
     if (isIncognitoSessionKey(key)) {
       return readAlias(key, agentId);
     }
-    return prepareGatewaySessionStoreLookup(
-      {
-        cfg,
-        agentId,
-        key,
-        canonicalKey: key,
-        readOnly: true,
-        exactRead: true,
-        clone: false,
-        projection: "list",
-        targetDiscoveryCache,
-      },
-      [key],
-    ).resolve().store[key];
+    return prepareGatewaySessionStoreTarget({
+      cfg,
+      agentId,
+      key,
+      preserveQualifiedAddress: true,
+      readOnly: true,
+      exactRead: true,
+      clone: false,
+      projection: "list",
+      targetDiscoveryCache,
+    }).resolve().store[key];
   };
   return { readStored, readAlias };
 }

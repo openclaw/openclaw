@@ -8,7 +8,10 @@ import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
+import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -19,6 +22,7 @@ import {
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
+import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import {
   consumePaneSessionHandoff,
   focusChatComposerFromPrintableKeydown,
@@ -34,6 +38,10 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 import {
   isSidebarSlotVisible,
   openSlot,
@@ -457,29 +465,83 @@ describe("chat pane retained presentation lifecycle", () => {
     }
   });
 
-  it("retires foreground-only state when a retained pane is hidden", () => {
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    const stop = vi.fn();
-    const release = vi.fn();
-    state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
-    state.realtimeTalkActive = true;
-    state.sidebarContent = { kind: "markdown", content: "Review selection" };
-    state.imageLightbox = { release, src: "blob:test", title: "preview" };
-    pane.presentationId = "p1:visible";
-    const announcement = document.createElement("span");
-    announcement.className = "chat-transcript-announcement";
-    announcement.setAttribute("aria-live", "polite");
-    pane.append(announcement);
-    pane.presented = false;
+  it.each(["image", "reset"] as const)(
+    "retires foreground state and the %s modal while its pane is parked",
+    async (overlay) => {
+      vi.useFakeTimers();
+      installTranscriptDomMocks();
+      const restoreDialog = installDialogPolyfill();
+      const key = "agent:main:retained-modal";
+      const fixture = createMountedPanes([{ key, kind: "direct", updatedAt: 1 }]);
+      const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane & {
+        boardProvider: ReturnType<typeof createMockBoardProvider>;
+        confirmConversationReset: () => Promise<boolean>;
+      };
+      pane.context = fixture.context;
+      pane.sessionKey = key;
+      const provider = createApplicationContextProvider(fixture.context);
+      provider.append(pane);
+      document.body.append(provider);
+      try {
+        await pane.updateComplete;
+        await vi.dynamicImportSettled();
+        const state = pane.state;
+        const stop = vi.fn();
+        const release = vi.fn();
+        state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
+        state.realtimeTalkActive = true;
+        state.sidebarContent = { kind: "markdown", content: "Review selection" };
+        let pending: Promise<boolean> | undefined;
+        if (overlay === "image") {
+          state.imageLightbox = { release, src: "blob:test", title: "preview" };
+          state.requestUpdate();
+        } else {
+          pane.boardProvider = createMockBoardProvider(key);
+          pending = pane.confirmConversationReset();
+        }
+        await pane.updateComplete;
+        const lightbox = pane.querySelector("openclaw-image-lightbox");
+        await lightbox?.updateComplete;
+        const modal =
+          lightbox?.shadowRoot?.querySelector("openclaw-modal-dialog") ??
+          pane.querySelector("openclaw-modal-dialog");
+        expect(modal).not.toBeNull();
+        await modal!.updateComplete;
+        expect(document.openClawModalLayers?.has(modal!)).toBe(true);
+        const updates = vi.spyOn(pane, "performUpdate");
+        const announcement = pane.querySelector(".chat-transcript-announcement");
+        expect(announcement).not.toBeNull();
+        announcement!.setAttribute("aria-live", "polite");
+        pane.presented = false;
+        let completed = false;
+        const completion = pane.updateComplete.then(() => {
+          completed = true;
+        });
+        await Promise.resolve();
 
-    expect(stop).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-    expect(state.sidebarContent).toBeNull();
-    expect(announcement.getAttribute("aria-live")).toBe("off");
-  });
+        expect(stop).toHaveBeenCalledOnce();
+        expect(release).toHaveBeenCalledTimes(overlay === "image" ? 1 : 0);
+        expect(state.sidebarContent).toBeNull();
+        expect(announcement!.getAttribute("aria-live")).toBe("off");
+        expect(modal!.isConnected).toBe(false);
+        expect(document.openClawModalLayers?.has(modal!)).toBe(false);
+        expect(updates).not.toHaveBeenCalled();
+        expect(completed).toBe(false);
+        if (pending) {
+          await expect(pending).resolves.toBe(false);
+        }
+        pane.presented = true;
+        await completion;
+        expect(pane.querySelector("openclaw-image-lightbox, openclaw-modal-dialog")).toBeNull();
+      } finally {
+        provider.remove();
+        await vi.dynamicImportSettled();
+        restoreDialog();
+        resetTranscriptTestDom();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each(["hidden", "disconnected"] as const)(
     "does not restore a pending file preview after its retained pane is %s",

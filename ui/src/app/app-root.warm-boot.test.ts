@@ -98,6 +98,29 @@ describe("warm boot app root", () => {
     expect(container.querySelector("openclaw-login-gate")).toBeNull();
   });
 
+  it("keeps the credential-scoped warm shell after an unreachable connection retries", () => {
+    const { snapshot, container, draw } = createWarmSurface();
+    snapshot.phase = "connecting";
+    snapshot.lastError = "Connection interrupted; retrying";
+    snapshot.lastErrorCode = null;
+    draw();
+    expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
+    expect(container.querySelector("openclaw-login-gate")).toBeNull();
+    vi.spyOn(runtime!.context.gateway, "connectionRevision", "get").mockReturnValue(1);
+    draw();
+    expect(container.querySelector("openclaw-app-shell")).toBeNull();
+  });
+
+  it("does not treat a retryable pairing rejection as warm offline admission", () => {
+    const { snapshot, container, draw } = createWarmSurface();
+    snapshot.phase = "connecting";
+    snapshot.lastError = "Pairing required";
+    snapshot.lastErrorCode = "PAIRING_REQUIRED";
+    draw();
+    expect(container.querySelector("openclaw-app-shell")).toBeNull();
+    expect(container.querySelector("openclaw-login-gate")).not.toBeNull();
+  });
+
   it("returns to the login gate after a warm connection fails", () => {
     const { snapshot, container, draw } = createWarmSurface();
     draw();

@@ -83,12 +83,11 @@ export function redactClaudeCliHistoryMessage(
   ) as unknown as TranscriptLikeMessage;
 }
 
-function resolveHistoryHomeDir(homeDir?: string): string {
-  return normalizeOptionalString(homeDir) || process.env.HOME || os.homedir();
-}
-
 function resolveClaudeProjectsDir(homeDir?: string): string {
-  return path.join(resolveHistoryHomeDir(homeDir), CLAUDE_PROJECTS_RELATIVE_DIR);
+  return path.join(
+    normalizeOptionalString(homeDir) || process.env.HOME || os.homedir(),
+    CLAUDE_PROJECTS_RELATIVE_DIR,
+  );
 }
 
 function normalizeClaudeCliSessionId(value: string): string | undefined {

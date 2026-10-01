@@ -6,6 +6,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatOutboxOwner, listChatOutboxAttention } from "./chat-outbox-owner.ts";
 import {
   admitStoredChatComposerQueueItem,
+  loadChatComposerSnapshot,
   removeStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
 
@@ -91,8 +92,15 @@ it("does not mistake an active settings wait or send overlay for a failed messag
 
 it("retains incidents through failed removal and clears them only after canonical retirement", () => {
   const host = hostFor();
-  const row = item("review", "unconfirmed");
-  admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, host.sessionKey), row);
+  const input = item("review", "unconfirmed");
+  expect(
+    admitStoredChatComposerQueueItem(
+      host,
+      captureChatOutboxAdmission(host, host.sessionKey),
+      input,
+    ),
+  ).toBe(true);
+  const row = loadChatComposerSnapshot(host, host.sessionKey)!.queue[0]!;
   expect(listChatOutboxAttention(host)).toHaveLength(1);
   const write = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
     throw new Error("quota");

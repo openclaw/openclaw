@@ -37,6 +37,7 @@ import {
   createChatPaneSessionActionCallbacks,
   readChatPaneComposerAccess,
   readChatPaneMutationAccess,
+  readChatPublicationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
 import {
@@ -299,7 +300,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       }
       const publication = this.githubPublication;
       publication?.sync({
-        canWrite: !selectedSessionArchived && !sessionParticipationBlocked && hasWriteScope,
+        ...readChatPublicationAccess(gatewaySnapshot, publicationRow, sessionParticipationBlocked),
         personalReady:
           !hasAbortableSessionRun(state) &&
           (!isCloudWorkerPlacementState(placement?.state) ||

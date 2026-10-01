@@ -4,7 +4,11 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -20,7 +24,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.skipIf(process.platform === "win32")(
   "retains native SQLite exclusion through removal against a legacy rollback-mode writer",
-  async () => {
+  async ({ signal }) => {
     const stateDir = tempDirs.make("openclaw-cleanup-legacy-writer-");
     const configPath = path.join(stateDir, "openclaw.json");
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
@@ -59,6 +63,8 @@ it.skipIf(process.platform === "win32")(
       ],
       { stdio: ["ignore", "ignore", "pipe", "ipc"] },
     );
+    const closed = once(child, "close");
+    void closed.catch(() => {});
     const started = createDeferred();
     const resumeRemoval = createDeferred();
     const realRm = fsPromises.rm;
@@ -70,14 +76,24 @@ it.skipIf(process.platform === "win32")(
       return realRm(target, settings);
     });
     const attemptWrite = async () => {
-      const reply = once(child, "message", { signal: AbortSignal.timeout(10_000) });
+      const reply = once(child, "message", { signal });
       child.send("write");
-      const [outcome] = await reply;
+      const [outcome] = await withinTest(
+        awaitGateBeforeSettlement(reply, closed, "Legacy SQLite writer closed before replying"),
+        signal,
+      );
       return outcome;
     };
     let deleting: Promise<boolean> | undefined;
     try {
-      const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
+      const [ready] = await withinTest(
+        awaitGateBeforeSettlement(
+          once(child, "message", { signal }),
+          closed,
+          "Legacy SQLite writer closed before readiness",
+        ),
+        signal,
+      );
       expect(ready).toEqual({ ready: true });
       deleting = removeStateAndLinkedPaths(
         {
@@ -103,9 +119,8 @@ it.skipIf(process.platform === "win32")(
       const removedFileCode = process.versions.bun && process.platform === "darwin" ? 6922 : 1032;
       await expect(attemptWrite()).resolves.toEqual({ committed: false, errcode: removedFileCode });
       expect(fs.existsSync(stateDir)).toBe(false);
-      const closed = once(child, "close", { signal: AbortSignal.timeout(10_000) });
       child.send("close");
-      await closed;
+      await withinTest(closed, signal);
     } finally {
       resumeRemoval.resolve();
       try {
@@ -118,7 +133,9 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it("refuses state removal while a peer owns a cached database, then removes after peer retirement", async () => {
+it("refuses state removal while a peer owns a cached database, then removes after peer retirement", async ({
+  signal,
+}) => {
   const stateDir = tempDirs.make("openclaw-cleanup-handle-exclusion-");
   const configPath = path.join(stateDir, "openclaw.json");
   fs.writeFileSync(configPath, "{}\n");
@@ -144,6 +161,8 @@ it("refuses state removal while a peer owns a cached database, then removes afte
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     },
   );
+  const closed = once(child, "close");
+  void closed.catch(() => {});
   const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const plan = {
     stateDir,
@@ -153,16 +172,22 @@ it("refuses state removal while a peer owns a cached database, then removes afte
     oauthInsideState: true,
   };
   try {
-    const [ready] = await once(child, "message", { signal: AbortSignal.timeout(15_000) });
+    const [ready] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(child, "message", { signal }),
+        closed,
+        "Cached database peer closed before readiness",
+      ),
+      signal,
+    );
     expect(ready).toMatchObject({ ready: true });
     await expect(removeStateAndLinkedPaths(plan, runtime)).rejects.toThrow(
       "Cannot remove OpenClaw state directory while another SQLite connection is active",
     );
     expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
-    const closed = once(child, "close", { signal: AbortSignal.timeout(10_000) });
     child.send({ close: true });
-    await closed;
+    await withinTest(closed, signal);
     await expect(removeStateAndLinkedPaths(plan, runtime)).resolves.toBe(true);
     expect(fs.existsSync(stateDir)).toBe(false);
   } finally {
