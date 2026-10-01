@@ -371,6 +371,7 @@ src/commands/doctor/shared/legacy-model-ref-normalization.ts
 src/commands/doctor/shared/legacy-models-add-metadata.ts
 src/commands/doctor/shared/legacy-runtime-model-policy.ts
 src/commands/doctor/shared/legacy-runtime-model-providers.ts
+src/commands/doctor/shared/legacy-talk-config-normalizer.ts
 src/commands/doctor/shared/legacy-tool-name-migration.ts
 src/commands/doctor/shared/legacy-tool-policy-scopes.ts
 src/commands/doctor/shared/legacy-tools-by-sender.ts

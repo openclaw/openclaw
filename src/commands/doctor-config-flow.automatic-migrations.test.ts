@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { findLegacyConfigIssues } from "../config/legacy.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
@@ -29,6 +30,54 @@ function withMigrationHome(run: (home: string) => Promise<void>) {
     ),
   );
 }
+
+it("backs up and persists inherited Talk SecretRefs for an unmarked published updater", async () => {
+  await withMigrationHome(async (home) => {
+    const apiKey = { source: "env", provider: "default", id: "TALK_MIGRATION_TEST_KEY" } as const;
+    const raw = {
+      gateway: { mode: "local" as const },
+      talk: { realtime: { speakerVoice: "marin" } },
+      plugins: {
+        enabled: false,
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: { provider: "openai", providers: { openai: { apiKey } } },
+              streaming: { provider: "openai-realtime" },
+            },
+          },
+        },
+      },
+    };
+    const configPath = await writeOpenClawConfig(home, raw);
+    const original = await fs.readFile(configPath, "utf8");
+    const before = await readConfigFileSnapshot();
+    expect(before.valid).toBe(true);
+    expect(before.raw).toBe(original);
+    expect(before.sourceConfig.talk).toEqual(raw.talk);
+    expect(findLegacyConfigIssues(before.sourceConfig, before.parsed)).toContainEqual({
+      path: "plugins.entries.voice-call.config.realtime",
+      message: expect.stringContaining("talk.realtime"),
+    });
+
+    await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
+
+    const saved = await readConfigFileSnapshot();
+    expect(saved.valid).toBe(true);
+    expect(saved.sourceConfig.talk?.realtime).toEqual({
+      provider: "openai",
+      providers: { openai: { apiKey } },
+      speakerVoice: "marin",
+    });
+    expect(saved.sourceConfig.plugins?.entries?.["voice-call"]?.config).toEqual(
+      raw.plugins.entries["voice-call"].config,
+    );
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+    await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
+    expect((await readConfigFileSnapshot()).raw).toBe(saved.raw);
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+  });
+});
 
 it.each([
   { extra: "session_status", repaired: true },
