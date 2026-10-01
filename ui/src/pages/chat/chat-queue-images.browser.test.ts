@@ -52,77 +52,68 @@ describe("queued image snippets", () => {
   }
 
   it.each([
-    [960, "dark", undefined],
-    [390, "light", "failed"],
-    [390, "dark", "waiting-reconnect"],
-    [960, "light", "waiting-idle"],
-  ] as const)("keeps images aligned at %ipx in %s with state %s", async (width, theme, state) => {
-    await page.viewport(width, 800);
-    document.documentElement.dataset.theme = "claw";
-    document.documentElement.dataset.themeMode = theme;
-    const queue = [0, 1, 2, 12].map((count): ChatQueueItem => ({
-      id: "count-" + count,
-      text: "Reference",
-      createdAt: count,
-      sender: { name: "Alex" },
-      sendState: state,
-      sendError: state === "failed" ? "Upload failed" : undefined,
-      queueMode: state === "waiting-idle" ? "steer" : undefined,
-      attachments: attachments.slice(0, count),
-    }));
-    draw(queue.map((item) => ({ ...item, attachments: [] })));
-    const baselineHeights = [...container.querySelectorAll(".chat-queue__item")].map(
-      (row) => row.getBoundingClientRect().height,
-    );
-    draw(queue);
-    const rows = [...container.querySelectorAll<HTMLElement>(".chat-queue__item")];
-    const snippets = [...container.querySelectorAll<HTMLElement>(".chat-queue__images")];
-    expect(snippets).toHaveLength(3);
-    // Compare like-for-like: the last row intentionally has no bottom divider.
-    for (const [index, row] of rows.entries()) {
-      expect(row.getBoundingClientRect().height).toBe(baselineHeights[index]);
-    }
-    const textStarts = rows
-      .slice(1)
-      .map((row) => row.querySelector(".chat-queue__text")!.getBoundingClientRect().left);
-    expect(new Set(textStarts).size).toBe(1);
-    for (const row of rows.slice(1)) {
-      const error = row.querySelector(".chat-queue__error");
-      if (error) {
-        expect(error.getBoundingClientRect().left).toBe(textStarts[0]);
+    [960, "dark", undefined, true],
+    [390, "light", "failed", true],
+    [390, "dark", "waiting-reconnect", false],
+    [960, "light", "waiting-idle", false],
+  ] as const)(
+    "keeps images aligned at %ipx in %s with state %s",
+    async (width, theme, state, withAvatar) => {
+      await page.viewport(width, 800);
+      document.documentElement.dataset.theme = "claw";
+      document.documentElement.dataset.themeMode = theme;
+      const queue = [0, 1, 2, 12].map((count): ChatQueueItem => ({
+        id: "count-" + count,
+        text: "Reference",
+        createdAt: count,
+        sender: withAvatar ? { name: "Alex" } : undefined,
+        sendState: state,
+        sendError: state === "failed" ? "Upload failed" : undefined,
+        queueMode: state === "waiting-idle" ? "steer" : undefined,
+        attachments: attachments.slice(0, count),
+      }));
+      draw(queue.map((item) => ({ ...item, attachments: [] })));
+      const baselineHeights = [...container.querySelectorAll(".chat-queue__item")].map(
+        (row) => row.getBoundingClientRect().height,
+      );
+      draw(queue);
+      const rows = [...container.querySelectorAll<HTMLElement>(".chat-queue__item")];
+      const snippets = [...container.querySelectorAll<HTMLImageElement>(".chat-queue__images")];
+      expect(snippets).toHaveLength(3);
+      // Compare like-for-like: the last row intentionally has no bottom divider.
+      for (const [index, row] of rows.entries()) {
+        expect(row.getBoundingClientRect().height).toBe(baselineHeights[index]);
       }
-    }
-    for (const [index, snippet] of snippets.entries()) {
-      const box = snippet.getBoundingClientRect();
-      const image = snippet.querySelector("img")!;
-      const imageBox = image.getBoundingClientRect();
-      expect(box.width).toBe(32);
-      expect(box.height).toBe(24);
-      expect(imageBox.height).toBe(24);
-      expect(imageBox.top).toBe(box.top);
-      expect(image.draggable).toBe(false);
-      expect(snippet.hasAttribute("title")).toBe(false);
-      expect(snippet.tabIndex).toBe(-1);
-      expect(snippet.closest("openclaw-tooltip")).toBeNull();
-      const layers = ["::before", "::after"]
-        .map((pseudo) => getComputedStyle(snippet, pseudo))
-        .filter((layer) => layer.content !== "none");
-      expect(layers).toHaveLength(index);
-      for (const [layerIndex, layer] of layers.entries()) {
-        expect(Number.parseFloat(layer.left)).toBe((layerIndex + 1) * 2);
-        expect(Number.parseFloat(layer.height)).toBe(24);
-        expect(layer.top).toBe("0px");
-        expect(layer.borderColor).toBe(getComputedStyle(image).borderColor);
-        expect(layer.opacity).toBe("1");
+      const textStarts = rows
+        .slice(1)
+        .map((row) => row.querySelector(".chat-queue__text")!.getBoundingClientRect().left);
+      expect(new Set(textStarts).size).toBe(1);
+      for (const row of rows.slice(1)) {
+        expect(row.querySelectorAll("img.chat-queue__images")).toHaveLength(1);
+        const error = row.querySelector(".chat-queue__error");
+        if (error) {
+          expect(error.getBoundingClientRect().left).toBe(textStarts[0]);
+        }
       }
-    }
-    draw(queue, "count-12");
-    expect(container.querySelectorAll(".chat-queue__images")).toHaveLength(3);
-    const edited = container.querySelector(".chat-queue__item--editing")!;
-    expect(edited.querySelector(".chat-queue__edit-input")!.getBoundingClientRect().left).toBe(
-      textStarts[0],
-    );
-  });
+      for (const image of snippets) {
+        const box = image.getBoundingClientRect();
+        expect(box.width).toBe(24);
+        expect(box.height).toBe(24);
+        expect(image.draggable).toBe(false);
+        expect(image.hasAttribute("title")).toBe(false);
+        expect(image.tabIndex).toBe(-1);
+        const promptGap = textStarts[0]! - box.right;
+        expect(promptGap).toBeGreaterThanOrEqual(4);
+        expect(promptGap).toBeLessThanOrEqual(8);
+      }
+      draw(queue, "count-12");
+      expect(container.querySelectorAll(".chat-queue__images")).toHaveLength(3);
+      const edited = container.querySelector(".chat-queue__item--editing")!;
+      expect(edited.querySelector(".chat-queue__edit-input")!.getBoundingClientRect().left).toBe(
+        textStarts[0],
+      );
+    },
+  );
 
   it("uses retained payloads, ignores non-images, and preserves image-only copy", () => {
     const payloadOnly: ChatAttachment = { id: "payload-only", mimeType: "image/png" };
@@ -156,10 +147,8 @@ describe("queued image snippets", () => {
     const rows = [...container.querySelectorAll(".chat-queue__item")];
     expect(rows[0]!.querySelector(".chat-queue__images")).toBeNull();
     const preview = rows[1]!.querySelector(".chat-queue__images")!;
-    expect(preview.querySelector("img")!.getAttribute("src")).toBe(
-      getChatAttachmentPreviewUrl(payloadOnly),
-    );
-    expect(preview.getAttribute("aria-label")).toBe(t("chat.queue.imageCount", { count: "2" }));
+    expect(preview.getAttribute("src")).toBe(getChatAttachmentPreviewUrl(payloadOnly));
+    expect(preview.getAttribute("alt")).toBe(t("chat.queue.imageCount", { count: "2" }));
     expect(rows[2]!.querySelector(".chat-queue__text")!.textContent).toBe(
       t("chat.queue.imageCount", { count: "1" }),
     );

@@ -450,14 +450,16 @@ function renderChatQueueItem(
       ${authorAvatar}
       ${
         previewUrl && images
-          ? html`<span
+          ? html`<img
               class="chat-queue__images"
-              data-count=${Math.min(images.length, 3)}
-              role="img"
-              aria-label=${t("chat.queue.imageCount", { count: String(images.length) })}
-            >
-              <img src=${previewUrl} alt="" draggable="false" />
-            </span>`
+              src=${previewUrl}
+              alt=${t("chat.queue.imageCount", { count: String(images.length) })}
+              draggable="false"
+              width="24"
+              height="24"
+              loading="lazy"
+              decoding="async"
+            />`
           : nothing
       }
       ${
