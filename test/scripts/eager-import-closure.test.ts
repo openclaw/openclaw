@@ -14,6 +14,7 @@ import {
 import { join, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
@@ -181,7 +182,7 @@ it.each([
   const root = tempDirs.make("openclaw-eager-import-closure-");
   const entry = join(root, "entry.mts");
   writeFileSync(entry, `${source}\nconsole.log("entry executed");\n`);
-  const result = spawnSync(process.execPath, [entry], {
+  const result = spawnSync(resolveTestNodeExecPath(), [entry], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },

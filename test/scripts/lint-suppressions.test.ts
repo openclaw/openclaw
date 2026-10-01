@@ -239,7 +239,7 @@ describe("production lint suppressions", () => {
         "src/node-host/invoke-payload.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/plugin-sdk/channel-entry-contract.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugin-sdk/channel-entry-contract.ts|typescript/no-unnecessary-type-parameters|2",
         "src/plugin-sdk/facade-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/facade-runtime.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugin-sdk/json-store.ts|typescript-eslint/no-unnecessary-type-parameters|1",

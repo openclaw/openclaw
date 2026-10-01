@@ -22,6 +22,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../src/process/gateway-work-admission.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../src/state/openclaw-agent-db-resources.js";
+import { clearJsdomViewportFocus } from "./jsdom-compat.mts";
 import {
   type CustomElementTracking,
   dropRepoOwnedCustomElements,
@@ -223,6 +224,7 @@ function resetSharedDocumentBody(): void {
   body.focus();
   body.blur();
   body.removeAttribute("tabindex");
+  clearJsdomViewportFocus(body.ownerDocument);
 }
 
 function restoreRealTimers(): void {

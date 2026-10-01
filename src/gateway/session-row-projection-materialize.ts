@@ -159,7 +159,7 @@ export function createSessionRowMaterializer(owner: {
     accept(
       ids: readonly string[],
       facts: ReadonlyMap<string, records.PreparedSessionRowDatabaseFacts>,
-      materializeArchived = false,
+      options: { archived?: boolean; materialize?: boolean } = {},
     ) {
       if (!owner.isActive()) {
         return;
@@ -182,7 +182,7 @@ export function createSessionRowMaterializer(owner: {
           if (row && databaseFacts) {
             row.preparedAcpMeta = databaseFacts.acpMeta;
           }
-          if (row && isColdArchivedSessionRow(row) && !materializeArchived) {
+          if (row && isColdArchivedSessionRow(row) && !options.archived) {
             owner.dirty.delete(id);
             owner.forgetBackfill(id);
           } else if (row) {
@@ -191,7 +191,9 @@ export function createSessionRowMaterializer(owner: {
           }
         }
       });
-      refresh(ids, true);
+      if (options.materialize !== false) {
+        refresh(ids, true);
+      }
     },
   };
 }

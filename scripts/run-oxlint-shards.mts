@@ -401,7 +401,7 @@ export async function main(
         shouldPrepareOxlintArtifacts([...shard.args, ...shardArgs.oxlintArgs]),
       )
     ) {
-      await ensureKyselyTypes(process.cwd());
+      await ensureKyselyTypes(process.cwd(), false, { allowPartialCheckout: true });
     }
     if (needsArtifacts) {
       const code = await runManagedCommand({

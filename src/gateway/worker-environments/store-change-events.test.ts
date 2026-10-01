@@ -66,6 +66,7 @@ it.each(["reopening the store", "reconciling an unchanged host"] as const)(
       const request = { limit: 1, archived: "all" as const };
       const initial = await listSessions({ context, client, request });
       const projection = getSessionRowProjection(context)!;
+      await projection.ensureMaterialized();
       const before = projection.materializedCount;
       const environment = store.get(environmentId);
       if (operation === "reopening the store") {
@@ -184,7 +185,10 @@ describe("worker store session change publications", () => {
       claimId: "pending-row-change",
     });
     const authority = await store.prepareTurnClaimAuthority(claim);
+    const previousObservation = await store.prepareRuntimeRefresh(claim.sessionId);
+    previousObservation.release();
     const observation = await store.prepareRuntimeRefresh(claim.sessionId);
+    previousObservation.release();
     onTestFinished(authority.release);
     onTestFinished(observation.release);
     const observed: Array<{ reconciling: boolean; conflict: boolean; transaction: boolean }> = [];

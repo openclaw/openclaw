@@ -21,13 +21,15 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-c
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userPreferences from "../../state/user-preferences.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { themeHandlers } from "./themes.js";
+import { pluginTheme } from "./themes.test-support.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -115,28 +117,6 @@ async function invoke(
     ...requestOptions,
   } as GatewayRequestHandlerOptions);
   return expectDefined(result, "theme RPC response");
-}
-
-function pluginTheme(): ThemeCatalogEntry {
-  const definition = createThemeDefinitionFixture({
-    mascot: "none",
-    workingPhrases: ["Building"],
-    critters: ["penguin", "fedora"],
-    avatarHat: "fedora",
-  });
-  return {
-    id: "space-pack/xenovessel",
-    name: definition.name,
-    description: definition.description,
-    mascot: definition.mascot,
-    workingPhrases: definition.workingPhrases,
-    critters: definition.critters,
-    avatarHat: definition.avatarHat,
-    source: "plugin",
-    pluginId: "space-pack",
-    modes: ["dark"],
-    definition,
-  };
 }
 
 function beforeWorkerCommit(checkpoint: () => void) {

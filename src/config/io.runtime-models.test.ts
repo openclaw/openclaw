@@ -95,64 +95,45 @@ it.each(["ensure", "plan"] as const)(
   },
 );
 
-it.each(["ensure", "plan"] as const)(
-  "%s keeps source secret markers when the same runtime is republished before continuation",
-  async (operation) => {
-    const { config, agentDir } = await fixture();
-    const provider = CUSTOM_PROXY_MODELS_CONFIG.models!.providers!["custom-proxy"]!;
-    const sourceFor = (id: string) => ({
-      ...config,
-      models: {
-        providers: {
-          "custom-proxy": {
-            ...provider,
-            apiKey: { source: "env" as const, provider: "default", id },
-          },
+it("keeps source secret markers when the same runtime is republished before continuation", async () => {
+  const { config, agentDir } = await fixture();
+  const provider = CUSTOM_PROXY_MODELS_CONFIG.models!.providers!["custom-proxy"]!;
+  const sourceFor = (id: string) => ({
+    ...config,
+    models: {
+      providers: {
+        "custom-proxy": {
+          ...provider,
+          apiKey: { source: "env" as const, provider: "default", id },
         },
       },
-    });
-    setRuntimeConfigSnapshot(config, sourceFor("MODEL_ORIGINAL_KEY"));
-    const pending =
-      operation === "ensure"
-        ? ensureOpenClawModelsJson(undefined, agentDir)
-        : planOpenClawModelsJsonSource(undefined, agentDir);
-    setRuntimeConfigSnapshot(config, sourceFor("MODEL_REPLACEMENT_KEY"));
-    const result = await pending;
-    const contents =
-      "modelsJsonContents" in result
-        ? result.modelsJsonContents
-        : await fs.readFile(path.join(agentDir, "models.json"), "utf8");
-    expect(JSON.parse(contents ?? "null").providers["custom-proxy"].apiKey).toBe(
-      "MODEL_ORIGINAL_KEY",
-    );
-  },
-);
+    },
+  });
+  setRuntimeConfigSnapshot(config, sourceFor("MODEL_ORIGINAL_KEY"));
+  const pending = ensureOpenClawModelsJson(undefined, agentDir);
+  setRuntimeConfigSnapshot(config, sourceFor("MODEL_REPLACEMENT_KEY"));
+  await pending;
+  const contents = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
+  expect(JSON.parse(contents ?? "null").providers["custom-proxy"].apiKey).toBe(
+    "MODEL_ORIGINAL_KEY",
+  );
+});
 
-it.each(["ensure", "plan"] as const)(
-  "%s refuses a cold read after its config selector changes",
-  async (operation) => {
-    const { agentDir, state } = await fixture();
-    const pending =
-      operation === "ensure"
-        ? ensureOpenClawModelsJson(undefined, agentDir)
-        : planOpenClawModelsJsonSource(undefined, agentDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(state, "replaced.json"));
-    await expect(pending).rejects.toThrow("Runtime config source changed");
-    expect(getRuntimeConfigSnapshot()).toBeNull();
-    await expect(fs.access(path.join(agentDir, "models.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  },
-);
+it("refuses a cold read after its config selector changes", async () => {
+  const { agentDir, state } = await fixture();
+  const pending = ensureOpenClawModelsJson(undefined, agentDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(state, "replaced.json"));
+  await expect(pending).rejects.toThrow("Runtime config source changed");
+  expect(getRuntimeConfigSnapshot()).toBeNull();
+  await expect(fs.access(path.join(agentDir, "models.json"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
 
-it.each(["ensure", "plan"] as const)(
-  "%s retains its default agent directory after captured environment changes",
-  async (operation) => {
-    const { config, agentDir, state } = await fixture();
-    setRuntimeConfigSnapshot(config);
-    const pending =
-      operation === "ensure" ? ensureOpenClawModelsJson() : planOpenClawModelsJsonSource();
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state, "replacement-state"));
-    expect((await pending).agentDir).toBe(agentDir);
-  },
-);
+it("retains its default agent directory after captured environment changes", async () => {
+  const { config, agentDir, state } = await fixture();
+  setRuntimeConfigSnapshot(config);
+  const pending = ensureOpenClawModelsJson();
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state, "replacement-state"));
+  expect((await pending).agentDir).toBe(agentDir);
+});
