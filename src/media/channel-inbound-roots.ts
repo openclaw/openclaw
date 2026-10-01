@@ -9,7 +9,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 // never pulls the control-plane/kysely graph into light call paths.
 import { getCurrentPluginMetadataSnapshotRuntime } from "../plugins/plugin-metadata-snapshot.runtime.js";
 import {
-  loadBundledPluginPublicArtifactModuleSync,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync,
   loadPluginPublicArtifactModuleSync,
 } from "../plugins/public-surface-loader.js";
 
@@ -38,25 +38,13 @@ function loadBundledChannelMediaContractApi(
   channelId: string,
   resolver: ChannelMediaRootResolver,
 ): ChannelMediaContractApi | undefined {
-  try {
-    // Media-root resolution must stay a narrow artifact load, not full channel bootstrap.
-    const loaded = loadBundledPluginPublicArtifactModuleSync<ChannelMediaContractApi>({
-      dirName: channelId,
-      artifactBasename: CHANNEL_MEDIA_CONTRACT_ARTIFACT,
-    });
-    return acceptsResolver(loaded, resolver) ? loaded : undefined;
-  } catch (error) {
-    if (
-      !(
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      )
-    ) {
-      throw error;
-    }
-  }
-
-  return undefined;
+  // Media-root resolution must stay a narrow artifact load, not full channel bootstrap.
+  // Missing artifacts stay optional; errors from resolved artifacts must propagate.
+  const loaded = loadBundledPluginPublicArtifactModuleFromCandidatesSync<ChannelMediaContractApi>({
+    dirName: channelId,
+    artifactCandidates: [CHANNEL_MEDIA_CONTRACT_ARTIFACT],
+  });
+  return loaded && acceptsResolver(loaded, resolver) ? loaded : undefined;
 }
 
 function declaresChannel(plugin: PluginManifestRecord, channelId: string): boolean {
