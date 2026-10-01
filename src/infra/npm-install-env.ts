@@ -225,6 +225,28 @@ function hasRawNpmConfigKey(
   return resolveNpmConfigFiles(env, scope).some((file) => hasNpmrcConfigKey(file, key));
 }
 
+function hasNpmEnvConfigKey(env: NodeJS.ProcessEnv, key: string): boolean {
+  return Object.entries(env).some(([envKey, value]) => {
+    if (!/^npm_config_/iu.test(envKey) || !value?.trim()) {
+      return false;
+    }
+    const normalized = envKey
+      .slice("npm_config_".length)
+      .replace(/(?!^)_/gu, "-")
+      .toLowerCase();
+    return normalized === key;
+  });
+}
+
+/** Returns whether npm config explicitly defines a key outside its built-in defaults. */
+export function hasNpmConfigKey(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  scope: NpmConfigScope = {},
+): boolean {
+  return hasNpmEnvConfigKey(env, key) || hasRawNpmConfigKey(env, key, scope);
+}
+
 function resolveNpmFreshnessBypassMode(
   env: NodeJS.ProcessEnv,
   scope: NpmConfigScope,

@@ -1,6 +1,6 @@
 // Builds script-disabled npm install commands and env.
 import type { NpmProjectInstallEnvOptions } from "./npm-install-env.js";
-import { createNpmProjectInstallEnv } from "./npm-install-env.js";
+import { createNpmProjectInstallEnv, hasNpmConfigKey } from "./npm-install-env.js";
 
 type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
   ignoreWorkspaces?: boolean;
@@ -31,13 +31,7 @@ export function createSafeNpmInstallEnv(
   const nextEnv: NodeJS.ProcessEnv = {
     ...createNpmProjectInstallEnv(env, options),
     COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-    // npm 12 denies transitive Git and remote tarball dependencies by default.
-    // Preserve the admitted package behavior while lifecycle scripts remain disabled.
-    NPM_CONFIG_ALLOW_GIT: "all",
-    NPM_CONFIG_ALLOW_REMOTE: "all",
     NPM_CONFIG_IGNORE_SCRIPTS: "true",
-    npm_config_allow_git: "all",
-    npm_config_allow_remote: "all",
     npm_config_audit: "false",
     npm_config_fund: "false",
     npm_config_ignore_scripts: "true",
@@ -53,6 +47,14 @@ export function createSafeNpmInstallEnv(
       npm_config_progress: "false",
       npm_config_yes: "true",
     });
+  }
+  // npm 12 changed these defaults from all to none. Preserve npm 11 behavior
+  // only when the operator has not set a policy through env or npmrc.
+  if (!hasNpmConfigKey(env, "allow-git", options)) {
+    nextEnv.npm_config_allow_git = "all";
+  }
+  if (!hasNpmConfigKey(env, "allow-remote", options)) {
+    nextEnv.npm_config_allow_remote = "all";
   }
   return nextEnv;
 }

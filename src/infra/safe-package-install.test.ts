@@ -1,5 +1,8 @@
 // Covers script-free npm install args and environment.
+import fsSync from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
 describe("safe npm install helpers", () => {
@@ -54,14 +57,14 @@ describe("safe npm install helpers", () => {
     );
 
     expect(env.PATH).toBe("/usr/bin:/bin");
-    expect(env.NPM_CONFIG_ALLOW_GIT).toBe("all");
-    expect(env.NPM_CONFIG_ALLOW_REMOTE).toBe("all");
+    expect(env.NPM_CONFIG_ALLOW_GIT).toBe("none");
+    expect(env.NPM_CONFIG_ALLOW_REMOTE).toBe("none");
     expect(env.NPM_CONFIG_BEFORE).toBe("");
     expect(env.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
     expect(env.NPM_CONFIG_IGNORE_SCRIPTS).toBe("true");
     expect(env.npm_config_audit).toBe("false");
-    expect(env.npm_config_allow_git).toBe("all");
-    expect(env.npm_config_allow_remote).toBe("all");
+    expect(env.npm_config_allow_git).toBeUndefined();
+    expect(env.npm_config_allow_remote).toBeUndefined();
     expect(env.npm_config_before).toBe("");
     expect(env.npm_config_cache).toBe("/tmp/openclaw-npm-cache");
     expect(env.npm_config_dry_run).toBe("false");
@@ -98,6 +101,38 @@ describe("safe npm install helpers", () => {
     expect(env.PATH).toBe("/usr/bin:/bin");
     expect(env.npm_config_legacy_peer_deps).toBe("false");
     expect(env.npm_config_strict_peer_deps).toBe("false");
+  });
+
+  it("preserves npm 11 dependency-source defaults when no policy is configured", () => {
+    const env = createSafeNpmInstallEnv({
+      PATH: "/usr/bin:/bin",
+    });
+
+    expect(env.npm_config_allow_git).toBe("all");
+    expect(env.npm_config_allow_remote).toBe("all");
+  });
+
+  it("preserves dependency-source restrictions from npmrc", async () => {
+    await withTempDir("openclaw-npm-source-policy-", async (dir) => {
+      const home = path.join(dir, "home");
+      const userconfig = path.join(dir, "user.npmrc");
+      const globalconfig = path.join(dir, "global.npmrc");
+      fsSync.mkdirSync(home, { recursive: true });
+      fsSync.writeFileSync(userconfig, "allow-git=none\n", "utf-8");
+      fsSync.writeFileSync(globalconfig, "allow-remote=root\n", "utf-8");
+
+      const env = createSafeNpmInstallEnv(
+        {
+          HOME: home,
+          NPM_CONFIG_GLOBALCONFIG: globalconfig,
+          NPM_CONFIG_USERCONFIG: userconfig,
+        },
+        { npmConfigCwd: dir },
+      );
+
+      expect(env.npm_config_allow_git).toBeUndefined();
+      expect(env.npm_config_allow_remote).toBeUndefined();
+    });
   });
 
   it("allows package-lock-enabled installs to write lockfiles", () => {
