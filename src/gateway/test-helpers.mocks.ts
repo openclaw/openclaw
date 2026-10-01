@@ -135,11 +135,20 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
 
   class MockModelRegistry {
     private readonly actualRegistry?: ReturnType<typeof createActualRegistry>;
+    private readonly modelsFile: string;
 
     constructor(authStorage: unknown, modelsFile: string) {
+      this.modelsFile = modelsFile;
       if (!agentDiscoveryMock.enabled) {
         this.actualRegistry = createActualRegistry(authStorage as never, path.dirname(modelsFile));
       }
+    }
+
+    // Prepared-model catalog construction forks the discovered registry once per
+    // auth scope. This mock reads its rows from the shared discovery state, so a
+    // fork is the same projection against the requested storage.
+    fork(authStorage: unknown) {
+      return new MockModelRegistry(authStorage, this.modelsFile);
     }
 
     getAll() {
