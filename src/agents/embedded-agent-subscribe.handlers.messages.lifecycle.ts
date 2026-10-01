@@ -94,33 +94,11 @@ export function handleMessageEnd(
     emitReasoningEnd(ctx);
   }
   ctx.noteLastAssistant(assistantMessage);
-  // Progress sent as the last tool batch was written after every other tool
-  // result. An empty stop after it leaves nothing to add, so it is the reply.
-  // `endTurn: false` keeps the run going, so later work may still need an answer.
-  const progressEndsTurn = ctx.state.toolBatchSourceProgress === "progress";
-  const startsToolBatch =
-    Array.isArray(assistantMessage.content) &&
-    assistantMessage.content.some((block) => block.type === "toolCall");
-  ctx.state.toolBatchSourceProgress = startsToolBatch ? "open" : undefined;
-  const closingText = extractEmbeddedAssistantText(assistantMessage).trim();
   if (
-    progressEndsTurn &&
-    !startsToolBatch &&
-    assistantMessage.stopReason === "stop" &&
-    assistantMessage.endTurn !== false &&
-    (!closingText || isSilentReplyText(closingText, SILENT_REPLY_TOKEN))
+    Array.isArray(assistantMessage.content) &&
+    assistantMessage.content.some((block) => block.type === "toolCall")
   ) {
-    for (const send of [
-      ctx.state.messagingToolSentTargets.findLast((target) => target.sourceReplyFinal === false),
-      ctx.state.messagingToolSourceReplyPayloads.findLast(
-        (payload) => payload.sourceReplyFinal === false,
-      ),
-    ]) {
-      if (send) {
-        send.sourceReplyFinal = true;
-      }
-    }
-    ctx.state.sourceReplyDeliveryState = "delivered";
+    ctx.state.toolBatchSourceProgress = "open";
   }
   if (suppressVisibleAssistantOutput) {
     appendRawStream(

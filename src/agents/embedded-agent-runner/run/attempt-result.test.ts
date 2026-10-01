@@ -1,12 +1,25 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  AssistantMessageEventStream,
+  type Message,
+  type Model,
+  type ToolCall,
+} from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
+import { runAgentLoop } from "../../../plugin-sdk/agent-core.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
+import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
+import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
+import { resolveSettledToolTerminalContinuationInstruction } from "./incomplete-turn-recovery.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
@@ -101,6 +114,7 @@ function createResultFixture(params?: {
     getMessagingToolSourceReplyPayloads: () => [],
     getSourceReplyDelivered: () => undefined,
     getSourceReplyDeliveryState: () => undefined,
+    endsWithSourceProgress: () => false,
     getPendingToolMediaReply: () => params?.pendingToolMediaReply,
     getToolAutoDeliveryMediaUrls: () => params?.toolAutoDeliveryMediaUrls ?? [],
     getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: false }),
@@ -760,5 +774,186 @@ describe("attempt result projection", () => {
         latestMcpAppChannelView: { viewId: "view-latest" },
       }).latestMcpAppChannelView,
     ).toEqual({ viewId: "view-latest" });
+  });
+});
+
+describe("trailing source progress at runtime settlement", () => {
+  const testModel: Model = {
+    id: "settle-model",
+    name: "Settle Model",
+    api: "openai-responses",
+    provider: "test",
+    baseUrl: "https://example.test",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 100_000,
+    maxTokens: 8_000,
+  };
+  type ModelCall = { progress?: "sync" | "async"; read?: boolean };
+
+  async function settleRealLoop(calls: ModelCall[]) {
+    const sessionManager = {};
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-1",
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionExtras: { sessionManager } as never,
+    });
+    const messages: AgentMessage[] = [];
+    let callIndex = 0;
+    const tool = (name: string, execute: (toolCallId: string) => void) => ({
+      name,
+      label: name,
+      description: name,
+      parameters: Type.Object({}, { additionalProperties: true }),
+      execute: async (toolCallId: string) => {
+        execute(toolCallId);
+        return { content: [{ type: "text" as const, text: "ok" }], details: {} };
+      },
+    });
+    const progressSettled = createDeferred();
+    await runAgentLoop(
+      [{ role: "user", content: "Run the report.", timestamp: 0 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [
+          tool("message", (toolCallId) =>
+            recordEmbeddedToolReceipt(
+              sessionManager,
+              toolCallId,
+              {
+                messageDelivery: {
+                  status: "settled",
+                  partialDelivery: false,
+                  createdThreadIds: [],
+                  sourceReplyDelivered: true,
+                },
+              },
+              true,
+            ),
+          ),
+          tool("read", () => {}),
+        ],
+      },
+      {
+        model: testModel,
+        convertToLlm: (history) =>
+          history.filter(
+            (message): message is Message =>
+              message.role === "user" ||
+              message.role === "assistant" ||
+              message.role === "toolResult",
+          ),
+      },
+      async (event) => {
+        emit(event);
+        if (event.type === "message_end") {
+          messages.push(event.message);
+        }
+        if (event.type === "tool_execution_end" && event.toolName === "message") {
+          await subscription.waitForPendingEvents();
+          progressSettled.resolve();
+        }
+        if (event.type === "agent_end") {
+          await subscription.waitForPendingEvents();
+        }
+      },
+      undefined,
+      () => {
+        const call = calls[callIndex++] ?? {};
+        const toolCall: ToolCall | undefined = call.progress
+          ? {
+              type: "toolCall",
+              id: `progress-${callIndex}`,
+              name: "message",
+              arguments: {
+                action: "send",
+                final: false,
+                target: "channel:source",
+                message: "Started the run, I will report back.",
+              },
+              ...(call.progress === "async" ? { async: true as const } : {}),
+            }
+          : call.read
+            ? { type: "toolCall", id: `read-${callIndex}`, name: "read", arguments: {} }
+            : undefined;
+        const message = makeAssistantMessageFixture({
+          api: testModel.api,
+          provider: testModel.provider,
+          model: testModel.id,
+          content: [...(toolCall ? [toolCall] : []), { type: "text", text: "" }],
+          stopReason: toolCall && call.progress !== "async" ? "toolUse" : "stop",
+          errorMessage: undefined,
+        });
+        const stream = new AssistantMessageEventStream();
+        stream.push({ type: "start", partial: { ...message, content: [] } });
+        if (toolCall) {
+          stream.push({
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall,
+            partial: { ...message, content: [toolCall] },
+          });
+        }
+        // A native-async send can settle while the provider is still streaming;
+        // its empty terminal fragment then arrives after the send's receipt.
+        const finish = () => {
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+        };
+        if (call.progress === "async") {
+          void progressSettled.promise.then(finish);
+        } else {
+          finish();
+        }
+        return stream;
+      },
+    );
+    expect(callIndex).toBe(calls.length);
+    const fixture = createResultFixture();
+    fixture.input.preparedStreamRuntime.stream.subscription = subscription as never;
+    const terminalAssistant = messages.findLast((message) => message.role === "assistant");
+    fixture.settled.currentAttemptAssistant = terminalAssistant as never;
+    fixture.settled.currentAttemptCompletedAssistant = terminalAssistant as never;
+    fixture.settled.messagesSnapshot = messages;
+    fixture.prompt.messagesSnapshot = messages;
+    const result = completeEmbeddedAttemptResult(
+      fixture.input as never,
+      fixture.settled,
+      fixture.prompt,
+    );
+    subscription.unsubscribe();
+    return {
+      result,
+      finalizerInstruction: resolveSettledToolTerminalContinuationInstruction({
+        executionContract: "strict-agentic",
+        allowEmptyStopContinuation: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: result,
+      }),
+    };
+  }
+
+  it("treats progress sent as the last tool batch as the reply", async () => {
+    const { result, finalizerInstruction } = await settleRealLoop([{ progress: "sync" }, {}]);
+
+    expect(result.sourceReplyDeliveryState).toBe("delivered");
+    expect(result.messagingToolSentTargets?.map((send) => send.sourceReplyFinal)).toEqual([true]);
+    expect(finalizerInstruction).toBeNull();
+  });
+
+  it("still finalizes when the turn continues after an async progress send", async () => {
+    const { result, finalizerInstruction } = await settleRealLoop([
+      { progress: "async" },
+      { read: true },
+      {},
+    ]);
+
+    expect(result.sourceReplyDeliveryState).toBe("missing");
+    expect(result.messagingToolSentTargets?.map((send) => send.sourceReplyFinal)).toEqual([false]);
+    expect(finalizerInstruction).toContain("did not produce a user-visible answer");
   });
 });

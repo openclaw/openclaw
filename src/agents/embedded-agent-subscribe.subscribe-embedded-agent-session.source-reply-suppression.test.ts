@@ -648,24 +648,14 @@ describe("subscribeEmbeddedAgentSession", () => {
   );
 
   it.each([
-    { name: "an empty stop", batch: ["progress"], closing: "", completes: true },
-    { name: "NO_REPLY", batch: ["progress"], closing: "NO_REPLY", completes: true },
-    { name: "a closing answer", batch: ["progress"], closing: "Done.", completes: false },
-    { name: "work in the same batch", batch: ["read", "progress"], closing: "", completes: false },
-    { name: "a later tool batch", batch: ["progress"], later: true, closing: "", completes: false },
-    {
-      name: "an explicit continuation into more work",
-      batch: ["progress"],
-      continued: true,
-      later: true,
-      closing: "",
-      completes: false,
-    },
-    { name: "a progress reaction", batch: ["reaction"], closing: "", completes: false },
-    { name: "a partial progress send", batch: ["partial"], closing: "", completes: false },
+    { name: "only progress", batch: ["progress"], endsWithProgress: true },
+    { name: "work in the same batch", batch: ["read", "progress"], endsWithProgress: false },
+    { name: "a later tool batch", batch: ["progress"], later: true, endsWithProgress: false },
+    { name: "a progress reaction", batch: ["reaction"], endsWithProgress: false },
+    { name: "a partial progress send", batch: ["partial"], endsWithProgress: false },
   ])(
-    "treats trailing source progress as the reply after $name",
-    async ({ batch, continued, later, closing, completes }) => {
+    "reports whether the last tool batch was source progress after $name",
+    async ({ batch, later, endsWithProgress }) => {
       const { session, emit } = createStubSessionHarness();
       const sessionManager = {};
       Object.assign(session, { sessionManager });
@@ -722,19 +712,14 @@ describe("subscribeEmbeddedAgentSession", () => {
       };
 
       await runToolBatch(batch);
-      if (continued) {
-        emitAssistantMessageEnd(emit, "", { stopReason: "stop", endTurn: false });
-      }
       if (later) {
         await runToolBatch(["read"]);
       }
-      emitAssistantMessageEnd(emit, closing, { stopReason: "stop" });
+      emitAssistantMessageEnd(emit, "", { stopReason: "stop" });
       await subscription.waitForPendingEvents();
 
-      expect(subscription.getSourceReplyDeliveryState()).toBe(completes ? "delivered" : "missing");
-      expect(
-        subscription.getMessagingToolSentTargets().some((target) => target.sourceReplyFinal),
-      ).toBe(completes);
+      expect(subscription.endsWithSourceProgress()).toBe(endsWithProgress);
+      expect(subscription.getSourceReplyDeliveryState()).toBe("missing");
       subscription.unsubscribe();
     },
   );
