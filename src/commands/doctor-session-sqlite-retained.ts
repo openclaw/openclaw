@@ -116,7 +116,7 @@ export async function prepareRetainedSessionImport(
         code: fs.existsSync(params.target.storePath)
           ? "retained_plugin_source_conflict"
           : "historical_transcript_deferred",
-        message: `${artifactPath}: ${reason} Canonical SQLite sessions remain authoritative. Run openclaw doctor --fix to preserve the conflicting input in the migration archive.`,
+        message: `${artifactPath}: ${reason} Canonical SQLite sessions remain authoritative. Preserve this input and its backups. Restore the verified original at ${sourcePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state/config.`,
       });
     },
   };
