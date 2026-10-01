@@ -84,7 +84,13 @@ export async function startCrablineDiscordReplies(params: {
           lastDelivery = { messageId, channelId };
         }
       }
-      const body = Buffer.from(JSON.stringify(rewriteEndpointUrls(message, origins)));
+      const pathname = new URL(req.url ?? "/", upstream).pathname;
+      if (req.method === "GET" && /^\/api\/v10\/gateway(?:\/bot)?$/u.test(pathname)) {
+        rewriteEndpointFields(message, ["url"], origins);
+      } else if (/^\/api\/v10\/channels\/\d+\/messages(?:\/\d+)?$/u.test(pathname)) {
+        rewriteMessageAttachmentUrls(message, origins);
+      }
+      const body = Buffer.from(JSON.stringify(message));
       const headers = { ...response.headers, "content-length": body.length };
       delete headers["transfer-encoding"];
       res.writeHead(response.statusCode ?? 502, headers);
@@ -134,7 +140,14 @@ export async function startCrablineDiscordReplies(params: {
         remote.on("message", (data, binary) => {
           if (!binary) {
             const event: unknown = JSON.parse(rawDataToString(data));
-            connection.send(JSON.stringify(rewriteEndpointUrls(event, origins)));
+            if (isRecord(event)) {
+              if (event.t === "READY") {
+                rewriteEndpointFields(event.d, ["resume_gateway_url"], origins);
+              } else if (event.t === "MESSAGE_CREATE" || event.t === "MESSAGE_UPDATE") {
+                rewriteMessageAttachmentUrls(event.d, origins);
+              }
+            }
+            connection.send(JSON.stringify(event));
             return;
           }
           connection.send(data, { binary });
@@ -252,21 +265,44 @@ export async function startCrablineDiscordReplies(params: {
   };
 }
 
-function rewriteEndpointUrls(value: unknown, origins: ReadonlyMap<string, string>): unknown {
-  if (typeof value === "string") {
+function rewriteEndpointFields(
+  value: unknown,
+  fields: readonly string[],
+  origins: ReadonlyMap<string, string>,
+): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  for (const field of fields) {
+    const url = value[field];
+    if (typeof url !== "string") {
+      continue;
+    }
     for (const [source, target] of origins) {
-      if (value === source || value.startsWith(`${source}/`) || value.startsWith(`${source}?`)) {
-        return `${target}${value.slice(source.length)}`;
+      if (url === source || url.startsWith(`${source}/`) || url.startsWith(`${source}?`)) {
+        value[field] = `${target}${url.slice(source.length)}`;
+        break;
       }
     }
-  } else if (Array.isArray(value)) {
-    return value.map((entry) => rewriteEndpointUrls(entry, origins));
-  } else if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, rewriteEndpointUrls(entry, origins)]),
-    );
   }
-  return value;
+}
+
+function rewriteMessageAttachmentUrls(value: unknown, origins: ReadonlyMap<string, string>): void {
+  if (Array.isArray(value)) {
+    for (const message of value) {
+      rewriteMessageAttachmentUrls(message, origins);
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  if (Array.isArray(value.attachments)) {
+    for (const attachment of value.attachments) {
+      rewriteEndpointFields(attachment, ["url", "proxy_url"], origins);
+    }
+  }
+  rewriteMessageAttachmentUrls(value.referenced_message, origins);
 }
 
 function closeGatewayPeer(socket: WebSocket, code: number, reason: Buffer): void {
