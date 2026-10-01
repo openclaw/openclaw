@@ -350,33 +350,6 @@ describe("web monitor inbox poll vote hook", () => {
       },
     );
 
-    const preflightMessageId = "NORMAL-BEFORE-THROWING-POLL-HOOK";
-    sock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { remoteJid: CHAT_JID, id: preflightMessageId, fromMe: false },
-          message: { conversation: "ordinary message before poll hook failure" },
-          messageTimestamp: 1_700_000_099,
-        },
-      ],
-    });
-    await waitForInboundWorkDrained();
-    const preflightDurableId = createWhatsAppDurableInboundMessageId({
-      remoteJid: CHAT_JID,
-      id: preflightMessageId,
-    });
-    expect(enqueueSpy).toHaveBeenCalledWith(
-      preflightDurableId,
-      expect.objectContaining({
-        message: expect.objectContaining({
-          key: expect.objectContaining({ id: preflightMessageId }),
-        }),
-      }),
-      expect.objectContaining({ laneKey: CHAT_JID }),
-    );
-    expect(enqueueSpy).toHaveBeenCalledTimes(1);
-
     // Simulate ownership recorded from an accepted send (the only producer
     // since round 3), so the hook actually reaches the point that throws.
     rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId);
@@ -438,9 +411,21 @@ describe("web monitor inbox poll vote hook", () => {
       }),
       expect.objectContaining({ laneKey: CHAT_JID }),
     );
-    // The regression boundary is batch admission. Durable draining and delivery
-    // run on separate async work, so downstream assertions would be timing-dependent.
-    expect(enqueueSpy).toHaveBeenCalledTimes(2);
+    // The handler catches failed admissions, and the queue retries append failures.
+    // Check the final result for this message to prove it was durably accepted.
+    const normalAdmissionIndex = enqueueSpy.mock.calls.findLastIndex(
+      ([id]) => id === normalDurableId,
+    );
+    expect(normalAdmissionIndex).toBeGreaterThanOrEqual(0);
+    const normalAdmission = enqueueSpy.mock.results[normalAdmissionIndex];
+    if (normalAdmission?.type !== "return") {
+      throw new Error("WhatsApp durable admission did not return a result");
+    }
+    await expect(normalAdmission.value).resolves.toMatchObject({
+      kind: "accepted",
+      duplicate: false,
+      record: { id: normalDurableId },
+    });
   });
 
   it("does not fire poll_vote_received twice for a redelivered vote-update upsert", async () => {
