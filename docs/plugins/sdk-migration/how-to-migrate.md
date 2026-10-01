@@ -112,8 +112,8 @@ would expose a historical failure as new pending work.
     must receive config from their boundary, and long-lived runtime modules
     allow zero ambient `loadConfig()` calls.
 
-    New plugin code should avoid the broad `openclaw/plugin-sdk/config-runtime`
-    barrel. Use the narrow subpath for the job:
+    The broad `openclaw/plugin-sdk/config-runtime` barrel has been removed.
+    Use the narrow subpath for the job:
 
     | Need | Import |
     | --- | --- |
@@ -135,19 +135,15 @@ would expose a historical failure as new pending work.
     resolver preserves channel/account precedence and channel defaults;
     `markdown-table-runtime` is a private, JavaScript-only host export.
 
-    Check named types separately. `config-contracts` does not export `TtsMode`,
-    `TtsPersonaConfig`, `TtsPersonaFallbackPolicy`, or `SessionResetMode`;
-    `session-store-runtime` does not export `SessionResetMode` either. Existing
-    callers needing those names must keep retained type imports or explicitly
-    adapt their types. Talk config, cron-store operations, context-visibility
-    config resolution, and dangerous-name checks also lack a complete modern
-    typed-public mapping. Missing public contracts require an SDK-owner decision,
-    not an import of the private focused implementation.
+    The named types `TtsMode`, `TtsPersonaConfig`, `TtsPersonaFallbackPolicy`,
+    and `SessionResetMode` move unchanged to `config-contracts`. Talk config,
+    cron-store operations, context-visibility config resolution, and
+    dangerous-name checks lack a complete modern typed-public mapping.
+    Adapt plugin-owned behavior or request a focused
+    public contract; do not import the private host implementation.
 
     Bundled plugins and their tests are scanner-guarded against the broad
-    barrel so imports and mocks stay local to the behavior they need. The
-    barrel still exists for external compatibility, but new code should not
-    depend on it.
+    barrel so imports and mocks stay local to the behavior they need.
 
   </Step>
 
@@ -240,13 +236,16 @@ would expose a historical failure as new pending work.
     grep -r "plugin-sdk/compat" my-plugin/
     grep -r "plugin-sdk/infra-runtime" my-plugin/
     grep -r "plugin-sdk/config-runtime" my-plugin/
+    grep -r "plugin-sdk/channel-lifecycle" my-plugin/
+    grep -r "plugin-sdk/channel-message" my-plugin/
+    grep -r "plugin-sdk/channel-reply-pipeline" my-plugin/
     grep -r "openclaw/extension-api" my-plugin/
     ```
   </Step>
 
   <Step title="Replace with focused imports">
     Check the exported name and typed-public contract as well as the import
-    path. Some functions are renamed; not every retained helper or named type
+    path. Some functions are renamed; not every removed helper or named type
     has a modern public replacement:
 
     ```typescript
@@ -265,7 +264,7 @@ would expose a historical failure as new pending work.
 
     The explicit alias preserves existing `createChannelReplyPipeline(...)`
     call sites. The modern export is `createChannelMessageReplyPipeline`;
-    see [Retained channel facade mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
+    see [Removed channel facade mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
     for the remaining functions and named types.
 
     For host-side helpers, use the injected plugin runtime instead of
@@ -295,13 +294,13 @@ would expose a historical failure as new pending work.
   </Step>
 
   <Step title="Replace broad infra-runtime imports">
-    `openclaw/plugin-sdk/infra-runtime` still exists for external
-    compatibility, but new code should use the supported surface it actually
-    needs:
+    `openclaw/plugin-sdk/infra-runtime` has been removed. Use the supported
+    surface for each operation:
 
     | Need | Typed-public import or injected API |
     | --- | --- |
     | New system event producers | `api.runtime.system.enqueueSystemEvent` |
+    | System event snapshot inspection and consumption | `openclaw/plugin-sdk/system-event-runtime` |
     | Heartbeat wake requests | `api.runtime.system.requestHeartbeat` |
     | Channel activity telemetry | `api.runtime.channel.activity.record` and `.get` |
     | `createDedupeCache`, `resolveGlobalDedupeCache` | `openclaw/plugin-sdk/dedupe-runtime` |
@@ -315,21 +314,17 @@ would expose a historical failure as new pending work.
 
     OpenClaw no longer uses `commandRequiresSecurityAuditSuppressionApproval`
     internally: suppression reads and writes follow ordinary exec policy. The
-    deprecated SDK export preserves its shipped signature and results, including
-    `true` for suppression writes, until the
-    [infra-runtime compatibility surface is retired](/plugins/sdk-migration/removal-timeline).
-    Existing plugins can retain the call during that window. Plugins adopting
-    ordinary exec policy should remove it; there is no replacement command-text
-    detector.
+    SDK export was removed with the compatibility barrel. Remove this call when
+    adopting ordinary exec policy; there is no replacement command-text detector.
 
     These are symbol-specific mappings, not replacements for the whole barrel.
     Private-local entries such as `heartbeat-runtime`, `delivery-queue-runtime`,
     `fetch-runtime`, `runtime-fetch`, and `file-lock` are JavaScript-only host
     exports, not typed third-party APIs. Heartbeat event/summary/visibility
     helpers, pending-delivery drain, transport readiness, concurrency, and file
-    locking do not have equivalent modern typed-public mappings here. Retain
-    existing compatibility imports for those operations pending an SDK-owner
-    decision.
+    locking do not have equivalent modern typed-public mappings here. Adapt
+    plugin-owned behavior or request a focused public contract for the missing
+    host capability.
 
     `fetchWithSsrFGuard` is not a drop-in replacement for dispatcher-aware fetch:
     it takes an options object and returns `{ response, finalUrl, release, ... }`,
@@ -343,11 +338,13 @@ would expose a historical failure as new pending work.
     `stringifyNonErrorCause`, `ErrorKind`, or `detectErrorKind`; the last helper
     preserves legacy substring classification. The numeric and random mappings
     likewise do not cover every timer, expiry, hex, fraction, or integer helper.
-    Keep unsupported retained imports until their public contract is resolved.
+    Adapt those operations explicitly; the removed imports no longer load.
 
-    System event snapshot inspection and consume helpers remain available only
-    through the deprecated `openclaw/plugin-sdk/infra-runtime` compatibility
-    surface; there is no modern public replacement. Current snapshots carry an
+    Import system event snapshot inspection and consume helpers from
+    `openclaw/plugin-sdk/system-event-runtime`: use `peekSystemEventEntries`
+    to inspect and `consumeSelectedSystemEventEntries` to consume selected
+    snapshots. Replace the legacy `consumeSystemEventEntries` alias with
+    `consumeSelectedSystemEventEntries`. Current snapshots carry an
     opaque `id` for one queued occurrence. Preserve it through copies and
     serialization when returning a snapshot to consume. Legacy ID-less callers
     retain structural matching, which can be ambiguous after queue churn. Do

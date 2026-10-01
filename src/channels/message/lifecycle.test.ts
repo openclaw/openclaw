@@ -50,11 +50,12 @@ describe("message lifecycle primitives", () => {
     const editFinal = vi.fn(async () => undefined);
     const deliverNormally = vi.fn(async () => undefined);
     const onPreviewFinalized = vi.fn(async () => undefined);
+    const draft = createDraft("preview-1", { seal: vi.fn(async () => undefined) });
 
     const result = await deliverFinalizableLivePreview({
       kind: "final",
       payload: { text: "done" },
-      draft: createDraft("preview-1", { seal: vi.fn(async () => undefined) }),
+      draft,
       buildFinalEdit: (payload) => ({ text: payload.text }),
       editFinal,
       deliverNormally,
@@ -62,8 +63,11 @@ describe("message lifecycle primitives", () => {
     });
 
     expect(result.kind).toBe("preview-finalized");
+    expect(draft.flush).toHaveBeenCalledTimes(1);
+    expect(draft.seal).toHaveBeenCalledTimes(1);
     expect(editFinal).toHaveBeenCalledWith("preview-1", { text: "done" });
     expect(deliverNormally).not.toHaveBeenCalled();
+    expect(draft.clear).not.toHaveBeenCalled();
     const liveState = result.liveState;
     if (!liveState) {
       throw new Error("expected finalized live state");
@@ -165,34 +169,44 @@ describe("message lifecycle primitives", () => {
     ).rejects.toThrow("Live preview supplemental payload was not delivered");
   });
 
-  it("treats live preview fallback delivery as terminal state", async () => {
-    const discardPending = vi.fn(async () => undefined);
-    const clear = vi.fn(async () => undefined);
-    const deliverNormally = vi.fn(async () => true);
-    const onNormalDelivered = vi.fn(async () => undefined);
+  it.each(["non-finalizable payload", "failed preview edit"] as const)(
+    "treats live preview fallback delivery as terminal state after a %s",
+    async (reason) => {
+      const discardPending = vi.fn(async () => undefined);
+      const clear = vi.fn(async () => undefined);
+      const deliverNormally = vi.fn(async () => true);
+      const onNormalDelivered = vi.fn(async () => undefined);
+      const draft = createDraft("preview-2", { discardPending, clear });
+      const editFails = reason === "failed preview edit";
+      const editFinal = vi.fn(async () => {
+        throw new Error("preview edit failed");
+      });
 
-    const result = await deliverFinalizableLivePreview({
-      kind: "final",
-      payload: { text: "with media" },
-      draft: createDraft("preview-2", { discardPending, clear }),
-      buildFinalEdit: () => undefined,
-      editFinal: vi.fn(async () => undefined),
-      deliverNormally,
-      onNormalDelivered,
-    });
+      const result = await deliverFinalizableLivePreview({
+        kind: "final",
+        payload: { text: "with media" },
+        draft,
+        buildFinalEdit: (payload) => (editFails ? { text: payload.text } : undefined),
+        editFinal,
+        deliverNormally,
+        onNormalDelivered,
+      });
 
-    expect(result.kind).toBe("normal-delivered");
-    expect(discardPending).toHaveBeenCalledTimes(1);
-    expect(deliverNormally).toHaveBeenCalledWith({ text: "with media" });
-    expect(onNormalDelivered).toHaveBeenCalledTimes(1);
-    expect(clear).toHaveBeenCalledTimes(1);
-    const liveState = result.liveState;
-    if (!liveState) {
-      throw new Error("expected fallback live state");
-    }
-    expect(liveState.phase).toBe("cancelled");
-    expect(liveState.canFinalizeInPlace).toBe(false);
-  });
+      expect(result.kind).toBe("normal-delivered");
+      expect(draft.flush).toHaveBeenCalledTimes(editFails ? 1 : 0);
+      expect(editFinal).toHaveBeenCalledTimes(editFails ? 1 : 0);
+      expect(discardPending).toHaveBeenCalledTimes(1);
+      expect(deliverNormally).toHaveBeenCalledWith({ text: "with media" });
+      expect(onNormalDelivered).toHaveBeenCalledTimes(1);
+      expect(clear).toHaveBeenCalledTimes(1);
+      const liveState = result.liveState;
+      if (!liveState) {
+        throw new Error("expected fallback live state");
+      }
+      expect(liveState.phase).toBe("cancelled");
+      expect(liveState.canFinalizeInPlace).toBe(false);
+    },
+  );
 
   it("preserves committed normal delivery when preview cleanup fails through the adapter", async () => {
     const events: string[] = [];

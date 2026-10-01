@@ -854,7 +854,7 @@ const SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "src/plugin-sdk/channel-reply-pipeline.ts",
+    "src/channels/message/reply-pipeline.ts",
     ["src/plugins/contracts/plugin-sdk-subpaths.test.ts", ...GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ],
   ["src/plugin-sdk/reply-runtime.ts", ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"]],

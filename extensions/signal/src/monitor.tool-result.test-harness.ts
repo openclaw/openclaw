@@ -315,7 +315,7 @@ export function installSignalToolResultTestHooks() {
   beforeEach(async () => {
     const [{ resetInboundDedupe }, { resetSystemEventsForTest }] = await Promise.all([
       import("openclaw/plugin-sdk/reply-runtime"),
-      import("openclaw/plugin-sdk/system-event-runtime"),
+      import("openclaw/plugin-sdk/test-fixtures"),
     ]);
     resetInboundDedupe();
     signalToolResultState = await createOpenClawTestState({

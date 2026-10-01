@@ -7,10 +7,8 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  enqueueSystemEvent,
-  resetSystemEventsForTest,
-} from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
 

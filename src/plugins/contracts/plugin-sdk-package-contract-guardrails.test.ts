@@ -576,14 +576,6 @@ describe("plugin-sdk package contract guardrails", () => {
     ).toBe(true);
   });
 
-  it("keeps configured local-origin fetch helpers out of deprecated infra-runtime", () => {
-    const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk/infra-runtime.ts"), "utf8");
-
-    expect(source).not.toMatch(/export\s+\*\s+from\s+["']\.\.\/infra\/net\/fetch-guard\.js["']/);
-    expect(source).not.toContain("fetchConfiguredLocalOriginWithSsrFGuard");
-    expect(source).not.toContain("GuardedFetchConfiguredLocalOriginOptions");
-  });
-
   it("keeps configured local-origin fetch helpers out of the public SSRF runtime", async () => {
     const ssrfRuntime = await import("../../plugin-sdk/ssrf-runtime.js");
 

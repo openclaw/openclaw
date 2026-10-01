@@ -7,11 +7,11 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { normalizePluginsConfig as readNormalizedPluginsConfig } from "../plugins/config-state.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
-  type OpenClawConfig,
-} from "./config-runtime.js";
+} from "./plugin-config-runtime.js";
 import { normalizePluginsConfig } from "./plugin-config-runtime.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());

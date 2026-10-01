@@ -40,25 +40,30 @@ Upgrade affected plugins to scoped row and transcript-identity APIs before
 upgrading the host. The `session-store-runtime` subpath and `resolveStorePath`
 remain supported; see the [removed session APIs and replacements](/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis).
 
-| Removal gate            | Tier                               | SDK subpaths                                                                                                                                                                        |
-| ----------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `2026-10-01`            | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |
-| `next-plugin-sdk-major` | Major-version compatibility gate   | `inbound-reply-dispatch`; `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore`                                                                                    |
-| `2026-10-01`            | Media legacy projection            | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |
+| Removal gate            | Tier                             | SDK subpaths                                                                                                                                                                        |
+| ----------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `next-plugin-sdk-major` | Major-version compatibility gate | `inbound-reply-dispatch`; `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore`                                                                                    |
+| `2026-10-01`            | Media legacy projection          | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |
 
-The five September 1 subpaths remain available in 2026.8.2 under an approved
-retention exception; that release’s registry still labels them `deprecated`.
-For 2026.9.1, the release maintainer approved renewing their `removeAfter` date
-from `2026-09-01` to `2026-10-01` on September 2, 2026. The registry keeps them
-`removal-pending` with the same replacement mappings. Removal awaits verification
-that supported external plugins have migrated. `infra-runtime` additionally retains
-system-event snapshot inspection and consumption until a modern public replacement
-exists. This changes compatibility tracking only, not the exported SDK or runtime
-behavior.
+The five compatibility subpaths `channel-lifecycle`, `channel-message`,
+`channel-reply-pipeline`, `config-runtime`, and `infra-runtime` were retired
+early by explicit SDK-owner approval on September 30, 2026. That decision
+supersedes their October 1 gate and external-migration retention blocker; it
+does not certify that every external plugin has migrated. Their public exports
+and compatibility aliases are removed. Upgrade affected plugins before loading
+them on a host containing this removal.
+
+These subpaths remained available in 2026.8.2 under an approved retention
+exception. On September 2, 2026, the release maintainer renewed their
+`removeAfter` date from September 1 to October 1 for 2026.9.1. The September 30
+decision replaces that window. See [channel import mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
+and [config and infrastructure migration](/plugins/sdk-migration/how-to-migrate)
+for replacements and behavioral differences. System-event snapshot inspection
+and consumption now use `openclaw/plugin-sdk/system-event-runtime`.
 
 Bundled-plugin migration does not prove that every external caller can use a
 path-only replacement. Migrate the functions with verified typed-public mappings;
-keep retained imports where a named type or required behavior still lacks a
-public replacement and ask the SDK owner to resolve that gap. Run
+adapt the caller where a removed named type or required behavior lacks a
+public replacement. Do not substitute a private-local host export. Run
 `pnpm plugins:boundary-report` to see the dates, gates, and blockers for the
 surfaces your plugin uses.

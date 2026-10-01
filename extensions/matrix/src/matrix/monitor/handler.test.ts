@@ -13,13 +13,10 @@ import {
   sessionDeliveryOrigin,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "openclaw/plugin-sdk/system-event-runtime";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 // Matrix tests cover handler plugin behavior.
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";

@@ -190,7 +190,6 @@
   "ssrf-dispatcher",
   "ssrf-runtime-internal",
   "string-normalization-runtime",
-  "system-event-runtime",
   "talk-config-runtime",
   "target-resolver-runtime",
   "test-env",
