@@ -57,6 +57,7 @@ function interruptionScript(
       ["/infra/gateway-lock-legacy.js", 'export const assertLegacyGatewayStoppedForMaintenance = async () => {};'],
       ["/infra/gateway-lock.js", 'export const acquireGatewayLock = async () => { let active = true; return { assertCurrent(assertPolicy) { if (!active) throw new Error("Fixture Gateway ownership released"); assertPolicy?.(); if (!active) throw new Error("Fixture Gateway ownership released"); }, run(operation) { if (!active) throw new Error("Fixture Gateway ownership released"); return operation(); }, async release() { active = false; } }; };'],
       ["/state/openclaw-state-db-async-lifecycle.js", 'export const createOpenClawDatabaseMaintenanceScope = () => { let closed = false; return { run: run => run(), close: async () => { if (!closed) { globalThis.doctorFixture.record("stores-closed"); closed = true; } } }; };'],
+      ["/state/openclaw-state-maintenance-context.js", 'export const admitOpenClawMaintenanceLiveAuthorityReads = () => {};'],
       ["/cli/update-cli/update-command-service-maintenance.js", 'export const maybeStopManagedServiceBeforeMutableUpdate = params => globalThis.doctorFixture.stop(params); export const revalidateManagedGatewayServiceAfterUpdate = async () => globalThis.doctorFixture.verdict;'],
       ["/commands/doctor-gateway-services.js", 'export const maybeRepairGatewayServiceConfig = cfg => globalThis.doctorFixture.repair(cfg);'],
       ["/daemon/service.js", 'export const resolveGatewayService = () => globalThis.doctorFixture.service; export const readGatewayServiceState = async () => globalThis.doctorFixture.state;'],
@@ -207,7 +208,12 @@ it.skipIf(process.platform === "win32").each([
       ]);
       expect(ready[0]).toBe("stopped");
       if (pendingApproval || restoringApproval) {
-        const approval = once(child, "message");
+        const approval = Promise.race([
+          once(child, "message"),
+          closed.then(() => {
+            throw new Error("Doctor exited before requesting approval: " + stderr);
+          }),
+        ]);
         child.send("continue", () => {});
         expect((await approval)[0]).toBe("approval");
         child.kill("SIGTERM");

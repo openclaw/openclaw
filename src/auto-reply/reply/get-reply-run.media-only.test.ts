@@ -1793,7 +1793,10 @@ describe("runPreparedReply media-only handling", () => {
       });
 
       expect(result).toEqual({ text: "ok" });
-      expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+      expect(commandQueue.clearCommandLane).toHaveBeenCalledWith(
+        "session:session-key",
+        expect.any(Function),
+      );
       expect(embeddedAgentRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
       expect(activeOperation.result).toEqual({
         kind: "aborted",

@@ -116,34 +116,6 @@ function migrateExecMode(
   delete exec.ask;
 }
 
-function migrateCliBackendSessionArgs(
-  scope: Record<string, unknown>,
-  path: string,
-  changes: string[],
-): void {
-  const backends = getRecord(scope.cliBackends);
-  if (!backends) {
-    return;
-  }
-  for (const [backendId, value] of Object.entries(backends)) {
-    const backend = getRecord(value);
-    if (!backend || !Object.hasOwn(backend, "sessionArg")) {
-      continue;
-    }
-    if (backend.sessionArgs === undefined && typeof backend.sessionArg === "string") {
-      backend.sessionArgs = [backend.sessionArg, "{sessionId}"];
-      changes.push(
-        `Moved ${path}.cliBackends.${backendId}.sessionArg → ${path}.cliBackends.${backendId}.sessionArgs.`,
-      );
-    } else {
-      changes.push(
-        `Removed ${path}.cliBackends.${backendId}.sessionArg (sessionArgs already set).`,
-      );
-    }
-    delete backend.sessionArg;
-  }
-}
-
 function migrateSignalEndpoint(
   entry: Record<string, unknown>,
   path: string,
@@ -407,7 +379,6 @@ export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: st
     if (path !== "agents.defaults") {
       migrateExecMode(scope, path, changes, inheritedExecPolicy);
     }
-    migrateCliBackendSessionArgs(scope, path, changes);
     for (const retiredPath of TIER_EVAL_RETIRED_AGENT_PATHS) {
       stripped = deleteRetiredPath(scope, retiredPath) || stripped;
     }

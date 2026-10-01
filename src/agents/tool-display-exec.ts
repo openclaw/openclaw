@@ -14,6 +14,7 @@ import {
   hasShellCompoundCommand,
   optionValue,
   positionalArgs,
+  parseHeredocMarker,
   scanTopLevelChars,
   parseShellWords,
   parseShellOptions,
@@ -382,68 +383,15 @@ type HeredocTerminator = {
 
 function collectHeredocTerminators(commandLine: string): HeredocTerminator[] {
   const terminators: HeredocTerminator[] = [];
-  scanTopLevelChars(commandLine, (char, index) => {
-    if (
-      char !== "<" ||
-      commandLine[index - 1] === "<" ||
-      commandLine[index + 1] !== "<" ||
-      commandLine[index + 2] === "<"
-    ) {
-      return true;
-    }
-
-    const stripLeadingTabs = commandLine[index + 2] === "-";
-    const parsed = parseHeredocTerminator(commandLine, index + (stripLeadingTabs ? 3 : 2));
-    if (parsed) {
-      terminators.push({ value: parsed, stripLeadingTabs });
+  scanTopLevelChars(commandLine, (_char, index) => {
+    // Lines accept all whitespace; the whole-script scanner must not skip newlines.
+    const marker = parseHeredocMarker(commandLine, index, /\s/u);
+    if (marker) {
+      terminators.push(marker);
     }
     return true;
   });
   return terminators;
-}
-
-function parseHeredocTerminator(commandLine: string, rawStart: number): string | undefined {
-  let start = rawStart;
-  while (/\s/u.test(commandLine[start] ?? "")) {
-    start += 1;
-  }
-
-  let value = "";
-  let quote: '"' | "'" | undefined;
-
-  for (let index = start; index < commandLine.length; index += 1) {
-    const char = commandLine[index] ?? "";
-
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-        continue;
-      }
-      if (quote === '"' && char === "\\" && index + 1 < commandLine.length) {
-        index += 1;
-        value += commandLine[index] ?? "";
-        continue;
-      }
-      value += char;
-      continue;
-    }
-
-    if (/[\s;&|<>]/u.test(char)) {
-      break;
-    }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (char === "\\" && index + 1 < commandLine.length) {
-      index += 1;
-      value += commandLine[index] ?? "";
-      continue;
-    }
-    value += char;
-  }
-
-  return value || undefined;
 }
 
 function commandWithoutHeredocBodies(command: string): string | undefined {

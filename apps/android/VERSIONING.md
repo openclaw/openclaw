@@ -79,8 +79,16 @@ Internal distributions retain the same live version planning, generated phone
 and Wear notes, signing, artifact validation, atomic upload, and immutable
 source-ref recording. They publish only to `internal` and `wear:internal`, skip
 screenshot capture and its emulator/image tooling, and leave the store listing
-metadata and images unchanged. The existing Play review-submission settings stay
-in effect; production promotion remains manual.
+metadata and images unchanged. Internal distributions omit
+`changesNotSentForReview` so Play handles review automatically, and disable
+Fastlane's review-setting fallback. Ordinary store releases retain their
+configured review settings; production promotion remains manual.
+
+Google Play can also submit changes already staged in Play Console when an API
+edit commits. Resolve unrelated pending store changes before running an internal
+distribution or enabling its daily schedule; skipping listing uploads does not
+isolate those staged changes. See Google's
+[concurrency guidance](https://developers.google.com/android-publisher/concurrency-considerations).
 
 To configure unattended runs:
 

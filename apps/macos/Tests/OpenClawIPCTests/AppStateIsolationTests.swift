@@ -5,6 +5,7 @@ import Security
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 @MainActor
 struct AppStateIsolationTests {
     @Test

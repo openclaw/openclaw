@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -10,6 +11,11 @@ import {
   WorkerTaskPool,
   type WorkerTaskResponse,
 } from "../infra/worker-task-pool.js";
+import {
+  getBoundLegacyPluginSdkResourceHost,
+  type LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
+import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import {
   codeModeFailureCode,
   CodeModeHeadlessAbortError,
@@ -36,16 +42,20 @@ type NodePool = {
   tasks: WorkerTaskPool<NodeWorkerInput, CodeModeWorkerThreadResult<undefined>>;
   url: string;
   memoryLimitBytes: number;
+  lifetime?: NodePoolLifetime;
 };
+type NodePoolLifetime = { scheduler: GatewaySchedulerScope; pools: Set<NodePool> };
 type NodeInput = CodeModeExecutorStartInput | CodeModeExecutorResumeInput;
 type NodeWorkerInput = NodeInput & { progress: SharedArrayBuffer; inlineHost: boolean };
 const retiringPools = new Set<NodePool>();
-const idlePools = new Map<NodePool, NodeJS.Timeout>();
+const idlePools = new Map<NodePool, GatewayScheduledJob>();
+const poolLifetimes = new WeakMap<LegacyPluginSdkResourceHost, NodePoolLifetime>();
+let nextPoolId = 0;
 const MAX_IDLE_POOLS = 4;
 const memoryPressure = channel("openclaw.memory.critical");
 
 function removeIdlePool(owner: NodePool): void {
-  clearTimeout(idlePools.get(owner));
+  idlePools.get(owner)?.cancel();
   idlePools.delete(owner);
   if (!idlePools.size) {
     memoryPressure.unsubscribe(retireIdlePools);
@@ -76,17 +86,55 @@ async function closePool(owner: NodePool): Promise<void> {
   retiringPools.add(owner);
   await owner.tasks.close();
   retiringPools.delete(owner);
+  owner.lifetime?.pools.delete(owner);
+}
+
+function capturePoolLifetime(): NodePoolLifetime | undefined {
+  const host = getBoundLegacyPluginSdkResourceHost();
+  if (!host) {
+    return undefined;
+  }
+  host.assertOpen();
+  let lifetime = poolLifetimes.get(host);
+  if (!lifetime) {
+    const scheduler = host.scheduler.scope();
+    const pools = new Set<NodePool>();
+    lifetime = { scheduler, pools };
+    host.adopt(lifetime, {
+      release: async () => {
+        scheduler.beginClose();
+        const results = await Promise.allSettled([...pools].map(closePool));
+        await scheduler.stop();
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length) {
+          throw new PluginRuntimeCloseRetainedError(
+            new AggregateError(failures, "Code Mode workers failed to retire"),
+          );
+        }
+      },
+    });
+    poolLifetimes.set(host, lifetime);
+  }
+  lifetime.scheduler.signal.throwIfAborted();
+  return lifetime;
 }
 
 async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<NodePool> {
+  const lifetime = capturePoolLifetime();
   let workerUrl: URL;
   for (;;) {
     signal.throwIfAborted();
+    lifetime?.scheduler.signal.throwIfAborted();
     workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode);
     const retiring = new Set([
-      ...retiringPools,
+      ...[...retiringPools].filter(
+        (owner) => owner.lifetime === lifetime || owner.lifetime?.scheduler.signal.aborted,
+      ),
       ...[...idlePools.keys()].filter(
-        (owner) => owner.url !== workerUrl.href || owner.tasks.isClosed,
+        (owner) =>
+          owner.lifetime === lifetime && (owner.url !== workerUrl.href || owner.tasks.isClosed),
       ),
     ]);
     if (!retiring.size) {
@@ -97,6 +145,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
   for (const owner of idlePools.keys()) {
     if (
       owner.memoryLimitBytes === memoryLimitBytes &&
+      owner.lifetime === lifetime &&
       owner.url === workerUrl.href &&
       !owner.tasks.isClosed
     ) {
@@ -105,6 +154,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     }
   }
   const owner: NodePool = {
+    lifetime,
     url: workerUrl.href,
     memoryLimitBytes,
     tasks: new WorkerTaskPool({
@@ -126,21 +176,29 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
       },
     }),
   };
+  lifetime?.pools.add(owner);
   return owner;
 }
 
 async function releasePool(owner: NodePool): Promise<void> {
   if (
     idlePools.size >= MAX_IDLE_POOLS ||
+    !owner.lifetime ||
+    owner.lifetime.scheduler.signal.aborted ||
     owner.tasks.isClosed ||
     owner.url !== resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode).href
   ) {
     await closePool(owner);
     return;
   }
-  const timer = setTimeout(() => retireIdlePool(owner), 5 * 60_000);
-  timer.unref();
-  idlePools.set(owner, timer);
+  idlePools.set(
+    owner,
+    owner.lifetime.scheduler.schedule({
+      id: `code-mode-worker-idle:${++nextPoolId}`,
+      delayMs: 5 * 60_000,
+      run: () => closePool(owner),
+    }),
+  );
   if (idlePools.size === 1) {
     memoryPressure.subscribe(retireIdlePools);
   }

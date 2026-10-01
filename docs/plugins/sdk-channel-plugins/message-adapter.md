@@ -138,6 +138,13 @@ cleanup. Adapters that already settle their sends before rotation can use
 `resetMessage()` to reset identity and pending/throttle state without reopening delivery
 or advancing the generation.
 
+Pass `"keep"` as the throttle argument to `resetMessage("keep")` or
+`reset("discard", "keep")` when rotation must preserve the existing throttle
+window and scheduled flush. The default resets both. Transports that decide
+stale-preview disposition during cleanup can pass `{ defer: true }` as the
+third argument to `createMessage`; stale discarded receipts then enter deletion
+custody without an immediate deletion attempt.
+
 ### Commentary delivery ownership
 
 Set `commentaryPayloadsEnabled: true` when the channel supports durable commentary messages.

@@ -60,6 +60,7 @@ For runtime hook debugging:
 - `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway URL/profile, service/process hints, config path, and RPC health.
 - If a hook-only plugin is absent from runtime inspection, confirm its [hook startup intent](/tools/plugin#plugin-hooks): either manifest `activation.onCapabilities: ["hook"]` with explicit plugin enablement, or a startup-signaling `plugins.entries.<id>.hooks` policy such as `allowConversationAccess: true`. Global disable, deny, and restrictive allowlists still win.
 - Non-bundled conversation hooks (`before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_run`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
+- `session_end` metadata does not require conversation access. Its bounded `ctx.endedTranscript` reader does, and reports `conversation-access-required` when the grant is absent.
 
 ### Plugin index
 

@@ -42,6 +42,22 @@ export function createLifecycleAgentCallWaits(
         `expected ${expectedCount} agent call(s), got ${getAgentCallCount()}: ${JSON.stringify(pending)}`,
       );
     },
+    async waitForCleanupHandledFalse(runId: string) {
+      // RPC entry can beat native persistence. Join its retained producer without
+      // spending retry time or disposing observation of a corrected receipt.
+      await pendingRootWork;
+      const run = mod
+        .listSubagentRunsForRequester(requesterSessionKey)
+        .find((candidate) => candidate.runId === runId);
+      if (
+        run?.cleanupHandled === false &&
+        run.delivery?.status === "pending" &&
+        run.delivery.payload
+      ) {
+        return;
+      }
+      throw new Error(`run ${runId} did not reach deferred cleanup after producer settlement`);
+    },
     async settle() {
       try {
         await pendingRootWork;
@@ -58,26 +74,6 @@ export function createLifecycleAgentCallWaits(
 
 export function createLifecycleWaits(requesterSessionKey: string) {
   const flushAsync = () => vi.dynamicImportSettled();
-
-  const waitForCleanupHandledFalse = async (runId: string) => {
-    // Cleanup can be released asynchronously after announce failure; poll fake
-    // time until the retry-grace state is observable.
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const run = mod
-        .listSubagentRunsForRequester(requesterSessionKey)
-        .find((candidate) => candidate.runId === runId);
-      if (
-        run?.cleanupHandled === false &&
-        run.delivery?.status === "pending" &&
-        run.delivery.payload
-      ) {
-        return;
-      }
-      await vi.advanceTimersByTimeAsync(1);
-      await flushAsync();
-    }
-    throw new Error(`run ${runId} did not reach cleanupHandled=false in time`);
-  };
 
   const waitForDeliveredCleanup = async (
     runId: string,
@@ -127,7 +123,6 @@ export function createLifecycleWaits(requesterSessionKey: string) {
 
   return {
     flushAsync,
-    waitForCleanupHandledFalse,
     waitForDeliveredCleanup,
     waitForFrozenResult,
     waitForFrozenResultText,

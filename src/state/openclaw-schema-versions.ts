@@ -1,37 +1,40 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 export type OpenClawSchemaVersions = {
   state: number;
   agent: number;
 };
 
 export function parseOpenClawSchemaVersions(value: unknown): OpenClawSchemaVersions | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
+  const { state, agent } = value;
   if (
-    !Number.isInteger(record.state) ||
-    (record.state as number) < 0 ||
-    !Number.isInteger(record.agent) ||
-    (record.agent as number) < 0
+    typeof state !== "number" ||
+    !Number.isInteger(state) ||
+    state < 0 ||
+    typeof agent !== "number" ||
+    !Number.isInteger(agent) ||
+    agent < 0
   ) {
     return undefined;
   }
-  return { state: record.state as number, agent: record.agent as number };
+  return { state, agent };
 }
 
 export function parsePackageOpenClawSchemaVersions(
   packageJson: unknown,
 ): OpenClawSchemaVersions | undefined {
-  if (!packageJson || typeof packageJson !== "object" || Array.isArray(packageJson)) {
+  if (!isRecord(packageJson)) {
     return undefined;
   }
-  const manifest = packageJson as Record<string, unknown>;
-  const openclaw = manifest.openclaw;
+  const openclaw = packageJson.openclaw;
   if (openclaw !== undefined) {
-    if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    if (!isRecord(openclaw)) {
       return undefined;
     }
-    const schemaVersions = (openclaw as Record<string, unknown>).schemaVersions;
+    const schemaVersions = openclaw.schemaVersions;
     if (schemaVersions !== undefined) {
       return parseOpenClawSchemaVersions(schemaVersions);
     }
@@ -39,10 +42,10 @@ export function parsePackageOpenClawSchemaVersions(
   // Published OpenClaw stable releases through 2026.7.1 used schema 1 before
   // declaring it in package metadata. Unknown versions and replacement packages
   // cannot inherit that shipped contract. See database-schemas/integrity-and-recovery.
-  if (manifest.name !== "openclaw" || typeof manifest.version !== "string") {
+  if (packageJson.name !== "openclaw" || typeof packageJson.version !== "string") {
     return undefined;
   }
-  const legacy = /^2026\.([1-7])\.([1-9]\d*)$/.exec(manifest.version);
+  const legacy = /^2026\.([1-7])\.([1-9]\d*)$/.exec(packageJson.version);
   if (
     !legacy ||
     !Number.isSafeInteger(Number(legacy[2])) ||

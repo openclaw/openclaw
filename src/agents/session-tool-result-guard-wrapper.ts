@@ -256,6 +256,7 @@ export function guardSessionManager(
         Reflect.get(runtimeContext?.message ?? message, "idempotencyKey") !== preparedUserReplayKey
       ) {
         pendingPreparedUserTurnMessage = undefined;
+        guard.clearNextUserMessagePersistenceSuppression();
       }
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
       const recorder =
@@ -295,8 +296,9 @@ export function guardSessionManager(
             contextWindowTokens: opts.contextWindowTokens,
           })
         : undefined,
-    suppressNextUserMessagePersistence:
-      preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence,
+    // Compaction may have removed the admitted user from model context. If the
+    // prompt reinjects it, keep it model-only; a different queued input clears this above.
+    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: opts?.assistantErrorTranscript,
     onMessagePersisted: opts?.onMessagePersisted,
